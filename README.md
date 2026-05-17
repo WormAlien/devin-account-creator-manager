@@ -64,6 +64,12 @@ Edit `config.js` to customize:
 └── presets/              # Config presets
 ```
 
+## Community
+
+This project was made possible thanks to the help and activity of the community.
+
+Join us: **https://t.me/abuz_ai**
+
 ## Disclaimer
 
 This tool is for educational purposes only. Use responsibly and in accordance with Devin.ai's terms of service.

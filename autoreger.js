@@ -672,15 +672,18 @@ function exportToSessionManager(sessionFile, orgName, email, success = true) {
     fs.copyFileSync(sessionFile, targetSessionFile);
 
     // Создаём restore_session.js
+    // Используем относительный путь с forward slashes для кроссплатформенности
+    const relativeSessionPath = './session.json';
     const restoreScript = `const { chromium } = require('playwright');
 const path = require('path');
 
 async function restoreSession() {
     console.log('🚀 Восстанавливаем сессию: ${sessionName}');
 
+    const sessionPath = path.join(__dirname, 'session.json');
     const browser = await chromium.launch({ headless: false });
     const context = await browser.newContext({
-        storageState: '${targetSessionFile}'
+        storageState: sessionPath
     });
     const page = await context.newPage();
 

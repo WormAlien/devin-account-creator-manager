@@ -26,16 +26,25 @@ function convertToCookieEditor(sessionPath) {
     }
 
     // Cookie Editor формат - просто массив cookies
-    // Но нужно немного адаптировать поля
+    // sameSite должен быть: lax, strict, no_restriction, unspecified (lowercase!)
+    const sameSiteMap = {
+        'Lax': 'lax',
+        'Strict': 'strict',
+        'None': 'no_restriction',
+        'lax': 'lax',
+        'strict': 'strict',
+        'none': 'no_restriction'
+    };
+
     const cookieEditorFormat = session.cookies.map(cookie => ({
         name: cookie.name,
         value: cookie.value,
         domain: cookie.domain,
         path: cookie.path || '/',
-        expires: cookie.expires || null,
+        expirationDate: cookie.expires > 0 ? cookie.expires : undefined,
         httpOnly: cookie.httpOnly || false,
         secure: cookie.secure || false,
-        sameSite: cookie.sameSite || 'Lax'
+        sameSite: sameSiteMap[cookie.sameSite] || 'lax'
     }));
 
     // Сохраняем рядом с оригиналом

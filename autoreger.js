@@ -8,6 +8,13 @@ const config = require('./config');
 // BUG4 FIX: shutdownRequested на уровне модуля — доступен из waitForOtpCode
 let shutdownRequested = false;
 
+// Глобальные переменные для сохранения сессии при Ctrl+C
+let currentSessionContext = null;
+let currentSessionFile = null;
+let currentOrgName = null;
+let currentEmail = null;
+let currentPaymentConfirmed = false;
+
 // ==================== УТИЛИТЫ ====================
 
 const randomString = (len) => Math.random().toString(36).substring(2, 2 + len);
@@ -969,6 +976,13 @@ async function registerAccount(accountIndex, binManager) {
     let orgName = login.replace(/_/g, '-');
     let cardUsed = '';
 
+    // Устанавливаем глобальные переменные для сохранения при Ctrl+C
+    currentSessionContext = context;
+    currentSessionFile = sessionFile;
+    currentOrgName = orgName;
+    currentEmail = email;
+    currentPaymentConfirmed = false;
+
     try {
         // ---- РЕГИСТРАЦИЯ ----
         console.log('[Браузер] Переходим на страницу регистрации...');
@@ -1007,7 +1021,10 @@ async function registerAccount(accountIndex, binManager) {
 
         // ---- ОПРЕДЕЛЯЕМ ORG ----
         const orgMatch = page.url().match(/\/org\/([^\/]+)/);
-        if (orgMatch) orgName = orgMatch[1];
+        if (orgMatch) {
+            orgName = orgMatch[1];
+            currentOrgName = orgName; // Обновляем глобальную переменную
+        }
 
         // ---- ТРИАЛ PRO ($20) ----
         console.log(`[Браузер] Переходим к тарифам (org: ${orgName})...`);
@@ -1302,6 +1319,7 @@ if ($proc) {
                 await playSound('payment_success'); // Звук успешной оплаты
                 binManager.markGood(bin); // Отмечаем BIN как рабочий
                 paymentConfirmed = true;
+                currentPaymentConfirmed = true; // Обновляем глобальную переменную для Ctrl+C
                 // Сохраняем сессию сразу после оплаты — до любых дальнейших шагов
                 // Защита от Ctrl+C: если скрипт прервут, сессия уже будет в менеджере со статусом success
                 try {
@@ -1351,6 +1369,15 @@ if ($proc) {
                                 await playSound('payment_success'); // Звук успешной оплаты
                                 manualPaymentSuccess = true;
                                 paymentConfirmed = true;
+                                currentPaymentConfirmed = true; // Обновляем глобальную переменную для Ctrl+C
+                                // Сохраняем сессию сразу после ручной оплаты
+                                try {
+                                    await context.storageState({ path: sessionFile });
+                                    if (config.AUTO_ADD_TO_SESSION_MANAGER) {
+                                        exportToSessionManager(sessionFile, orgName, email, true);
+                                        console.log('[Ручной режим] 💾 Сессия сохранена в менеджер!');
+                                    }
+                                } catch (e) { /* не критично */ }
                                 break;
                             }
 
@@ -1499,19 +1526,36 @@ if ($proc) {
     console.log('════════════════════════════════════════\n');
 
     // ========================================
-    // ФИНАЛЬНАЯ СТАДИЯ БАГ FIX - Ctrl+C
+    // ОБРАБОТЧИК Ctrl+C - СОХРАНЕНИЕ УСПЕШНЫХ СЕССИЙ
     // ========================================
-    // ЗАКОММЕНТИРОВАНО: Обработчик SIGINT удалён, чтобы Ctrl+C корректно возвращал в меню
-    // Авторегер теперь не перехватывает Ctrl+C - это обрабатывается меню через noop handler
-    // Это финальное исправление проблемы с состоянием терминала после выхода из авторегера
-    
-    // // BUG9 FIX: graceful shutdown по Ctrl+C
-    // let shutdownRequested = false;
-    // process.on('SIGINT', () => {
-    //     if (shutdownRequested) process.exit(1); // двойной Ctrl+C — принудительно
-    //     console.log('\n[!] Ctrl+C — завершаем текущий аккаунт и останавливаем...');
-    //     shutdownRequested = true;
-    // });
+    process.on('SIGINT', async () => {
+        if (shutdownRequested) {
+            console.log('\n[!] Принудительный выход...');
+            process.exit(1);
+        }
+        
+        console.log('\n[!] Ctrl+C — останавливаем скрипт...');
+        shutdownRequested = true;
+        
+        // Если оплата уже прошла - сохраняем сессию перед выходом
+        if (currentPaymentConfirmed && currentSessionContext && currentSessionFile && currentOrgName) {
+            console.log('[!] 💾 Сохраняем успешную сессию перед выходом...');
+            try {
+                await currentSessionContext.storageState({ path: currentSessionFile });
+                if (config.AUTO_ADD_TO_SESSION_MANAGER) {
+                    exportToSessionManager(currentSessionFile, currentOrgName, currentEmail, true);
+                    console.log('[!] ✅ Сессия сохранена в менеджер!');
+                }
+            } catch (e) {
+                console.log('[!] ⚠️ Не удалось сохранить сессию:', e.message);
+            }
+        } else {
+            console.log('[!] ⚠️ Нет успешной сессии для сохранения');
+        }
+        
+        console.log('[!] Выход...');
+        process.exit(0);
+    });
 
     // Инициализация BinManager для статистики рабочих/нерабочих BIN-ов
     const binManager = new BinManager();

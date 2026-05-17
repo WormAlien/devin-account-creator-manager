@@ -172,6 +172,64 @@ function convertToCookieEditor(sessionPath) {
             const htmlPath = path.join(dir, 'import_session.html');
             fs.writeFileSync(htmlPath, htmlContent);
             console.log(`📁 HTML: ${htmlPath}`);
+
+            // Создаём Tampermonkey userscript
+            const userscript = `// ==UserScript==
+// @name         Devin.ai Session Import
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Автоматический импорт сессии Devin.ai
+// @match        https://app.devin.ai/*
+// @match        https://devin.ai/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+    
+    // Проверяем, не импортирована ли уже сессия
+    if (localStorage.getItem('auth1_session')) {
+        console.log('✅ Сессия уже установлена');
+        return;
+    }
+
+    console.log('🔐 Импортируем сессию Devin.ai...');
+
+${localStorageItems.map(item => {
+    const escapedValue = item.value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `    localStorage.setItem('${item.name}', '${escapedValue}');`;
+}).join('\n')}
+
+    console.log('✅ localStorage установлен!');
+    
+    // Показываем уведомление
+    setTimeout(() => {
+        alert('✅ Сессия импортирована!\\n\\nТеперь:\\n1. Удали этот скрипт из Tampermonkey\\n2. Импортируй куки через Cookie Editor\\n3. Обнови страницу (F5)');
+    }, 1000);
+})();
+`;
+
+            const userscriptPath = path.join(dir, 'devin_session.user.js');
+            fs.writeFileSync(userscriptPath, userscript);
+            console.log(`📁 Tampermonkey: ${userscriptPath}`);
+
+            // Создаём скрипт для "Custom JavaScript for Websites 2"
+            // Это расширение просто выполняет JS код на сайте - без заголовков
+            const customJsCode = `// Скрипт для расширения "Custom JavaScript for Websites 2"
+// Сайт: app.devin.ai
+
+${localStorageItems.map(item => {
+    const escapedValue = item.value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `localStorage.setItem('${item.name}', '${escapedValue}');`;
+}).join('\n')}
+
+console.log('✅ Сессия Devin.ai установлена! Обнови страницу (F5)');
+`;
+
+            const customJsPath = path.join(dir, 'custom_js_websites.js');
+            fs.writeFileSync(customJsPath, customJsCode);
+            console.log(`📁 Custom JS for Websites: ${customJsPath}`);
         }
     }
     

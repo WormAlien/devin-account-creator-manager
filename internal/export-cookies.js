@@ -78,6 +78,100 @@ function convertToCookieEditor(sessionPath) {
             
             console.log(`✅ Экспортировано ${localStorageItems.length} localStorage items`);
             console.log(`📁 LocalStorage: ${localStoragePath}`);
+
+            // Создаём HTML файл для автоматической установки всего
+            const htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Импорт сессии Devin.ai</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+        .btn { background: #4CAF50; color: white; padding: 15px 30px; border: none; cursor: pointer; font-size: 16px; border-radius: 5px; margin: 10px 0; }
+        .btn:hover { background: #45a049; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .status { margin: 20px 0; padding: 15px; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        pre { background: #f4f4f4; padding: 10px; overflow-x: auto; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>🔐 Импорт сессии Devin.ai</h1>
+    
+    <div class="info status">
+        <strong>Инструкция:</strong><br>
+        1. Нажми кнопку ниже<br>
+        2. Разреши всплывающее окно (если спросит)<br>
+        3. Готово — ты залогинен!
+    </div>
+
+    <button class="btn" onclick="importSession()">🚀 Импортировать сессию</button>
+    
+    <div id="status"></div>
+
+    <script>
+        const cookies = ${JSON.stringify(cookieEditorFormat)};
+        
+        const localStorageData = ${JSON.stringify(localStorageItems.reduce((acc, item) => { acc[item.name] = item.value; return acc; }, {}))};
+
+        async function importSession() {
+            const statusDiv = document.getElementById('status');
+            
+            try {
+                // Открываем app.devin.ai
+                statusDiv.innerHTML = '<div class="status info">Открываем app.devin.ai...</div>';
+                
+                const win = window.open('https://app.devin.ai', '_blank');
+                
+                if (!win) {
+                    statusDiv.innerHTML = '<div class="status error">❌ Разреши всплывающие окна и попробуй снова!</div>';
+                    return;
+                }
+
+                // Ждём загрузки
+                await new Promise(r => setTimeout(r, 3000));
+                
+                // Инжектим localStorage
+                try {
+                    const script = \`
+                        ${localStorageItems.map(item => {
+                            const escapedValue = item.value.replace(/\\/g, '\\\\\\\\').replace(/'/g, "\\\\'").replace(/`/g, '\\\\`');
+                            return `localStorage.setItem('${item.name}', '${escapedValue}');`;
+                        }).join('\\n')}
+                        console.log('✅ localStorage установлен');
+                    \`;
+                    win.eval(script);
+                } catch(e) {
+                    console.log('localStorage inject error (expected due to CORS):', e);
+                }
+
+                statusDiv.innerHTML = \`
+                    <div class="status success">
+                        <strong>✅ Окно открыто!</strong><br><br>
+                        Теперь в открывшемся окне:<br>
+                        1. Нажми F12 → Console<br>
+                        2. Вставь этот код и нажми Enter:<br>
+                    </div>
+                    <pre>${jsCode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                    <div class="status info">
+                        3. Затем импортируй куки через Cookie Editor<br>
+                        4. Обнови страницу (F5)
+                    </div>
+                \`;
+
+            } catch(e) {
+                statusDiv.innerHTML = '<div class="status error">❌ Ошибка: ' + e.message + '</div>';
+            }
+        }
+    </script>
+</body>
+</html>`;
+
+            const htmlPath = path.join(dir, 'import_session.html');
+            fs.writeFileSync(htmlPath, htmlContent);
+            console.log(`📁 HTML: ${htmlPath}`);
         }
     }
     

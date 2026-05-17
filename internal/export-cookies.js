@@ -49,20 +49,54 @@ function convertToCookieEditor(sessionPath) {
 
     // Сохраняем рядом с оригиналом
     const dir = path.dirname(sessionPath);
-    const outputPath = path.join(dir, 'cookies_for_import.json');
+    const cookiesPath = path.join(dir, 'cookies_for_import.json');
     
-    fs.writeFileSync(outputPath, JSON.stringify(cookieEditorFormat, null, 2));
+    fs.writeFileSync(cookiesPath, JSON.stringify(cookieEditorFormat, null, 2));
     
     console.log(`✅ Экспортировано ${cookieEditorFormat.length} cookies`);
-    console.log(`📁 Файл: ${outputPath}`);
-    console.log('');
-    console.log('Инструкция:');
-    console.log('1. Установи расширение "Cookie Editor" в Chrome');
-    console.log('2. Зайди на https://app.devin.ai');
-    console.log('3. Открой Cookie Editor → Import → выбери cookies_for_import.json');
-    console.log('4. Обнови страницу (F5)');
+    console.log(`📁 Cookies: ${cookiesPath}`);
+
+    // Экспортируем localStorage (критично для авторизации!)
+    if (session.origins && session.origins.length > 0) {
+        const devinOrigin = session.origins.find(o => o.origin.includes('devin.ai'));
+        if (devinOrigin && devinOrigin.localStorage && devinOrigin.localStorage.length > 0) {
+            // Генерируем JS-код для вставки в консоль
+            const localStorageItems = devinOrigin.localStorage;
+            
+            let jsCode = '// Вставь этот код в консоль браузера (F12 → Console) на сайте app.devin.ai\n';
+            jsCode += '// Затем обнови страницу (F5)\n\n';
+            
+            for (const item of localStorageItems) {
+                const escapedValue = item.value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                jsCode += `localStorage.setItem('${item.name}', '${escapedValue}');\n`;
+            }
+            
+            jsCode += '\nconsole.log("✅ localStorage установлен! Обнови страницу (F5)");\n';
+
+            const localStoragePath = path.join(dir, 'localStorage_inject.js');
+            fs.writeFileSync(localStoragePath, jsCode);
+            
+            console.log(`✅ Экспортировано ${localStorageItems.length} localStorage items`);
+            console.log(`📁 LocalStorage: ${localStoragePath}`);
+        }
+    }
     
-    return outputPath;
+    console.log('');
+    console.log('═══════════════════════════════════════════════');
+    console.log('  ИНСТРУКЦИЯ ДЛЯ ИМПОРТА СЕССИИ');
+    console.log('═══════════════════════════════════════════════');
+    console.log('');
+    console.log('1. Открой https://app.devin.ai в Chrome');
+    console.log('2. Нажми F12 → вкладка Console');
+    console.log('3. Скопируй содержимое localStorage_inject.js и вставь в консоль');
+    console.log('4. Нажми Enter');
+    console.log('5. Установи расширение "Cookie Editor"');
+    console.log('6. Cookie Editor → Import → выбери cookies_for_import.json');
+    console.log('7. Обнови страницу (F5)');
+    console.log('');
+    console.log('═══════════════════════════════════════════════');
+    
+    return cookiesPath;
 }
 
 // Интерактивный режим - выбор сессии

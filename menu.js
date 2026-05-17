@@ -831,6 +831,7 @@ function waitForKey() {
 
 // Проверка квоты через Playwright (headless, тихо)
 async function checkQuota(session) {
+    let browser = null;
     try {
         const sessionFile = path.join(session.path, 'session.json');
         if (!fs.existsSync(sessionFile)) return null;
@@ -839,24 +840,57 @@ async function checkQuota(session) {
         const orgName = session.orgName;
         const usageUrl = `https://app.devin.ai/org/${orgName}/settings/usage`;
 
-        const browser = await chromium.launch({ headless: true });
+        browser = await chromium.launch({ headless: true });
         const context = await browser.newContext({ storageState: sessionFile });
         const page = await context.newPage();
         await page.goto(usageUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        // Ждём пока появится текст "Daily quota" или "Weekly quota" — до 10 сек
+        // Ждём пока появится "Current plan" И ("Daily quota" или "Weekly quota") — до 12 сек
         await page.waitForFunction(
-            () => document.body?.innerText?.includes('Daily quota') || document.body?.innerText?.includes('Weekly quota'),
-            { timeout: 10000 }
+            () => {
+                const text = document.body?.innerText || '';
+                const hasQuota = text.includes('Daily quota') || text.includes('Weekly quota');
+                const hasPlan = text.includes('Current plan');
+                return hasQuota && hasPlan;
+            },
+            { timeout: 12000 }
         ).catch(() => {});
+        // Небольшая пауза для рендера React-компонентов
+        await page.waitForTimeout(300);
 
         const data = await page.evaluate(() => {
             const result = {};
-            // Проверяем статус аккаунта (free/платный)
             const bodyText = document.body?.innerText || '';
+            
+            // Определяем план по структуре страницы:
+            // "Current plan\nPro\nTrial..." или "Current plan\nFree\n..."
             let plan = 'free';
-            if (bodyText.includes('Pro') || bodyText.includes('pro') || bodyText.includes('Paid') || bodyText.includes('paid')) {
+            
+            // Ищем паттерн "Current plan" и следующую строку
+            const lines = bodyText.split('\n').map(l => l.trim()).filter(Boolean);
+            for (let i = 0; i < lines.length - 1; i++) {
+                if (lines[i] === 'Current plan' || lines[i].includes('Current plan')) {
+                    const nextLine = lines[i + 1].toLowerCase();
+                    if (nextLine === 'pro' || nextLine.startsWith('pro') || 
+                        nextLine === 'teams' || nextLine.startsWith('teams')) {
+                        plan = 'paid';
+                        break;
+                    } else if (nextLine === 'free' || nextLine.startsWith('free')) {
+                        plan = 'free';
+                        break;
+                    }
+                }
+            }
+            
+            // Дополнительно: если есть "Trial" — это Pro Trial
+            if (plan === 'free' && bodyText.includes('Trial')) {
                 plan = 'paid';
             }
+            
+            // Если есть "Manage billing" — скорее всего платный
+            if (plan === 'free' && bodyText.includes('Manage billing')) {
+                plan = 'paid';
+            }
+            
             result.plan = plan;
 
             for (const el of document.querySelectorAll('*')) {
@@ -873,6 +907,7 @@ async function checkQuota(session) {
         });
 
         await browser.close();
+        browser = null;
 
         const daily  = data['Daily quota'];
         const weekly = data['Weekly quota'];
@@ -886,6 +921,11 @@ async function checkQuota(session) {
         };
     } catch (e) {
         return null;
+    } finally {
+        // Гарантируем закрытие браузера даже при ошибке
+        if (browser) {
+            try { await browser.close(); } catch (_) {}
+        }
     }
 }
 
@@ -1078,7 +1118,7 @@ function fitW(str, maxW) {
     return result;
 }
 
-function renderSessions(sessions, row, quotaMap, quotaLoading, focus = 'list', actionIdx = 0, first = false) {
+function renderSessions(sessions, row, quotaMap, quotaLoading, focus = 'list', actionIdx = 0, loadingSet = new Set()) {
     // ВАЖНО: sessions ожидается уже отсортированным — сначала все ✅, потом все ❌.
     // row индексирует именно этот порядок (см. sortSessions в sessionsMenu).
     const good = sessions.filter(s => s.status === '✅');
@@ -1108,7 +1148,11 @@ function renderSessions(sessions, row, quotaMap, quotaLoading, focus = 'list', a
         let extra = '';
         if (s.status === '✅') {
             const q = quotaMap[s.name];
-            if (q) {
+            const isLoading = loadingSet.has(s.name);
+            if (isLoading) {
+                // Показываем загрузку для конкретной сессии
+                extra = `\x1b[2m⏳ загрузка…\x1b[0m`;
+            } else if (q) {
                 // Сокращаем "0% used" → "0%" и убираем длинные суффиксы — компактно
                 const shortD = (q.daily || '').replace(/\s*used$/, '');
                 const shortW = (q.weekly || '').replace(/\s*used$/, '');
@@ -1116,8 +1160,6 @@ function renderSessions(sessions, row, quotaMap, quotaLoading, focus = 'list', a
                 const qc = used ? '\x1b[33m' : '\x1b[32m';
                 const planLabel = q.plan === 'paid' ? '\x1b[35m[Pro]\x1b[0m' : '\x1b[2m[Free]\x1b[0m';
                 extra = `${planLabel} ${qc}D:${shortD} W:${shortW}\x1b[0m`;
-            } else if (isRow && quotaLoading) {
-                extra = `\x1b[2mзагрузка…\x1b[0m`;
             }
         }
 
@@ -1384,7 +1426,28 @@ async function sessionsMenu() {
     // Набор имён сессий, для которых сейчас идёт загрузка квоты
     const loadingSet = new Set();
 
-    const rerender = () => renderSessions(sessions, row, quotaMap, quotaLoading, focus, actionIdx);
+    // Debounced rerender — не чаще чем раз в 100мс (для фоновых обновлений)
+    let rerenderTimeout = null;
+    let lastRenderTime = 0;
+    const rerenderNow = () => renderSessions(sessions, row, quotaMap, quotaLoading, focus, actionIdx, loadingSet);
+    const rerender = (immediate = false) => {
+        const now = Date.now();
+        if (immediate || now - lastRenderTime > 100) {
+            // Немедленный рендер (для навигации)
+            if (rerenderTimeout) { clearTimeout(rerenderTimeout); rerenderTimeout = null; }
+            lastRenderTime = now;
+            rerenderNow();
+        } else {
+            // Отложенный рендер (для фоновых обновлений квот)
+            if (!rerenderTimeout) {
+                rerenderTimeout = setTimeout(() => {
+                    rerenderTimeout = null;
+                    lastRenderTime = Date.now();
+                    rerenderNow();
+                }, 100);
+            }
+        }
+    };
 
     // Сохранить квоту в map + в файл
     const setQuota = (name, q) => {
@@ -1393,26 +1456,37 @@ async function sessionsMenu() {
     };
 
     // Загрузка всех квот — полностью в фоне, меню не блокируется
+    // Ограничиваем параллельные запросы (макс 2 браузера одновременно)
     const loadAllQuotas = () => {
+        loadingSet.clear(); // Очищаем на случай предыдущих незавершённых
         quotaLoading = true; rerender();
         const list = sessions.filter(s => s.status === '✅');
         let done = 0;
+        let idx = 0;
+        const MAX_CONCURRENT = 2;
         if (list.length === 0) { quotaLoading = false; rerender(); return; }
-        for (const s of list) {
-            loadingSet.add(s.name);
-            checkQuota(s).then(q => {
-                if (q) setQuota(s.name, q);
-                loadingSet.delete(s.name);
-                done++;
-                if (done === list.length) { quotaLoading = false; rerender(); }
-                else if (done % 3 === 0) rerender(); // Перерисовываем каждые 3 завершенные
-            }).catch(() => {
-                loadingSet.delete(s.name);
-                done++;
-                if (done === list.length) { quotaLoading = false; rerender(); }
-                else if (done % 3 === 0) rerender();
-            });
-        }
+
+        const processNext = () => {
+            while (loadingSet.size < MAX_CONCURRENT && idx < list.length) {
+                const s = list[idx++];
+                loadingSet.add(s.name);
+                checkQuota(s).then(q => {
+                    if (q) setQuota(s.name, q);
+                    loadingSet.delete(s.name);
+                    done++;
+                    rerender();
+                    if (done === list.length) { quotaLoading = false; rerender(); }
+                    else processNext();
+                }).catch(() => {
+                    loadingSet.delete(s.name);
+                    done++;
+                    rerender();
+                    if (done === list.length) { quotaLoading = false; rerender(); }
+                    else processNext();
+                });
+            }
+        };
+        processNext();
     };
 
     // Загрузка одной квоты — тоже в фоне
@@ -1482,7 +1556,7 @@ async function sessionsMenu() {
                         focus = 'list';
                         actionIdx = 0;
                     }
-                    rerender();
+                    rerender(true);
                     break;
                 }
                 case 'mark-sub': {
@@ -1497,7 +1571,7 @@ async function sessionsMenu() {
                         focus = 'list';
                         actionIdx = 0;
                     }
-                    rerender();
+                    rerender(true);
                     break;
                 }
                 case 'delete': {
@@ -1509,7 +1583,7 @@ async function sessionsMenu() {
                         focus = 'list';
                         actionIdx = 0;
                     }
-                    rerender();
+                    rerender(true);
                     break;
                 }
                 case 'refresh-all':
@@ -1530,7 +1604,7 @@ async function sessionsMenu() {
         const onKey = async (str, key) => {
             if (!key) return;
 
-            // ── Навигация ───────────────────────────────────────────
+            // ── Навигация (immediate rerender для отзывчивости) ───────
             if (key.name === 'up') {
                 if (focus === 'list') {
                     row = (row - 1 + sessions.length) % sessions.length;
@@ -1540,7 +1614,7 @@ async function sessionsMenu() {
                     do { actionIdx = (actionIdx - 1 + actions.length) % actions.length; }
                     while (actions[actionIdx] && actions[actionIdx].separator);
                 }
-                rerender();
+                rerender(true);
             } else if (key.name === 'down') {
                 if (focus === 'list') {
                     row = (row + 1) % sessions.length;
@@ -1550,17 +1624,17 @@ async function sessionsMenu() {
                     do { actionIdx = (actionIdx + 1) % actions.length; }
                     while (actions[actionIdx] && actions[actionIdx].separator);
                 }
-                rerender();
+                rerender(true);
             } else if (key.name === 'right') {
                 if (focus === 'list') {
                     focus = 'actions';
                     actionIdx = 0;
-                    rerender();
+                    rerender(true);
                 }
             } else if (key.name === 'left') {
                 if (focus === 'actions') {
                     focus = 'list';
-                    rerender();
+                    rerender(true);
                 }
             } else if (key.name === 'return') {
                 if (focus === 'list') {
@@ -1574,7 +1648,7 @@ async function sessionsMenu() {
             } else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
                 if (focus === 'actions') {
                     focus = 'list';
-                    rerender();
+                    rerender(true);
                 } else {
                     setKeypressListener(null);
                     if (process.stdin.isTTY && process.stdin.setRawMode) {

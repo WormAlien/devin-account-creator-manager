@@ -27,6 +27,13 @@ backup_*/
 SALES_*.md
 CONTEXT.md
 
+# Временная документация
+CURRENT_CONFIG.md
+DOCUMENTATION_INDEX.md
+PROJECT_INFO.md
+QUICK_START.md
+SESSIONS_STATUS.md
+
 # Батники (локальные)
 *.bat
 

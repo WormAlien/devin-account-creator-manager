@@ -1,0 +1,48 @@
+# Node modules
+node_modules/
+
+# Логи и данные
+logs/
+output/
+accounts.txt
+.quota_cache.json
+known_bins.json
+timing_profile.json
+_log_hits.txt
+_nul
+
+# Сессии и аккаунты (приватные данные)
+manual_sessions/
+errors/
+ready_to_sell/
+
+# Временные сессии
+devin_session_*.json
+
+# Бэкапы
+backup_*/
+*.backup
+
+# Документы продаж
+SALES_*.md
+CONTEXT.md
+
+# Батники (локальные)
+*.bat
+
+# Операционные системы
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# npm
+package-lock.json
+
+# Дублирующие данные
+autoreger_data/

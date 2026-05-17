@@ -1,0 +1,25 @@
+{
+  "name": "devin-ai-autoreg",
+  "version": "2.0.0",
+  "description": "Devin.ai AutoReg - Автоматическая регистрация с пробной подпиской",
+  "main": "autoreger.js",
+  "scripts": {
+    "start": "node autoreger.js"
+  },
+  "keywords": [
+    "devin",
+    "autoreg",
+    "autoreger"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "inquirer": "^8.2.7",
+    "node-pty": "^1.1.0",
+    "playwright": "^1.60.0"
+  },
+  "devDependencies": {
+    "interactive-cli-tester": "^0.3.0"
+  }
+}

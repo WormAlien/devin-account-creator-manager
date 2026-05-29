@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { chromium } = require('playwright');
+const { freemodelSessionsMenu } = require('./internal/freemodel-manager');
+const { createFreemodelSession } = require('./internal/freemodel-creator');
+const { notionSessionsMenu } = require('./internal/notion-manager');
 
 const SESSIONS_DIR = 'manual_sessions';
 const QUOTA_CACHE_FILE = 'logs/.quota_cache.json';
@@ -255,8 +258,58 @@ async function mainMenu() {
     const localeDisplay = config.BILLING_ROTATION ? `Авто (${billingCountry})` : `${config.TIMEZONE}`;
     
     const action = await rawList('⚙️  DEVIN.AI AUTOREG', [
-        { label: `🗂️   Менеджер сессий`, value: 'sessions' },
+        { label: `🗂️   Менеджер сессий Devin`, value: 'sessions' },
+        { label: `➕  Добавить аккаунт Devin`, value: 'devin-add' },
+        { label: `🆓  FreeModel сессии`, value: 'freemodel-sessions' },
+        { label: `➕  Создать аккаунт FreeModel`, value: 'freemodel-create' },
+        { label: `🗂️   Notion сессии     [${notionSessionsCount()}]`, value: 'notion-sessions' },
+        { label: `📝  Notion         [${notionStatusLine()}]`, value: 'notion-create' },
         { label: '──────────────────────────────', value: null, disabled: true },
+        { label: '✖️   Выход', value: 'exit' },
+    ]);
+
+    switch (action) {
+        case 'sessions': await sessionsMenu(); break;
+        case 'devin-add': await devinAddMenu(); break;
+        case 'freemodel-sessions': await freemodelSessionsMenu({ clearScreen, setKeypressListener, rawList }); break;
+        case 'freemodel-create': await createFreemodelSession({ clearScreen, setKeypressListener, rawList, rawInput }); break;
+        case 'notion-sessions': await notionSessionsMenu({ clearScreen, setKeypressListener, rawList }); break;
+        case 'notion-create': await notionCreateMenu(); break;
+        case 'exit':
+            clearScreen();
+            process.exit(0);
+            break;
+    }
+    } // while(true)
+}
+
+// ─── Devin: Добавить аккаунт (подменю) ─────────────────────────────────────
+async function devinAddMenu() {
+    clearScreen();
+
+    // Отображение текущих настроек
+    const bins = Array.isArray(config.BINS) ? config.BINS : (config.BINS ? [config.BINS] : []);
+    const hasBins = bins.length > 0 && bins.some(b => b);
+
+    let cardDisplay;
+    if (!hasBins) {
+        cardDisplay = 'Авто (из базы)';
+    } else {
+        const b = bins[0];
+        if (b.length === 16) {
+            cardDisplay = `${b.slice(0,4)}…${b.slice(-4)}`;
+        } else {
+            cardDisplay = `BIN ${b}`;
+        }
+    }
+
+    const expDisplay = config.EXP_DATE === 'auto' ? 'авто' : config.EXP_DATE;
+    const cvcDisplay = config.CVC_CODE === 'auto' ? 'авто' : config.CVC_CODE;
+    const proxyDisplay = config.PROXY ? 'Вкл' : 'Выкл';
+    const billingCountry = config.BILLING_PROFILES?.[0]?.country || 'US';
+    const localeDisplay = config.BILLING_ROTATION ? `Авто (${billingCountry})` : `${config.TIMEZONE}`;
+
+    const action = await rawList('➕  Добавить аккаунт Devin', [
         { label: `💳  Карта: ${cardDisplay}`, value: 'card' },
         { label: `    ├─ Срок: ${expDisplay}  CVC: ${cvcDisplay}`, value: 'card', disabled: false },
         { label: `🌍  Прокси              [${proxyDisplay}]`, value: 'proxy' },
@@ -267,77 +320,73 @@ async function mainMenu() {
         { label: `🔔  Звук                [${config.SOUND_NOTIFICATIONS ? 'Вкл' : 'Выкл'}]`, value: 'sound' },
         { label: '──────────────────────────────', value: null, disabled: true },
         { label: '▶️   Сохранить и запустить', value: 'run' },
-        { label: '✖️   Выход без сохранения', value: 'exit' },
+        { label: '← Назад', value: 'back' },
     ]);
 
     switch (action) {
-        case 'card':     await cardMenu();     break;
-        case 'proxy':    await proxyMenu();    break;
-        case 'locale':   await localeMenu();   break;
-        case 'accounts': await accountsMenu(); break;
-        case 'browser':  await browserMenu();  break;
-        case 'manual':   await manualMenu();   break;
-        case 'sound':    await soundMenu();    break;
-        case 'sessions': await sessionsMenu(); break;
+        case 'card':     await cardMenu(); await devinAddMenu(); break;
+        case 'proxy':    await proxyMenu(); await devinAddMenu(); break;
+        case 'locale':   await localeMenu(); await devinAddMenu(); break;
+        case 'accounts': await accountsMenu(); await devinAddMenu(); break;
+        case 'browser':  await browserMenu(); await devinAddMenu(); break;
+        case 'manual':   await manualMenu(); await devinAddMenu(); break;
+        case 'sound':    await soundMenu(); await devinAddMenu(); break;
         case 'run':
             saveConfig();
             console.log('\n🚀 Запуск autoreger...\n');
             console.log('💡 Нажмите Ctrl+C для остановки и возврата в меню\n');
             {
-                // Запоминаем сессии ДО запуска, чтобы потом найти новые
                 const sessionsBefore = new Set(getSessions().map(s => s.name));
-                // Снимаем наш SIGINT хендлер. Вместо него ставим noop — иначе Node по умолчанию
-                // убьёт менеджер при Ctrl+C. С noop Ctrl+C получит только autoreger,
-                // он завершится, а мы вернёмся в меню.
                 process.removeListener('SIGINT', menuSigintHandler);
                 const noopSigint = () => {};
                 process.on('SIGINT', noopSigint);
+
                 await new Promise(resolve => {
                     const child = spawn(process.execPath, ['autoreger.js'], { stdio: 'inherit' });
                     child.on('close', resolve);
                 });
+
                 process.removeListener('SIGINT', noopSigint);
-                // Восстанавливаем хендлер после завершения autoreger
                 process.on('SIGINT', menuSigintHandler);
-                // Восстанавливаем состояние терминала после autoreger
+
                 if (process.stdin.isTTY && process.stdin.setRawMode) {
                     try { process.stdin.setRawMode(false); } catch (_) {}
                 }
                 try { process.stdin.pause(); } catch (_) {}
                 clearScreen();
-                // Находим новые ✅ сессии и сразу грузим для них квоту (с планом pro/free) в кеш + на диск
-                const newSessions = getSessions().filter(s => !sessionsBefore.has(s.name) && s.status === '✅');
-                if (!global._quotaCache) global._quotaCache = loadQuotaCache();
-                for (const s of newSessions) {
-                    checkQuota(s).then(q => {
-                        if (q) {
-                            global._quotaCache[s.name] = { ...q, updatedAt: Date.now() };
-                            saveQuotaCache(global._quotaCache);
-                        }
-                    }).catch(() => {});
+
+                const sessionsAfter = getSessions();
+                const newSessions = sessionsAfter.filter(s => !sessionsBefore.has(s.name));
+
+                if (newSessions.length > 0) {
+                    console.log(`\n✅  Создано новых сессий: ${newSessions.length}\n`);
+                    newSessions.forEach(s => {
+                        console.log(`  ${s.status}  ${s.orgName}  ${s.email}`);
+                    });
+                } else {
+                    console.log('\n⚠️  Новых сессий не обнаружено\n');
                 }
-            }
-            console.log('\n  Нажмите любую клавишу для возврата в меню...');
-            await new Promise(resolve => {
-                process.stdin.resume();
-                if (process.stdin.isTTY && process.stdin.setRawMode) {
-                    try { process.stdin.setRawMode(true); } catch (_) {}
-                }
-                process.stdin.once('keypress', () => {
+
+                console.log('\n  Нажмите любую клавишу для возврата...');
+                await new Promise(resolve => {
+                    process.stdin.resume();
                     if (process.stdin.isTTY && process.stdin.setRawMode) {
-                        try { process.stdin.setRawMode(false); } catch (_) {}
+                        try { process.stdin.setRawMode(true); } catch (_) {}
                     }
-                    process.stdin.pause();
-                    resolve();
+                    process.stdin.once('keypress', () => {
+                        if (process.stdin.isTTY && process.stdin.setRawMode) {
+                            try { process.stdin.setRawMode(false); } catch (_) {}
+                        }
+                        process.stdin.pause();
+                        resolve();
+                    });
                 });
-            });
+            }
+            await devinAddMenu();
             break;
-        case 'exit':
-        case null:
-            console.log('\n👋 Выход без сохранения\n');
-            process.exit(0);
+        case 'back':
+            return;
     }
-    } // while(true)
 }
 
 // ─── Настройка карты (объединённое меню) ────────────────────────────────────
@@ -998,6 +1047,14 @@ function getSessions() {
 
     const addSession = (item, itemPath, source, defaultStatus) => {
         if (!fs.statSync(itemPath).isDirectory()) return;
+        // Пропускаем FreeModel-сессии — у них свой менеджер
+        try {
+            const infoPath = path.join(itemPath, 'session_info.txt');
+            if (fs.existsSync(infoPath)) {
+                const info = fs.readFileSync(infoPath, 'utf-8');
+                if (/^URL:.*freemodel\.dev/im.test(info)) return;
+            }
+        } catch {}
         const s = parseSessionDir(item, itemPath, source, defaultStatus);
         if (!s) return;
         const existing = seenOrg.get(s.orgName);
@@ -1660,6 +1717,398 @@ async function sessionsMenu() {
             }
         };
         setKeypressListener(onKey);
+    });
+}
+
+// Краткое описание текущей карты Notion для главного меню
+function notionStatusLine() {
+    try {
+        const nc = loadNotionConfig();
+        const presets = nc.CARD_PRESETS || [];
+        if (!presets.length) return 'нет карт';
+        const idx = Number.isInteger(nc.CARD_PRESET_INDEX) ? nc.CARD_PRESET_INDEX : 0;
+        const p = presets[Math.min(idx, presets.length - 1)];
+        const label = p.label || `${p.number.slice(0, 4)}…${p.number.slice(-4)}`;
+        return `${label} × ${nc.ACCOUNTS_COUNT}`;
+    } catch {
+        return 'config error';
+    }
+}
+
+// Количество сохранённых Notion-сессий — для счётчика в главном меню
+function notionSessionsCount() {
+    try {
+        const dir = path.join(__dirname, 'notion', 'sessions');
+        if (!fs.existsSync(dir)) return '0';
+        const items = fs.readdirSync(dir).filter(item => {
+            const p = path.join(dir, item);
+            try {
+                return fs.statSync(p).isDirectory()
+                    && fs.existsSync(path.join(p, 'session.json'));
+            } catch { return false; }
+        });
+        return String(items.length);
+    } catch {
+        return '?';
+    }
+}
+
+// ─── Notion: подменю ────────────────────────────────────────────────────────
+//
+// Хранит свой собственный notionConfig в памяти, синкает с notion/config.js
+// тем же приёмом регекс-замены, что и основной saveConfig().
+
+const NOTION_CONFIG_PATH = path.join(__dirname, 'notion', 'config.js');
+
+function loadNotionConfig() {
+    // require() кэшится — сбрасываем чтобы прочитать актуальное состояние с диска
+    delete require.cache[require.resolve(NOTION_CONFIG_PATH)];
+    return require(NOTION_CONFIG_PATH);
+}
+
+function saveNotionField(fieldName, newValue) {
+    let content = fs.readFileSync(NOTION_CONFIG_PATH, 'utf-8');
+    const before = content;
+
+    // число
+    content = content.replace(
+        new RegExp(`(\\n[ \\t]+${fieldName}:\\s*)\\d+(,?)`),
+        (_m, prefix, comma) => `${prefix}${newValue}${comma}`
+    );
+    if (content !== before) { fs.writeFileSync(NOTION_CONFIG_PATH, content); return true; }
+
+    // строка в кавычках
+    content = content.replace(
+        new RegExp(`(\\n[ \\t]+${fieldName}:\\s*)'[^']*'(,?)`),
+        (_m, prefix, comma) => `${prefix}${newValue}${comma}`
+    );
+    if (content !== before) { fs.writeFileSync(NOTION_CONFIG_PATH, content); return true; }
+
+    return false;
+}
+
+// Сохранить массив CARD_PRESETS в notion/config.js
+function saveNotionCardPresets(presets) {
+    let content = fs.readFileSync(NOTION_CONFIG_PATH, 'utf-8');
+    const formatted = JSON.stringify(presets, null, 4)
+        .replace(/^/gm, '    ')  // отступ 4 пробела
+        .trim();
+
+    // Заменяем CARD_PRESETS: [...],  (многострочный массив)
+    const re = /(\n\s+CARD_PRESETS:\s*)\[[\s\S]*?\n\s+\](,?)/;
+    if (re.test(content)) {
+        content = content.replace(re, (_m, prefix, comma) => `${prefix}${formatted}${comma}`);
+        fs.writeFileSync(NOTION_CONFIG_PATH, content);
+        return true;
+    }
+    return false;
+}
+
+async function notionCreateMenu() {
+    while (true) {
+        const notionConfig = loadNotionConfig();
+        const presets = notionConfig.CARD_PRESETS || [];
+        const idx = Number.isInteger(notionConfig.CARD_PRESET_INDEX) ? notionConfig.CARD_PRESET_INDEX : 0;
+        const current = presets[Math.min(idx, presets.length - 1)];
+        const cardLabel = current
+            ? (current.label || `${current.number.slice(0, 4)}…${current.number.slice(-4)}`)
+            : '⚠️ нет пресетов';
+        const billing = current && current.billing;
+        const billLabel = billing
+            ? `${billing.city || '?'}, ${billing.country || '?'}`
+            : '—';
+
+        const action = await rawList('📝  NOTION AUTOREG', [
+            { label: `💳  Карта:       ${cardLabel}`, value: 'card' },
+            { label: `🏳️   Биллинг:     ${billLabel}`, value: null, disabled: true },
+            { label: `👥  Аккаунтов:   ${notionConfig.ACCOUNTS_COUNT}`, value: 'count' },
+            { label: '──────────────────────────────', value: null, disabled: true },
+            { label: '▶️   Запустить регистрацию', value: 'run' },
+            { label: '← Назад', value: null },
+        ]);
+
+        if (action === null) return;
+
+        if (action === 'card') {
+            await notionCardMenu(presets, idx);
+        } else if (action === 'count') {
+            await notionCountMenu(notionConfig.ACCOUNTS_COUNT);
+        } else if (action === 'run') {
+            if (!current) {
+                clearScreen();
+                console.log('❌  Нет ни одного пресета карты — нечем оплачивать.');
+                console.log('    Добавьте карту в notion/config.js → CARD_PRESETS.');
+                await new Promise(r => setTimeout(r, 2500));
+                continue;
+            }
+            await notionRun();
+        }
+    }
+}
+
+// Выбор / добавление / удаление пресета карты
+async function notionCardMenu(presets, currentIdx) {
+    const items = presets.map((p, i) => {
+        const tick = i === currentIdx ? '  ✓' : '';
+        const label = p.label || `${p.number.slice(0, 4)}…${p.number.slice(-4)}`;
+        const city = p.billing && p.billing.city ? ` — ${p.billing.city}, ${p.billing.country}` : '';
+        return { label: `${label}${city}${tick}`, value: { action: 'select', idx: i } };
+    });
+
+    items.push({ label: '──────────────────────────────', value: null, disabled: true });
+    items.push({ label: '➕  Добавить новую карту', value: { action: 'add' } });
+
+    if (presets.length > 0) {
+        items.push({ label: '🗑️   Удалить карту', value: { action: 'delete' } });
+    }
+
+    items.push({ label: '← Назад', value: null });
+
+    const choice = await rawList('💳  Карты Notion', items);
+    if (choice === null) return;
+
+    if (choice.action === 'select') {
+        const ok = saveNotionField('CARD_PRESET_INDEX', String(choice.idx));
+        clearScreen();
+        if (ok) {
+            const p = presets[choice.idx];
+            console.log(`✅  Карта выбрана: ${p.label || p.number}`);
+            if (p.bin_info) console.log(`    ${p.bin_info}`);
+            if (p.billing) {
+                console.log(`    Биллинг: ${p.billing.name}, ${p.billing.address}`);
+                console.log(`             ${p.billing.city}, ${p.billing.state || ''} ${p.billing.zip}, ${p.billing.country}`);
+            }
+        } else {
+            console.log('⚠️  Не удалось записать CARD_PRESET_INDEX');
+        }
+        await new Promise(r => setTimeout(r, 2000));
+    } else if (choice.action === 'add') {
+        await notionAddCardMenu(presets);
+    } else if (choice.action === 'delete') {
+        await notionDeleteCardMenu(presets);
+    }
+}
+
+// Определить страну по BIN через публичный API
+async function lookupBin(bin) {
+    try {
+        const res = await fetch(`https://lookup.binlist.net/${bin}`, {
+            headers: { 'Accept-Version': '3' }
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return {
+            country: (data.country && data.country.alpha2) || null,
+            countryName: (data.country && data.country.name) || null,
+            brand: data.brand || data.scheme || null,
+            type: data.type || null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+// Добавление новой карты
+async function notionAddCardMenu(presets) {
+    clearScreen();
+    console.log('➕  Добавление новой карты\n');
+
+    const number = (await rawInput('💳  Номер карты (16 цифр)')).trim();
+    if (!/^\d{13,19}$/.test(number)) {
+        console.log('  ❌  Неверный номер. Отмена.\n');
+        await new Promise(r => setTimeout(r, 1500));
+        return;
+    }
+
+    const exp = (await rawInput('📅  Срок (MM/YY, например 12/30)')).trim();
+    if (!/^\d{2}\/\d{2}$/.test(exp)) {
+        console.log('  ❌  Неверный формат срока. Отмена.\n');
+        await new Promise(r => setTimeout(r, 1500));
+        return;
+    }
+
+    const cvc = (await rawInput('🔒  CVC (3-4 цифры)')).trim();
+    if (!/^\d{3,4}$/.test(cvc)) {
+        console.log('  ❌  Неверный CVC. Отмена.\n');
+        await new Promise(r => setTimeout(r, 1500));
+        return;
+    }
+
+    // Определяем страну по BIN автоматически
+    console.log('\n🔍  Определяю страну по BIN...');
+    const binInfo = await lookupBin(number.slice(0, 6));
+
+    let country, brand;
+    if (binInfo && binInfo.country) {
+        country = binInfo.country;
+        brand = binInfo.brand;
+        console.log(`✅  Определено: ${binInfo.countryName} (${country}) · ${brand || '?'} ${binInfo.type || ''}`);
+
+        // Подтверждение или ручной ввод
+        const confirm = (await rawInput(`\n   Использовать страну ${country}? (Enter = да, или введи свой ISO код)`, country)).trim().toUpperCase();
+        country = confirm || country;
+    } else {
+        console.log('⚠️  Не удалось определить — введите вручную');
+        country = ((await rawInput('🌍  Страна (ISO код, US/CN/GB/DE...)', 'US')).trim() || 'US').toUpperCase();
+    }
+
+    console.log('\n📍  Биллинг адрес:\n');
+
+    // Дефолты по стране
+    const defaults = {
+        US: { name: 'John Doe', address: '123 Main Street', city: 'New York', state: 'NY', zip: '10001', phone: '+12015551234' },
+        GB: { name: 'James Smith', address: '10 Downing Street', city: 'London', state: '', zip: 'SW1A 2AA', phone: '+442079460000' },
+        DE: { name: 'Hans Müller', address: 'Hauptstraße 1', city: 'Berlin', state: '', zip: '10115', phone: '+4930123456' },
+        CN: { name: 'Li Wei', address: 'No. 123 Nanjing Road', city: 'Shanghai', state: 'Shanghai', zip: '200001', phone: '+8613800138000' },
+        FR: { name: 'Pierre Dubois', address: '1 Rue de Rivoli', city: 'Paris', state: '', zip: '75001', phone: '+33142601234' },
+        CA: { name: 'John MacDonald', address: '123 Bay Street', city: 'Toronto', state: 'ON', zip: 'M5J 2N8', phone: '+14165551234' },
+        JP: { name: 'Yuki Tanaka', address: '1-1 Chiyoda', city: 'Tokyo', state: '', zip: '100-0001', phone: '+81312345678' },
+    };
+    const def = defaults[country] || defaults.US;
+
+    const name = (await rawInput('👤  Имя на карте', def.name)).trim() || def.name;
+    const address = (await rawInput('🏠  Адрес', def.address)).trim() || def.address;
+    const city = (await rawInput('🏙️   Город', def.city)).trim() || def.city;
+    const state = (await rawInput('🗺️   Штат/Регион (опционально)', def.state || '')).trim();
+    const zip = (await rawInput('📮  ZIP / Индекс', def.zip)).trim() || def.zip;
+    const phone = (await rawInput('📞  Телефон (опционально)', def.phone || '')).trim();
+
+    const flagMap = { US: '🇺🇸', GB: '🇬🇧', DE: '🇩🇪', FR: '🇫🇷', CN: '🇨🇳', JP: '🇯🇵', CA: '🇨🇦', AU: '🇦🇺', RU: '🇷🇺', UA: '🇺🇦', NL: '🇳🇱', ES: '🇪🇸', IT: '🇮🇹', SE: '🇸🇪', FI: '🇫🇮' };
+    const flag = flagMap[country] || '💳';
+
+    const newPreset = {
+        label: `${flag} ${brand || 'Card'} · ${number.slice(0, 4)}…${number.slice(-4)}`,
+        number,
+        exp,
+        cvc,
+        bin_info: `${country} ${brand || 'card'} (BIN ${number.slice(0, 6)})`,
+        billing: {
+            name,
+            address,
+            city,
+            ...(state ? { state } : {}),
+            zip,
+            country,
+            ...(phone ? { phone } : {}),
+        },
+    };
+
+    const updated = [...presets, newPreset];
+    const ok = saveNotionCardPresets(updated);
+
+    clearScreen();
+    if (ok) {
+        console.log(`✅  Карта добавлена: ${newPreset.label}`);
+        console.log(`    Всего пресетов: ${updated.length}`);
+    } else {
+        console.log('⚠️  Не удалось сохранить пресет');
+    }
+    await new Promise(r => setTimeout(r, 2000));
+}
+
+// Удаление карты
+async function notionDeleteCardMenu(presets) {
+    if (presets.length === 0) {
+        clearScreen();
+        console.log('📭 Нет карт для удаления');
+        await new Promise(r => setTimeout(r, 1500));
+        return;
+    }
+
+    const items = presets.map((p, i) => {
+        const label = p.label || `${p.number.slice(0, 4)}…${p.number.slice(-4)}`;
+        const city = p.billing && p.billing.city ? ` — ${p.billing.city}, ${p.billing.country}` : '';
+        return { label: `${label}${city}`, value: i };
+    });
+    items.push({ label: '──────────────────────────────', value: null, disabled: true });
+    items.push({ label: '← Отмена', value: null });
+
+    const choice = await rawList('🗑️   Какую карту удалить?', items);
+    if (choice === null) return;
+
+    const removed = presets[choice];
+    const updated = presets.filter((_, i) => i !== choice);
+    const ok = saveNotionCardPresets(updated);
+
+    clearScreen();
+    if (ok) {
+        console.log(`✅  Удалена: ${removed.label || removed.number}`);
+        // Сбрасываем индекс на 0 если удалили текущий
+        saveNotionField('CARD_PRESET_INDEX', '0');
+    } else {
+        console.log('⚠️  Не удалось удалить пресет');
+    }
+    await new Promise(r => setTimeout(r, 2000));
+}
+
+async function notionCountMenu(currentCount) {
+    clearScreen();
+    while (true) {
+        const ans = await rawInput('👥  Сколько аккаунтов Notion создать? (1-50)', String(currentCount));
+        if (!/^\d+$/.test(ans) || parseInt(ans) < 1 || parseInt(ans) > 50) {
+            console.log('  ❌  Введите число от 1 до 50\n');
+            continue;
+        }
+        const ok = saveNotionField('ACCOUNTS_COUNT', String(parseInt(ans)));
+        if (ok) console.log(`✅  ACCOUNTS_COUNT = ${ans}`);
+        else    console.log('⚠️  Не удалось записать');
+        await new Promise(r => setTimeout(r, 700));
+        return;
+    }
+}
+
+// Запуск notion_workflow.js как дочерний процесс
+async function notionRun() {
+    clearScreen();
+    console.log('🚀 Запуск Notion Workflow...\n');
+    console.log('💡 Ctrl+C — остановка и возврат в меню\n');
+
+    process.removeListener('SIGINT', menuSigintHandler);
+    const noopSigint = () => {};
+    process.on('SIGINT', noopSigint);
+
+    await new Promise(resolve => {
+        const child = spawn(
+            process.execPath,
+            [path.join(__dirname, 'notion', 'notion_workflow.js')],
+            {
+                stdio: 'inherit',
+                cwd: path.join(__dirname, 'notion'),
+            }
+        );
+        child.on('close', resolve);
+    });
+
+    process.removeListener('SIGINT', noopSigint);
+    process.on('SIGINT', menuSigintHandler);
+
+    if (process.stdin.isTTY && process.stdin.setRawMode) {
+        try { process.stdin.setRawMode(false); } catch (_) {}
+    }
+    try { process.stdin.pause(); } catch (_) {}
+    clearScreen();
+
+    console.log('\n  ✅ Notion Workflow завершён');
+    console.log('\n  Нажмите любую клавишу для возврата...');
+
+    // Переинициализируем readline после дочернего процесса
+    const readline = require('readline');
+    readline.emitKeypressEvents(process.stdin);
+
+    await new Promise(resolve => {
+        process.stdin.resume();
+        if (process.stdin.isTTY && process.stdin.setRawMode) {
+            try { process.stdin.setRawMode(true); } catch (_) {}
+        }
+        const onKey = () => {
+            process.stdin.removeListener('keypress', onKey);
+            if (process.stdin.isTTY && process.stdin.setRawMode) {
+                try { process.stdin.setRawMode(false); } catch (_) {}
+            }
+            process.stdin.pause();
+            resolve();
+        };
+        process.stdin.on('keypress', onKey);
     });
 }
 

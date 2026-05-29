@@ -16,6 +16,38 @@ manual_sessions/
 errors/
 ready_to_sell/
 
+# FreeModel приватные данные (cookies, localStorage, аккаунты, ключи, логи)
+freemodel/imports/
+freemodel/accounts/
+freemodel/sessions/
+freemodel/keys.txt
+freemodel/logs/
+
+# Notion приватные данные (сессии, скриншоты, логи, конфиг с картой)
+notion/sessions/
+notion/ready/
+notion/errors/
+notion/logs/
+notion/config.js
+notion/notion_session_*.json
+notion/notion_payment_*.png
+notion/notion_after_card_*.png
+notion/error_*.png
+notion/emailnator_*.png
+
+# Скриншоты отладки
+*.png
+*.jpg
+*.jpeg
+
+# Битые артефакты
+nul
+C\357*
+
+# Claude Code / Obsidian локальные настройки
+.claude/
+.obsidian/
+
 # Временные сессии
 devin_session_*.json
 

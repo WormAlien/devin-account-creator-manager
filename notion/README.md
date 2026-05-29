@@ -47,12 +47,15 @@
 Страна: United States / US
 ```
 
-### Карта (проверено)
+### Карта (пример формата)
 ```
-Номер: 6233586376545103
-Месяц/Год: 07/2029
-CVC: 747
+Номер: XXXXXXXXXXXXXXXX (16 цифр)
+Месяц/Год: MM/YYYY
+CVC: XXX (3 цифры)
 ```
+
+> ⚠️ Карты добавляются через меню (`node menu.js` → Notion → Карта → Добавить)
+> или вручную в `notion/config.js` (этот файл в `.gitignore`)
 
 ## URL регистрации
 ```
@@ -73,5 +76,7 @@ https://www.notion.so/signup?from=marketing&pathname=%2Fexplore
 
 ## Файлы
 
-- `notion_autoreger.js` — основной скрипт (в разработке)
-- `config.js` — конфигурация (в разработке)
+- `notion_workflow.js` — основной скрипт регистрации
+- `config.example.js` — шаблон конфига (скопируйте в `config.js`)
+- `config.js` — ваш приватный конфиг (карты, пароли) — в `.gitignore`
+- `sessions/` — сохранённые сессии аккаунтов — в `.gitignore`

@@ -34,6 +34,8 @@ notion/notion_payment_*.png
 notion/notion_after_card_*.png
 notion/error_*.png
 notion/emailnator_*.png
+notion/.dashboard-config.json
+notion/.dashboard-cache.json
 
 # Скриншоты отладки
 *.png
@@ -66,8 +68,15 @@ PROJECT_INFO.md
 QUICK_START.md
 SESSIONS_STATUS.md
 
-# Батники (локальные)
+# Батники (локальные) — но routing/ батники мы пушим
 *.bat
+!routing/*.bat
+
+# Routing dir runtime artefacts
+routing/*.log
+routing/*.err
+routing/*.log.err
+routing/mode.txt
 
 # Операционные системы
 .DS_Store

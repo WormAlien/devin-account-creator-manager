@@ -273,7 +273,7 @@ async function mainMenu() {
         case 'devin-add': await devinAddMenu(); break;
         case 'freemodel-sessions': await freemodelSessionsMenu({ clearScreen, setKeypressListener, rawList }); break;
         case 'freemodel-create': await createFreemodelSession({ clearScreen, setKeypressListener, rawList, rawInput }); break;
-        case 'notion-sessions': await notionSessionsMenu({ clearScreen, setKeypressListener, rawList }); break;
+        case 'notion-sessions': await notionSessionsMenu({ clearScreen, setKeypressListener, rawList, rawInput }); break;
         case 'notion-create': await notionCreateMenu(); break;
         case 'exit':
             clearScreen();

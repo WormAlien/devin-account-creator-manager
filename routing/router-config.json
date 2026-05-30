@@ -1,0 +1,52 @@
+{
+  "modelBackends": {
+    "opus-4.8": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "opus-4.7": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "opus-4.6": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "sonnet-4.6": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "haiku-4.5": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "gpt-5.5": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "gpt-5.4": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "gpt-5.2": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "ComboWombo": "omniroute",
+    "ac-freemodel1/claude-opus-4-7": "omniroute",
+    "gemini-2.5-flash": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "gemini-3-flash": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "minimax-m2.5": {
+      "backend": "omniroute",
+      "asModel": "ac-freemodel1/claude-opus-4-7"
+    }
+  },
+  "defaultBackend": "omniroute",
+  "_mode": "omniroute"
+}

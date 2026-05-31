@@ -1,227 +1,372 @@
 <!doctype html>
-<html lang="ru" class="dark">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <title>Backend Switch</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-  tailwind.config = {
-    theme: {
-      extend: {
-        colors: {
-          bg:    '#0a0e0d',
-          panel: '#141a18',
-          card:  '#0d1512',
-          line:  '#1f2a25',
-          ink:   '#e0e0e0',
-          muted: '#6a8a7a',
-          dim:   '#3a4a42',
-          green: '#00ff88',
-          blue:  '#4aa3ff',
-          amber: '#ffc800',
-          red:   '#ff5757',
-        },
-        fontFamily: {
-          mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
-        },
-      },
-    },
-  };
-</script>
+<script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style type="text/tailwindcss">
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Surfaces */
+  --color-bg:        oklch(0.135 0.012 245);
+  --color-surface:   oklch(0.175 0.012 245);
+  --color-elevated:  oklch(0.215 0.013 245);
+  --color-line:      oklch(0.30  0.014 245);
+  --color-line-soft: oklch(0.24  0.014 245);
+
+  /* Text */
+  --color-ink:       oklch(0.96 0.005 245);
+  --color-muted:     oklch(0.66 0.013 245);
+  --color-dim:       oklch(0.48 0.014 245);
+  --color-faint:     oklch(0.36 0.014 245);
+
+  /* Semantic accents */
+  --color-emerald:   oklch(0.78 0.17 155);
+  --color-amber:     oklch(0.82 0.17 80);
+  --color-azure:     oklch(0.72 0.16 240);
+  --color-violet:    oklch(0.74 0.17 295);
+  --color-crimson:   oklch(0.70 0.20 22);
+  --color-rose:      oklch(0.72 0.18 12);
+}
+
+@layer utilities {
+  .pulse-dot::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: currentColor;
+    opacity: 0.55;
+    animation: pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+}
+
+@keyframes pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.55; }
+  70%  { transform: scale(2.4); opacity: 0;    }
+  100% { transform: scale(2.4); opacity: 0;    }
+}
+@keyframes slide-up {
+  from { transform: translateY(10px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.toast-enter { animation: slide-up 0.18s cubic-bezier(0.2, 0, 0, 1); }
+
+/* Custom scrollbar */
+*::-webkit-scrollbar         { width: 9px; height: 9px; }
+*::-webkit-scrollbar-thumb   { background: oklch(0.30 0.014 245); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: oklch(0.40 0.014 245); border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-track   { background: transparent; }
+</style>
 <style>
-  body { background: #0a0e0d; }
-  .scrollbar-thin::-webkit-scrollbar      { width: 8px; height: 8px; }
-  .scrollbar-thin::-webkit-scrollbar-thumb{ background: #1f2a25; border-radius: 4px; }
-  .scrollbar-thin::-webkit-scrollbar-track{ background: transparent; }
-  /* Toast animation */
-  @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-  .toast-enter { animation: slideIn 0.2s ease-out; }
+  body { background: oklch(0.135 0.012 245); font-feature-settings: "cv11", "ss01", "ss03"; }
+  html { color-scheme: dark; }
+  [data-tab-content] { display: none; }
+  [data-tab-content].active { display: block; }
 </style>
 </head>
-<body class="bg-bg text-ink font-sans antialiased">
+<body class="text-ink font-sans antialiased min-h-dvh">
 
-<div class="max-w-7xl mx-auto px-6 py-6">
+<!-- ════════════════════ LAYOUT: sidebar + main ════════════════════ -->
+<div class="grid min-h-dvh grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)]">
 
-  <!-- Header -->
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <h1 class="text-xl font-semibold text-green">🔀 Backend Switch</h1>
-      <div class="text-xs text-muted mt-1">Edits <code class="text-green">~/.claude/settings.json</code> · restart Claude Code after switching</div>
-    </div>
-    <div class="text-right text-xs text-muted">
-      <div>Current: <span id="hdr-current" class="text-green font-semibold">…</span></div>
-      <div id="hdr-url" class="font-mono"></div>
-    </div>
-  </div>
-
-  <!-- Tabs -->
-  <div class="flex gap-1 border-b border-line mb-6">
-    <button class="tab-btn px-4 py-2 text-sm font-semibold text-green border-b-2 border-green -mb-px" data-tab="switcher">🔀 Switcher</button>
-    <button class="tab-btn px-4 py-2 text-sm font-semibold text-muted hover:text-ink border-b-2 border-transparent -mb-px" data-tab="accounts">👥 Accounts</button>
-  </div>
-
-  <!-- Toast container -->
-  <div id="toasts" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2"></div>
-
-  <!-- ═══════════════ TAB: SWITCHER ═══════════════════════════════════ -->
-  <div id="tab-switcher" class="tab-panel">
-    <div class="bg-panel border border-line rounded-lg p-6">
-
-      <div class="bg-card border border-line rounded-md p-4 mb-4 text-center">
-        <div class="text-[10px] uppercase tracking-widest text-muted mb-1">Active Backend</div>
-        <div id="current-target" class="text-lg font-semibold text-green">Loading…</div>
-        <div id="current-url" class="text-xs text-muted font-mono mt-1"></div>
-      </div>
-
-      <div class="grid grid-cols-2 gap-3 mb-4">
-        <button id="btn-omniroute" class="omni-btn group bg-card border-2 border-line rounded-md p-4 text-left hover:border-line transition" onclick="switchTo('omniroute')">
-          <div class="text-sm font-semibold">🟢 FreeModel</div>
-          <div class="text-xs text-muted mt-1">основной — tools, vision, длинные сессии</div>
-          <div class="text-[10px] text-dim font-mono mt-2">OmniRoute :20128</div>
-        </button>
-        <button id="btn-notion" class="notion-btn group bg-card border-2 border-line rounded-md p-4 text-left hover:border-line transition" onclick="switchTo('notion')">
-          <div class="text-sm font-semibold">🔵 Notion</div>
-          <div class="text-xs text-muted mt-1">cheap — короткие запросы без tools</div>
-          <div class="text-[10px] text-dim font-mono mt-2">notion-manager :8190</div>
-        </button>
-      </div>
-
-      <div class="bg-card border border-line rounded-md p-3 text-xs text-muted leading-relaxed space-y-1">
-        <div>
-          Клик переписывает <code class="text-green">ANTHROPIC_BASE_URL</code> и <code class="text-green">ANTHROPIC_API_KEY</code>.
-          Перед каждой записью создаётся <code>.bak-&lt;timestamp&gt;</code>.
-          <strong class="text-ink">После клика — перезапусти Claude Code.</strong>
-        </div>
-        <div class="pt-1 border-t border-line/60">
-          <span class="text-ink font-semibold">🔄 Перезапуск дашборда:</span>
-          двойной клик по <code class="text-green">routing\restart-dashboard.bat</code>
-          (убивает старый процесс, запускает свежий, открывает UI).
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <aside class="lg:sticky lg:top-0 lg:h-dvh bg-surface border-r border-line-soft flex flex-col">
+    <!-- Brand -->
+    <div class="px-5 pt-5 pb-4">
+      <div class="flex items-center gap-2.5">
+        <div class="relative size-7 rounded-lg bg-gradient-to-br from-emerald to-azure flex items-center justify-center">
+          <span class="text-bg font-bold text-sm font-mono">↯</span>
         </div>
         <div>
-          <span class="text-red font-semibold">🆘 Откат settings.json:</span>
-          <code class="text-red">PANIC-restore-omniroute.bat</code> в корне проекта.
+          <div class="font-semibold text-sm tracking-tight">Backend Switch</div>
+          <div class="text-[10px] text-dim font-mono uppercase tracking-widest">localhost:8200</div>
         </div>
-      </div>
-
-      <!-- Whoami -->
-      <div class="mt-6 pt-5 border-t border-line">
-        <h2 class="text-sm font-semibold text-green mb-2">🔍 Whoami</h2>
-        <div class="text-xs text-muted mb-3">Вставь строку из лога OmniRoute — найду name/email по любому UUID-фрагменту.</div>
-        <textarea id="whoami-input" rows="2" placeholder="anthropic-compatible-…:fd48f370-… или просто fd48f370"
-          class="w-full bg-card text-ink border border-line rounded-md p-3 font-mono text-xs resize-y focus:outline-none focus:border-green/50"></textarea>
-        <div class="flex gap-2 mt-2">
-          <button onclick="runWhoami()" class="flex-1 px-3 py-2 text-xs bg-card border border-line text-ink rounded-md hover:border-green/50 transition">🔍 Найти</button>
-          <button onclick="showTab('accounts')" class="flex-1 px-3 py-2 text-xs bg-card border border-line text-ink rounded-md hover:border-green/50 transition">📋 Все аккаунты →</button>
-        </div>
-        <div id="whoami-results" class="mt-3"></div>
       </div>
     </div>
-  </div>
 
-  <!-- ═══════════════ TAB: ACCOUNTS ════════════════════════════════════ -->
-  <div id="tab-accounts" class="tab-panel hidden space-y-5">
-
-    <!-- Devin section -->
-    <section class="bg-panel border border-line rounded-lg">
-      <header class="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-line">
-        <div>
-          <h2 class="text-sm font-semibold text-[#a78bfa]">🤖 Devin sessions</h2>
-          <div class="text-xs text-muted mt-0.5">из <code class="text-[#a78bfa]">manual_sessions/</code> + <code class="text-[#a78bfa]">ready_to_sell/</code> + <code class="text-[#a78bfa]">errors/</code>, кеш в <code class="text-[#a78bfa]">logs/.quota_cache.json</code></div>
-        </div>
-        <div class="flex gap-2 items-center flex-wrap">
-          <input id="devin-filter" placeholder="фильтр…" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 w-32 focus:outline-none focus:border-[#a78bfa]/50">
-          <select id="devin-sort" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 focus:outline-none focus:border-[#a78bfa]/50">
-            <option value="date-desc">📅 дата ↓ (новые)</option>
-            <option value="date-asc">📅 дата ↑ (старые)</option>
-            <option value="status">⚡ статус</option>
-            <option value="plan">💰 план (Pro→Free)</option>
-            <option value="email">📧 email A→Z</option>
-          </select>
-          <button onclick="loadDevinSessions(false)" class="text-xs px-3 py-1.5 bg-card border border-line rounded-md hover:border-[#a78bfa]/50">↻ Список</button>
-          <button onclick="loadDevinSessions(true)" class="text-xs px-3 py-1.5 bg-[#a78bfa]/10 border border-[#a78bfa]/50 text-[#a78bfa] rounded-md hover:bg-[#a78bfa]/20">🔄 Все квоты (~30s)</button>
-        </div>
-      </header>
-      <div id="devin-list" class="overflow-x-auto scrollbar-thin">
-        <div class="p-6 text-center text-muted text-xs">—</div>
+    <!-- Current backend pill (always visible) -->
+    <div class="mx-3 mb-4 px-3 py-2.5 rounded-lg bg-elevated border border-line-soft">
+      <div class="text-[10px] uppercase tracking-widest text-dim mb-1">active</div>
+      <div class="flex items-center gap-2">
+        <span id="side-dot" class="relative inline-block size-2 rounded-full text-emerald bg-emerald pulse-dot"></span>
+        <span id="side-current" class="text-sm font-semibold truncate">…</span>
       </div>
-    </section>
+      <div id="side-url" class="text-[10px] text-faint font-mono mt-1 truncate">…</div>
+    </div>
 
-    <!-- FreeModel section -->
-    <section class="bg-panel border border-line rounded-lg">
-      <header class="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-line">
-        <div>
-          <h2 class="text-sm font-semibold text-amber">🆓 FreeModel sessions</h2>
-          <div class="text-xs text-muted mt-0.5">кеш квот в <code class="text-amber">logs/.freemodel_quota_cache.json</code></div>
+    <!-- Nav -->
+    <nav class="px-2 space-y-0.5 flex-1">
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="switcher">
+        <span class="text-base">🔀</span>
+        <span class="flex-1">Switcher</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="devin">
+        <span class="text-base">🤖</span>
+        <span class="flex-1">Devin</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-devin">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="freemodel">
+        <span class="text-base">🆓</span>
+        <span class="flex-1">FreeModel</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-freemodel">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="notion">
+        <span class="text-base">📝</span>
+        <span class="flex-1">Notion</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-notion">—</span>
+      </button>
+    </nav>
+
+    <!-- Sidebar footer -->
+    <div class="p-3 mx-2 mb-2 rounded-md bg-elevated/40 border border-line-soft text-[11px] text-dim space-y-1.5">
+      <div class="flex items-center gap-1.5"><span class="text-emerald">▶</span> <code class="font-mono text-[10px]">restart-dashboard.bat</code></div>
+      <div class="flex items-center gap-1.5"><span class="text-rose">⏻</span> <code class="font-mono text-[10px]">PANIC-restore-omniroute.bat</code></div>
+    </div>
+  </aside>
+
+  <!-- ═══════════ MAIN ═══════════ -->
+  <main class="min-w-0">
+
+    <!-- Toast container -->
+    <div id="toasts" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- ═════════ TAB: SWITCHER ═════════ -->
+    <div data-tab-content="switcher" class="active">
+      <div class="max-w-3xl mx-auto px-6 py-8 space-y-6">
+
+        <header>
+          <h1 class="text-2xl font-semibold tracking-tight">Switcher</h1>
+          <p class="text-sm text-muted mt-1">Управляет <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code> между двумя бэкендами.</p>
+        </header>
+
+        <!-- Hero: active backend -->
+        <div class="rounded-xl bg-surface border border-line-soft p-6 relative overflow-hidden">
+          <div class="absolute -top-32 -right-32 size-64 rounded-full bg-gradient-to-br from-emerald/20 to-azure/0 blur-3xl pointer-events-none"></div>
+          <div class="relative">
+            <div class="text-[11px] uppercase tracking-[0.2em] text-dim mb-2">Active backend</div>
+            <div class="flex items-baseline gap-3">
+              <div id="hero-name" class="text-xl font-semibold">Loading…</div>
+              <span id="hero-pill" class="px-2 py-0.5 rounded-md text-[10px] font-mono uppercase tracking-wider bg-elevated border border-line-soft text-muted">—</span>
+            </div>
+            <div id="hero-url" class="text-xs text-muted font-mono mt-1.5">—</div>
+          </div>
         </div>
-        <div class="flex gap-2 items-center flex-wrap">
-          <input id="freemodel-filter" placeholder="фильтр…" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 w-32 focus:outline-none focus:border-amber/50">
-          <select id="freemodel-sort" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 focus:outline-none focus:border-amber/50">
-            <option value="date-desc">📅 дата ↓ (новые)</option>
-            <option value="date-asc">📅 дата ↑ (старые)</option>
-            <option value="status">⚡ статус</option>
-            <option value="quota-asc">💰 квота ↑</option>
-            <option value="quota-desc">💰 квота ↓</option>
-            <option value="updated">🔄 свежесть кеша</option>
-          </select>
-          <button onclick="loadFreemodelSessions(false)" class="text-xs px-3 py-1.5 bg-card border border-line rounded-md hover:border-amber/50">↻ Список</button>
-          <button onclick="loadFreemodelSessions(true)" class="text-xs px-3 py-1.5 bg-amber/10 border border-amber/50 text-amber rounded-md hover:bg-amber/20">🔄 Все квоты (~30s)</button>
+
+        <!-- Switch buttons -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button id="btn-omniroute" data-target="omniroute" onclick="switchTo('omniroute')"
+                  class="group relative text-left bg-surface border-2 border-line-soft hover:border-emerald/60 rounded-xl p-5 transition data-[active]:border-emerald data-[active]:shadow-[0_0_30px_-8px_oklch(0.78_0.17_155_/_0.45)]">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-base font-semibold">FreeModel</span>
+              <span data-on-active class="hidden text-emerald text-[10px] font-mono uppercase tracking-wider">● Active</span>
+            </div>
+            <div class="text-xs text-muted leading-relaxed">основной — tools, vision, длинные сессии</div>
+            <div class="text-[10px] text-faint font-mono mt-3 flex items-center gap-2">
+              <span class="size-1.5 rounded-full bg-emerald inline-block"></span>
+              OmniRoute · :20128
+            </div>
+          </button>
+          <button id="btn-notion" data-target="notion" onclick="switchTo('notion')"
+                  class="group relative text-left bg-surface border-2 border-line-soft hover:border-azure/60 rounded-xl p-5 transition data-[active]:border-azure data-[active]:shadow-[0_0_30px_-8px_oklch(0.72_0.16_240_/_0.45)]">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-base font-semibold">Notion</span>
+              <span data-on-active class="hidden text-azure text-[10px] font-mono uppercase tracking-wider">● Active</span>
+            </div>
+            <div class="text-xs text-muted leading-relaxed">cheap — короткие запросы без tools</div>
+            <div class="text-[10px] text-faint font-mono mt-3 flex items-center gap-2">
+              <span class="size-1.5 rounded-full bg-azure inline-block"></span>
+              notion-manager · :8190
+            </div>
+          </button>
         </div>
-      </header>
-      <div id="freemodel-list" class="overflow-x-auto scrollbar-thin">
-        <div class="p-6 text-center text-muted text-xs">—</div>
+
+        <!-- How it works -->
+        <details class="rounded-xl bg-surface border border-line-soft text-xs text-muted">
+          <summary class="cursor-pointer px-5 py-3 font-medium text-ink select-none flex items-center gap-2">
+            <span>Как это работает</span>
+            <span class="text-faint">— нажми чтобы развернуть</span>
+          </summary>
+          <div class="px-5 pb-5 space-y-2 leading-relaxed">
+            <div>Клик переписывает <code class="font-mono text-emerald">ANTHROPIC_BASE_URL</code> и <code class="font-mono text-emerald">ANTHROPIC_API_KEY</code> в <code class="font-mono">~/.claude/settings.json</code>.</div>
+            <div>Перед каждой записью создаётся <code class="font-mono">.bak-&lt;timestamp&gt;</code>.</div>
+            <div><span class="text-ink font-semibold">После переключения перезапусти Claude Code</span> (читает settings.json только при старте).</div>
+            <div class="pt-2 border-t border-line-soft">
+              <span class="text-emerald font-semibold">▶ Рестарт дашборда:</span> двойной клик по <code class="font-mono">routing\restart-dashboard.bat</code>
+            </div>
+            <div>
+              <span class="text-rose font-semibold">⏻ Откат settings.json:</span> <code class="font-mono">PANIC-restore-omniroute.bat</code> в корне проекта
+            </div>
+          </div>
+        </details>
+
+        <!-- Whoami -->
+        <section class="rounded-xl bg-surface border border-line-soft p-5 space-y-3">
+          <div>
+            <h2 class="text-sm font-semibold flex items-center gap-2">
+              <span class="text-violet">🔍</span> Whoami
+            </h2>
+            <p class="text-xs text-muted mt-1">Вставь любой ID-фрагмент из лога OmniRoute — найду name / email.</p>
+          </div>
+          <textarea id="whoami-input" rows="2"
+            placeholder="anthropic-compatible-…:fd48f370-…  или  просто fd48f370"
+            class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2.5 font-mono text-xs resize-y focus:outline-none focus:border-violet/60 focus:ring-2 focus:ring-violet/20"></textarea>
+          <div class="flex gap-2">
+            <button onclick="runWhoami()" class="flex-1 px-3 py-2 text-xs font-medium bg-elevated border border-line-soft rounded-lg hover:border-violet/60 hover:text-violet transition">🔍 Найти</button>
+          </div>
+          <div id="whoami-results"></div>
+        </section>
+
       </div>
-    </section>
+    </div>
 
-    <!-- Notion section -->
-    <section class="bg-panel border border-line rounded-lg">
-      <header class="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-line">
-        <div>
-          <h2 class="text-sm font-semibold text-blue">📝 Notion sessions</h2>
-          <div class="text-xs text-muted mt-0.5">план/статус из <code class="text-blue">notion/sessions/&lt;name&gt;/info.json</code></div>
+    <!-- ═════════ TAB: DEVIN ═════════ -->
+    <div data-tab-content="devin">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-violet">🤖</span> Devin sessions
+            </h1>
+            <p class="text-sm text-muted mt-1">
+              из <code class="font-mono text-violet text-xs">manual_sessions/</code> +
+              <code class="font-mono text-violet text-xs">ready_to_sell/</code> +
+              <code class="font-mono text-violet text-xs">errors/</code>;
+              кеш квот — <code class="font-mono text-violet text-xs">logs/.quota_cache.json</code>
+            </p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <input id="devin-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-violet/60 focus:ring-2 focus:ring-violet/20">
+            <select id="devin-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-violet/60">
+              <option value="date-desc">📅 дата ↓ (новые)</option>
+              <option value="date-asc">📅 дата ↑ (старые)</option>
+              <option value="status">⚡ статус</option>
+              <option value="plan">💰 план (Pro→Free)</option>
+              <option value="quota-asc">📊 квота: меньше использовано</option>
+              <option value="quota-desc">📊 квота: больше использовано</option>
+              <option value="updated">🔄 свежесть кеша</option>
+              <option value="email">📧 email A→Z</option>
+            </select>
+            <button onclick="loadDevinSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadDevinSessions(true)" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🔄 Квоты ~30s</button>
+            <button onclick="launchScript('devin-autoreg', '➕ Devin autoreg запущен в новом окне')" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить аккаунт</button>
+            <button onclick="launchScript('menu', '🗂 menu.js открыт в новом окне')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line" title="Полное TUI меню (карта, прокси, локаль и т.д.)">⚙ Настройки</button>
+          </div>
+        </header>
+        <div id="devin-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
+          <div class="p-12 text-center text-muted text-xs">—</div>
         </div>
-        <div class="flex gap-2 items-center flex-wrap">
-          <input id="notion-filter" placeholder="фильтр…" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 w-32 focus:outline-none focus:border-blue/50">
-          <select id="notion-sort" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 focus:outline-none focus:border-blue/50">
-            <option value="date-desc">📅 дата ↓ (новые)</option>
-            <option value="date-asc">📅 дата ↑ (старые)</option>
-            <option value="status">⚡ статус</option>
-            <option value="email">📧 email A→Z</option>
-          </select>
-          <button onclick="loadNotionSessions()" class="text-xs px-3 py-1.5 bg-card border border-line rounded-md hover:border-blue/50">↻ Обновить</button>
-        </div>
-      </header>
-      <div id="notion-list" class="overflow-x-auto scrollbar-thin">
-        <div class="p-6 text-center text-muted text-xs">—</div>
       </div>
-    </section>
+    </div>
 
-  </div>
+    <!-- ═════════ TAB: FREEMODEL ═════════ -->
+    <div data-tab-content="freemodel">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-amber">🆓</span> FreeModel sessions
+            </h1>
+            <p class="text-sm text-muted mt-1">кеш — <code class="font-mono text-amber text-xs">logs/.freemodel_quota_cache.json</code></p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <input id="freemodel-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-amber/60 focus:ring-2 focus:ring-amber/20">
+            <select id="freemodel-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-amber/60">
+              <option value="date-desc">📅 дата ↓ (новые)</option>
+              <option value="date-asc">📅 дата ↑ (старые)</option>
+              <option value="status">⚡ статус</option>
+              <option value="quota-asc">📊 квота: меньше использовано</option>
+              <option value="quota-desc">📊 квота: больше использовано</option>
+              <option value="avail-desc">💰 доступно: больше денег</option>
+              <option value="avail-asc">💰 доступно: меньше денег</option>
+              <option value="updated">🔄 свежесть кеша</option>
+            </select>
+            <button onclick="loadFreemodelSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadFreemodelSessions(true)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Квоты ~30s</button>
+            <button onclick="launchScript('freemodel-create', '➕ FreeModel: создание сессии запущено')" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать сессию</button>
+          </div>
+        </header>
+        <div id="freemodel-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
+          <div class="p-12 text-center text-muted text-xs">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: NOTION ═════════ -->
+    <div data-tab-content="notion">
+      <div class="px-6 py-8 space-y-6">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-azure">📝</span> Notion sessions
+            </h1>
+            <p class="text-sm text-muted mt-1">план / статус из <code class="font-mono text-azure text-xs">notion/sessions/&lt;name&gt;/info.json</code></p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <input id="notion-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-azure/60 focus:ring-2 focus:ring-azure/20">
+            <select id="notion-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-azure/60">
+              <option value="date-desc">📅 дата ↓ (новые)</option>
+              <option value="date-asc">📅 дата ↑ (старые)</option>
+              <option value="status">⚡ статус</option>
+              <option value="email">📧 email A→Z</option>
+            </select>
+            <button onclick="loadNotionSessions()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="launchScript('notion-create', '➕ Notion: workflow запущен')" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать аккаунт</button>
+          </div>
+        </header>
+
+        <!-- Card picker -->
+        <section class="rounded-xl bg-surface border border-line-soft p-5">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h2 class="text-sm font-semibold flex items-center gap-2"><span class="text-azure">💳</span> Карта для autoreg</h2>
+              <p class="text-xs text-muted mt-0.5">Выбранная карта используется в <code class="font-mono text-azure text-xs">notion_workflow.js</code> при создании новых аккаунтов.</p>
+            </div>
+            <button onclick="loadNotionCards()" class="text-xs px-3 py-1.5 bg-elevated border border-line-soft rounded-md hover:border-azure/60">↻ Перечитать</button>
+          </div>
+          <div id="notion-cards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div class="col-span-full p-6 text-center text-muted text-xs">загрузка…</div>
+          </div>
+        </section>
+
+        <div id="notion-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
+          <div class="p-12 text-center text-muted text-xs">—</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
 </div>
 
 <script>
-// ═══════════════ STATE ════════════════════════════════════════════════
+// ═══════════════════ STATE ═══════════════════════════════════════════
 const state = {
-  currentTarget: null,
-  backendUrls:   {},
-  omni:      [],
-  devin:     [],
+  current: null,
+  urls:    {},
+  devin:   [],
   freemodel: [],
-  notion:    [],
+  notion:  [],
+  loaded:  { devin: false, freemodel: false, notion: false },
 };
 
-// ═══════════════ HELPERS ══════════════════════════════════════════════
-const $  = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const $   = (id) => document.getElementById(id);
+const esc = (s)  => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-function toast(text, kind = 'info', ms = 4000) {
-  const colors = {
-    info:    'bg-blue/10  border-blue/50  text-blue',
-    success: 'bg-green/10 border-green/50 text-green',
-    warn:    'bg-amber/10 border-amber/50 text-amber',
-    error:   'bg-red/10   border-red/50   text-red',
-  }[kind];
+// ═══════════════════ TOASTS ══════════════════════════════════════════
+function toast(text, kind='info', ms=4000) {
+  const map = {
+    info:    'bg-azure/10   border-azure/50   text-azure',
+    success: 'bg-emerald/10 border-emerald/50 text-emerald',
+    warn:    'bg-amber/10   border-amber/50   text-amber',
+    error:   'bg-crimson/10 border-crimson/50 text-crimson',
+  };
   const el = document.createElement('div');
-  el.className = `toast-enter px-4 py-2.5 rounded-md border text-xs ${colors} shadow-lg max-w-md`;
+  el.className = `toast-enter pointer-events-auto px-4 py-2.5 rounded-lg border text-xs font-medium ${map[kind]} shadow-2xl max-w-md backdrop-blur-sm`;
   el.textContent = text;
   $('toasts').appendChild(el);
   setTimeout(() => el.remove(), ms);
@@ -231,173 +376,190 @@ function ageStr(ms) {
   if (!ms) return '';
   const dt = Date.now() - ms;
   if (dt < 60_000)    return 'только что';
-  if (dt < 3600_000)  return Math.round(dt / 60_000) + 'м';
-  if (dt < 86400_000) return Math.round(dt / 3600_000) + 'ч';
-  return Math.round(dt / 86400_000) + 'д';
+  if (dt < 3_600_000) return Math.round(dt / 60_000) + 'м';
+  if (dt < 86_400_000) return Math.round(dt / 3_600_000) + 'ч';
+  return Math.round(dt / 86_400_000) + 'д';
 }
 
-function pctColor(pct) {
-  if (pct == null) return 'text-dim';
-  if (pct < 10)    return 'text-red';
-  if (pct < 30)    return 'text-amber';
-  return 'text-green';
+function pctColor(p) {
+  if (p == null) return 'text-faint';
+  if (p < 10)    return 'text-crimson';
+  if (p < 30)    return 'text-amber';
+  return 'text-emerald';
 }
 
-// ═══════════════ TABS ═════════════════════════════════════════════════
+// ═══════════════════ NAV / TABS ══════════════════════════════════════
 function showTab(name) {
-  document.querySelectorAll('.tab-btn').forEach(b => {
+  document.querySelectorAll('.nav-btn').forEach(b => {
     const on = b.dataset.tab === name;
-    b.classList.toggle('text-green', on);
-    b.classList.toggle('border-green', on);
+    b.classList.toggle('text-ink', on);
+    b.classList.toggle('bg-elevated', on);
     b.classList.toggle('text-muted', !on);
-    b.classList.toggle('border-transparent', !on);
   });
-  document.querySelectorAll('.tab-panel').forEach(p => {
-    p.classList.toggle('hidden', p.id !== 'tab-' + name);
+  document.querySelectorAll('[data-tab-content]').forEach(p => {
+    p.classList.toggle('active', p.dataset.tabContent === name);
   });
-  if (name === 'accounts' && !state.accountsLoaded) {
-    state.accountsLoaded = true;
-    loadDevinSessions(false);
-    loadFreemodelSessions(false);
+  if (name === 'devin'     && !state.loaded.devin)     { state.loaded.devin = true; loadDevinSessions(false); }
+  if (name === 'freemodel' && !state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); }
+  if (name === 'notion' && !state.loaded.notion) {
+    state.loaded.notion = true;
     loadNotionSessions();
+    loadNotionCards();
   }
 }
-document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
-// ═══════════════ SWITCHER ═════════════════════════════════════════════
-const LABELS = { omniroute: '🟢 FreeModel (OmniRoute)', notion: '🔵 Notion (cheap)', unknown: '❓ unknown' };
+// ═══════════════════ SWITCHER STATUS ═════════════════════════════════
+const LABELS = { omniroute: 'FreeModel (OmniRoute)', notion: 'Notion (cheap)', unknown: 'unknown' };
+const COLORS = { omniroute: 'text-emerald bg-emerald', notion: 'text-azure bg-azure', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
-    const res = await fetch('/__switch/api/status');
+    const res  = await fetch('/__switch/api/status');
     const data = await res.json();
-    state.currentTarget = data.current;
-    state.backendUrls = {};
-    for (const [k, v] of Object.entries(data.backends || {})) state.backendUrls[k] = v.base_url;
-    updateSwitcherUI();
-  } catch (e) {
-    toast('Статус: ' + e.message, 'error');
+    state.current = data.current;
+    state.urls = {};
+    for (const [k, v] of Object.entries(data.backends || {})) state.urls[k] = v.base_url;
+    paintStatus();
+  } catch (e) { toast('Status: ' + e.message, 'error'); }
+}
+
+function paintStatus() {
+  const t = state.current;
+  const label = LABELS[t] || ('? ' + t);
+  const dotClass = COLORS[t] || COLORS.unknown;
+
+  $('side-current').textContent = label;
+  $('side-url').textContent     = state.urls[t] || '';
+  $('side-dot').className       = `relative inline-block size-2 rounded-full pulse-dot ${dotClass}`;
+
+  $('hero-name').textContent = label;
+  $('hero-url').textContent  = state.urls[t] || '';
+  $('hero-pill').textContent = t || '?';
+
+  for (const btn of document.querySelectorAll('[data-target]')) {
+    const on = btn.dataset.target === t;
+    btn.toggleAttribute('data-active', on);
+    btn.querySelector('[data-on-active]').classList.toggle('hidden', !on);
   }
 }
 
-function updateSwitcherUI() {
-  const t = state.currentTarget;
-  const label = LABELS[t] || '? ' + t;
-  $('current-target').textContent = label;
-  $('current-url').textContent    = state.backendUrls[t] || '';
-  $('hdr-current').textContent    = label;
-  $('hdr-url').textContent        = state.backendUrls[t] || '';
-  const btnOmni   = $('btn-omniroute');
-  const btnNotion = $('btn-notion');
-  btnOmni.className   = 'omni-btn bg-card border-2 rounded-md p-4 text-left transition ' +
-    (t === 'omniroute' ? 'border-green shadow-[0_0_20px_rgba(0,255,136,0.25)]' : 'border-line hover:border-green/50');
-  btnNotion.className = 'notion-btn bg-card border-2 rounded-md p-4 text-left transition ' +
-    (t === 'notion'    ? 'border-blue shadow-[0_0_20px_rgba(74,163,255,0.25)]' : 'border-line hover:border-blue/50');
-}
-
 async function switchTo(target) {
-  if (target === state.currentTarget) { toast('Уже на ' + LABELS[target], 'warn'); return; }
+  if (target === state.current) { toast('Уже на ' + LABELS[target], 'warn'); return; }
   try {
     const res = await fetch('/__switch/api/switch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'switch failed');
-    state.currentTarget = target;
-    updateSwitcherUI();
-    toast(`✓ settings.json → ${LABELS[target]}. Перезапусти Claude Code!`, 'success', 8000);
-  } catch (e) {
-    toast('Switch: ' + e.message, 'error');
-  }
+    state.current = target; paintStatus();
+    toast(`✓ ${LABELS[target]} — перезапусти Claude Code!`, 'success', 7000);
+  } catch (e) { toast('Switch: ' + e.message, 'error'); }
 }
 
-// ═══════════════ WHOAMI ═══════════════════════════════════════════════
-async function runWhoami() {
-  const input = $('whoami-input').value.trim();
-  if (!input) { toast('Вставь строку', 'warn'); return; }
-  try {
-    const res = await fetch('/__switch/api/whoami', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'whoami failed');
-    renderWhoami(data.matches || [], data.prefixes || []);
-  } catch (e) {
-    toast('Whoami: ' + e.message, 'error');
-  }
-}
-
-function renderWhoami(matches, prefixes) {
-  const box = $('whoami-results');
-  if (!matches.length) {
-    box.innerHTML = `<div class="text-xs text-amber p-3 bg-amber/10 border border-amber/30 rounded-md">⚠ ничего не найдено для: ${prefixes.join(', ') || '(пусто)'}</div>`;
-    return;
-  }
-  const rows = matches.map(a => `
-    <div class="flex items-center gap-3 p-2 border-b border-line/50 font-mono text-xs">
-      <span>${a.is_active ? '🟢' : '⚪'}</span>
-      <span class="text-ink w-20">${esc(a.id?.substring(0,8))}</span>
-      <span class="text-muted w-16">[${esc(provLabel(a.provider))}]</span>
-      <span class="text-ink flex-1 truncate">${esc(a.name || '(no name)')}</span>
-      <span class="text-muted text-[11px]">${esc(a.test_status || '?')}${a.error_code ? ' err='+esc(a.error_code) : ''}</span>
-    </div>
-  `).join('');
-  box.innerHTML = `<div class="bg-card border border-line rounded-md p-2">
-    <div class="text-[10px] text-dim px-2 py-1">матч по: ${prefixes.join(', ')}</div>${rows}
-  </div>`;
-}
-
-function provLabel(p) {
+// ═══════════════════ WHOAMI ══════════════════════════════════════════
+function provShort(p) {
   if (!p) return '?';
   if (p.startsWith('anthropic-compat')) return 'free';
   return p;
 }
 
-// ═══════════════ OMNI ACCOUNTS (used only by Whoami in Switcher tab) ══
-async function loadOmniAccounts() {
+async function runWhoami() {
+  const input = $('whoami-input').value.trim();
+  if (!input) { toast('Вставь строку из лога', 'warn'); return; }
   try {
-    const res = await fetch('/__switch/api/accounts');
-    const data = await res.json();
-    state.omni = data.accounts || [];
-  } catch (e) {
-    toast('Omni: ' + e.message, 'error');
-  }
-}
-
-async function toggleOmni(id, active) {
-  try {
-    const res = await fetch('/__switch/api/accounts/toggle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, active }),
+    const res  = await fetch('/__switch/api/whoami', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'toggle failed');
-    toast(`${id} → ${active ? 'ON' : 'OFF'}`, 'success');
-  } catch (e) {
-    toast('Toggle: ' + e.message, 'error');
-  }
+    if (!res.ok) throw new Error(data.error);
+    renderWhoami(data.matches || [], data.prefixes || []);
+  } catch (e) { toast('Whoami: ' + e.message, 'error'); }
 }
 
-// ═══════════════ DEVIN ═══════════════════════════════════════════════
+function renderWhoami(matches, prefixes) {
+  const box = $('whoami-results');
+  if (!matches.length) {
+    box.innerHTML = `<div class="text-xs text-amber px-3 py-2.5 bg-amber/10 border border-amber/30 rounded-lg">⚠ ничего не найдено для: <code class="font-mono">${esc(prefixes.join(', ') || '∅')}</code></div>`;
+    return;
+  }
+  const rows = matches.map(a => `
+    <div class="flex items-center gap-3 px-3 py-2 border-b border-line-soft/60 last:border-0 font-mono text-xs">
+      <span class="relative inline-block size-1.5 rounded-full ${a.is_active ? 'bg-emerald' : 'bg-faint'}"></span>
+      <span class="text-ink w-20">${esc(a.id?.substring(0,8))}</span>
+      <span class="text-faint w-14">${esc(provShort(a.provider))}</span>
+      <span class="text-ink flex-1 truncate">${esc(a.name || '(no name)')}</span>
+      <span class="text-muted text-[11px]">${esc(a.test_status || '?')}${a.error_code ? ' · err=' + esc(a.error_code) : ''}</span>
+    </div>`).join('');
+  box.innerHTML = `<div class="bg-elevated border border-line-soft rounded-lg overflow-hidden">
+    <div class="text-[10px] uppercase tracking-widest text-faint px-3 py-2 bg-bg/40">матч по: ${esc(prefixes.join(', '))}</div>
+    ${rows}
+  </div>`;
+}
+
+// ═══════════════════ TABLE HELPERS ═══════════════════════════════════
+function table(headers, rows, footer) {
+  return `
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-[10px] uppercase tracking-wider text-faint bg-bg/40 border-b border-line-soft">
+          ${headers.map(h => `<th class="px-3 py-2.5 ${h.align ? 'text-' + h.align : 'text-left'} ${h.w || ''} font-medium">${h.label}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-line-soft/50">${rows}</tbody>
+    </table>
+    <div class="px-4 py-2.5 text-[10px] text-faint border-t border-line-soft bg-bg/30 font-mono">${footer}</div>`;
+}
+
+function bar(pct, color) {
+  if (pct == null) return '<span class="text-faint">—</span>';
+  const w = Math.min(100, Math.max(0, pct));
+  return `
+    <div class="flex items-center gap-2 min-w-24">
+      <div class="flex-1 h-1.5 bg-line-soft rounded-full overflow-hidden">
+        <div class="h-full ${color} rounded-full" style="width:${w}%"></div>
+      </div>
+      <span class="${color.replace('bg-','text-')} text-xs font-mono w-8 text-right">${Math.round(pct)}%</span>
+    </div>`;
+}
+
+// Parse "0% used" → 0
+function parsePct(s) {
+  if (!s) return null;
+  const m = String(s).match(/(-?\d+(?:\.\d+)?)\s*%/);
+  return m ? parseFloat(m[1]) : null;
+}
+
+// Parse "$10.00 / $66.67" → fraction 0..1
+function parseFrac(used, max) {
+  const u = parseFloat(String(used || '').replace(/[^\d.]/g, ''));
+  const m = parseFloat(String(max  || '').replace(/[^\d.]/g, ''));
+  if (!isFinite(u) || !isFinite(m) || m === 0) return null;
+  return u / m;
+}
+
+function actBtn(onclick, title, icon, color) {
+  return `<button onclick="${onclick}" title="${esc(title)}" class="size-7 inline-flex items-center justify-center rounded-md border border-line-soft text-${color} hover:border-${color}/60 hover:bg-${color}/10 transition text-[12px]">${icon}</button>`;
+}
+
+// ═══════════════════ DEVIN ═══════════════════════════════════════════
 async function loadDevinSessions(refresh) {
   $('devin-list').innerHTML = refresh
-    ? `<div class="p-6 text-center text-[#a78bfa] text-xs">🔄 обновляю квоты Devin через headless Chrome… (~30s)</div>`
-    : `<div class="p-6 text-center text-muted text-xs">загрузка…</div>`;
+    ? `<div class="p-12 text-center text-violet text-xs">🔄 обновляю квоты Devin через headless Chrome… (~30s)</div>`
+    : `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
   try {
     const url = '/__switch/api/devin/sessions' + (refresh ? '?refresh=1' : '');
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.devin = data.sessions || [];
+    $('nav-count-devin').textContent = state.devin.length;
     renderDevin(data.refreshed);
-    if (refresh) toast(`✓ Devin: квоты обновлены`, 'success');
+    if (refresh) toast('✓ Devin: квоты обновлены', 'success');
   } catch (e) {
-    $('devin-list').innerHTML = `<div class="p-4 text-red text-xs">${esc(e.message)}</div>`;
+    $('devin-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
   }
 }
 
@@ -407,12 +569,30 @@ function renderDevin(refreshed) {
   const all = state.devin.slice();
 
   const planRank = (q) => q?.plan === 'paid' ? 0 : q?.plan === 'free' ? 1 : 2;
+  // Composite quota score: daily used + weekly used, treats no-data as -1 (sorts last in asc)
+  const quotaScore = (s) => {
+    const d = parsePct(s.quota?.daily);
+    const w = parsePct(s.quota?.weekly);
+    if (d == null && w == null) return null;
+    return ((d ?? 0) + (w ?? 0)) / (d != null && w != null ? 2 : 1);
+  };
+  const cmpQuota = (a, b, dir) => {
+    const qa = quotaScore(a), qb = quotaScore(b);
+    // No-quota rows always go to the end regardless of direction
+    if (qa == null && qb == null) return 0;
+    if (qa == null) return 1;
+    if (qb == null) return -1;
+    return dir === 'asc' ? qa - qb : qb - qa;
+  };
   const sortFns = {
-    'date-desc': (a, b) => (b.date || '').localeCompare(a.date || ''),
-    'date-asc':  (a, b) => (a.date || '').localeCompare(b.date || ''),
-    'status':    (a, b) => (a.status === b.status ? 0 : a.status === '✅' ? -1 : 1) || (b.date || '').localeCompare(a.date || ''),
-    'plan':      (a, b) => planRank(a.quota) - planRank(b.quota) || (b.date || '').localeCompare(a.date || ''),
-    'email':     (a, b) => (a.email || '').localeCompare(b.email || ''),
+    'date-desc':  (a, b) => (b.date || '').localeCompare(a.date || ''),
+    'date-asc':   (a, b) => (a.date || '').localeCompare(b.date || ''),
+    'status':     (a, b) => (a.status === b.status ? 0 : a.status === '✅' ? -1 : 1) || (b.date || '').localeCompare(a.date || ''),
+    'plan':       (a, b) => planRank(a.quota) - planRank(b.quota) || (b.date || '').localeCompare(a.date || ''),
+    'quota-asc':  (a, b) => cmpQuota(a, b, 'asc')  || (b.date || '').localeCompare(a.date || ''),
+    'quota-desc': (a, b) => cmpQuota(a, b, 'desc') || (b.date || '').localeCompare(a.date || ''),
+    'updated':    (a, b) => (b.quota?.updatedAt || 0) - (a.quota?.updatedAt || 0),
+    'email':      (a, b) => (a.email || '').localeCompare(b.email || ''),
   };
   all.sort(sortFns[sort] || sortFns['date-desc']);
 
@@ -421,106 +601,103 @@ function renderDevin(refreshed) {
     : all;
 
   if (!list.length) {
-    $('devin-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
+    $('devin-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
     return;
   }
 
   const planBadge = (plan) => {
-    if (plan === 'paid') return '<span class="px-1.5 py-0.5 rounded text-[10px] border bg-green/15 text-green border-green/30">💰 Pro</span>';
-    if (plan === 'free') return '<span class="px-1.5 py-0.5 rounded text-[10px] border bg-dim/20 text-muted border-dim/40">📦 Free</span>';
-    return '<span class="text-dim">—</span>';
+    if (plan === 'paid') return '<span class="px-2 py-0.5 rounded-md text-[10px] font-medium border bg-emerald/10 text-emerald border-emerald/30">💰 Pro</span>';
+    if (plan === 'free') return '<span class="px-2 py-0.5 rounded-md text-[10px] font-medium border bg-bg text-muted border-line-soft">📦 Free</span>';
+    return '<span class="text-faint text-xs">—</span>';
   };
   const sourceBadge = (src) => {
     const map = {
-      manual: { txt: 'manual', cls: 'text-blue border-blue/30' },
-      ready:  { txt: 'ready',  cls: 'text-green border-green/30' },
-      errors: { txt: 'errors', cls: 'text-red border-red/30' },
+      manual: 'text-azure border-azure/40 bg-azure/5',
+      ready:  'text-emerald border-emerald/40 bg-emerald/5',
+      errors: 'text-crimson border-crimson/40 bg-crimson/5',
     };
-    const m = map[src] || { txt: src || '?', cls: 'text-muted border-dim/40' };
-    return `<span class="px-1.5 py-0.5 rounded text-[10px] border ${m.cls}">${m.txt}</span>`;
+    return `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono border ${map[src] || 'text-muted border-line-soft'}">${esc(src || '?')}</span>`;
   };
 
   const rows = list.map(s => {
-    const ok = s.status === '✅';
+    const ok    = s.status === '✅';
     const email = s.email !== 'Неизвестно' ? s.email : s.name;
     const org   = s.orgName !== 'Неизвестно' ? s.orgName : '';
-    let daily   = '<span class="text-dim">—</span>';
-    let weekly  = '<span class="text-dim">—</span>';
-    let plan    = '<span class="text-dim">—</span>';
-    let age     = '<span class="text-dim">нет в кеше</span>';
-    if (s.quota) {
-      daily  = `<span class="text-amber">${esc(s.quota.daily  || '—')}</span>`;
-      weekly = `<span class="text-blue">${esc(s.quota.weekly || '—')}</span>`;
-      plan   = planBadge(s.quota.plan);
-      age    = `<span class="text-muted">${ageStr(s.quota.updatedAt)}</span>`;
+    const q     = s.quota || null;
+
+    let dailyCell  = '<span class="text-faint">—</span>';
+    let weeklyCell = '<span class="text-faint">—</span>';
+    let planCell   = '<span class="text-faint">—</span>';
+    let ageCell    = '<span class="text-faint">нет в кеше</span>';
+    if (q) {
+      const dPct = parsePct(q.daily);
+      const wPct = parsePct(q.weekly);
+      // Daily/weekly are "X% used" — fill bar shows USED amount
+      dailyCell  = dPct != null ? bar(dPct, dPct > 70 ? 'bg-crimson' : dPct > 40 ? 'bg-amber' : 'bg-emerald') : '<span class="text-faint">—</span>';
+      weeklyCell = wPct != null ? bar(wPct, wPct > 70 ? 'bg-crimson' : wPct > 40 ? 'bg-amber' : 'bg-emerald') : '<span class="text-faint">—</span>';
+      planCell   = planBadge(q.plan);
+      ageCell    = `<span class="text-muted">${ageStr(q.updatedAt)}</span>`;
     }
 
-    return `<tr class="border-b border-line/50 hover:bg-card/50">
-      <td class="px-3 py-2 w-8">${ok ? '✅' : '❌'}</td>
-      <td class="px-3 py-2 text-sm text-ink truncate max-w-xs" title="${esc(email)}">${esc(email)}</td>
-      <td class="px-3 py-2 text-xs text-muted truncate max-w-[180px]" title="${esc(org)}">${esc(org)}</td>
-      <td class="px-3 py-2">${sourceBadge(s.source)}</td>
-      <td class="px-3 py-2 text-xs text-muted whitespace-nowrap">${esc(s.date || '')}</td>
-      <td class="px-3 py-2">${plan}</td>
-      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${daily}</td>
-      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${weekly}</td>
-      <td class="px-3 py-2 text-[10px] text-right">${age}</td>
-      <td class="px-3 py-2 text-right whitespace-nowrap">
-        <button onclick="openSession('devin', '${esc(s.name)}')"
-                title="Открыть в браузере (app.devin.ai/settings/usage)" class="px-2 py-1 text-[11px] rounded border border-blue/40 text-blue hover:bg-blue/10">🌐</button>
-        <button onclick="refreshQuota('${esc(s.name)}', 'devin')"
-                title="Обновить квоту" class="px-2 py-1 text-[11px] rounded border border-amber/40 text-amber hover:bg-amber/10">🔄</button>
-        <button onclick="deleteSession('devin', '${esc(s.name)}', '${esc(email)}')"
-                title="Удалить сессию" class="px-2 py-1 text-[11px] rounded border border-red/40 text-red hover:bg-red/10">🗑</button>
+    return `<tr class="hover:bg-elevated/40 transition">
+      <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[260px]" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2.5 text-xs text-muted font-mono truncate max-w-[160px]" title="${esc(org)}">${esc(org)}</td>
+      <td class="px-3 py-2.5">${sourceBadge(s.source)}</td>
+      <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
+      <td class="px-3 py-2.5">${planCell}</td>
+      <td class="px-3 py-2.5">${dailyCell}</td>
+      <td class="px-3 py-2.5">${weeklyCell}</td>
+      <td class="px-3 py-2.5 text-[10px] text-right text-muted font-mono">${ageCell}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${actBtn(`openSession('devin', ${JSON.stringify(s.name)})`,       'Открыть в Chrome (app.devin.ai/settings/usage)', '🌐', 'azure')}
+        ${actBtn(`refreshQuota(${JSON.stringify(s.name)}, 'devin')`,       'Обновить квоту',                                  '🔄', 'amber')}
+        ${actBtn(`deleteSession('devin', ${JSON.stringify(s.name)}, ${JSON.stringify(email)})`, 'Удалить сессию',             '🗑', 'crimson')}
       </td>
     </tr>`;
   }).join('');
 
   const withQuota = state.devin.filter(s => s.quota).length;
-  const paidCnt   = state.devin.filter(s => s.quota?.plan === 'paid').length;
-  const tag = refreshed ? ' <span class="text-green">(только что обновлено)</span>' : '';
+  const paid      = state.devin.filter(s => s.quota?.plan === 'paid').length;
+  const refreshTag = refreshed ? ' · <span class="text-emerald">только что обновлено</span>' : '';
 
-  $('devin-list').innerHTML = `
-    <table class="min-w-full text-sm">
-      <thead>
-        <tr class="text-[10px] uppercase tracking-wider text-dim border-b border-line">
-          <th class="px-3 py-2 text-left w-8"></th>
-          <th class="px-3 py-2 text-left">Email</th>
-          <th class="px-3 py-2 text-left">Org</th>
-          <th class="px-3 py-2 text-left">Src</th>
-          <th class="px-3 py-2 text-left">Created</th>
-          <th class="px-3 py-2 text-left">Plan</th>
-          <th class="px-3 py-2 text-right">Daily</th>
-          <th class="px-3 py-2 text-right">Weekly</th>
-          <th class="px-3 py-2 text-right">Updated</th>
-          <th class="px-3 py-2 text-right">Actions</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <div class="px-3 py-2 text-[10px] text-dim border-t border-line">
-      ${list.length} из ${state.devin.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой · ${paidCnt} Pro${tag}
-    </div>`;
+  $('devin-list').innerHTML = table(
+    [
+      { label: '', w: 'w-8' },
+      { label: 'Email' },
+      { label: 'Org' },
+      { label: 'Src' },
+      { label: 'Created' },
+      { label: 'Plan' },
+      { label: 'Daily used' },
+      { label: 'Weekly used' },
+      { label: 'Updated', align: 'right' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${list.length} из ${state.devin.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой · ${paid} Pro${refreshTag}`
+  );
 }
 
 $('devin-filter').addEventListener('input', () => renderDevin(false));
 $('devin-sort').addEventListener('change', () => renderDevin(false));
 
-// ═══════════════ FREEMODEL ════════════════════════════════════════════
+// ═══════════════════ FREEMODEL ═══════════════════════════════════════
 async function loadFreemodelSessions(refresh) {
   $('freemodel-list').innerHTML = refresh
-    ? `<div class="p-6 text-center text-amber text-xs">🔄 обновляю квоты через headless Chrome… (~30s на ${state.freemodel.length || 16} сессий)</div>`
-    : `<div class="p-6 text-center text-muted text-xs">загрузка…</div>`;
+    ? `<div class="p-12 text-center text-amber text-xs">🔄 обновляю квоты FreeModel через headless Chrome… (~30s)</div>`
+    : `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
   try {
     const url = '/__switch/api/freemodel/sessions' + (refresh ? '?refresh=1' : '');
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.freemodel = data.sessions || [];
+    $('nav-count-freemodel').textContent = state.freemodel.length;
     renderFreemodel(data.refreshed);
-    if (refresh) toast(`✓ Квоты обновлены`, 'success');
+    if (refresh) toast('✓ FreeModel: квоты обновлены', 'success');
   } catch (e) {
-    $('freemodel-list').innerHTML = `<div class="p-4 text-red text-xs">${esc(e.message)}</div>`;
+    $('freemodel-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
   }
 }
 
@@ -529,19 +706,43 @@ function renderFreemodel(refreshed) {
   const sort   = $('freemodel-sort').value;
   const all = state.freemodel.slice();
 
-  // Sort first, then filter (so counts in footer make sense vs `all`)
-  const parseAvail = (s) => {
-    if (!s?.quota?.available) return -1;
-    const m = String(s.quota.available).match(/[\d.,]+/);
-    return m ? parseFloat(m[0].replace(',', '')) : -1;
+  // FreeModel quota = $used / $max. Score by average used% across 5h + 7d windows.
+  // No-quota rows always go to the end regardless of direction.
+  const parseDollars = (s) => {
+    if (s == null) return null;
+    const m = String(s).match(/[\d.,]+/);
+    if (!m) return null;
+    const n = parseFloat(m[0].replace(',', ''));
+    return isFinite(n) ? n : null;
+  };
+  const fmUsedScore = (s) => {
+    const q = s?.quota;
+    if (!q) return null;
+    const u5 = parseDollars(q.h5), m5 = parseDollars(q.h5max);
+    const u7 = parseDollars(q.d7), m7 = parseDollars(q.d7max);
+    const parts = [];
+    if (u5 != null && m5 && m5 > 0) parts.push(u5 / m5);
+    if (u7 != null && m7 && m7 > 0) parts.push(u7 / m7);
+    if (!parts.length) return null;
+    return parts.reduce((a, b) => a + b, 0) / parts.length;  // 0..1
+  };
+  const fmAvail = (s) => parseDollars(s?.quota?.available);
+  const cmpNullable = (a, b, getter, dir) => {
+    const va = getter(a), vb = getter(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;   // no-data → end
+    if (vb == null) return -1;
+    return dir === 'asc' ? va - vb : vb - va;
   };
   const sortFns = {
-    'date-desc':  (a, b) => (b.date || '').localeCompare(a.date || ''),
-    'date-asc':   (a, b) => (a.date || '').localeCompare(b.date || ''),
-    'status':     (a, b) => (a.status === b.status ? 0 : a.status === '✅' ? -1 : 1) || (b.date || '').localeCompare(a.date || ''),
-    'quota-desc': (a, b) => parseAvail(b) - parseAvail(a),
-    'quota-asc':  (a, b) => parseAvail(a) - parseAvail(b),
-    'updated':    (a, b) => (b.quota?.updatedAt || 0) - (a.quota?.updatedAt || 0),
+    'date-desc':   (a, b) => (b.date || '').localeCompare(a.date || ''),
+    'date-asc':    (a, b) => (a.date || '').localeCompare(b.date || ''),
+    'status':      (a, b) => (a.status === b.status ? 0 : a.status === '✅' ? -1 : 1) || (b.date || '').localeCompare(a.date || ''),
+    'quota-asc':   (a, b) => cmpNullable(a, b, fmUsedScore, 'asc')  || (b.date || '').localeCompare(a.date || ''),
+    'quota-desc':  (a, b) => cmpNullable(a, b, fmUsedScore, 'desc') || (b.date || '').localeCompare(a.date || ''),
+    'avail-desc':  (a, b) => cmpNullable(a, b, fmAvail,     'desc') || (b.date || '').localeCompare(a.date || ''),
+    'avail-asc':   (a, b) => cmpNullable(a, b, fmAvail,     'asc')  || (b.date || '').localeCompare(a.date || ''),
+    'updated':     (a, b) => (b.quota?.updatedAt || 0) - (a.quota?.updatedAt || 0),
   };
   all.sort(sortFns[sort] || sortFns['date-desc']);
 
@@ -550,81 +751,86 @@ function renderFreemodel(refreshed) {
     : all;
 
   if (!list.length) {
-    $('freemodel-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
+    $('freemodel-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
     return;
   }
 
   const rows = list.map(s => {
-    const ok = s.status === '✅';
+    const ok    = s.status === '✅';
     const email = s.email || s.name;
-    let avail = '<span class="text-dim">—</span>';
-    let h5 = '<span class="text-dim">—</span>';
-    let d7 = '<span class="text-dim">—</span>';
-    let age = '<span class="text-dim">нет в кеше</span>';
-    if (s.quota) {
-      avail = `<span class="text-green font-semibold">${esc(s.quota.available || '—')}</span>`;
-      if (s.quota.h5) h5 = `<span class="text-amber">${esc(s.quota.h5)}<span class="text-dim">/${esc(s.quota.h5max)}</span></span>`;
-      if (s.quota.d7) d7 = `<span class="text-blue">${esc(s.quota.d7)}<span class="text-dim">/${esc(s.quota.d7max)}</span></span>`;
-      age = `<span class="text-muted">${ageStr(s.quota.updatedAt)}</span>`;
+    const q     = s.quota || null;
+
+    let availCell = '<span class="text-faint">—</span>';
+    let h5Cell    = '<span class="text-faint">—</span>';
+    let d7Cell    = '<span class="text-faint">—</span>';
+    let ageCell   = '<span class="text-faint">нет в кеше</span>';
+    if (q) {
+      availCell = `<span class="text-emerald font-semibold font-mono">${esc(q.available || '—')}</span>`;
+      if (q.h5) {
+        const frac = parseFrac(q.h5, q.h5max);
+        h5Cell = frac != null
+          ? bar(frac * 100, frac > 0.7 ? 'bg-crimson' : frac > 0.4 ? 'bg-amber' : 'bg-emerald')
+          : `<span class="text-amber font-mono text-xs">${esc(q.h5)}/${esc(q.h5max)}</span>`;
+      }
+      if (q.d7) {
+        const frac = parseFrac(q.d7, q.d7max);
+        d7Cell = frac != null
+          ? bar(frac * 100, frac > 0.7 ? 'bg-crimson' : frac > 0.4 ? 'bg-amber' : 'bg-azure')
+          : `<span class="text-azure font-mono text-xs">${esc(q.d7)}/${esc(q.d7max)}</span>`;
+      }
+      ageCell = `<span class="text-muted">${ageStr(q.updatedAt)}</span>`;
     }
 
-    return `<tr class="border-b border-line/50 hover:bg-card/50">
-      <td class="px-3 py-2 w-8">${ok ? '✅' : '❌'}</td>
-      <td class="px-3 py-2 text-sm text-ink truncate max-w-xs" title="${esc(email)}">${esc(email)}</td>
-      <td class="px-3 py-2 text-xs text-muted whitespace-nowrap">${esc(s.date || '')}</td>
-      <td class="px-3 py-2 text-xs text-right font-mono">${avail}</td>
-      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${h5}</td>
-      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${d7}</td>
-      <td class="px-3 py-2 text-[10px] text-right">${age}</td>
-      <td class="px-3 py-2 text-right whitespace-nowrap">
-        <button onclick="openSession('freemodel', '${esc(s.name)}')"
-                title="Открыть в браузере" class="px-2 py-1 text-[11px] rounded border border-blue/40 text-blue hover:bg-blue/10">🌐</button>
-        <button onclick="refreshQuota('${esc(s.name)}', 'freemodel')"
-                title="Обновить квоту" class="px-2 py-1 text-[11px] rounded border border-amber/40 text-amber hover:bg-amber/10">🔄</button>
-        <button onclick="deleteSession('freemodel', '${esc(s.name)}', '${esc(email)}')"
-                title="Удалить сессию" class="px-2 py-1 text-[11px] rounded border border-red/40 text-red hover:bg-red/10">🗑</button>
+    return `<tr class="hover:bg-elevated/40 transition">
+      <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[260px]" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
+      <td class="px-3 py-2.5 text-right">${availCell}</td>
+      <td class="px-3 py-2.5">${h5Cell}</td>
+      <td class="px-3 py-2.5">${d7Cell}</td>
+      <td class="px-3 py-2.5 text-[10px] text-right text-muted font-mono">${ageCell}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${actBtn(`openSession('freemodel', ${JSON.stringify(s.name)})`,    'Открыть в Chrome (claude.ai/usage)', '🌐', 'azure')}
+        ${actBtn(`refreshQuota(${JSON.stringify(s.name)}, 'freemodel')`,    'Обновить квоту',                     '🔄', 'amber')}
+        ${actBtn(`deleteSession('freemodel', ${JSON.stringify(s.name)}, ${JSON.stringify(email)})`, 'Удалить сессию', '🗑', 'crimson')}
       </td>
     </tr>`;
   }).join('');
 
   const withQuota = state.freemodel.filter(s => s.quota).length;
-  const tag = refreshed ? ' <span class="text-green">(только что обновлено)</span>' : '';
+  const refreshTag = refreshed ? ' · <span class="text-emerald">только что обновлено</span>' : '';
 
-  $('freemodel-list').innerHTML = `
-    <table class="min-w-full text-sm">
-      <thead>
-        <tr class="text-[10px] uppercase tracking-wider text-dim border-b border-line">
-          <th class="px-3 py-2 text-left w-8"></th>
-          <th class="px-3 py-2 text-left">Email</th>
-          <th class="px-3 py-2 text-left">Created</th>
-          <th class="px-3 py-2 text-right">Available</th>
-          <th class="px-3 py-2 text-right">5h window</th>
-          <th class="px-3 py-2 text-right">7d window</th>
-          <th class="px-3 py-2 text-right">Updated</th>
-          <th class="px-3 py-2 text-right">Actions</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <div class="px-3 py-2 text-[10px] text-dim border-t border-line">
-      ${list.length} из ${state.freemodel.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой${tag}
-    </div>`;
+  $('freemodel-list').innerHTML = table(
+    [
+      { label: '', w: 'w-8' },
+      { label: 'Email' },
+      { label: 'Created' },
+      { label: 'Available', align: 'right' },
+      { label: '5h window' },
+      { label: '7d window' },
+      { label: 'Updated', align: 'right' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${list.length} из ${state.freemodel.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой${refreshTag}`
+  );
 }
 
 $('freemodel-filter').addEventListener('input', () => renderFreemodel(false));
 $('freemodel-sort').addEventListener('change', () => renderFreemodel(false));
 
-// ═══════════════ NOTION ═══════════════════════════════════════════════
+// ═══════════════════ NOTION ══════════════════════════════════════════
 async function loadNotionSessions() {
-  $('notion-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">загрузка…</div>`;
+  $('notion-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
   try {
-    const res = await fetch('/__switch/api/notion/sessions');
+    const res  = await fetch('/__switch/api/notion/sessions');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.notion = data.sessions || [];
+    $('nav-count-notion').textContent = state.notion.length;
     renderNotion();
   } catch (e) {
-    $('notion-list').innerHTML = `<div class="p-4 text-red text-xs">${esc(e.message)}</div>`;
+    $('notion-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
   }
 }
 
@@ -633,12 +839,9 @@ function renderNotion() {
   const sort   = $('notion-sort').value;
   const all = state.notion.slice();
 
-  // Status priority for sorting: paid > trial-card-added > trial > free > banned > in-progress > unknown
   const statusRank = (s) => ({
-    paid: 0, 'trial-card-added': 1, trial: 2, free: 3,
-    'in-progress': 4, banned: 5, unknown: 6,
+    paid: 0, 'trial-card-added': 1, trial: 2, free: 3, 'in-progress': 4, banned: 5, unknown: 6,
   })[s] ?? 99;
-
   const sortFns = {
     'date-desc': (a, b) => (b.date || '').localeCompare(a.date || ''),
     'date-asc':  (a, b) => (a.date || '').localeCompare(b.date || ''),
@@ -652,83 +855,153 @@ function renderNotion() {
     : all;
 
   if (!list.length) {
-    $('notion-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
+    $('notion-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
     return;
   }
 
   const statusBadge = (s) => {
-    const config = {
-      banned:             { icon: '🚫', cls: 'bg-red/15 text-red border-red/30' },
-      'trial-card-added': { icon: '💳', cls: 'bg-green/15 text-green border-green/30' },
-      trial:              { icon: '🆓', cls: 'bg-amber/15 text-amber border-amber/30' },
-      paid:               { icon: '💰', cls: 'bg-green/15 text-green border-green/30' },
-      free:               { icon: '📦', cls: 'bg-dim/20 text-muted border-dim/40' },
-      'in-progress':      { icon: '⏳', cls: 'bg-blue/15 text-blue border-blue/30' },
-    }[s.status] || { icon: '✅', cls: 'bg-dim/20 text-muted border-dim/40' };
-    const label = s.planType && s.planType !== 'unknown' ? `${s.status} · ${s.planType}` : s.status;
-    return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${config.cls}">${config.icon} ${esc(label)}</span>`;
+    const cfg = {
+      banned:             { i: '🚫', c: 'bg-crimson/10 text-crimson border-crimson/30' },
+      'trial-card-added': { i: '💳', c: 'bg-emerald/10 text-emerald border-emerald/30' },
+      trial:              { i: '🆓', c: 'bg-amber/10 text-amber border-amber/30' },
+      paid:               { i: '💰', c: 'bg-emerald/10 text-emerald border-emerald/30' },
+      free:               { i: '📦', c: 'bg-bg text-muted border-line-soft' },
+      'in-progress':      { i: '⏳', c: 'bg-azure/10 text-azure border-azure/30' },
+    }[s.status] || { i: '✓', c: 'bg-bg text-muted border-line-soft' };
+    const lbl = s.planType && s.planType !== 'unknown' ? `${s.status} · ${s.planType}` : s.status;
+    return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium border ${cfg.c}">${cfg.i} ${esc(lbl)}</span>`;
   };
 
   const rows = list.map(s => {
     const email = s.email || s.name;
-    return `<tr class="border-b border-line/50 hover:bg-card/50">
-      <td class="px-3 py-2 text-sm text-ink truncate max-w-xs" title="${esc(email)}">${esc(email)}</td>
-      <td class="px-3 py-2">${statusBadge(s)}</td>
-      <td class="px-3 py-2 text-xs text-muted whitespace-nowrap">${esc(s.date || '')}</td>
-      <td class="px-3 py-2 text-xs text-muted">${s.card ? '💳 ' + esc(s.card) : '<span class="text-dim">—</span>'}</td>
-      <td class="px-3 py-2 text-right whitespace-nowrap">
-        <button onclick="openSession('notion', '${esc(s.name)}')"
-                title="Открыть в браузере (Notion.so)" class="px-2 py-1 text-[11px] rounded border border-blue/40 text-blue hover:bg-blue/10">🌐</button>
-        <button onclick="deleteSession('notion', '${esc(s.name)}', '${esc(email)}')"
-                title="Удалить сессию" class="px-2 py-1 text-[11px] rounded border border-red/40 text-red hover:bg-red/10">🗑</button>
+    return `<tr class="hover:bg-elevated/40 transition">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[300px]" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2.5">${statusBadge(s)}</td>
+      <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
+      <td class="px-3 py-2.5 text-xs text-muted">${s.card ? '💳 ' + esc(s.card) : '<span class="text-faint">—</span>'}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${actBtn(`openSession('notion', ${JSON.stringify(s.name)})`, 'Открыть в Chrome (notion.so)', '🌐', 'azure')}
+        ${actBtn(`deleteSession('notion', ${JSON.stringify(s.name)}, ${JSON.stringify(email)})`, 'Удалить сессию', '🗑', 'crimson')}
       </td>
     </tr>`;
   }).join('');
 
-  $('notion-list').innerHTML = `
-    <table class="min-w-full text-sm">
-      <thead>
-        <tr class="text-[10px] uppercase tracking-wider text-dim border-b border-line">
-          <th class="px-3 py-2 text-left">Email</th>
-          <th class="px-3 py-2 text-left">Status</th>
-          <th class="px-3 py-2 text-left">Created</th>
-          <th class="px-3 py-2 text-left">Card</th>
-          <th class="px-3 py-2 text-right">Actions</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <div class="px-3 py-2 text-[10px] text-dim border-t border-line">
-      ${list.length} из ${state.notion.length}${filter ? ' (отфильтр.)' : ''}
-    </div>`;
+  $('notion-list').innerHTML = table(
+    [
+      { label: 'Email' },
+      { label: 'Status' },
+      { label: 'Created' },
+      { label: 'Card' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${list.length} из ${state.notion.length}${filter ? ' (отфильтр.)' : ''}`
+  );
 }
 
 $('notion-filter').addEventListener('input', () => renderNotion());
 $('notion-sort').addEventListener('change', () => renderNotion());
 
-// ═══════════════ SESSION ACTIONS (open / refresh / delete) ════════════
+// ═══════════════════ NOTION CARDS ════════════════════════════════════
+async function loadNotionCards() {
+  const box = $('notion-cards');
+  box.innerHTML = `<div class="col-span-full p-6 text-center text-muted text-xs">загрузка…</div>`;
+  try {
+    const res  = await fetch('/__switch/api/notion/cards');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    renderNotionCards(data.presets || [], data.currentIndex);
+  } catch (e) {
+    box.innerHTML = `<div class="col-span-full p-4 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function renderNotionCards(presets, current) {
+  const box = $('notion-cards');
+  if (!presets.length) {
+    box.innerHTML = `<div class="col-span-full p-6 text-center text-muted text-xs">нет пресетов в notion/config.js</div>`;
+    return;
+  }
+
+  const rotateActive = current === 'rotate';
+
+  const rotateCard = `
+    <button onclick="selectNotionCard('rotate')"
+            class="text-left rounded-lg border-2 p-4 transition ${rotateActive ? 'border-azure bg-azure/10 shadow-[0_0_25px_-8px_oklch(0.72_0.16_240_/_0.45)]' : 'border-line-soft bg-elevated hover:border-azure/40'}">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-semibold">🔄 Ротация</span>
+        ${rotateActive ? '<span class="text-[10px] font-mono text-azure uppercase tracking-wider">● Active</span>' : ''}
+      </div>
+      <div class="text-xs text-muted leading-relaxed">Брать карты по очереди (i % presets.length).</div>
+    </button>`;
+
+  const cards = presets.map((p, i) => {
+    const num    = p.number || '';
+    const masked = num.length >= 8 ? `${num.slice(0,4)}···${num.slice(-4)}` : num;
+    const active = current === i;
+    const billing = p.billing || {};
+    return `
+      <button onclick="selectNotionCard(${i})"
+              class="text-left rounded-lg border-2 p-4 transition ${active ? 'border-azure bg-azure/10 shadow-[0_0_25px_-8px_oklch(0.72_0.16_240_/_0.45)]' : 'border-line-soft bg-elevated hover:border-azure/40'}">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold truncate">${esc(p.label || `Card #${i}`)}</span>
+          ${active ? '<span class="text-[10px] font-mono text-azure uppercase tracking-wider shrink-0 ml-2">● Active</span>' : `<span class="text-[10px] font-mono text-faint shrink-0 ml-2">#${i}</span>`}
+        </div>
+        <div class="text-xs text-muted font-mono">${esc(masked)} · ${esc(p.exp || '')} · CVC ${esc(p.cvc || '')}</div>
+        ${p.bin_info ? `<div class="text-[10px] text-faint mt-1">${esc(p.bin_info)}</div>` : ''}
+        <div class="text-[10px] text-faint mt-2 truncate">${esc(billing.name || '')} · ${esc(billing.city || '')} · ${esc(billing.country || '')}</div>
+      </button>`;
+  }).join('');
+
+  box.innerHTML = rotateCard + cards;
+}
+
+async function selectNotionCard(index) {
+  try {
+    const res = await fetch('/__switch/api/notion/card-select', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`✓ Выбрана карта: ${index === 'rotate' ? 'Ротация' : '#' + index}`, 'success');
+    renderNotionCards(data.presets, data.currentIndex);
+  } catch (e) { toast('Card: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ LAUNCH SCRIPTS ══════════════════════════════════
+async function launchScript(kind, successMsg) {
+  if (!confirm(`Запустить «${kind}» в новом окне терминала?`)) return;
+  try {
+    const res = await fetch('/__switch/api/launch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(successMsg || `✓ ${kind} запущен`, 'success', 6000);
+  } catch (e) { toast('Launch: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ SESSION ACTIONS ═════════════════════════════════
 async function openSession(kind, name) {
   try {
-    toast(`Открываю ${name} в браузере…`, 'info');
+    toast(`Открываю ${name}…`, 'info');
     const res = await fetch('/__switch/api/session/open', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, name }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     toast(`✓ Открыто: ${name}`, 'success');
-  } catch (e) {
-    toast('Open: ' + e.message, 'error');
-  }
+  } catch (e) { toast('Open: ' + e.message, 'error'); }
 }
 
 async function refreshQuota(name, kind) {
   try {
     toast(`Проверяю квоту ${name}…`, 'info');
     const res = await fetch('/__switch/api/session/refresh-quota', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, kind: kind || 'freemodel' }),
     });
     const data = await res.json();
@@ -737,33 +1010,29 @@ async function refreshQuota(name, kind) {
     toast(`✓ ${name}: ${summary}`, 'success');
     if (kind === 'devin') loadDevinSessions(false);
     else loadFreemodelSessions(false);
-  } catch (e) {
-    toast('Refresh: ' + e.message, 'error');
-  }
+  } catch (e) { toast('Refresh: ' + e.message, 'error'); }
 }
 
 async function deleteSession(kind, name, email) {
   if (!confirm(`Удалить сессию ${email || name}?\n\nЭто удалит папку и кеш квоты. Действие необратимо.`)) return;
   try {
     const res = await fetch('/__switch/api/session/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, name }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     toast(`✓ Удалено: ${email || name}`, 'success');
-    if (kind === 'notion')   loadNotionSessions();
-    else if (kind === 'devin') loadDevinSessions(false);
-    else                       loadFreemodelSessions(false);
-  } catch (e) {
-    toast('Delete: ' + e.message, 'error');
-  }
+    if (kind === 'notion')      loadNotionSessions();
+    else if (kind === 'devin')  loadDevinSessions(false);
+    else                         loadFreemodelSessions(false);
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
 }
 
-// ═══════════════ INIT ═════════════════════════════════════════════════
+// ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
+showTab('switcher');
 </script>
 </body>
 </html>

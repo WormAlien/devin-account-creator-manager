@@ -333,6 +333,81 @@ function deleteSession(kind, name) {
     return { ok: true, kind, name };
 }
 
+// ───── Notion card presets (config.js editing) ─────────────────────
+// notion/config.js exports a plain JS object via module.exports. We mutate
+// only two fields: CARD_PRESETS array (read-only here) and CARD_PRESET_INDEX.
+// String-replace for CARD_PRESET_INDEX (regex), require() for parse.
+const NOTION_CONFIG = path.join(PROJECT_ROOT, 'notion', 'config.js');
+
+function getNotionCards() {
+    if (!fs.existsSync(NOTION_CONFIG)) {
+        throw new Error('notion/config.js not found');
+    }
+    // Bust require cache so on-disk changes (from this same dashboard) are picked up.
+    delete require.cache[require.resolve(NOTION_CONFIG)];
+    const cfg = require(NOTION_CONFIG);
+    return {
+        presets:      Array.isArray(cfg.CARD_PRESETS) ? cfg.CARD_PRESETS : [],
+        currentIndex: cfg.CARD_PRESET_INDEX,
+    };
+}
+
+function setNotionCardIndex(value) {
+    // value is either an integer >= 0 or the string 'rotate'
+    let serialised;
+    if (value === 'rotate') {
+        serialised = `'rotate'`;
+    } else {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 0) throw new Error('index must be a non-negative integer or "rotate"');
+        serialised = String(n);
+    }
+    let txt = fs.readFileSync(NOTION_CONFIG, 'utf8');
+    const before = txt;
+    txt = txt.replace(
+        /(CARD_PRESET_INDEX\s*:\s*)('rotate'|"rotate"|\d+)(\s*,?)/,
+        (_, k, _v, tail) => `${k}${serialised}${tail}`
+    );
+    if (txt === before) throw new Error('CARD_PRESET_INDEX not found in notion/config.js');
+    fs.writeFileSync(NOTION_CONFIG, txt, 'utf8');
+    delete require.cache[require.resolve(NOTION_CONFIG)];
+    return getNotionCards();
+}
+
+// ───── Launch scripts in detached terminal windows ─────────────────
+// Each "kind" maps to one launch command. We use Windows `cmd /c start` to
+// pop a new console window — the user does the interactive menu/Playwright
+// session there, the dashboard process stays clean.
+const { spawn } = require('child_process');
+
+function launchScript(kind) {
+    const node = process.execPath; // current Node binary
+    const TARGETS = {
+        'menu':            { title: 'Autoreger Menu',         args: [path.join(PROJECT_ROOT, 'menu.js')] },
+        'devin-autoreg':   { title: 'Devin Autoreger',        args: [path.join(PROJECT_ROOT, 'autoreger.js')] },
+        'freemodel-create':{ title: 'FreeModel: New Session', args: [path.join(PROJECT_ROOT, 'freemodel', 'create_first_session.js')] },
+        'notion-create':   { title: 'Notion: New Account',    args: [path.join(PROJECT_ROOT, 'notion', 'notion_workflow.js')] },
+    };
+    const t = TARGETS[kind];
+    if (!t) throw new Error(`unknown launch kind: ${kind}`);
+
+    if (process.platform === 'win32') {
+        // cmd /c start "" cmd /k "node <script>"
+        //   "" — empty window title placeholder (start treats first quoted arg as title)
+        //   /k — keep the window open after the script exits so user sees output
+        spawn('cmd.exe', ['/c', 'start', t.title, 'cmd.exe', '/k', node, ...t.args], {
+            cwd: PROJECT_ROOT,
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: false,
+        }).unref();
+    } else {
+        // Non-Windows fallback: just spawn detached
+        spawn(node, t.args, { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
+    }
+    return { ok: true, kind, args: t.args };
+}
+
 module.exports = {
     listNotionSessions,
     listFreemodelSessions,
@@ -343,6 +418,9 @@ module.exports = {
     refreshOneFreemodelQuota,
     refreshOneDevinQuota,
     deleteSession,
+    getNotionCards,
+    setNotionCardIndex,
+    launchScript,
     sqliteJson,
 };
 

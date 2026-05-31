@@ -334,6 +334,38 @@ async function handleSessionDelete(req, res) {
     }
 }
 
+function handleNotionCards(res) {
+    try {
+        const cwd = process.cwd();
+        process.chdir(path.join(__dirname, '..'));
+        try { jsonRes(res, 200, dashApi.getNotionCards()); }
+        finally { process.chdir(cwd); }
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleNotionCardSelect(req, res) {
+    try {
+        const { index } = await readJsonBody(req);
+        const cwd = process.cwd();
+        process.chdir(path.join(__dirname, '..'));
+        try {
+            const result = dashApi.setNotionCardIndex(index);
+            logLine(`notion card -> index=${index}`);
+            jsonRes(res, 200, result);
+        } finally { process.chdir(cwd); }
+    } catch (e) { jsonRes(res, 400, { error: e.message }); }
+}
+
+async function handleLaunch(req, res) {
+    try {
+        const { kind } = await readJsonBody(req);
+        if (!kind) return jsonRes(res, 400, { error: 'missing kind' });
+        const result = dashApi.launchScript(kind);
+        logLine(`launch: ${kind}`);
+        jsonRes(res, 200, result);
+    } catch (e) { jsonRes(res, 400, { error: e.message }); }
+}
+
 const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/__switch/api/status') {
         return jsonRes(res, 200, {
@@ -395,6 +427,18 @@ const server = http.createServer((req, res) => {
 
     if (req.method === 'POST' && req.url === '/__switch/api/session/delete') {
         return handleSessionDelete(req, res);
+    }
+
+    if (req.method === 'GET' && req.url === '/__switch/api/notion/cards') {
+        return handleNotionCards(res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/notion/card-select') {
+        return handleNotionCardSelect(req, res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/launch') {
+        return handleLaunch(req, res);
     }
 
     if (req.method === 'GET' && (req.url === '/' || req.url === '/__switch' || req.url === '/__switch/')) {

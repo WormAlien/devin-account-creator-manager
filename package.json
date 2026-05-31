@@ -1,15 +1,23 @@
 {
-  "name": "devin-ai-autoreg",
+  "name": "vibe-code-account-creator-manager",
   "version": "2.0.0",
-  "description": "Devin.ai AutoReg - Автоматическая регистрация с пробной подпиской",
+  "description": "Vibe-Code Account Creator Manager — Devin · Notion · FreeModel autoregs + Claude Code backend router",
   "main": "autoreger.js",
   "scripts": {
-    "start": "node autoreger.js"
+    "start": "node autoreger.js",
+    "menu": "node menu.js",
+    "dashboard": "node routing/transparent-proxy.js"
   },
   "keywords": [
+    "vibe-code",
+    "claude-code",
     "devin",
+    "notion",
+    "freemodel",
     "autoreg",
-    "autoreger"
+    "autoreger",
+    "router",
+    "dashboard"
   ],
   "author": "",
   "license": "ISC",

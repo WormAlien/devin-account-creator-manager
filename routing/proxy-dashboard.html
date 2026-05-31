@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="ru" class="dark">
+<head>
+<meta charset="utf-8">
+<title>Backend Switch</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg:    '#0a0e0d',
+          panel: '#141a18',
+          card:  '#0d1512',
+          line:  '#1f2a25',
+          ink:   '#e0e0e0',
+          muted: '#6a8a7a',
+          dim:   '#3a4a42',
+          green: '#00ff88',
+          blue:  '#4aa3ff',
+          amber: '#ffc800',
+          red:   '#ff5757',
+        },
+        fontFamily: {
+          mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  body { background: #0a0e0d; }
+  .scrollbar-thin::-webkit-scrollbar      { width: 8px; height: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb{ background: #1f2a25; border-radius: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track{ background: transparent; }
+  /* Toast animation */
+  @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .toast-enter { animation: slideIn 0.2s ease-out; }
+</style>
+</head>
+<body class="bg-bg text-ink font-sans antialiased">
+
+<div class="max-w-7xl mx-auto px-6 py-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-xl font-semibold text-green">🔀 Backend Switch</h1>
+      <div class="text-xs text-muted mt-1">Edits <code class="text-green">~/.claude/settings.json</code> · restart Claude Code after switching</div>
+    </div>
+    <div class="text-right text-xs text-muted">
+      <div>Current: <span id="hdr-current" class="text-green font-semibold">…</span></div>
+      <div id="hdr-url" class="font-mono"></div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex gap-1 border-b border-line mb-6">
+    <button class="tab-btn px-4 py-2 text-sm font-semibold text-green border-b-2 border-green -mb-px" data-tab="switcher">🔀 Switcher</button>
+    <button class="tab-btn px-4 py-2 text-sm font-semibold text-muted hover:text-ink border-b-2 border-transparent -mb-px" data-tab="accounts">👥 Accounts</button>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toasts" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2"></div>
+
+  <!-- ═══════════════ TAB: SWITCHER ═══════════════════════════════════ -->
+  <div id="tab-switcher" class="tab-panel">
+    <div class="bg-panel border border-line rounded-lg p-6">
+
+      <div class="bg-card border border-line rounded-md p-4 mb-4 text-center">
+        <div class="text-[10px] uppercase tracking-widest text-muted mb-1">Active Backend</div>
+        <div id="current-target" class="text-lg font-semibold text-green">Loading…</div>
+        <div id="current-url" class="text-xs text-muted font-mono mt-1"></div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <button id="btn-omniroute" class="omni-btn group bg-card border-2 border-line rounded-md p-4 text-left hover:border-line transition" onclick="switchTo('omniroute')">
+          <div class="text-sm font-semibold">🟢 FreeModel</div>
+          <div class="text-xs text-muted mt-1">основной — tools, vision, длинные сессии</div>
+          <div class="text-[10px] text-dim font-mono mt-2">OmniRoute :20128</div>
+        </button>
+        <button id="btn-notion" class="notion-btn group bg-card border-2 border-line rounded-md p-4 text-left hover:border-line transition" onclick="switchTo('notion')">
+          <div class="text-sm font-semibold">🔵 Notion</div>
+          <div class="text-xs text-muted mt-1">cheap — короткие запросы без tools</div>
+          <div class="text-[10px] text-dim font-mono mt-2">notion-manager :8190</div>
+        </button>
+      </div>
+
+      <div class="bg-card border border-line rounded-md p-3 text-xs text-muted leading-relaxed space-y-1">
+        <div>
+          Клик переписывает <code class="text-green">ANTHROPIC_BASE_URL</code> и <code class="text-green">ANTHROPIC_API_KEY</code>.
+          Перед каждой записью создаётся <code>.bak-&lt;timestamp&gt;</code>.
+          <strong class="text-ink">После клика — перезапусти Claude Code.</strong>
+        </div>
+        <div class="pt-1 border-t border-line/60">
+          <span class="text-ink font-semibold">🔄 Перезапуск дашборда:</span>
+          двойной клик по <code class="text-green">routing\restart-dashboard.bat</code>
+          (убивает старый процесс, запускает свежий, открывает UI).
+        </div>
+        <div>
+          <span class="text-red font-semibold">🆘 Откат settings.json:</span>
+          <code class="text-red">PANIC-restore-omniroute.bat</code> в корне проекта.
+        </div>
+      </div>
+
+      <!-- Whoami -->
+      <div class="mt-6 pt-5 border-t border-line">
+        <h2 class="text-sm font-semibold text-green mb-2">🔍 Whoami</h2>
+        <div class="text-xs text-muted mb-3">Вставь строку из лога OmniRoute — найду name/email по любому UUID-фрагменту.</div>
+        <textarea id="whoami-input" rows="2" placeholder="anthropic-compatible-…:fd48f370-… или просто fd48f370"
+          class="w-full bg-card text-ink border border-line rounded-md p-3 font-mono text-xs resize-y focus:outline-none focus:border-green/50"></textarea>
+        <div class="flex gap-2 mt-2">
+          <button onclick="runWhoami()" class="flex-1 px-3 py-2 text-xs bg-card border border-line text-ink rounded-md hover:border-green/50 transition">🔍 Найти</button>
+          <button onclick="showTab('accounts')" class="flex-1 px-3 py-2 text-xs bg-card border border-line text-ink rounded-md hover:border-green/50 transition">📋 Все аккаунты →</button>
+        </div>
+        <div id="whoami-results" class="mt-3"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ TAB: ACCOUNTS ════════════════════════════════════ -->
+  <div id="tab-accounts" class="tab-panel hidden space-y-5">
+
+    <!-- Devin section -->
+    <section class="bg-panel border border-line rounded-lg">
+      <header class="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-line">
+        <div>
+          <h2 class="text-sm font-semibold text-[#a78bfa]">🤖 Devin sessions</h2>
+          <div class="text-xs text-muted mt-0.5">из <code class="text-[#a78bfa]">manual_sessions/</code> + <code class="text-[#a78bfa]">ready_to_sell/</code> + <code class="text-[#a78bfa]">errors/</code>, кеш в <code class="text-[#a78bfa]">logs/.quota_cache.json</code></div>
+        </div>
+        <div class="flex gap-2 items-center flex-wrap">
+          <input id="devin-filter" placeholder="фильтр…" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 w-32 focus:outline-none focus:border-[#a78bfa]/50">
+          <select id="devin-sort" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 focus:outline-none focus:border-[#a78bfa]/50">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="status">⚡ статус</option>
+            <option value="plan">💰 план (Pro→Free)</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+          <button onclick="loadDevinSessions(false)" class="text-xs px-3 py-1.5 bg-card border border-line rounded-md hover:border-[#a78bfa]/50">↻ Список</button>
+          <button onclick="loadDevinSessions(true)" class="text-xs px-3 py-1.5 bg-[#a78bfa]/10 border border-[#a78bfa]/50 text-[#a78bfa] rounded-md hover:bg-[#a78bfa]/20">🔄 Все квоты (~30s)</button>
+        </div>
+      </header>
+      <div id="devin-list" class="overflow-x-auto scrollbar-thin">
+        <div class="p-6 text-center text-muted text-xs">—</div>
+      </div>
+    </section>
+
+    <!-- FreeModel section -->
+    <section class="bg-panel border border-line rounded-lg">
+      <header class="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-line">
+        <div>
+          <h2 class="text-sm font-semibold text-amber">🆓 FreeModel sessions</h2>
+          <div class="text-xs text-muted mt-0.5">кеш квот в <code class="text-amber">logs/.freemodel_quota_cache.json</code></div>
+        </div>
+        <div class="flex gap-2 items-center flex-wrap">
+          <input id="freemodel-filter" placeholder="фильтр…" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 w-32 focus:outline-none focus:border-amber/50">
+          <select id="freemodel-sort" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 focus:outline-none focus:border-amber/50">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="status">⚡ статус</option>
+            <option value="quota-asc">💰 квота ↑</option>
+            <option value="quota-desc">💰 квота ↓</option>
+            <option value="updated">🔄 свежесть кеша</option>
+          </select>
+          <button onclick="loadFreemodelSessions(false)" class="text-xs px-3 py-1.5 bg-card border border-line rounded-md hover:border-amber/50">↻ Список</button>
+          <button onclick="loadFreemodelSessions(true)" class="text-xs px-3 py-1.5 bg-amber/10 border border-amber/50 text-amber rounded-md hover:bg-amber/20">🔄 Все квоты (~30s)</button>
+        </div>
+      </header>
+      <div id="freemodel-list" class="overflow-x-auto scrollbar-thin">
+        <div class="p-6 text-center text-muted text-xs">—</div>
+      </div>
+    </section>
+
+    <!-- Notion section -->
+    <section class="bg-panel border border-line rounded-lg">
+      <header class="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-line">
+        <div>
+          <h2 class="text-sm font-semibold text-blue">📝 Notion sessions</h2>
+          <div class="text-xs text-muted mt-0.5">план/статус из <code class="text-blue">notion/sessions/&lt;name&gt;/info.json</code></div>
+        </div>
+        <div class="flex gap-2 items-center flex-wrap">
+          <input id="notion-filter" placeholder="фильтр…" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 w-32 focus:outline-none focus:border-blue/50">
+          <select id="notion-sort" class="text-xs bg-card border border-line rounded-md px-2 py-1.5 focus:outline-none focus:border-blue/50">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+          <button onclick="loadNotionSessions()" class="text-xs px-3 py-1.5 bg-card border border-line rounded-md hover:border-blue/50">↻ Обновить</button>
+        </div>
+      </header>
+      <div id="notion-list" class="overflow-x-auto scrollbar-thin">
+        <div class="p-6 text-center text-muted text-xs">—</div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+// ═══════════════ STATE ════════════════════════════════════════════════
+const state = {
+  currentTarget: null,
+  backendUrls:   {},
+  omni:      [],
+  devin:     [],
+  freemodel: [],
+  notion:    [],
+};
+
+// ═══════════════ HELPERS ══════════════════════════════════════════════
+const $  = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function toast(text, kind = 'info', ms = 4000) {
+  const colors = {
+    info:    'bg-blue/10  border-blue/50  text-blue',
+    success: 'bg-green/10 border-green/50 text-green',
+    warn:    'bg-amber/10 border-amber/50 text-amber',
+    error:   'bg-red/10   border-red/50   text-red',
+  }[kind];
+  const el = document.createElement('div');
+  el.className = `toast-enter px-4 py-2.5 rounded-md border text-xs ${colors} shadow-lg max-w-md`;
+  el.textContent = text;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), ms);
+}
+
+function ageStr(ms) {
+  if (!ms) return '';
+  const dt = Date.now() - ms;
+  if (dt < 60_000)    return 'только что';
+  if (dt < 3600_000)  return Math.round(dt / 60_000) + 'м';
+  if (dt < 86400_000) return Math.round(dt / 3600_000) + 'ч';
+  return Math.round(dt / 86400_000) + 'д';
+}
+
+function pctColor(pct) {
+  if (pct == null) return 'text-dim';
+  if (pct < 10)    return 'text-red';
+  if (pct < 30)    return 'text-amber';
+  return 'text-green';
+}
+
+// ═══════════════ TABS ═════════════════════════════════════════════════
+function showTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('text-green', on);
+    b.classList.toggle('border-green', on);
+    b.classList.toggle('text-muted', !on);
+    b.classList.toggle('border-transparent', !on);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('hidden', p.id !== 'tab-' + name);
+  });
+  if (name === 'accounts' && !state.accountsLoaded) {
+    state.accountsLoaded = true;
+    loadDevinSessions(false);
+    loadFreemodelSessions(false);
+    loadNotionSessions();
+  }
+}
+document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+// ═══════════════ SWITCHER ═════════════════════════════════════════════
+const LABELS = { omniroute: '🟢 FreeModel (OmniRoute)', notion: '🔵 Notion (cheap)', unknown: '❓ unknown' };
+
+async function loadStatus() {
+  try {
+    const res = await fetch('/__switch/api/status');
+    const data = await res.json();
+    state.currentTarget = data.current;
+    state.backendUrls = {};
+    for (const [k, v] of Object.entries(data.backends || {})) state.backendUrls[k] = v.base_url;
+    updateSwitcherUI();
+  } catch (e) {
+    toast('Статус: ' + e.message, 'error');
+  }
+}
+
+function updateSwitcherUI() {
+  const t = state.currentTarget;
+  const label = LABELS[t] || '? ' + t;
+  $('current-target').textContent = label;
+  $('current-url').textContent    = state.backendUrls[t] || '';
+  $('hdr-current').textContent    = label;
+  $('hdr-url').textContent        = state.backendUrls[t] || '';
+  const btnOmni   = $('btn-omniroute');
+  const btnNotion = $('btn-notion');
+  btnOmni.className   = 'omni-btn bg-card border-2 rounded-md p-4 text-left transition ' +
+    (t === 'omniroute' ? 'border-green shadow-[0_0_20px_rgba(0,255,136,0.25)]' : 'border-line hover:border-green/50');
+  btnNotion.className = 'notion-btn bg-card border-2 rounded-md p-4 text-left transition ' +
+    (t === 'notion'    ? 'border-blue shadow-[0_0_20px_rgba(74,163,255,0.25)]' : 'border-line hover:border-blue/50');
+}
+
+async function switchTo(target) {
+  if (target === state.currentTarget) { toast('Уже на ' + LABELS[target], 'warn'); return; }
+  try {
+    const res = await fetch('/__switch/api/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'switch failed');
+    state.currentTarget = target;
+    updateSwitcherUI();
+    toast(`✓ settings.json → ${LABELS[target]}. Перезапусти Claude Code!`, 'success', 8000);
+  } catch (e) {
+    toast('Switch: ' + e.message, 'error');
+  }
+}
+
+// ═══════════════ WHOAMI ═══════════════════════════════════════════════
+async function runWhoami() {
+  const input = $('whoami-input').value.trim();
+  if (!input) { toast('Вставь строку', 'warn'); return; }
+  try {
+    const res = await fetch('/__switch/api/whoami', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'whoami failed');
+    renderWhoami(data.matches || [], data.prefixes || []);
+  } catch (e) {
+    toast('Whoami: ' + e.message, 'error');
+  }
+}
+
+function renderWhoami(matches, prefixes) {
+  const box = $('whoami-results');
+  if (!matches.length) {
+    box.innerHTML = `<div class="text-xs text-amber p-3 bg-amber/10 border border-amber/30 rounded-md">⚠ ничего не найдено для: ${prefixes.join(', ') || '(пусто)'}</div>`;
+    return;
+  }
+  const rows = matches.map(a => `
+    <div class="flex items-center gap-3 p-2 border-b border-line/50 font-mono text-xs">
+      <span>${a.is_active ? '🟢' : '⚪'}</span>
+      <span class="text-ink w-20">${esc(a.id?.substring(0,8))}</span>
+      <span class="text-muted w-16">[${esc(provLabel(a.provider))}]</span>
+      <span class="text-ink flex-1 truncate">${esc(a.name || '(no name)')}</span>
+      <span class="text-muted text-[11px]">${esc(a.test_status || '?')}${a.error_code ? ' err='+esc(a.error_code) : ''}</span>
+    </div>
+  `).join('');
+  box.innerHTML = `<div class="bg-card border border-line rounded-md p-2">
+    <div class="text-[10px] text-dim px-2 py-1">матч по: ${prefixes.join(', ')}</div>${rows}
+  </div>`;
+}
+
+function provLabel(p) {
+  if (!p) return '?';
+  if (p.startsWith('anthropic-compat')) return 'free';
+  return p;
+}
+
+// ═══════════════ OMNI ACCOUNTS (used only by Whoami in Switcher tab) ══
+async function loadOmniAccounts() {
+  try {
+    const res = await fetch('/__switch/api/accounts');
+    const data = await res.json();
+    state.omni = data.accounts || [];
+  } catch (e) {
+    toast('Omni: ' + e.message, 'error');
+  }
+}
+
+async function toggleOmni(id, active) {
+  try {
+    const res = await fetch('/__switch/api/accounts/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, active }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'toggle failed');
+    toast(`${id} → ${active ? 'ON' : 'OFF'}`, 'success');
+  } catch (e) {
+    toast('Toggle: ' + e.message, 'error');
+  }
+}
+
+// ═══════════════ DEVIN ═══════════════════════════════════════════════
+async function loadDevinSessions(refresh) {
+  $('devin-list').innerHTML = refresh
+    ? `<div class="p-6 text-center text-[#a78bfa] text-xs">🔄 обновляю квоты Devin через headless Chrome… (~30s)</div>`
+    : `<div class="p-6 text-center text-muted text-xs">загрузка…</div>`;
+  try {
+    const url = '/__switch/api/devin/sessions' + (refresh ? '?refresh=1' : '');
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.devin = data.sessions || [];
+    renderDevin(data.refreshed);
+    if (refresh) toast(`✓ Devin: квоты обновлены`, 'success');
+  } catch (e) {
+    $('devin-list').innerHTML = `<div class="p-4 text-red text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function renderDevin(refreshed) {
+  const filter = $('devin-filter').value.toLowerCase();
+  const sort   = $('devin-sort').value;
+  const all = state.devin.slice();
+
+  const planRank = (q) => q?.plan === 'paid' ? 0 : q?.plan === 'free' ? 1 : 2;
+  const sortFns = {
+    'date-desc': (a, b) => (b.date || '').localeCompare(a.date || ''),
+    'date-asc':  (a, b) => (a.date || '').localeCompare(b.date || ''),
+    'status':    (a, b) => (a.status === b.status ? 0 : a.status === '✅' ? -1 : 1) || (b.date || '').localeCompare(a.date || ''),
+    'plan':      (a, b) => planRank(a.quota) - planRank(b.quota) || (b.date || '').localeCompare(a.date || ''),
+    'email':     (a, b) => (a.email || '').localeCompare(b.email || ''),
+  };
+  all.sort(sortFns[sort] || sortFns['date-desc']);
+
+  const list = filter
+    ? all.filter(s => ((s.email || '') + ' ' + s.name + ' ' + (s.orgName || '')).toLowerCase().includes(filter))
+    : all;
+
+  if (!list.length) {
+    $('devin-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
+    return;
+  }
+
+  const planBadge = (plan) => {
+    if (plan === 'paid') return '<span class="px-1.5 py-0.5 rounded text-[10px] border bg-green/15 text-green border-green/30">💰 Pro</span>';
+    if (plan === 'free') return '<span class="px-1.5 py-0.5 rounded text-[10px] border bg-dim/20 text-muted border-dim/40">📦 Free</span>';
+    return '<span class="text-dim">—</span>';
+  };
+  const sourceBadge = (src) => {
+    const map = {
+      manual: { txt: 'manual', cls: 'text-blue border-blue/30' },
+      ready:  { txt: 'ready',  cls: 'text-green border-green/30' },
+      errors: { txt: 'errors', cls: 'text-red border-red/30' },
+    };
+    const m = map[src] || { txt: src || '?', cls: 'text-muted border-dim/40' };
+    return `<span class="px-1.5 py-0.5 rounded text-[10px] border ${m.cls}">${m.txt}</span>`;
+  };
+
+  const rows = list.map(s => {
+    const ok = s.status === '✅';
+    const email = s.email !== 'Неизвестно' ? s.email : s.name;
+    const org   = s.orgName !== 'Неизвестно' ? s.orgName : '';
+    let daily   = '<span class="text-dim">—</span>';
+    let weekly  = '<span class="text-dim">—</span>';
+    let plan    = '<span class="text-dim">—</span>';
+    let age     = '<span class="text-dim">нет в кеше</span>';
+    if (s.quota) {
+      daily  = `<span class="text-amber">${esc(s.quota.daily  || '—')}</span>`;
+      weekly = `<span class="text-blue">${esc(s.quota.weekly || '—')}</span>`;
+      plan   = planBadge(s.quota.plan);
+      age    = `<span class="text-muted">${ageStr(s.quota.updatedAt)}</span>`;
+    }
+
+    return `<tr class="border-b border-line/50 hover:bg-card/50">
+      <td class="px-3 py-2 w-8">${ok ? '✅' : '❌'}</td>
+      <td class="px-3 py-2 text-sm text-ink truncate max-w-xs" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2 text-xs text-muted truncate max-w-[180px]" title="${esc(org)}">${esc(org)}</td>
+      <td class="px-3 py-2">${sourceBadge(s.source)}</td>
+      <td class="px-3 py-2 text-xs text-muted whitespace-nowrap">${esc(s.date || '')}</td>
+      <td class="px-3 py-2">${plan}</td>
+      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${daily}</td>
+      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${weekly}</td>
+      <td class="px-3 py-2 text-[10px] text-right">${age}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="openSession('devin', '${esc(s.name)}')"
+                title="Открыть в браузере (app.devin.ai/settings/usage)" class="px-2 py-1 text-[11px] rounded border border-blue/40 text-blue hover:bg-blue/10">🌐</button>
+        <button onclick="refreshQuota('${esc(s.name)}', 'devin')"
+                title="Обновить квоту" class="px-2 py-1 text-[11px] rounded border border-amber/40 text-amber hover:bg-amber/10">🔄</button>
+        <button onclick="deleteSession('devin', '${esc(s.name)}', '${esc(email)}')"
+                title="Удалить сессию" class="px-2 py-1 text-[11px] rounded border border-red/40 text-red hover:bg-red/10">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const withQuota = state.devin.filter(s => s.quota).length;
+  const paidCnt   = state.devin.filter(s => s.quota?.plan === 'paid').length;
+  const tag = refreshed ? ' <span class="text-green">(только что обновлено)</span>' : '';
+
+  $('devin-list').innerHTML = `
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-[10px] uppercase tracking-wider text-dim border-b border-line">
+          <th class="px-3 py-2 text-left w-8"></th>
+          <th class="px-3 py-2 text-left">Email</th>
+          <th class="px-3 py-2 text-left">Org</th>
+          <th class="px-3 py-2 text-left">Src</th>
+          <th class="px-3 py-2 text-left">Created</th>
+          <th class="px-3 py-2 text-left">Plan</th>
+          <th class="px-3 py-2 text-right">Daily</th>
+          <th class="px-3 py-2 text-right">Weekly</th>
+          <th class="px-3 py-2 text-right">Updated</th>
+          <th class="px-3 py-2 text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="px-3 py-2 text-[10px] text-dim border-t border-line">
+      ${list.length} из ${state.devin.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой · ${paidCnt} Pro${tag}
+    </div>`;
+}
+
+$('devin-filter').addEventListener('input', () => renderDevin(false));
+$('devin-sort').addEventListener('change', () => renderDevin(false));
+
+// ═══════════════ FREEMODEL ════════════════════════════════════════════
+async function loadFreemodelSessions(refresh) {
+  $('freemodel-list').innerHTML = refresh
+    ? `<div class="p-6 text-center text-amber text-xs">🔄 обновляю квоты через headless Chrome… (~30s на ${state.freemodel.length || 16} сессий)</div>`
+    : `<div class="p-6 text-center text-muted text-xs">загрузка…</div>`;
+  try {
+    const url = '/__switch/api/freemodel/sessions' + (refresh ? '?refresh=1' : '');
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.freemodel = data.sessions || [];
+    renderFreemodel(data.refreshed);
+    if (refresh) toast(`✓ Квоты обновлены`, 'success');
+  } catch (e) {
+    $('freemodel-list').innerHTML = `<div class="p-4 text-red text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function renderFreemodel(refreshed) {
+  const filter = $('freemodel-filter').value.toLowerCase();
+  const sort   = $('freemodel-sort').value;
+  const all = state.freemodel.slice();
+
+  // Sort first, then filter (so counts in footer make sense vs `all`)
+  const parseAvail = (s) => {
+    if (!s?.quota?.available) return -1;
+    const m = String(s.quota.available).match(/[\d.,]+/);
+    return m ? parseFloat(m[0].replace(',', '')) : -1;
+  };
+  const sortFns = {
+    'date-desc':  (a, b) => (b.date || '').localeCompare(a.date || ''),
+    'date-asc':   (a, b) => (a.date || '').localeCompare(b.date || ''),
+    'status':     (a, b) => (a.status === b.status ? 0 : a.status === '✅' ? -1 : 1) || (b.date || '').localeCompare(a.date || ''),
+    'quota-desc': (a, b) => parseAvail(b) - parseAvail(a),
+    'quota-asc':  (a, b) => parseAvail(a) - parseAvail(b),
+    'updated':    (a, b) => (b.quota?.updatedAt || 0) - (a.quota?.updatedAt || 0),
+  };
+  all.sort(sortFns[sort] || sortFns['date-desc']);
+
+  const list = filter
+    ? all.filter(s => ((s.email || '') + ' ' + s.name).toLowerCase().includes(filter))
+    : all;
+
+  if (!list.length) {
+    $('freemodel-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
+    return;
+  }
+
+  const rows = list.map(s => {
+    const ok = s.status === '✅';
+    const email = s.email || s.name;
+    let avail = '<span class="text-dim">—</span>';
+    let h5 = '<span class="text-dim">—</span>';
+    let d7 = '<span class="text-dim">—</span>';
+    let age = '<span class="text-dim">нет в кеше</span>';
+    if (s.quota) {
+      avail = `<span class="text-green font-semibold">${esc(s.quota.available || '—')}</span>`;
+      if (s.quota.h5) h5 = `<span class="text-amber">${esc(s.quota.h5)}<span class="text-dim">/${esc(s.quota.h5max)}</span></span>`;
+      if (s.quota.d7) d7 = `<span class="text-blue">${esc(s.quota.d7)}<span class="text-dim">/${esc(s.quota.d7max)}</span></span>`;
+      age = `<span class="text-muted">${ageStr(s.quota.updatedAt)}</span>`;
+    }
+
+    return `<tr class="border-b border-line/50 hover:bg-card/50">
+      <td class="px-3 py-2 w-8">${ok ? '✅' : '❌'}</td>
+      <td class="px-3 py-2 text-sm text-ink truncate max-w-xs" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2 text-xs text-muted whitespace-nowrap">${esc(s.date || '')}</td>
+      <td class="px-3 py-2 text-xs text-right font-mono">${avail}</td>
+      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${h5}</td>
+      <td class="px-3 py-2 text-xs text-right font-mono whitespace-nowrap">${d7}</td>
+      <td class="px-3 py-2 text-[10px] text-right">${age}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="openSession('freemodel', '${esc(s.name)}')"
+                title="Открыть в браузере" class="px-2 py-1 text-[11px] rounded border border-blue/40 text-blue hover:bg-blue/10">🌐</button>
+        <button onclick="refreshQuota('${esc(s.name)}', 'freemodel')"
+                title="Обновить квоту" class="px-2 py-1 text-[11px] rounded border border-amber/40 text-amber hover:bg-amber/10">🔄</button>
+        <button onclick="deleteSession('freemodel', '${esc(s.name)}', '${esc(email)}')"
+                title="Удалить сессию" class="px-2 py-1 text-[11px] rounded border border-red/40 text-red hover:bg-red/10">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const withQuota = state.freemodel.filter(s => s.quota).length;
+  const tag = refreshed ? ' <span class="text-green">(только что обновлено)</span>' : '';
+
+  $('freemodel-list').innerHTML = `
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-[10px] uppercase tracking-wider text-dim border-b border-line">
+          <th class="px-3 py-2 text-left w-8"></th>
+          <th class="px-3 py-2 text-left">Email</th>
+          <th class="px-3 py-2 text-left">Created</th>
+          <th class="px-3 py-2 text-right">Available</th>
+          <th class="px-3 py-2 text-right">5h window</th>
+          <th class="px-3 py-2 text-right">7d window</th>
+          <th class="px-3 py-2 text-right">Updated</th>
+          <th class="px-3 py-2 text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="px-3 py-2 text-[10px] text-dim border-t border-line">
+      ${list.length} из ${state.freemodel.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой${tag}
+    </div>`;
+}
+
+$('freemodel-filter').addEventListener('input', () => renderFreemodel(false));
+$('freemodel-sort').addEventListener('change', () => renderFreemodel(false));
+
+// ═══════════════ NOTION ═══════════════════════════════════════════════
+async function loadNotionSessions() {
+  $('notion-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">загрузка…</div>`;
+  try {
+    const res = await fetch('/__switch/api/notion/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.notion = data.sessions || [];
+    renderNotion();
+  } catch (e) {
+    $('notion-list').innerHTML = `<div class="p-4 text-red text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function renderNotion() {
+  const filter = $('notion-filter').value.toLowerCase();
+  const sort   = $('notion-sort').value;
+  const all = state.notion.slice();
+
+  // Status priority for sorting: paid > trial-card-added > trial > free > banned > in-progress > unknown
+  const statusRank = (s) => ({
+    paid: 0, 'trial-card-added': 1, trial: 2, free: 3,
+    'in-progress': 4, banned: 5, unknown: 6,
+  })[s] ?? 99;
+
+  const sortFns = {
+    'date-desc': (a, b) => (b.date || '').localeCompare(a.date || ''),
+    'date-asc':  (a, b) => (a.date || '').localeCompare(b.date || ''),
+    'status':    (a, b) => statusRank(a.status) - statusRank(b.status) || (b.date || '').localeCompare(a.date || ''),
+    'email':     (a, b) => (a.email || a.name || '').localeCompare(b.email || b.name || ''),
+  };
+  all.sort(sortFns[sort] || sortFns['date-desc']);
+
+  const list = filter
+    ? all.filter(s => ((s.email || '') + ' ' + s.name + ' ' + s.status).toLowerCase().includes(filter))
+    : all;
+
+  if (!list.length) {
+    $('notion-list').innerHTML = `<div class="p-6 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
+    return;
+  }
+
+  const statusBadge = (s) => {
+    const config = {
+      banned:             { icon: '🚫', cls: 'bg-red/15 text-red border-red/30' },
+      'trial-card-added': { icon: '💳', cls: 'bg-green/15 text-green border-green/30' },
+      trial:              { icon: '🆓', cls: 'bg-amber/15 text-amber border-amber/30' },
+      paid:               { icon: '💰', cls: 'bg-green/15 text-green border-green/30' },
+      free:               { icon: '📦', cls: 'bg-dim/20 text-muted border-dim/40' },
+      'in-progress':      { icon: '⏳', cls: 'bg-blue/15 text-blue border-blue/30' },
+    }[s.status] || { icon: '✅', cls: 'bg-dim/20 text-muted border-dim/40' };
+    const label = s.planType && s.planType !== 'unknown' ? `${s.status} · ${s.planType}` : s.status;
+    return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${config.cls}">${config.icon} ${esc(label)}</span>`;
+  };
+
+  const rows = list.map(s => {
+    const email = s.email || s.name;
+    return `<tr class="border-b border-line/50 hover:bg-card/50">
+      <td class="px-3 py-2 text-sm text-ink truncate max-w-xs" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2">${statusBadge(s)}</td>
+      <td class="px-3 py-2 text-xs text-muted whitespace-nowrap">${esc(s.date || '')}</td>
+      <td class="px-3 py-2 text-xs text-muted">${s.card ? '💳 ' + esc(s.card) : '<span class="text-dim">—</span>'}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="openSession('notion', '${esc(s.name)}')"
+                title="Открыть в браузере (Notion.so)" class="px-2 py-1 text-[11px] rounded border border-blue/40 text-blue hover:bg-blue/10">🌐</button>
+        <button onclick="deleteSession('notion', '${esc(s.name)}', '${esc(email)}')"
+                title="Удалить сессию" class="px-2 py-1 text-[11px] rounded border border-red/40 text-red hover:bg-red/10">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('notion-list').innerHTML = `
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-[10px] uppercase tracking-wider text-dim border-b border-line">
+          <th class="px-3 py-2 text-left">Email</th>
+          <th class="px-3 py-2 text-left">Status</th>
+          <th class="px-3 py-2 text-left">Created</th>
+          <th class="px-3 py-2 text-left">Card</th>
+          <th class="px-3 py-2 text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="px-3 py-2 text-[10px] text-dim border-t border-line">
+      ${list.length} из ${state.notion.length}${filter ? ' (отфильтр.)' : ''}
+    </div>`;
+}
+
+$('notion-filter').addEventListener('input', () => renderNotion());
+$('notion-sort').addEventListener('change', () => renderNotion());
+
+// ═══════════════ SESSION ACTIONS (open / refresh / delete) ════════════
+async function openSession(kind, name) {
+  try {
+    toast(`Открываю ${name} в браузере…`, 'info');
+    const res = await fetch('/__switch/api/session/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, name }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`✓ Открыто: ${name}`, 'success');
+  } catch (e) {
+    toast('Open: ' + e.message, 'error');
+  }
+}
+
+async function refreshQuota(name, kind) {
+  try {
+    toast(`Проверяю квоту ${name}…`, 'info');
+    const res = await fetch('/__switch/api/session/refresh-quota', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, kind: kind || 'freemodel' }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const summary = data.quota?.available || data.quota?.daily || 'no data';
+    toast(`✓ ${name}: ${summary}`, 'success');
+    if (kind === 'devin') loadDevinSessions(false);
+    else loadFreemodelSessions(false);
+  } catch (e) {
+    toast('Refresh: ' + e.message, 'error');
+  }
+}
+
+async function deleteSession(kind, name, email) {
+  if (!confirm(`Удалить сессию ${email || name}?\n\nЭто удалит папку и кеш квоты. Действие необратимо.`)) return;
+  try {
+    const res = await fetch('/__switch/api/session/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, name }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`✓ Удалено: ${email || name}`, 'success');
+    if (kind === 'notion')   loadNotionSessions();
+    else if (kind === 'devin') loadDevinSessions(false);
+    else                       loadFreemodelSessions(false);
+  } catch (e) {
+    toast('Delete: ' + e.message, 'error');
+  }
+}
+
+// ═══════════════ INIT ═════════════════════════════════════════════════
+loadStatus();
+setInterval(loadStatus, 5000);
+</script>
+</body>
+</html>

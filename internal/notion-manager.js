@@ -750,4 +750,4 @@ async function notionSessionsMenu({ clearScreen, setKeypressListener, rawList, r
     });
 }
 
-module.exports = { notionSessionsMenu };
+module.exports = { notionSessionsMenu, getNotionSessions };

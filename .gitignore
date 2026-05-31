@@ -78,6 +78,9 @@ routing/*.err
 routing/*.log.err
 routing/mode.txt
 
+# Routing secrets (real keys). .env.example IS committed.
+routing/.env
+
 # Операционные системы
 .DS_Store
 Thumbs.db

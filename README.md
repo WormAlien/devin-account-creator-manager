@@ -1,4 +1,4 @@
-# Devin Account Creator Manager
+# Vibe-Code Account Creator Manager
 
 > Полный тулкит для управления Devin · Notion · FreeModel аккаунтами +
 > локальный роутер бэкендов для Claude Code (OmniRoute ↔ notion-manager).

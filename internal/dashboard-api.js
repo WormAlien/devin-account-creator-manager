@@ -385,7 +385,10 @@ function launchScript(kind) {
     const TARGETS = {
         'menu':            { title: 'Autoreger Menu',         args: [path.join(PROJECT_ROOT, 'menu.js')] },
         'devin-autoreg':   { title: 'Devin Autoreger',        args: [path.join(PROJECT_ROOT, 'autoreger.js')] },
-        'freemodel-create':{ title: 'FreeModel: New Session', args: [path.join(PROJECT_ROOT, 'freemodel', 'create_first_session.js')] },
+        // FreeModel: emailnator-based mass register (v2 — guerrillamail v1 dead)
+        'freemodel-create':{ title: 'FreeModel Autoreg v2',   args: [path.join(PROJECT_ROOT, 'freemodel', 'freemodel_autoreger_v2.js')] },
+        // FreeModel: single manual login (legacy, for restoring sessions)
+        'freemodel-login': { title: 'FreeModel: Manual Login',args: [path.join(PROJECT_ROOT, 'freemodel', 'create_first_session.js')] },
         'notion-create':   { title: 'Notion: New Account',    args: [path.join(PROJECT_ROOT, 'notion', 'notion_workflow.js')] },
     };
     const t = TARGETS[kind];

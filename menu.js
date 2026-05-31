@@ -261,7 +261,8 @@ async function mainMenu() {
         { label: `🗂️   Менеджер сессий Devin`, value: 'sessions' },
         { label: `➕  Добавить аккаунт Devin`, value: 'devin-add' },
         { label: `🆓  FreeModel сессии`, value: 'freemodel-sessions' },
-        { label: `➕  Создать аккаунт FreeModel`, value: 'freemodel-create' },
+        { label: `➕  Создать аккаунт FreeModel (вручную, 1 шт)`, value: 'freemodel-create' },
+        { label: `🤖  FreeModel autoreg v2 (emailnator, пирамида)`, value: 'freemodel-autoreg-v2' },
         { label: `🗂️   Notion сессии     [${notionSessionsCount()}]`, value: 'notion-sessions' },
         { label: `📝  Notion         [${notionStatusLine()}]`, value: 'notion-create' },
         { label: '──────────────────────────────', value: null, disabled: true },
@@ -273,6 +274,7 @@ async function mainMenu() {
         case 'devin-add': await devinAddMenu(); break;
         case 'freemodel-sessions': await freemodelSessionsMenu({ clearScreen, setKeypressListener, rawList }); break;
         case 'freemodel-create': await createFreemodelSession({ clearScreen, setKeypressListener, rawList, rawInput }); break;
+        case 'freemodel-autoreg-v2': await freemodelAutoregV2({ clearScreen, setKeypressListener, rawInput }); break;
         case 'notion-sessions': await notionSessionsMenu({ clearScreen, setKeypressListener, rawList, rawInput }); break;
         case 'notion-create': await notionCreateMenu(); break;
         case 'exit':
@@ -1802,6 +1804,83 @@ function saveNotionCardPresets(presets) {
         return true;
     }
     return false;
+}
+
+async function freemodelAutoregV2({ clearScreen, rawInput }) {
+    clearScreen();
+
+    const LAST_INVITE_FILE = path.join(__dirname, 'freemodel', '.last_invite');
+    let lastInvite = null;
+    try {
+        if (fs.existsSync(LAST_INVITE_FILE)) {
+            const v = fs.readFileSync(LAST_INVITE_FILE, 'utf-8').trim();
+            if (/^FRE-[A-Za-z0-9]+$/.test(v)) lastInvite = v;
+        }
+    } catch {}
+
+    delete require.cache[require.resolve('./freemodel/config.js')];
+    const fmConfig = require('./freemodel/config.js');
+    const initial = fmConfig.INITIAL_INVITE;
+    const startInvite = lastInvite || initial;
+
+    console.log('🤖  FreeModel AutoReg v2 (emailnator + magic-link)\n');
+    console.log(`   Старт инвайт:  ${startInvite}`);
+    if (lastInvite && lastInvite !== initial) {
+        console.log('                  ↑ из freemodel/.last_invite (предыдущий запуск)');
+    } else {
+        console.log('                  ↑ из freemodel/config.js  (INITIAL_INVITE)');
+    }
+    console.log(`   Прокси:        ${fmConfig.PROXY || '(нет)'}`);
+    console.log('');
+
+    const countStr = await rawInput('Сколько аккаунтов создать? (Enter = 1) > ');
+    const count = Math.max(1, parseInt(countStr, 10) || 1);
+
+    console.log(`\n▶️   Запускаю: node freemodel/freemodel_autoreger_v2.js ${count}`);
+    console.log('     Ctrl+C — стоп после текущего акка.\n');
+
+    process.removeListener('SIGINT', menuSigintHandler);
+    const noopSigint = () => {};
+    process.on('SIGINT', noopSigint);
+
+    await new Promise(resolve => {
+        const child = spawn(process.execPath, ['freemodel/freemodel_autoreger_v2.js', String(count)], { stdio: 'inherit' });
+        child.on('close', resolve);
+    });
+
+    process.removeListener('SIGINT', noopSigint);
+    process.on('SIGINT', menuSigintHandler);
+
+    if (process.stdin.isTTY && process.stdin.setRawMode) {
+        try { process.stdin.setRawMode(false); } catch {}
+    }
+    try { process.stdin.pause(); } catch {}
+
+    let finalInvite = lastInvite;
+    try {
+        if (fs.existsSync(LAST_INVITE_FILE)) {
+            finalInvite = fs.readFileSync(LAST_INVITE_FILE, 'utf-8').trim();
+        }
+    } catch {}
+    if (finalInvite && finalInvite !== startInvite) {
+        console.log(`\n💾  Новый последний реф: ${finalInvite}`);
+        console.log('    Сохранён в freemodel/.last_invite — следующий запуск стартует с него.');
+    }
+
+    console.log('\nНажми любую клавишу для возврата...');
+    await new Promise(resolve => {
+        process.stdin.resume();
+        if (process.stdin.isTTY && process.stdin.setRawMode) {
+            try { process.stdin.setRawMode(true); } catch {}
+        }
+        process.stdin.once('keypress', () => {
+            if (process.stdin.isTTY && process.stdin.setRawMode) {
+                try { process.stdin.setRawMode(false); } catch {}
+            }
+            process.stdin.pause();
+            resolve();
+        });
+    });
 }
 
 async function notionCreateMenu() {

@@ -22,6 +22,7 @@ freemodel/accounts/
 freemodel/sessions/
 freemodel/keys.txt
 freemodel/logs/
+freemodel/.last_invite
 
 # Notion приватные данные (сессии, скриншоты, логи, конфиг с картой)
 notion/sessions/

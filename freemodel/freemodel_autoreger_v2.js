@@ -245,6 +245,18 @@ async function createEmailnatorEmail() {
 // waitForMagicLinkEmail — отличие от Notion-варианта:
 // извлекаем УРЛ верификации, а не 6-значный код.
 //
+// Notion-флоу: emailnator показывает текст письма с 6-значным кодом —
+// достаточно прочитать body inbox и достать /\d{6}/.
+// FreeModel-флоу: тело письма содержит ссылку с длинным токеном
+// /verify?token=... — её надо извлечь. Письмо нужно открыть кликом.
+//
+// Robustness: emailnator меняет вёрстку (raw HTML письма, фреймы, разные
+// форматы строк inbox). Не надеемся на конкретный селектор — пробуем:
+//   1. сразу искать magic-link на любой странице (вдруг inbox показывает preview)
+//   2. кликнуть любую строку inbox-таблицы с "freemodel" текстом
+//   3. кликнуть первый <tr>/<div role="row"> вообще (если в inbox одно письмо)
+//   4. после клика — собрать ВСЕ <a href> со всех frames и фильтровать
+//
 async function waitForMagicLinkEmail(email, timeoutMs) {
     log(`[почта] жду magic-link для ${email} (макс ${Math.round(timeoutMs/1000)}с)...`);
 
@@ -254,6 +266,52 @@ async function waitForMagicLinkEmail(email, timeoutMs) {
 
     const deadline = Date.now() + timeoutMs;
     const pollInterval = config.EMAIL_POLL_MS || 5000;
+    const fromHint = (config.EMAIL_FROM_HINT || 'freemodel').toLowerCase();
+    const subjectHints = config.EMAIL_SUBJECT_HINTS || ['verify', 'verification', 'sign in', 'login', 'confirm', 'magic'];
+
+    // Walk all frames + collect every href that points at freemodel
+    async function harvestFreemodelLinks() {
+        const links = new Set();
+        for (const frame of page.frames()) {
+            try {
+                const hrefs = await frame.locator('a[href*="freemodel"]').evaluateAll(
+                    els => els.map(el => el.getAttribute('href') || '')
+                );
+                for (const h of hrefs) {
+                    if (h) links.add(h.replace(/&amp;/g, '&'));
+                }
+            } catch {}
+            try {
+                const text = await frame.locator('body').innerText().catch(() => '');
+                const m = text.match(/https?:\/\/(?:www\.)?freemodel\.dev\/[^\s"'<>]+/gi);
+                if (m) m.forEach(l => links.add(l.replace(/&amp;/g, '&')));
+            } catch {}
+        }
+        return Array.from(links);
+    }
+
+    // Score a link by how "magic" it looks
+    function pickBestLink(links) {
+        if (!links.length) return null;
+        const priority = [
+            /freemodel\.dev\/[^\s]*\/api\/auth/i,
+            /freemodel\.dev\/[^\s]*verify/i,
+            /freemodel\.dev\/[^\s]*confirm/i,
+            /freemodel\.dev\/[^\s]*magic/i,
+            /freemodel\.dev\/[^\s]*(?:signin|login)/i,
+            /freemodel\.dev\/[^\s]*callback/i,
+            /freemodel\.dev\/[^\s]*token=/i,
+        ];
+        for (const re of priority) {
+            const hit = links.find(l => re.test(l));
+            if (hit) return hit;
+        }
+        // Fallback: any freemodel link that's not the root/dashboard
+        const non_root = links.find(l =>
+            !/freemodel\.dev\/?(?:#|$)/.test(l) &&
+            !/freemodel\.dev\/dashboard\/?(?:#|$)/.test(l));
+        return non_root || links[0];
+    }
 
     try {
         while (Date.now() < deadline) {
@@ -261,68 +319,76 @@ async function waitForMagicLinkEmail(email, timeoutMs) {
             try { await page.click('button:has-text("Consent")', { timeout: 2000 }); } catch {}
             await page.waitForTimeout(3000);
 
-            const inboxText = await page.locator('body').innerText().catch(() => '');
-            const fromHint = (config.EMAIL_FROM_HINT || 'freemodel').toLowerCase();
-            const subjectHints = config.EMAIL_SUBJECT_HINTS || ['verify', 'verification', 'sign in', 'login', 'confirm', 'magic'];
+            // 0. Quick scan — maybe inbox already shows preview
+            let links = await harvestFreemodelLinks();
+            let pick = pickBestLink(links);
+            if (pick) {
+                log(`[почта] 🔗 magic-link (inbox preview): ${pick}`);
+                await browser.close();
+                return pick;
+            }
 
-            // matcher: либо отправитель содержит freemodel, либо тема содержит ключевик
+            const inboxText = await page.locator('body').innerText().catch(() => '');
             const lowerInbox = inboxText.toLowerCase();
             const fromHit = lowerInbox.includes(fromHint);
             const subjectHit = subjectHints.some(h => lowerInbox.includes(h.toLowerCase()));
 
             if (fromHit || subjectHit) {
-                log('[почта] ✉ письмо найдено в inbox, открываю...');
+                log('[почта] ✉ письмо найдено в inbox, пробую открыть...');
 
-                // Кликаем первую строку с freemodel или verify
-                try {
-                    const row = page.locator(
-                        `tr:has-text("${fromHint}"), tr:has-text("verify"), tr:has-text("Sign in"), ` +
-                        `[role="row"]:has-text("${fromHint}"), [role="row"]:has-text("verify"), ` +
-                        `div:has-text("${fromHint}")`
-                    ).first();
-                    if (await row.count() > 0) {
-                        await row.click({ timeout: 5000 });
-                        await page.waitForTimeout(3000);
-                    } else {
-                        // Fallback — кликаем по тексту freemodel
-                        await page.click(`text=${fromHint}`, { timeout: 3000 });
-                        await page.waitForTimeout(3000);
-                    }
-                } catch (e) {
-                    log(`[почта] ⚠️ не смог открыть письмо кликом: ${e.message}`);
-                }
-
-                // Достаём содержимое письма
-                const bodyText = await page.locator('body').innerText().catch(() => '');
-                const bodyHtml = await page.content().catch(() => '');
-
-                // Сначала пытаемся найти magic-link
-                let link = extractMagicLink(bodyText) || extractMagicLink(bodyHtml);
-
-                // Если в тексте нет — пробуем href всех ссылок на странице
-                if (!link) {
-                    const hrefs = await page.locator('a[href*="freemodel.dev"]').all();
-                    for (const a of hrefs) {
-                        const href = await a.getAttribute('href').catch(() => '');
-                        if (href && /freemodel\.dev\/(verify|confirm|magic|login|signin|callback|token|api\/auth)/i.test(href)) {
-                            link = href.replace(/&amp;/g, '&');
-                            break;
+                // Try multiple click strategies — emailnator's row layout varies
+                const clickStrategies = [
+                    // 1. Exact text match anywhere
+                    async () => page.click(`text=/freemodel/i`, { timeout: 2500 }),
+                    // 2. Subject hint text (verify/sign in/etc.)
+                    async () => {
+                        for (const hint of subjectHints) {
+                            try {
+                                await page.click(`text=/${hint}/i`, { timeout: 1500 });
+                                return;
+                            } catch {}
                         }
-                    }
-                    // Если совсем никаких — берём первую freemodel-ссылку
-                    if (!link && hrefs.length > 0) {
-                        link = (await hrefs[0].getAttribute('href').catch(() => '')) || null;
-                        if (link) link = link.replace(/&amp;/g, '&');
-                    }
+                        throw new Error('no subject match');
+                    },
+                    // 3. First row in any table
+                    async () => page.click('tbody tr:first-of-type', { timeout: 2500 }),
+                    // 4. First [role="row"]
+                    async () => page.click('[role="row"]:not(:has(th))', { timeout: 2500 }),
+                    // 5. Any clickable div in the inbox list area
+                    async () => page.click('.list-group-item, .message-item, [class*="email"]', { timeout: 2500 }),
+                ];
+
+                let opened = false;
+                for (let i = 0; i < clickStrategies.length; i++) {
+                    try {
+                        await clickStrategies[i]();
+                        opened = true;
+                        log(`[почта]   ✓ открыл письмо стратегией #${i + 1}`);
+                        break;
+                    } catch {}
                 }
 
-                if (link) {
-                    log(`[почта] 🔗 magic-link: ${link}`);
+                if (!opened) {
+                    log('[почта]   ⚠️ ни одна стратегия клика не сработала — попробую harvest без клика');
+                }
+
+                await page.waitForTimeout(2500);
+
+                // After clicking (or even if not), harvest all freemodel links from all frames
+                links = await harvestFreemodelLinks();
+                pick = pickBestLink(links);
+
+                if (pick) {
+                    log(`[почта] 🔗 magic-link: ${pick}`);
                     await browser.close();
-                    return link;
+                    return pick;
                 }
 
-                log('[почта] ⚠️ письмо открыто, но magic-link не найден; продолжаю опрос');
+                // Last resort: dump screenshot + html for manual inspection
+                const dumpPath = path.join(__dirname, `inbox_debug_${Date.now()}.png`);
+                await page.screenshot({ path: dumpPath, fullPage: true }).catch(() => {});
+                log(`[почта]   📸 не нашёл ссылку — скриншот: ${dumpPath}`);
+                log(`[почта]   ${links.length === 0 ? 'ноль freemodel-ссылок на странице' : 'ссылки нашли но ни одна не похожа на magic: ' + links.slice(0, 3).join(' | ')}`);
             }
 
             process.stdout.write('.');

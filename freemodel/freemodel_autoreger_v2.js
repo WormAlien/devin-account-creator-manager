@@ -258,35 +258,26 @@ async function waitForOtpCodeEmail(email, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     const pollInterval = config.EMAIL_POLL_MS || 5000;
     const fromHint = (config.EMAIL_FROM_HINT || 'freemodel').toLowerCase();
-    const subjectHints = config.EMAIL_SUBJECT_HINTS || ['verify', 'verification', 'sign in', 'login', 'confirm', 'magic', 'code'];
 
     // Поднять ВСЕ 6-значные коды из всех фреймов, выбрать самый похожий на OTP.
-    // OTP обычно стоит отдельной строкой, окружён пробелами/новыми строками,
-    // и НЕ выглядит как год (2024-2026 фильтруем) или часть длинного числа.
     async function harvestOtpCodes() {
         const codes = [];
         for (const frame of page.frames()) {
             try {
                 const text = await frame.locator('body').innerText().catch(() => '');
                 if (!text) continue;
-                // 6 цифр окружённые non-digit (чтобы не выдрать кусок длинного числа)
                 const matches = text.match(/(?<!\d)\d{6}(?!\d)/g) || [];
                 for (const m of matches) {
                     const n = parseInt(m, 10);
-                    // Отсекаем годы 2000-2099 и совсем мелкие числа
                     if (n < 100000) continue;
-                    if (m.startsWith('20') && n >= 200000 && n <= 209999) {
-                        // Очень похоже на год типа 202612 — пропускаем
-                        continue;
-                    }
-                    codes.push({ code: m, frameUrl: frame.url(), context: text });
+                    if (m.startsWith('20') && n >= 200000 && n <= 209999) continue; // годы
+                    codes.push({ code: m, context: text });
                 }
             } catch {}
         }
         return codes;
     }
 
-    // Ранжируем код по близости к ключевым словам (code/verification/OTP)
     function pickBestCode(codes) {
         if (!codes.length) return null;
         const kw = /(?:code|verification|otp|verify|пин|код)/i;
@@ -296,7 +287,34 @@ async function waitForOtpCodeEmail(email, timeoutMs) {
             const window = c.context.substring(Math.max(0, idx - 80), idx + 86);
             if (kw.test(window)) return c.code;
         }
-        return codes[0].code;  // fallback — первый разумный
+        return codes[0].code;
+    }
+
+    // Найти ИМЕННО freemodel-строку в inbox-таблице.
+    // Возвращаем locator самой кликабельной части, либо null.
+    async function findFreemodelRow() {
+        // Перебираем все строки таблицы / role=row / div.list-item
+        const candidates = [
+            'tbody tr',
+            '[role="row"]:not(:has(th))',
+            '.list-group-item',
+            '.message-item',
+            '[class*="email-row"], [class*="email-item"]',
+        ];
+        for (const sel of candidates) {
+            const rows = await page.locator(sel).all();
+            for (const row of rows) {
+                try {
+                    const text = (await row.innerText().catch(() => '') || '').toLowerCase();
+                    // Строго: должен быть freemodel в видимом тексте строки.
+                    // Pinterest/Google/etc. отсекаем.
+                    if (text.includes('freemodel')) {
+                        return row;
+                    }
+                } catch {}
+            }
+        }
+        return null;
     }
 
     try {
@@ -305,64 +323,72 @@ async function waitForOtpCodeEmail(email, timeoutMs) {
             try { await page.click('button:has-text("Consent")', { timeout: 2000 }); } catch {}
             await page.waitForTimeout(3000);
 
-            // 0. Может inbox уже показывает превью с кодом
-            let codes = await harvestOtpCodes();
-            let pick = pickBestCode(codes);
+            // 0. Может в inbox уже видна OTP-цифра рядом со словом "freemodel" в превью
+            const inboxFullText = await page.locator('body').innerText().catch(() => '');
+            if (inboxFullText.toLowerCase().includes('freemodel')) {
+                // Проверим — есть ли уже превью с кодом
+                const codes = await harvestOtpCodes();
+                const previewPick = pickBestCode(codes);
+                if (previewPick) {
+                    // Удостоверимся что код не от Pinterest/Google — должно быть рядом freemodel
+                    const idx = inboxFullText.toLowerCase().indexOf(previewPick);
+                    const window = inboxFullText.substring(Math.max(0, idx - 200), idx + 200).toLowerCase();
+                    if (window.includes('freemodel')) {
+                        log(`[почта] 🔢 OTP (inbox preview, рядом с "freemodel"): ${previewPick}`);
+                        await browser.close();
+                        return previewPick;
+                    }
+                }
+            }
+
+            // 1. Ищем строку именно от freemodel
+            const fmRow = await findFreemodelRow();
+            if (!fmRow) {
+                process.stdout.write('.');
+                await page.waitForTimeout(pollInterval);
+                continue;
+            }
+
+            log('[почта] ✉ нашёл строку freemodel в inbox, открываю...');
+            try {
+                await fmRow.click({ timeout: 5000 });
+                await page.waitForTimeout(3000);
+            } catch (e) {
+                log(`[почта]   ⚠️ клик не сработал: ${e.message}`);
+                // Попробуем text-based fallback на любую "freemodel"-надпись
+                try {
+                    await page.click('text=/freemodel/i', { timeout: 2500 });
+                    await page.waitForTimeout(3000);
+                } catch {}
+            }
+
+            // 2. Парсим открытое письмо. Дополнительно убеждаемся что это правда freemodel.
+            const openedText = await page.locator('body').innerText().catch(() => '');
+            if (!openedText.toLowerCase().includes('freemodel')) {
+                log('[почта]   ⚠️ открыли что-то не то — в тексте нет freemodel');
+                // Назад в inbox
+                await page.waitForTimeout(2000);
+                continue;
+            }
+
+            const codes = await harvestOtpCodes();
+            const pick = pickBestCode(codes);
             if (pick) {
-                log(`[почта] 🔢 OTP (inbox preview): ${pick}`);
+                log(`[почта] 🔢 OTP: ${pick}`);
                 await browser.close();
                 return pick;
             }
 
-            const inboxText = await page.locator('body').innerText().catch(() => '');
-            const lowerInbox = inboxText.toLowerCase();
-            const fromHit = lowerInbox.includes(fromHint);
-            const subjectHit = subjectHints.some(h => lowerInbox.includes(h.toLowerCase()));
-
-            if (fromHit || subjectHit) {
-                log('[почта] ✉ письмо найдено в inbox, пробую открыть...');
-
-                const clickStrategies = [
-                    async () => page.click(`text=/freemodel/i`, { timeout: 2500 }),
-                    async () => {
-                        for (const hint of subjectHints) {
-                            try { await page.click(`text=/${hint}/i`, { timeout: 1500 }); return; } catch {}
-                        }
-                        throw new Error('no subject match');
-                    },
-                    async () => page.click('tbody tr:first-of-type', { timeout: 2500 }),
-                    async () => page.click('[role="row"]:not(:has(th))', { timeout: 2500 }),
-                    async () => page.click('.list-group-item, .message-item, [class*="email"]', { timeout: 2500 }),
-                ];
-
-                let opened = false;
-                for (let i = 0; i < clickStrategies.length; i++) {
-                    try { await clickStrategies[i](); opened = true; log(`[почта]   ✓ открыл стратегией #${i + 1}`); break; } catch {}
-                }
-                if (!opened) log('[почта]   ⚠️ не открылось — пробую harvest без клика');
-
-                await page.waitForTimeout(3000);
-
-                codes = await harvestOtpCodes();
-                pick = pickBestCode(codes);
-
-                if (pick) {
-                    log(`[почта] 🔢 OTP: ${pick}`);
-                    await browser.close();
-                    return pick;
-                }
-
-                const dumpPath = path.join(__dirname, `inbox_debug_${Date.now()}.png`);
-                await page.screenshot({ path: dumpPath, fullPage: true }).catch(() => {});
-                log(`[почта]   📸 OTP не найден — ${dumpPath}`);
-                log(`[почта]   текст письма (первые 300 символов): ${(await page.locator('body').innerText().catch(() => '')).slice(0, 300)}`);
-            }
+            const dumpPath = path.join(__dirname, `inbox_debug_${Date.now()}.png`);
+            await page.screenshot({ path: dumpPath, fullPage: true }).catch(() => {});
+            log(`[почта]   📸 freemodel-письмо открыто, но OTP не найден — ${dumpPath}`);
+            log(`[почта]   текст письма (первые 400 символов): ${openedText.slice(0, 400)}`);
 
             process.stdout.write('.');
             await page.waitForTimeout(pollInterval);
         }
 
-        log(`\n[почта] ⏰ таймаут (${Math.round(timeoutMs/1000)}с) — OTP не пришёл`);
+        log(`\n[почта] ⏰ таймаут (${Math.round(timeoutMs/1000)}с) — OTP от freemodel не пришёл`);
         await browser.close();
         return null;
     } catch (e) {

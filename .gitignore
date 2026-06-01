@@ -23,6 +23,11 @@ freemodel/sessions/
 freemodel/keys.txt
 freemodel/logs/
 freemodel/.last_invite
+freemodel/emailnator_debug_*.png
+freemodel/inbox_debug_*.png
+freemodel/probe_email_out/
+freemodel/probe_shots/
+freemodel/probe_*.js
 
 # Notion приватные данные (сессии, скриншоты, логи, конфиг с картой)
 notion/sessions/

@@ -379,10 +379,22 @@ async function waitForOtpCodeEmail(email, timeoutMs) {
                 return pick;
             }
 
-            const dumpPath = path.join(__dirname, `inbox_debug_${Date.now()}.png`);
-            await page.screenshot({ path: dumpPath, fullPage: true }).catch(() => {});
-            log(`[почта]   📸 freemodel-письмо открыто, но OTP не найден — ${dumpPath}`);
-            log(`[почта]   текст письма (первые 400 символов): ${openedText.slice(0, 400)}`);
+            // OTP не нашли в открытом freemodel-письме — дампим ВСЁ для анализа.
+            // Раньше писали в консоль 400 символов — этого мало.
+            const dumpDir = path.join(__dirname, 'logs', 'email_debug');
+            try { fs.mkdirSync(dumpDir, { recursive: true }); } catch {}
+            const stamp = Date.now();
+            const screenshotPath = path.join(dumpDir, `email_${stamp}.png`);
+            const textPath       = path.join(dumpDir, `email_${stamp}.txt`);
+            const htmlPath       = path.join(dumpDir, `email_${stamp}.html`);
+            await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+            try { fs.writeFileSync(textPath, openedText); } catch {}
+            try { fs.writeFileSync(htmlPath, await page.content().catch(() => '')); } catch {}
+            log(`[почта]   ⚠️ OTP не извлечён. Дамп для анализа:`);
+            log(`[почта]     screenshot: ${screenshotPath}`);
+            log(`[почта]     text:       ${textPath}`);
+            log(`[почта]     html:       ${htmlPath}`);
+            log(`[почта]   Пришли любой из этих файлов — пойму как парсить.`);
 
             process.stdout.write('.');
             await page.waitForTimeout(pollInterval);

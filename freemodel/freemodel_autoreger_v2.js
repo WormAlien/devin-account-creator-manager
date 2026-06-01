@@ -242,23 +242,14 @@ async function createEmailnatorEmail() {
 }
 
 //
-// waitForMagicLinkEmail — отличие от Notion-варианта:
-// извлекаем УРЛ верификации, а не 6-значный код.
+// waitForOtpCodeEmail — FreeModel сейчас шлёт 6-значный код, НЕ magic-link.
+// (Подтверждено probe_signup.js — форма после submit: 6 × <input maxLength=1>
+// + "Verify & continue" / "Resend code".)
 //
-// Notion-флоу: emailnator показывает текст письма с 6-значным кодом —
-// достаточно прочитать body inbox и достать /\d{6}/.
-// FreeModel-флоу: тело письма содержит ссылку с длинным токеном
-// /verify?token=... — её надо извлечь. Письмо нужно открыть кликом.
+// Извлекаем ровно 6 подряд идущих цифр из видимого текста письма.
 //
-// Robustness: emailnator меняет вёрстку (raw HTML письма, фреймы, разные
-// форматы строк inbox). Не надеемся на конкретный селектор — пробуем:
-//   1. сразу искать magic-link на любой странице (вдруг inbox показывает preview)
-//   2. кликнуть любую строку inbox-таблицы с "freemodel" текстом
-//   3. кликнуть первый <tr>/<div role="row"> вообще (если в inbox одно письмо)
-//   4. после клика — собрать ВСЕ <a href> со всех frames и фильтровать
-//
-async function waitForMagicLinkEmail(email, timeoutMs) {
-    log(`[почта] жду magic-link для ${email} (макс ${Math.round(timeoutMs/1000)}с)...`);
+async function waitForOtpCodeEmail(email, timeoutMs) {
+    log(`[почта] жду OTP для ${email} (макс ${Math.round(timeoutMs/1000)}с)...`);
 
     const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
@@ -267,50 +258,45 @@ async function waitForMagicLinkEmail(email, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     const pollInterval = config.EMAIL_POLL_MS || 5000;
     const fromHint = (config.EMAIL_FROM_HINT || 'freemodel').toLowerCase();
-    const subjectHints = config.EMAIL_SUBJECT_HINTS || ['verify', 'verification', 'sign in', 'login', 'confirm', 'magic'];
+    const subjectHints = config.EMAIL_SUBJECT_HINTS || ['verify', 'verification', 'sign in', 'login', 'confirm', 'magic', 'code'];
 
-    // Walk all frames + collect every href that points at freemodel
-    async function harvestFreemodelLinks() {
-        const links = new Set();
+    // Поднять ВСЕ 6-значные коды из всех фреймов, выбрать самый похожий на OTP.
+    // OTP обычно стоит отдельной строкой, окружён пробелами/новыми строками,
+    // и НЕ выглядит как год (2024-2026 фильтруем) или часть длинного числа.
+    async function harvestOtpCodes() {
+        const codes = [];
         for (const frame of page.frames()) {
             try {
-                const hrefs = await frame.locator('a[href*="freemodel"]').evaluateAll(
-                    els => els.map(el => el.getAttribute('href') || '')
-                );
-                for (const h of hrefs) {
-                    if (h) links.add(h.replace(/&amp;/g, '&'));
+                const text = await frame.locator('body').innerText().catch(() => '');
+                if (!text) continue;
+                // 6 цифр окружённые non-digit (чтобы не выдрать кусок длинного числа)
+                const matches = text.match(/(?<!\d)\d{6}(?!\d)/g) || [];
+                for (const m of matches) {
+                    const n = parseInt(m, 10);
+                    // Отсекаем годы 2000-2099 и совсем мелкие числа
+                    if (n < 100000) continue;
+                    if (m.startsWith('20') && n >= 200000 && n <= 209999) {
+                        // Очень похоже на год типа 202612 — пропускаем
+                        continue;
+                    }
+                    codes.push({ code: m, frameUrl: frame.url(), context: text });
                 }
             } catch {}
-            try {
-                const text = await frame.locator('body').innerText().catch(() => '');
-                const m = text.match(/https?:\/\/(?:www\.)?freemodel\.dev\/[^\s"'<>]+/gi);
-                if (m) m.forEach(l => links.add(l.replace(/&amp;/g, '&')));
-            } catch {}
         }
-        return Array.from(links);
+        return codes;
     }
 
-    // Score a link by how "magic" it looks
-    function pickBestLink(links) {
-        if (!links.length) return null;
-        const priority = [
-            /freemodel\.dev\/[^\s]*\/api\/auth/i,
-            /freemodel\.dev\/[^\s]*verify/i,
-            /freemodel\.dev\/[^\s]*confirm/i,
-            /freemodel\.dev\/[^\s]*magic/i,
-            /freemodel\.dev\/[^\s]*(?:signin|login)/i,
-            /freemodel\.dev\/[^\s]*callback/i,
-            /freemodel\.dev\/[^\s]*token=/i,
-        ];
-        for (const re of priority) {
-            const hit = links.find(l => re.test(l));
-            if (hit) return hit;
+    // Ранжируем код по близости к ключевым словам (code/verification/OTP)
+    function pickBestCode(codes) {
+        if (!codes.length) return null;
+        const kw = /(?:code|verification|otp|verify|пин|код)/i;
+        for (const c of codes) {
+            const idx = c.context.indexOf(c.code);
+            if (idx < 0) continue;
+            const window = c.context.substring(Math.max(0, idx - 80), idx + 86);
+            if (kw.test(window)) return c.code;
         }
-        // Fallback: any freemodel link that's not the root/dashboard
-        const non_root = links.find(l =>
-            !/freemodel\.dev\/?(?:#|$)/.test(l) &&
-            !/freemodel\.dev\/dashboard\/?(?:#|$)/.test(l));
-        return non_root || links[0];
+        return codes[0].code;  // fallback — первый разумный
     }
 
     try {
@@ -319,11 +305,11 @@ async function waitForMagicLinkEmail(email, timeoutMs) {
             try { await page.click('button:has-text("Consent")', { timeout: 2000 }); } catch {}
             await page.waitForTimeout(3000);
 
-            // 0. Quick scan — maybe inbox already shows preview
-            let links = await harvestFreemodelLinks();
-            let pick = pickBestLink(links);
+            // 0. Может inbox уже показывает превью с кодом
+            let codes = await harvestOtpCodes();
+            let pick = pickBestCode(codes);
             if (pick) {
-                log(`[почта] 🔗 magic-link (inbox preview): ${pick}`);
+                log(`[почта] 🔢 OTP (inbox preview): ${pick}`);
                 await browser.close();
                 return pick;
             }
@@ -336,66 +322,47 @@ async function waitForMagicLinkEmail(email, timeoutMs) {
             if (fromHit || subjectHit) {
                 log('[почта] ✉ письмо найдено в inbox, пробую открыть...');
 
-                // Try multiple click strategies — emailnator's row layout varies
                 const clickStrategies = [
-                    // 1. Exact text match anywhere
                     async () => page.click(`text=/freemodel/i`, { timeout: 2500 }),
-                    // 2. Subject hint text (verify/sign in/etc.)
                     async () => {
                         for (const hint of subjectHints) {
-                            try {
-                                await page.click(`text=/${hint}/i`, { timeout: 1500 });
-                                return;
-                            } catch {}
+                            try { await page.click(`text=/${hint}/i`, { timeout: 1500 }); return; } catch {}
                         }
                         throw new Error('no subject match');
                     },
-                    // 3. First row in any table
                     async () => page.click('tbody tr:first-of-type', { timeout: 2500 }),
-                    // 4. First [role="row"]
                     async () => page.click('[role="row"]:not(:has(th))', { timeout: 2500 }),
-                    // 5. Any clickable div in the inbox list area
                     async () => page.click('.list-group-item, .message-item, [class*="email"]', { timeout: 2500 }),
                 ];
 
                 let opened = false;
                 for (let i = 0; i < clickStrategies.length; i++) {
-                    try {
-                        await clickStrategies[i]();
-                        opened = true;
-                        log(`[почта]   ✓ открыл письмо стратегией #${i + 1}`);
-                        break;
-                    } catch {}
+                    try { await clickStrategies[i](); opened = true; log(`[почта]   ✓ открыл стратегией #${i + 1}`); break; } catch {}
                 }
+                if (!opened) log('[почта]   ⚠️ не открылось — пробую harvest без клика');
 
-                if (!opened) {
-                    log('[почта]   ⚠️ ни одна стратегия клика не сработала — попробую harvest без клика');
-                }
+                await page.waitForTimeout(3000);
 
-                await page.waitForTimeout(2500);
-
-                // After clicking (or even if not), harvest all freemodel links from all frames
-                links = await harvestFreemodelLinks();
-                pick = pickBestLink(links);
+                codes = await harvestOtpCodes();
+                pick = pickBestCode(codes);
 
                 if (pick) {
-                    log(`[почта] 🔗 magic-link: ${pick}`);
+                    log(`[почта] 🔢 OTP: ${pick}`);
                     await browser.close();
                     return pick;
                 }
 
-                // Last resort: dump screenshot + html for manual inspection
                 const dumpPath = path.join(__dirname, `inbox_debug_${Date.now()}.png`);
                 await page.screenshot({ path: dumpPath, fullPage: true }).catch(() => {});
-                log(`[почта]   📸 не нашёл ссылку — скриншот: ${dumpPath}`);
-                log(`[почта]   ${links.length === 0 ? 'ноль freemodel-ссылок на странице' : 'ссылки нашли но ни одна не похожа на magic: ' + links.slice(0, 3).join(' | ')}`);
+                log(`[почта]   📸 OTP не найден — ${dumpPath}`);
+                log(`[почта]   текст письма (первые 300 символов): ${(await page.locator('body').innerText().catch(() => '')).slice(0, 300)}`);
             }
 
             process.stdout.write('.');
             await page.waitForTimeout(pollInterval);
         }
 
-        log(`\n[почта] ⏰ таймаут (${Math.round(timeoutMs/1000)}с) — magic-link не пришёл`);
+        log(`\n[почта] ⏰ таймаут (${Math.round(timeoutMs/1000)}с) — OTP не пришёл`);
         await browser.close();
         return null;
     } catch (e) {
@@ -494,18 +461,62 @@ async function fillSignupForm(page, email) {
     if (!submitted) await page.keyboard.press('Enter');
 }
 
-async function visitMagicLink(context, link) {
-    const page = await context.newPage();
-    log('[магиклинк] открываю...');
-    await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(4000);
+//
+// fillOtpAndContinue — на freemodel.dev signup-step после email:
+//   - 6 single-char <input> (maxLength=1) подряд
+//   - "Verify & continue" / "Resend code" кнопки
+// Стратегия: попробуем заполнить 6 инпутов по одной цифре, затем Verify.
+//
+async function fillOtpAndContinue(page, code) {
+    log(`[OTP] ввожу код ${code}`);
 
+    // Все inputs с maxlength=1 или autocomplete="one-time-code"
+    const inputs = page.locator('input[maxlength="1"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
+    const n = await inputs.count();
+
+    if (n >= 6) {
+        // 6 раздельных полей
+        for (let i = 0; i < 6; i++) {
+            await inputs.nth(i).fill(code[i]).catch(async () => {
+                // некоторые сетки требуют focus + press
+                await inputs.nth(i).focus();
+                await page.keyboard.press(code[i]);
+            });
+            await page.waitForTimeout(80);
+        }
+    } else if (n === 1) {
+        // Один большой input — ввожу целиком
+        await inputs.first().fill(code);
+    } else {
+        // Fallback: фокусируем первый видимый input и печатаем
+        const first = page.locator('input').first();
+        await first.click();
+        await page.keyboard.type(code, { delay: 80 });
+    }
+
+    await page.waitForTimeout(500);
+
+    // Иногда форма авто-сабмитится после 6-й цифры — ждём редиректа сначала
+    const before = page.url();
+    try {
+        await page.waitForURL(u => u !== before, { timeout: 4000 });
+        log('[OTP] авто-сабмит сработал');
+    } catch {
+        // Кликаем Verify & continue вручную
+        const verify = page.locator('button:has-text("Verify"), button:has-text("Continue"), button:has-text("Confirm"), button[type="submit"]').first();
+        if (await verify.count() > 0) {
+            await verify.click({ timeout: 5000 }).catch(() => {});
+            log('[OTP] нажал Verify');
+        }
+    }
+
+    await page.waitForTimeout(4500);
     for (let i = 0; i < 6; i++) {
         const u = page.url();
-        if (u.includes('/dashboard') || u.includes('/app') || u.includes('/account')) break;
+        if (u.includes('/dashboard') || u.includes('/app') || u.includes('/account') || u.includes('/welcome')) break;
         await page.waitForTimeout(2000);
     }
-    log(`[магиклинк] URL после: ${page.url()}`);
+    log(`[OTP] URL после verify: ${page.url()}`);
     return page;
 }
 
@@ -602,14 +613,13 @@ async function registerOne(index, inviteCode) {
     try {
         // ── Email creation with retries (как у Notion) ──
         const MAX_EMAIL_RETRIES = 5;
-        let magicLink = null;
+        let otpCode = null;
 
         for (let attempt = 0; attempt < MAX_EMAIL_RETRIES; attempt++) {
             email = await createEmailnatorEmail();
             log(`[#${index}] email (попытка ${attempt + 1}): ${email}`);
 
-            // Запускаем браузер для signup только один раз — на 1-й попытке.
-            // На ретраях reuse того же context (просто новая страница).
+            // Один браузер на все попытки — context shared, page закрываем между ретраями.
             if (!browser) {
                 browser = await chromium.launch(launchOpts);
                 context = await browser.newContext({
@@ -643,27 +653,29 @@ async function registerOne(index, inviteCode) {
             if (banHit) {
                 log(`[#${index}] ❌ email отклонён (${banHit}), беру новую почту`);
                 await page.close().catch(() => {});
+                page = null;
                 continue;
             }
 
-            // Жду magic-link 60 сек
-            magicLink = await waitForMagicLinkEmail(email, 60000);
-            if (magicLink) break;
+            // Жду OTP 60 сек
+            otpCode = await waitForOtpCodeEmail(email, 60000);
+            if (otpCode) break;
 
-            log(`[#${index}] ⚠️ magic-link не пришёл за 60с, новый email (${attempt + 2}/${MAX_EMAIL_RETRIES})`);
+            log(`[#${index}] ⚠️ OTP не пришёл за 60с, новый email (${attempt + 2}/${MAX_EMAIL_RETRIES})`);
             await page.close().catch(() => {});
+            page = null;
         }
 
-        if (!magicLink) {
-            throw new Error(`magic-link не получен после ${MAX_EMAIL_RETRIES} попыток`);
+        if (!otpCode) {
+            throw new Error(`OTP не получен после ${MAX_EMAIL_RETRIES} попыток`);
         }
 
-        // ── Открываем magic-link в том же context (важно, иначе session не привяжется) ──
-        const dashPage = await visitMagicLink(context, magicLink);
+        // ── Ввод OTP в ту же открытую страницу с 6 input-полями ──
+        const dashPage = await fillOtpAndContinue(page, otpCode);
 
         const url = dashPage.url();
-        if (!/\/(dashboard|app|account)/.test(url)) {
-            log(`[#${index}] ⚠️ после magic-link URL: ${url}`);
+        if (!/\/(dashboard|app|account|welcome)/.test(url)) {
+            log(`[#${index}] ⚠️ после verify URL: ${url}`);
         }
 
         // ── Сохраняем сессию ДО создания ключа ──

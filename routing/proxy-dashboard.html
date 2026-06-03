@@ -288,7 +288,13 @@
             </select>
             <button onclick="loadFreemodelSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadFreemodelSessions(true)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Квоты ~30s</button>
-            <button onclick="launchScript('freemodel-create', '➕ FreeModel: создание сессии запущено')" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать сессию</button>
+            <div class="flex items-center gap-1 ml-2 pl-2 border-l border-line-soft">
+              <label class="text-[10px] text-faint">кол-во</label>
+              <input id="fm-create-count" type="number" min="1" max="50" value="1"
+                     class="text-xs w-14 px-2 py-2 bg-surface border border-line-soft rounded-lg text-ink text-center" />
+              <button onclick="launchFreemodelCreate()"
+                      class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать v3</button>
+            </div>
           </div>
         </header>
         <div id="freemodel-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
@@ -541,7 +547,10 @@ function parseFrac(used, max) {
 }
 
 function actBtn(onclick, title, icon, color) {
-  return `<button onclick="${onclick}" title="${esc(title)}" class="size-7 inline-flex items-center justify-center rounded-md border border-line-soft text-${color} hover:border-${color}/60 hover:bg-${color}/10 transition text-[12px]">${icon}</button>`;
+  // Кавычки в onclick: используем одинарные снаружи (onclick='...'), чтобы внутри спокойно
+  // жили двойные от JSON.stringify(имя сессии). Любые ' внутри expression экранируем как &#39;.
+  const safe = String(onclick).replace(/'/g, '&#39;');
+  return `<button onclick='${safe}' title="${esc(title)}" class="size-7 inline-flex items-center justify-center rounded-md border border-line-soft text-${color} hover:border-${color}/60 hover:bg-${color}/10 transition text-[12px]">${icon}</button>`;
 }
 
 // ═══════════════════ DEVIN ═══════════════════════════════════════════
@@ -970,17 +979,25 @@ async function selectNotionCard(index) {
 }
 
 // ═══════════════════ LAUNCH SCRIPTS ══════════════════════════════════
-async function launchScript(kind, successMsg) {
+async function launchScript(kind, successMsg, extraArgs) {
   if (!confirm(`Запустить «${kind}» в новом окне терминала?`)) return;
   try {
     const res = await fetch('/__switch/api/launch', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind }),
+      body: JSON.stringify({ kind, args: extraArgs || [] }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     toast(successMsg || `✓ ${kind} запущен`, 'success', 6000);
   } catch (e) { toast('Launch: ' + e.message, 'error'); }
+}
+
+async function launchFreemodelCreate() {
+  const input = document.getElementById('fm-create-count');
+  const count = Math.max(1, Math.min(50, parseInt(input?.value || '1', 10) || 1));
+  await launchScript('freemodel-create',
+    `➕ FreeModel v3: создание ${count} аккаунт${count === 1 ? 'а' : 'ов'} запущено`,
+    [String(count)]);
 }
 
 // ═══════════════════ SESSION ACTIONS ═════════════════════════════════

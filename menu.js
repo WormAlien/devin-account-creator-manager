@@ -262,7 +262,7 @@ async function mainMenu() {
         { label: `➕  Добавить аккаунт Devin`, value: 'devin-add' },
         { label: `🆓  FreeModel сессии`, value: 'freemodel-sessions' },
         { label: `➕  Создать аккаунт FreeModel (вручную, 1 шт)`, value: 'freemodel-create' },
-        { label: `🤖  FreeModel autoreg v2 (emailnator, пирамида)`, value: 'freemodel-autoreg-v2' },
+        { label: `🤖  FreeModel autoreg v3 (instanttempemail, пирамида)`, value: 'freemodel-autoreg-v3' },
         { label: `🗂️   Notion сессии     [${notionSessionsCount()}]`, value: 'notion-sessions' },
         { label: `📝  Notion         [${notionStatusLine()}]`, value: 'notion-create' },
         { label: '──────────────────────────────', value: null, disabled: true },
@@ -274,7 +274,7 @@ async function mainMenu() {
         case 'devin-add': await devinAddMenu(); break;
         case 'freemodel-sessions': await freemodelSessionsMenu({ clearScreen, setKeypressListener, rawList }); break;
         case 'freemodel-create': await createFreemodelSession({ clearScreen, setKeypressListener, rawList, rawInput }); break;
-        case 'freemodel-autoreg-v2': await freemodelAutoregV2({ clearScreen, setKeypressListener, rawInput }); break;
+        case 'freemodel-autoreg-v3': await freemodelAutoregV3({ clearScreen, setKeypressListener, rawInput }); break;
         case 'notion-sessions': await notionSessionsMenu({ clearScreen, setKeypressListener, rawList, rawInput }); break;
         case 'notion-create': await notionCreateMenu(); break;
         case 'exit':
@@ -1806,7 +1806,7 @@ function saveNotionCardPresets(presets) {
     return false;
 }
 
-async function freemodelAutoregV2({ clearScreen, rawInput }) {
+async function freemodelAutoregV3({ clearScreen, rawInput }) {
     clearScreen();
 
     const LAST_INVITE_FILE = path.join(__dirname, 'freemodel', '.last_invite');
@@ -1823,7 +1823,7 @@ async function freemodelAutoregV2({ clearScreen, rawInput }) {
     const initial = fmConfig.INITIAL_INVITE;
     const startInvite = lastInvite || initial;
 
-    console.log('🤖  FreeModel AutoReg v2 (emailnator + magic-link)\n');
+    console.log('🤖  FreeModel AutoReg v3 (instanttempemail + OTP)\n');
     console.log(`   Старт инвайт:  ${startInvite}`);
     if (lastInvite && lastInvite !== initial) {
         console.log('                  ↑ из freemodel/.last_invite (предыдущий запуск)');
@@ -1836,7 +1836,7 @@ async function freemodelAutoregV2({ clearScreen, rawInput }) {
     const countStr = await rawInput('Сколько аккаунтов создать? (Enter = 1) > ');
     const count = Math.max(1, parseInt(countStr, 10) || 1);
 
-    console.log(`\n▶️   Запускаю: node freemodel/freemodel_autoreger_v2.js ${count}`);
+    console.log(`\n▶️   Запускаю: node freemodel/freemodel_autoreger_v3.js ${count}`);
     console.log('     Ctrl+C — стоп после текущего акка.\n');
 
     process.removeListener('SIGINT', menuSigintHandler);
@@ -1844,7 +1844,7 @@ async function freemodelAutoregV2({ clearScreen, rawInput }) {
     process.on('SIGINT', noopSigint);
 
     await new Promise(resolve => {
-        const child = spawn(process.execPath, ['freemodel/freemodel_autoreger_v2.js', String(count)], { stdio: 'inherit' });
+        const child = spawn(process.execPath, ['freemodel/freemodel_autoreger_v3.js', String(count)], { stdio: 'inherit' });
         child.on('close', resolve);
     });
 

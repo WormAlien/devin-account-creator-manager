@@ -103,3 +103,6 @@ package-lock.json
 
 # Дублирующие данные
 autoreger_data/
+
+# Playwright MCP runtime artefacts
+.playwright-mcp/

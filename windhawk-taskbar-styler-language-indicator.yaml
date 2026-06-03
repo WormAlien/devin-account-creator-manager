@@ -1,0 +1,89 @@
+# ============================================================
+#  Windhawk › Windows 11 Taskbar Styler
+#  Restyle the system tray language indicator ("ENG" / "РУС")
+#  to match a dark Luminosity Dock + gold/crown aesthetic.
+#
+#  HOW TO USE:
+#  1. Open Windhawk → Mods → "Windows 11 Taskbar Styler" → Details/Settings
+#  2. Click "Advanced" toggle so the raw YAML editor appears
+#  3. Replace its contents with everything below
+#  4. Click Save. Taskbar should restyle instantly (no reboot).
+#
+#  TWEAK THE PALETTE (just change these hex values in the rules below):
+#     #FFC107  → primary gold (matches 👑 crown / +15°C orange)
+#     #1A1A1A  → optional pill background
+#  Font defaults to Cascadia Mono — change to "Segoe UI Variable",
+#  "JetBrains Mono", whatever your dock uses.
+# ============================================================
+
+theme: Luminosity_variant_Dock
+
+styleConstants:
+  - ''
+
+controlStyles:
+
+  # --- Main language pill container -------------------------------
+  # Layout Text in registry will be set to 🇺🇸 / 🇷🇺 emoji.
+  # No Foreground tint (would silhouette the flag colors),
+  # no FontFamily override (Cascadia Mono has no emoji glyphs).
+  - target: SystemTray.LanguageTextIconContent
+    styles:
+      - Padding=4,2,4,2
+
+  # --- The actual flag glyph -------------------------------------
+  # Force Segoe UI Emoji explicitly so the COLR-table flag renders
+  # in color instead of falling back to the UI font (which strips it
+  # to a Regional Indicator letter pair).
+  - target: TextBlock#Base@SystemTray.LanguageTextIconContent
+    styles:
+      - FontFamily=Segoe UI Emoji
+      - FontSize=13
+      - VerticalAlignment=Center
+      - HorizontalAlignment=Center
+
+  - target: TextBlock#Text@SystemTray.LanguageTextIconContent
+    styles:
+      - FontFamily=Segoe UI Emoji
+      - FontSize=13
+
+  # ================================================================
+  # CLOCK: nudge down by 3px (visual-only, no layout reflow)
+  # ================================================================
+  # Using RenderTransform translates the rendered pixels without
+  # affecting layout — both TextBlocks stay where they are relative
+  # to each other; only the whole clock shifts down 3px.
+  # Applied to the clock container, NOT each TextBlock, so the two
+  # lines don't shift independently and collide.
+  - target: SystemTray.ChevronSystemTrayIconDataModel
+    styles:
+      - RenderTransform:=<TranslateTransform Y="3" />
+
+  # Fallback for 24H2 visual tree variants.
+  - target: SystemTray.TextIconContent#SystemTrayDateTimeIcon
+    styles:
+      - RenderTransform:=<TranslateTransform Y="3" />
+
+  # --- Optional: golden pill background ---------------------------
+  # Uncomment if you want a subtle pill behind "ENG" matching the
+  # rest of the dock. Comment out if you prefer flat text.
+  #
+  # - target: Border#ContainerBorder@SystemTray.LanguageTextIconContent
+  #   styles:
+  #     - Background:=<SolidColorBrush Color="#1A1A1A" Opacity="0.55"/>
+  #     - CornerRadius=6
+  #     - BorderBrush:=<SolidColorBrush Color="#FFC107" Opacity="0.35"/>
+  #     - BorderThickness=1
+
+  # --- Optional: hide the supplementary IME glyph -----------------
+  # If a second tiny icon appears next to ENG (the IME mode marker),
+  # uncomment this to nuke it.
+  #
+  # - target: SystemTray.TextIconContent#SystemTrayInputIndicatorIcon
+  #   styles:
+  #     - Visibility=Collapsed
+
+themeResourceVariables:
+  - ''
+
+xamlDiagnosticsHandling: alert

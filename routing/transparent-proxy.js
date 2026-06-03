@@ -358,10 +358,11 @@ async function handleNotionCardSelect(req, res) {
 
 async function handleLaunch(req, res) {
     try {
-        const { kind } = await readJsonBody(req);
+        const body = await readJsonBody(req);
+        const { kind, args } = body || {};
         if (!kind) return jsonRes(res, 400, { error: 'missing kind' });
-        const result = dashApi.launchScript(kind);
-        logLine(`launch: ${kind}`);
+        const result = dashApi.launchScript(kind, Array.isArray(args) ? args : []);
+        logLine(`launch: ${kind}${result.args && result.args.length > 1 ? ' args=' + result.args.slice(1).join(' ') : ''}`);
         jsonRes(res, 200, result);
     } catch (e) { jsonRes(res, 400, { error: e.message }); }
 }

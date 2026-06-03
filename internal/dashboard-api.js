@@ -263,14 +263,21 @@ async function openSessionInBrowser(kind, name) {
         return { ok: true, kind, name, url: 'https://www.notion.so/' };
     }
     if (kind === 'freemodel') {
-        const dir = path.join(PROJECT_ROOT, 'manual_sessions', name);
-        if (!fs.existsSync(dir)) throw new Error(`freemodel session not found: ${name}`);
+        const session = freemodelMod().getFreemodelSessions().find(s => s.name === name);
+        if (!session) throw new Error(`freemodel session not found: ${name}`);
+        const dir = session.path;
+        if (!fs.existsSync(dir)) throw new Error(`freemodel session dir gone: ${dir}`);
         const { chromium } = require('playwright');
         const browser = await chromium.launch({ headless: false });
-        const context = await browser.newContext({ storageState: path.join(dir, 'session.json') });
+        const context = await browser.newContext({
+            storageState: path.join(dir, 'session.json'),
+            // Форсим английский UI: иначе ru-системные акки откроются на русском
+            locale: 'en-US',
+            extraHTTPHeaders: { 'accept-language': 'en-US,en;q=0.9' },
+        });
         const page = await context.newPage();
-        await page.goto('https://claude.ai/dashboard/usage', { waitUntil: 'domcontentloaded' }).catch(() => {});
-        return { ok: true, kind, name, url: 'https://claude.ai/dashboard/usage' };
+        await page.goto('https://freemodel.dev/dashboard/usage', { waitUntil: 'domcontentloaded' }).catch(() => {});
+        return { ok: true, kind, name, url: 'https://freemodel.dev/dashboard/usage' };
     }
     if (kind === 'devin') {
         const session = devinMod().getDevinSessions().find(s => s.name === name);
@@ -310,7 +317,9 @@ function deleteSession(kind, name) {
     if (kind === 'notion') {
         dir = path.join(PROJECT_ROOT, 'notion', 'sessions', name);
     } else if (kind === 'freemodel') {
-        dir = path.join(PROJECT_ROOT, 'manual_sessions', name);
+        const s = freemodelMod().getFreemodelSessions().find(x => x.name === name);
+        if (!s) throw new Error(`freemodel session not found: ${name}`);
+        dir = s.path;
     } else if (kind === 'devin') {
         // Devin sessions live across three roots — find by getDevinSessions
         const s = devinMod().getDevinSessions().find(x => x.name === name);
@@ -380,13 +389,13 @@ function setNotionCardIndex(value) {
 // session there, the dashboard process stays clean.
 const { spawn } = require('child_process');
 
-function launchScript(kind) {
+function launchScript(kind, extraArgs = []) {
     const node = process.execPath; // current Node binary
     const TARGETS = {
         'menu':            { title: 'Autoreger Menu',         args: [path.join(PROJECT_ROOT, 'menu.js')] },
         'devin-autoreg':   { title: 'Devin Autoreger',        args: [path.join(PROJECT_ROOT, 'autoreger.js')] },
-        // FreeModel: emailnator-based mass register (v2 — guerrillamail v1 dead)
-        'freemodel-create':{ title: 'FreeModel Autoreg v2',   args: [path.join(PROJECT_ROOT, 'freemodel', 'freemodel_autoreger_v2.js')] },
+        // FreeModel: instanttempemail-based mass register (v3 — v2/emailnator deprecated)
+        'freemodel-create':{ title: 'FreeModel Autoreg v3',   args: [path.join(PROJECT_ROOT, 'freemodel', 'freemodel_autoreger_v3.js')] },
         // FreeModel: single manual login (legacy, for restoring sessions)
         'freemodel-login': { title: 'FreeModel: Manual Login',args: [path.join(PROJECT_ROOT, 'freemodel', 'create_first_session.js')] },
         'notion-create':   { title: 'Notion: New Account',    args: [path.join(PROJECT_ROOT, 'notion', 'notion_workflow.js')] },
@@ -394,21 +403,26 @@ function launchScript(kind) {
     const t = TARGETS[kind];
     if (!t) throw new Error(`unknown launch kind: ${kind}`);
 
+    // Safety: позитивный целочисленный count / FRE-инвайт только, выкидываем мусор
+    const safeExtra = (Array.isArray(extraArgs) ? extraArgs : [])
+        .map(a => String(a))
+        .filter(a => /^(\d{1,3}|FRE-[A-Za-z0-9]+)$/.test(a))
+        .slice(0, 4);
+
+    const finalArgs = [...t.args, ...safeExtra];
+
     if (process.platform === 'win32') {
-        // cmd /c start "" cmd /k "node <script>"
-        //   "" — empty window title placeholder (start treats first quoted arg as title)
-        //   /k — keep the window open after the script exits so user sees output
-        spawn('cmd.exe', ['/c', 'start', t.title, 'cmd.exe', '/k', node, ...t.args], {
+        // cmd /c start "" cmd /k "node <script> [args...]"
+        spawn('cmd.exe', ['/c', 'start', t.title, 'cmd.exe', '/k', node, ...finalArgs], {
             cwd: PROJECT_ROOT,
             detached: true,
             stdio: 'ignore',
             windowsHide: false,
         }).unref();
     } else {
-        // Non-Windows fallback: just spawn detached
-        spawn(node, t.args, { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
+        spawn(node, finalArgs, { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
     }
-    return { ok: true, kind, args: t.args };
+    return { ok: true, kind, args: finalArgs };
 }
 
 module.exports = {

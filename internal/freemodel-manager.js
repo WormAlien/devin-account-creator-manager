@@ -13,6 +13,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const SESSIONS_DIR = 'manual_sessions';
+const V3_ACCOUNTS_DIR = path.join('freemodel', 'accounts');
 const QUOTA_CACHE_FILE = 'logs/.freemodel_quota_cache.json';
 const USAGE_URL = 'https://freemodel.dev/dashboard/usage';
 
@@ -58,6 +59,45 @@ function isFreemodelSession(itemPath) {
     return info.url.includes('freemodel.dev');
 }
 
+// v3-формат: freemodel/accounts/<idx>_<ts>_ok_<ident>/{session.json, cookies.json, account_info.txt}
+function readV3AccountInfo(itemPath) {
+    const info = { email: '', invite: '', status: '', apiKey: '' };
+    const f = path.join(itemPath, 'account_info.txt');
+    if (!fs.existsSync(f)) return info;
+    try {
+        for (const line of fs.readFileSync(f, 'utf-8').split('\n')) {
+            const c = line.indexOf(':');
+            if (c < 0) continue;
+            const k = line.slice(0, c).trim().toLowerCase();
+            const v = line.slice(c + 1).trim();
+            if (k === 'email') info.email = v;
+            else if (k.startsWith('invite code')) info.invite = v;
+            else if (k === 'status') info.status = v;
+            else if (k === 'api key') info.apiKey = v;
+        }
+    } catch {}
+    return info;
+}
+
+function parseV3Account(item, itemPath) {
+    const sessionFile = path.join(itemPath, 'session.json');
+    if (!fs.existsSync(sessionFile)) return null;
+    const info = readV3AccountInfo(itemPath);
+
+    const dtFull = item.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/);
+    const okMark = /_ok_/.test(item) || /✅/.test(info.status);
+
+    return {
+        name: item,
+        path: itemPath,
+        orgName: '—',
+        email: info.email || '—',
+        date: dtFull ? `${dtFull[1]} ${dtFull[2]}:${dtFull[3]}` : '—',
+        status: okMark ? '✅' : '❌',
+        backend: 'v3',
+    };
+}
+
 function parseSession(item, itemPath) {
     const sessionFile = path.join(itemPath, 'session.json');
     if (!fs.existsSync(sessionFile)) return null;
@@ -77,19 +117,48 @@ function parseSession(item, itemPath) {
 }
 
 function getFreemodelSessions() {
-    if (!fs.existsSync(SESSIONS_DIR)) { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); return []; }
     const list = [];
-    for (const item of fs.readdirSync(SESSIONS_DIR)) {
-        const p = path.join(SESSIONS_DIR, item);
-        try {
-            if (!fs.statSync(p).isDirectory()) continue;
-        } catch { continue; }
-        if (!isFreemodelSession(p)) continue;
-        const s = parseSession(item, p);
-        if (s) list.push(s);
+
+    // 1. Старый формат: manual_sessions/<name>/session_info.txt с "URL: freemodel.dev..."
+    if (!fs.existsSync(SESSIONS_DIR)) {
+        try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {}
     }
+    if (fs.existsSync(SESSIONS_DIR)) {
+        for (const item of fs.readdirSync(SESSIONS_DIR)) {
+            const p = path.join(SESSIONS_DIR, item);
+            try {
+                if (!fs.statSync(p).isDirectory()) continue;
+            } catch { continue; }
+            if (!isFreemodelSession(p)) continue;
+            const s = parseSession(item, p);
+            if (s) list.push(s);
+        }
+    }
+
+    // 2. v3-формат: freemodel/accounts/<dir>/account_info.txt + session.json
+    if (fs.existsSync(V3_ACCOUNTS_DIR)) {
+        for (const item of fs.readdirSync(V3_ACCOUNTS_DIR)) {
+            // Пропускаем служебные временные файлы автореги.
+            if (item.startsWith('_tmp_') || item.startsWith('_error_')) continue;
+            const p = path.join(V3_ACCOUNTS_DIR, item);
+            try {
+                if (!fs.statSync(p).isDirectory()) continue;
+            } catch { continue; }
+            const s = parseV3Account(item, p);
+            if (s) list.push(s);
+        }
+    }
+
     return list.sort((a, b) => b.date.localeCompare(a.date) || b.name.localeCompare(a.name));
 }
+
+// Форсим английский UI: freemodel определяет язык по Accept-Language/navigator.language.
+// Без этого новые v3-аккаунты, регистрировавшиеся под русским системным locale,
+// открываются на русском, и парсер "AVAILABLE NOW" / "5-Hour window" ничего не находит.
+const EN_CONTEXT_OPTS = {
+    locale: 'en-US',
+    extraHTTPHeaders: { 'accept-language': 'en-US,en;q=0.9' },
+};
 
 // ─── Парсинг /dashboard/usage ────────────────────────────────────
 async function checkFreemodelQuota(session) {
@@ -98,7 +167,7 @@ async function checkFreemodelQuota(session) {
         const sessionFile = path.join(session.path, 'session.json');
         if (!fs.existsSync(sessionFile)) return null;
         browser = await chromium.launch({ headless: true });
-        const context = await browser.newContext({ storageState: sessionFile });
+        const context = await browser.newContext({ storageState: sessionFile, ...EN_CONTEXT_OPTS });
         const page = await context.newPage();
         await page.goto(USAGE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
@@ -336,7 +405,7 @@ async function freemodelSessionsMenu({ clearScreen, setKeypressListener }) {
         if (process.stdin.isTTY && process.stdin.setRawMode) try { process.stdin.setRawMode(false); } catch {}
         try {
             const browser = await chromium.launch({ headless: false });
-            const context = await browser.newContext({ storageState: path.join(s.path, 'session.json') });
+            const context = await browser.newContext({ storageState: path.join(s.path, 'session.json'), ...EN_CONTEXT_OPTS });
             const page = await context.newPage();
             await page.goto(USAGE_URL, { waitUntil: 'domcontentloaded' });
             // браузер оставляем открытым, юзер закроет

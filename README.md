@@ -85,6 +85,8 @@ Claude Code читает `~/.claude/settings.json` — берёт оттуда `
 
 **Switcher** на `:8200` (`routing/transparent-proxy.js`) переписывает `settings.json` одним кликом и кладёт `.bak-<timestamp>` рядом. Реальные API-ключи живут в `routing/.env` (gitignored) и подставляются роутером — CC получает только литералку `sk-local-dev-key`.
 
+![Architecture](docs/architecture.svg)
+
 ## Скрипты
 
 <details>

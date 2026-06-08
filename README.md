@@ -8,7 +8,7 @@
 
 ![Dashboard](docs/dashboard.png)
 
-<sub>Web-UI на <code>localhost:8200</code> · Tailwind v4 · OKLCH палитра · Geist</sub>
+<sub>Web-UI на <code>localhost:8200</code></sub>
 
 <br>
 
@@ -66,14 +66,16 @@ routing\restart-dashboard.bat   # Windows: один клик
 
 Список сессий с прогресс-барами квот и действиями на каждой строке.
 
-| Цвет | Использовано | | Кнопка | Действие |
-| :---: | :--- | :---: | :---: | :--- |
-| 🟢 | < 40% | | 🌐 | Открыть в headed Chrome |
-| 🟡 | 40 – 70% | | 🔄 | Обновить квоту (headless ~1–3s) |
-| 🔴 | > 70% | | ➕ | Создать новую сессию |
-| | | | 🗑 | Удалить папку + кеш |
+**Цвет квоты:** 🟢 < 40% · 🟡 40 – 70% · 🔴 > 70%
 
-Сортировка: дата ↑/↓ · статус · план Pro→Free · квота · доступно `$` · свежесть кеша · email.
+| Кнопка | Действие |
+| :---: | :--- |
+| 🌐 | Открыть в headed Chrome |
+| 🔄 | Обновить квоту (headless ~1–3s) |
+| ➕ | Создать новую сессию |
+| 🗑 | Удалить папку + кеш |
+
+**Сортировка:** дата ↑/↓ · статус · план Pro→Free · квота · доступно `$` · свежесть кеша · email.
 
 ### Card picker
 
@@ -85,7 +87,13 @@ Claude Code читает `~/.claude/settings.json` — берёт оттуда `
 
 **Switcher** на `:8200` (`routing/transparent-proxy.js`) переписывает `settings.json` одним кликом и кладёт `.bak-<timestamp>` рядом. Реальные API-ключи живут в `routing/.env` (gitignored) и подставляются роутером — CC получает только литералку `sk-local-dev-key`.
 
+<div align="center">
+
 ![Architecture](docs/architecture.svg)
+
+<sub>🟢 OmniRoute · 🔵 notion-manager · 🟣 локальная control-plane (Switcher + .env)</sub>
+
+</div>
 
 ## Скрипты
 

@@ -1,20 +1,31 @@
 <div align="center">
 
-# 🎛️ Vibe-Code Account Creator Manager
+<br>
 
-**Полный тулкит для управления Devin · Notion · FreeModel аккаунтами**
-**+ локальный роутер бэкендов для Claude Code (OmniRoute ↔ notion-manager)**
+# ⚡ Vibe-Code Account Creator Manager
+
+###### `localhost:8200` · _backend switcher · account autoreg · session manager_
+
+<br>
+
+**Полный тулкит для управления `Devin` · `Notion` · `FreeModel` аккаунтами**
+**+ локальный роутер бэкендов для Claude Code** _(OmniRoute ↔ notion-manager)_
+
+<br>
 
 <p>
-  <img src="https://img.shields.io/badge/Node-18%2B-43853d?style=for-the-badge&logo=node.js&logoColor=white">
-  <img src="https://img.shields.io/badge/Playwright-Chromium-2EAD33?style=for-the-badge&logo=playwright&logoColor=white">
-  <img src="https://img.shields.io/badge/Tailwind-v4-38bdf8?style=for-the-badge&logo=tailwindcss&logoColor=white">
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/node-18%2B-3FB950?style=flat-square&labelColor=0d1117">
+  <img src="https://img.shields.io/badge/playwright-chromium-7C9CFF?style=flat-square&labelColor=0d1117">
+  <img src="https://img.shields.io/badge/tailwind-v4-58A6FF?style=flat-square&labelColor=0d1117">
+  <img src="https://img.shields.io/badge/style-OKLCH-D2A8FF?style=flat-square&labelColor=0d1117">
+  <img src="https://img.shields.io/badge/license-MIT-8B949E?style=flat-square&labelColor=0d1117">
 </p>
 
-<sub>🤖 Devin · 📝 Notion · 🆓 FreeModel · 🔀 Routing dashboard</sub>
+<sub>`🤖 Devin` &nbsp;·&nbsp; `📝 Notion` &nbsp;·&nbsp; `🆓 FreeModel` &nbsp;·&nbsp; `🔀 Routing`</sub>
 
 </div>
+
+<br>
 
 ---
 
@@ -24,31 +35,33 @@
 
 <table>
 <tr>
-  <th width="22%">Саб-система</th>
-  <th width="50%">Что делает</th>
-  <th width="28%">Где живёт</th>
+  <th align="left" width="22%">Саб-система</th>
+  <th align="left" width="50%">Что делает</th>
+  <th align="left" width="28%">Где живёт</th>
 </tr>
 <tr>
-  <td>🤖 <b>Devin</b> автореги</td>
-  <td>Создаёт Pro-аккаунты devin.ai с картой/прокси/локалью</td>
-  <td><code>autoreger.js</code> · <code>internal/</code> · <code>menu.js</code></td>
+  <td>🤖 &nbsp;<b>Devin</b> &nbsp;<sub>autoreg</sub></td>
+  <td>Создаёт Pro-аккаунты <code>devin.ai</code> с картой / прокси / локалью</td>
+  <td><code>autoreger.js</code> &nbsp;·&nbsp; <code>internal/</code> &nbsp;·&nbsp; <code>menu.js</code></td>
 </tr>
 <tr>
-  <td>📝 <b>Notion</b> автореги</td>
-  <td>Создаёт Notion-аккаунты, привязывает карту, фиксит trial</td>
-  <td><code>notion/</code> · <code>notion_workflow.js</code></td>
+  <td>📝 &nbsp;<b>Notion</b> &nbsp;<sub>autoreg</sub></td>
+  <td>Notion-аккаунты + привязка карты + фикс trial</td>
+  <td><code>notion/</code> &nbsp;·&nbsp; <code>notion_workflow.js</code></td>
 </tr>
 <tr>
-  <td>🆓 <b>FreeModel</b> сессии</td>
-  <td>Менеджит сессии freemodel.dev (Claude через клуб)</td>
-  <td><code>freemodel/</code> · <code>manual_sessions/</code></td>
+  <td>🆓 &nbsp;<b>FreeModel</b> &nbsp;<sub>sessions</sub></td>
+  <td>Менеджит сессии <code>freemodel.dev</code> (Claude через клуб)</td>
+  <td><code>freemodel/</code> &nbsp;·&nbsp; <code>manual_sessions/</code></td>
 </tr>
 <tr>
-  <td>🔀 <b>Routing dashboard</b></td>
+  <td>🔀 &nbsp;<b>Routing</b> &nbsp;<sub>dashboard</sub></td>
   <td>Web-UI на <code>:8200</code> — переключатель backend для Claude Code + менеджер всех 3х систем</td>
-  <td><code>routing/</code> · <code>internal/dashboard-api.js</code></td>
+  <td><code>routing/</code> &nbsp;·&nbsp; <code>internal/dashboard-api.js</code></td>
 </tr>
 </table>
+
+<br>
 
 ---
 
@@ -73,6 +86,8 @@ routing\restart-dashboard.bat     # Windows: один клик
 > [!TIP]
 > Альтернатива — классическое TUI меню: `node menu.js`
 
+<br>
+
 ---
 
 ## 🖥 Routing dashboard
@@ -81,42 +96,46 @@ routing\restart-dashboard.bat     # Windows: один клик
 
 ### 🔀 Switcher — переключатель бэкендов
 
-Переключает Claude Code между двумя бэкендами одним кликом:
+Переключает Claude Code между двумя бэкендами одним кликом.
 
 ```mermaid
+%%{init: {'theme':'dark', 'themeVariables': {
+  'background':'#0d1117',
+  'primaryColor':'#161b22',
+  'primaryTextColor':'#e6edf3',
+  'primaryBorderColor':'#30363d',
+  'lineColor':'#6e7681',
+  'tertiaryColor':'#21262d'
+}}}%%
 flowchart LR
-    CC["🤖 Claude Code<br/>settings.json"]
-    SW["🔀 Switcher :8200<br/>(transparent-proxy.js)"]
-    OR["🟢 OmniRoute :20128<br/>Pro/Max OAuth<br/>+ FreeModel pool"]
-    NM["🔵 notion-manager :8190<br/>Notion bypass"]
+    CC["🤖 Claude Code<br/><sub>settings.json</sub>"]
+    SW(("🔀 Switcher<br/>:8200"))
+    OR["🟢 OmniRoute<br/>:20128/v1<br/><sub>Pro/Max OAuth · FreeModel pool</sub>"]
+    NM["🔵 notion-manager<br/>:8190<br/><sub>Notion bypass</sub>"]
 
-    CC -->|читает ANTHROPIC_BASE_URL| OR
-    CC -.->|или| NM
-    SW -.->|редактит settings.json| CC
+    CC ==>|reads BASE_URL| OR
+    CC -.->|or| NM
+    SW -.->|rewrites| CC
 
-    classDef active fill:#0d6e3e,stroke:#3fb950,color:#fff
-    classDef alt fill:#1f6feb,stroke:#58a6ff,color:#fff
-    classDef router fill:#3c1361,stroke:#a371f7,color:#fff
-    classDef cc fill:#21262d,stroke:#8b949e,color:#c9d1d9
-    class OR active
-    class NM alt
-    class SW router
-    class CC cc
+    style OR fill:#0d4429,stroke:#3fb950,color:#7ee787,stroke-width:2px
+    style NM fill:#0c2d6b,stroke:#58a6ff,color:#79c0ff,stroke-width:2px
+    style SW fill:#3c1361,stroke:#d2a8ff,color:#d2a8ff,stroke-width:2px
+    style CC fill:#21262d,stroke:#8b949e,color:#c9d1d9
 ```
 
 <table>
 <tr>
-  <th>🟢 FreeModel</th>
-  <th>🔵 Notion</th>
+  <th align="left">🟢 &nbsp;FreeModel</th>
+  <th align="left">🔵 &nbsp;Notion</th>
 </tr>
 <tr>
   <td>
     <code>tools / vision / big</code><br>
-    OmniRoute <code>:20128</code>
+    OmniRoute &nbsp;<code>:20128</code>
   </td>
   <td>
     <code>cheap, без tools</code><br>
-    notion-mgr <code>:8190</code>
+    notion-mgr &nbsp;<code>:8190</code>
   </td>
 </tr>
 </table>
@@ -124,77 +143,86 @@ flowchart LR
 Клик переписывает `~/.claude/settings.json` (с `.bak-<timestamp>` бэкапом) — после нужно **перезапустить Claude Code**.
 
 > [!IMPORTANT]
-> CC принимает в `settings.json` **только** ключ `sk-local-dev-key` (внутренний bypass-токен OmniRoute) — любой другой даёт «Not logged in · Please run /login». Реальные API-ключи живут в `routing/.env` (gitignored), их подставляет роутер.
+> CC принимает в `settings.json` **только** ключ `sk-local-dev-key` (внутренний bypass-токен OmniRoute) — любой другой даёт `Not logged in · Please run /login`. Реальные API-ключи живут в `routing/.env` (gitignored), их подставляет роутер.
 
-**Whoami** — вставляешь ID из лога OmniRoute (`anthropic-compatible-...:fd48f370-...`), показывает кто это (email/name/status) из локальной БД OmniRoute.
+**Whoami** — вставляешь ID из лога OmniRoute (`anthropic-compatible-...:fd48f370-...`), показывает кто это (email / name / status) из локальной БД OmniRoute.
 
 ### 🤖 Devin · 🆓 FreeModel · 📝 Notion — менеджер сессий
 
 Список сессий с **прогресс-барами квот** и действиями на каждой строке:
 
 <table>
-<tr><th>Цвет</th><th>Квота использована</th></tr>
-<tr><td>🟢</td><td>&lt; 40%</td></tr>
-<tr><td>🟡</td><td>40 – 70%</td></tr>
-<tr><td>🔴</td><td>&gt; 70%</td></tr>
+<tr>
+  <th align="left">Цвет</th>
+  <th align="left">Квота использована</th>
+  <th align="left">&nbsp;</th>
+  <th align="left">Кнопка</th>
+  <th align="left">Действие</th>
+</tr>
+<tr><td>🟢</td><td><code>&lt; 40%</code></td><td>&nbsp;</td><td>🌐</td><td>Открыть в headed Chrome</td></tr>
+<tr><td>🟡</td><td><code>40 – 70%</code></td><td>&nbsp;</td><td>🔄</td><td>Обновить квоту (headless ~1–3s)</td></tr>
+<tr><td>🔴</td><td><code>&gt; 70%</code></td><td>&nbsp;</td><td>➕</td><td>Создать новую сессию (новое cmd-окно)</td></tr>
+<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>🗑</td><td>Удалить папку + кеш</td></tr>
 </table>
 
-<table>
-<tr><th>Кнопка</th><th>Действие</th></tr>
-<tr><td>🌐</td><td>Открыть в headed Chrome (Notion.so / app.devin.ai/settings/usage / claude.ai/usage)</td></tr>
-<tr><td>🔄</td><td>Обновить квоту через headless Playwright (~1–3s)</td></tr>
-<tr><td>➕</td><td>Создать новую сессию (запускает <code>node ...</code> в новом окне cmd)</td></tr>
-<tr><td>🗑</td><td>Удалить папку сессии + кеш</td></tr>
-</table>
-
-**Сортировка:** дата ↑/↓ · статус · план Pro→Free · квота (меньше/больше использовано) · доступно $ · свежесть кеша · email.
+**Сортировка:** дата ↑/↓ · статус · план Pro→Free · квота · доступно `$` · свежесть кеша · email.
 
 ### 💳 Card picker (Notion)
 
-3 карты-пресета (`CARD_PRESETS` из `notion/config.js`) + опция «🔄 Ротация». Клик — обновляется `CARD_PRESET_INDEX` через regex-replace в `notion/config.js`, без рестарта.
+3 карты-пресета (`CARD_PRESETS` из `notion/config.js`) + опция **🔄 Ротация**. Клик — обновляется `CARD_PRESET_INDEX` через regex-replace в `notion/config.js`, без рестарта.
+
+<br>
 
 ---
 
 ## 🏗 Архитектура роутинга
 
 ```mermaid
+%%{init: {'theme':'dark', 'themeVariables': {
+  'background':'#0d1117',
+  'primaryColor':'#161b22',
+  'primaryTextColor':'#e6edf3',
+  'primaryBorderColor':'#30363d',
+  'lineColor':'#6e7681',
+  'clusterBkg':'#161b22',
+  'clusterBorder':'#30363d'
+}}}%%
 flowchart TB
-    subgraph CC["🤖 Claude Code"]
+    subgraph CC[" 🤖 Claude Code "]
         SET["settings.json<br/><sub>ANTHROPIC_BASE_URL · ANTHROPIC_API_KEY</sub>"]
     end
 
-    subgraph BACKENDS["Backends"]
-        direction LR
-        OR["🟢 OmniRoute :20128/v1<br/><sub>Pro/Max OAuth · FreeModel pool</sub>"]
-        NM["🔵 notion-manager :8190<br/><sub>Notion bypass</sub>"]
-    end
-
-    subgraph ROUTER["🔀 Local control plane"]
+    subgraph ROUTER[" 🔀 Local control plane "]
         SW["Switcher :8200<br/><sub>transparent-proxy.js</sub>"]
-        ENV["routing/.env<br/><sub>🔒 real keys</sub>"]
+        ENV[".env<br/><sub>🔒 real keys</sub>"]
     end
 
-    SET -->|HTTP requests| OR
-    SET -.->|HTTP requests| NM
-    SW -->|rewrites| SET
+    subgraph BACKENDS[" Backends "]
+        direction LR
+        OR["🟢 OmniRoute<br/>:20128/v1<br/><sub>Pro/Max · FreeModel pool</sub>"]
+        NM["🔵 notion-manager<br/>:8190<br/><sub>Notion bypass</sub>"]
+    end
+
+    SET ==>|HTTP| OR
+    SET -.->|HTTP| NM
+    SW -.->|rewrites| SET
     ENV -.->|injects| OR
 
-    classDef green fill:#0d6e3e,stroke:#3fb950,color:#fff
-    classDef blue fill:#1f6feb,stroke:#58a6ff,color:#fff
-    classDef purple fill:#3c1361,stroke:#a371f7,color:#fff
-    classDef gray fill:#21262d,stroke:#8b949e,color:#c9d1d9
-    class OR green
-    class NM blue
-    class SW,ENV purple
-    class SET gray
+    style OR fill:#0d4429,stroke:#3fb950,color:#7ee787,stroke-width:2px
+    style NM fill:#0c2d6b,stroke:#58a6ff,color:#79c0ff,stroke-width:2px
+    style SW fill:#3c1361,stroke:#d2a8ff,color:#d2a8ff,stroke-width:2px
+    style ENV fill:#3c1361,stroke:#d2a8ff,color:#d2a8ff,stroke-dasharray:3 3
+    style SET fill:#21262d,stroke:#8b949e,color:#c9d1d9
 ```
+
+<br>
 
 ---
 
 ## 📜 Скрипты
 
 <details>
-<summary><b>🧭 Главное меню</b></summary>
+<summary><b>🧭 &nbsp;Главное меню</b></summary>
 
 ```bash
 node menu.js               # Полное интерактивное TUI меню
@@ -202,7 +230,7 @@ node menu.js               # Полное интерактивное TUI мен�
 </details>
 
 <details>
-<summary><b>🤖 Devin</b></summary>
+<summary><b>🤖 &nbsp;Devin</b></summary>
 
 ```bash
 node autoreger.js                  # Прямой запуск создания аккаунтов
@@ -211,7 +239,7 @@ node internal/bin-lookup.js        # BIN-генератор (148 BIN, 12 стр�
 </details>
 
 <details>
-<summary><b>📝 Notion</b></summary>
+<summary><b>📝 &nbsp;Notion</b></summary>
 
 ```bash
 node notion/notion_workflow.js     # Создать Notion-аккаунт (с картой)
@@ -219,7 +247,7 @@ node notion/notion_workflow.js     # Создать Notion-аккаунт (с к
 </details>
 
 <details>
-<summary><b>🆓 FreeModel</b></summary>
+<summary><b>🆓 &nbsp;FreeModel</b></summary>
 
 ```bash
 node freemodel/freemodel_autoreger_v3.js          # Автореги (instanttempemail)
@@ -233,7 +261,7 @@ node freemodel/restore_session.js        # Восстановить из cookies
 </details>
 
 <details>
-<summary><b>🔀 Routing</b></summary>
+<summary><b>🔀 &nbsp;Routing</b></summary>
 
 ```bash
 routing\restart-dashboard.bat            # Перезапуск :8200 (Windows)
@@ -242,6 +270,8 @@ node routing/transparent-proxy.js        # Switcher вручную
 node routing/smart-router-v3.js          # Auto-router :8201 (экспериментальный)
 ```
 </details>
+
+<br>
 
 ---
 
@@ -254,6 +284,8 @@ node routing/smart-router-v3.js          # Auto-router :8201 (экспериме
 | `freemodel/config.js` | FreeModel: URLs · паттерны email · таймауты |
 | `routing/.env` | 🔒 **Секреты** (gitignored): `OMNIROUTE_API_KEY`, `NOTION_API_KEY` |
 | `~/.claude/settings.json` | Активный backend (Switcher редактирует) |
+
+<br>
 
 ---
 
@@ -301,14 +333,15 @@ node routing/smart-router-v3.js          # Auto-router :8201 (экспериме
 
 > 🔒 = в `.gitignore`, не в репозитории.
 
+<br>
+
 ---
 
 ## 🔧 Troubleshooting
 
 > [!CAUTION]
-> **CC говорит «Not logged in · Please run /login»**
-> Ты подставил в `settings.json` **реальный** ключ вместо `sk-local-dev-key`.
-> CC принимает только эту литералку. Откати:
+> **CC говорит `Not logged in · Please run /login`**
+> Ты подставил в `settings.json` **реальный** ключ вместо `sk-local-dev-key`. CC принимает только эту литералку.
 > ```bash
 > routing\PANIC-restore-omniroute.bat
 > ```
@@ -330,7 +363,9 @@ node routing/smart-router-v3.js          # Auto-router :8201 (экспериме
 
 > [!NOTE]
 > **Whoami ничего не находит**
-> Скрипт парсит **8-символьные hex-префиксы** из любого текста. Проверь что в строке есть хотя бы один UUID-фрагмент. Если есть — нет такого аккаунта в `~/.omniroute/storage.sqlite`.
+> Скрипт парсит **8-символьные hex-префиксы**. Проверь что в строке есть хоть один UUID-фрагмент. Если есть — нет такого аккаунта в `~/.omniroute/storage.sqlite`.
+
+<br>
 
 ---
 
@@ -346,17 +381,21 @@ node routing/smart-router-v3.js          # Auto-router :8201 (экспериме
 git diff --cached | grep -E "sk-[a-z]{2,}-[a-f0-9]+" || echo "OK: no keys in staged diff"
 ```
 
+<br>
+
 ---
 
 ## 🤝 Community
 
-Сделано благодаря помощи и активности сообщества.
-
 <div align="center">
 
-**Присоединяйся → [t.me/abuz_ai](https://t.me/abuz_ai)**
+Сделано благодаря помощи и активности сообщества.
+
+**[`t.me/abuz_ai`](https://t.me/abuz_ai)** — присоединяйся
 
 </div>
+
+<br>
 
 ---
 

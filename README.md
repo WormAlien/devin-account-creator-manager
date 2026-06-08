@@ -81,21 +81,9 @@ Notion-таб: 3 карты-пресета (`CARD_PRESETS` из `notion/config.j
 
 ## Архитектура
 
-```
-Claude Code (settings.json)
-       │
-       │ ANTHROPIC_BASE_URL
-       │
-       ├──► OmniRoute       :20128/v1   (Pro/Max OAuth + FreeModel pool)
-       │
-       └──► notion-manager  :8190       (Notion bypass)
+Claude Code читает `~/.claude/settings.json` — берёт оттуда `ANTHROPIC_BASE_URL` и шлёт API-запросы в выбранный бэкенд: **OmniRoute** на `:20128/v1` (Pro/Max OAuth + пул FreeModel) или **notion-manager** на `:8190` (Notion bypass).
 
-       ▲
-       │ rewrites
-       │
-   Switcher  :8200  ◄── routing/.env (real keys)
-   transparent-proxy.js
-```
+**Switcher** на `:8200` (`routing/transparent-proxy.js`) переписывает `settings.json` одним кликом и кладёт `.bak-<timestamp>` рядом. Реальные API-ключи живут в `routing/.env` (gitignored) и подставляются роутером — CC получает только литералку `sk-local-dev-key`.
 
 ## Скрипты
 
@@ -153,35 +141,24 @@ node routing/smart-router-v3.js          # auto-router :8201 (экспериме
 
 ## Структура
 
-```
-routing/                      Web-дашборд + локальные роутеры
-├── transparent-proxy.js      Switcher :8200 + HTTP API
-├── proxy-dashboard.html      Tailwind v4 UI
-├── smart-router-v3.js        Авто-роутер :8201
-├── restart-dashboard.bat     One-click рестарт
-├── PANIC-restore-omni…       Откат settings.json
-├── .env                      gitignored — реальные ключи
-└── .env.example              template
-
-internal/
-├── dashboard-api.js          Прослойка CLI ↔ HTTP
-├── devin-manager.js          Devin сессии
-├── freemodel-manager.js      FreeModel сессии + квоты
-├── notion-manager.js         Notion сессии
-├── autoreger.js              Логика создания Devin
-└── bin-lookup.js             БД BIN + Luhn
-
-notion/                       Notion autoreg
-freemodel/                    FreeModel
-manual_sessions/              gitignored
-ready_to_sell/                gitignored — готовые Pro-сессии Devin
-errors/                       gitignored
-
-menu.js                       1600-строчное TUI меню (всё-в-одном)
-autoreger.js                  Devin entry
-start.js                      Entry с CLI-аргументами
-config.js                     Devin config
-```
+| Папка / файл | Что |
+| :--- | :--- |
+| `routing/transparent-proxy.js` | Switcher :8200 + HTTP API дашборда |
+| `routing/proxy-dashboard.html` | Tailwind v4 UI |
+| `routing/smart-router-v3.js` | Авто-роутер :8201 (экспериментальный) |
+| `routing/restart-dashboard.bat` | One-click рестарт |
+| `routing/PANIC-restore-omniroute.bat` | Откат `settings.json` на OmniRoute |
+| `routing/.env` | _gitignored_ — реальные ключи |
+| `internal/dashboard-api.js` | Прослойка CLI ↔ HTTP |
+| `internal/devin-manager.js` | Devin-сессии (manual + ready + errors) |
+| `internal/freemodel-manager.js` | FreeModel-сессии + квоты |
+| `internal/notion-manager.js` | Notion-сессии |
+| `internal/autoreger.js` | Логика создания Devin-аккаунтов |
+| `internal/bin-lookup.js` | БД BIN + Luhn-генератор |
+| `notion/`, `freemodel/` | Auto-reg скрипты |
+| `manual_sessions/`, `ready_to_sell/`, `errors/` | _gitignored_ — сессии и ошибки |
+| `menu.js` | TUI-меню (всё-в-одном) |
+| `autoreger.js`, `start.js`, `config.js` | Devin entry-points + конфиг |
 
 ## Troubleshooting
 

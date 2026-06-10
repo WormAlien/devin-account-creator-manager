@@ -289,6 +289,16 @@
             <button onclick="loadFreemodelSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadFreemodelSessions(true)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Квоты ~30s</button>
             <div class="flex items-center gap-1 ml-2 pl-2 border-l border-line-soft">
+              <label class="text-[10px] text-faint">старт-реф</label>
+              <select id="fm-invite-select"
+                      onchange="setFreemodelInvite(this.value)"
+                      class="text-xs px-2 py-2 bg-surface border border-line-soft rounded-lg text-ink max-w-[260px]"
+                      title="Выбрать стартовый реф-код для следующего запуска (запишется в .last_invite)">
+                <option value="">— загрузка…</option>
+              </select>
+              <button onclick="loadFreemodelInvites()" class="text-xs px-2 py-2 bg-surface border border-line-soft rounded-lg hover:border-line" title="Перечитать keys.txt">↻</button>
+            </div>
+            <div class="flex items-center gap-1 ml-2 pl-2 border-l border-line-soft">
               <label class="text-[10px] text-faint">кол-во</label>
               <input id="fm-create-count" type="number" min="1" max="50" value="1"
                      class="text-xs w-14 px-2 py-2 bg-surface border border-line-soft rounded-lg text-ink text-center" />
@@ -406,7 +416,7 @@ function showTab(name) {
     p.classList.toggle('active', p.dataset.tabContent === name);
   });
   if (name === 'devin'     && !state.loaded.devin)     { state.loaded.devin = true; loadDevinSessions(false); }
-  if (name === 'freemodel' && !state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); }
+  if (name === 'freemodel' && !state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); loadFreemodelInvites(); }
   if (name === 'notion' && !state.loaded.notion) {
     state.loaded.notion = true;
     loadNotionSessions();
@@ -998,6 +1008,50 @@ async function launchFreemodelCreate() {
   await launchScript('freemodel-create',
     `➕ FreeModel v3: создание ${count} аккаунт${count === 1 ? 'а' : 'ов'} запущено`,
     [String(count)]);
+}
+
+// ═══════════════════ FREEMODEL INVITE CHAIN ══════════════════════════
+async function loadFreemodelInvites() {
+  const sel = document.getElementById('fm-invite-select');
+  if (!sel) return;
+  try {
+    const res = await fetch('/__switch/api/freemodel/invites');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'load failed');
+
+    const opts = [];
+    if (data.last) {
+      opts.push(`<option value="${esc(data.last)}" selected>📌 ${esc(data.last)} (последний из .last_invite)</option>`);
+    }
+    if (data.initial && data.initial !== data.last) {
+      opts.push(`<option value="${esc(data.initial)}">🏁 ${esc(data.initial)} (стартовый из config)</option>`);
+    }
+    if (data.chain && data.chain.length) {
+      opts.push(`<option disabled>──────── история (${data.chain.length}) ────────</option>`);
+      for (const item of data.chain) {
+        if (item.code === data.last) continue;
+        opts.push(`<option value="${esc(item.code)}">${esc(item.code)} — ${esc(item.email)}</option>`);
+      }
+    }
+    sel.innerHTML = opts.join('') || '<option value="">(пусто)</option>';
+  } catch (e) {
+    sel.innerHTML = `<option value="">ошибка: ${esc(e.message)}</option>`;
+  }
+}
+
+async function setFreemodelInvite(code) {
+  if (!code || !/^FRE-[A-Za-z0-9]+$/.test(code)) return;
+  try {
+    const res = await fetch('/__switch/api/freemodel/set-invite', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'set failed');
+    toast(`✓ старт-реф: ${code}`, 'success', 4000);
+  } catch (e) {
+    toast('set-invite: ' + e.message, 'error');
+  }
 }
 
 // ═══════════════════ SESSION ACTIONS ═════════════════════════════════

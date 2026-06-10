@@ -245,6 +245,63 @@ async function handleFreemodelSessions(req, res) {
     }
 }
 
+// Read freemodel referral chain: keys.txt + .last_invite + config.INITIAL_INVITE.
+function handleFreemodelInvites(req, res) {
+    try {
+        const root = path.join(__dirname, '..');
+        const keysFile = path.join(root, 'freemodel', 'keys.txt');
+        const lastFile = path.join(root, 'freemodel', '.last_invite');
+        const configFile = path.join(root, 'freemodel', 'config.js');
+
+        const chain = [];
+        if (fs.existsSync(keysFile)) {
+            const raw = fs.readFileSync(keysFile, 'utf8');
+            for (const line of raw.split(/\r?\n/)) {
+                if (!line.trim()) continue;
+                const parts = line.split('|');
+                const email = parts[0] || '';
+                const code = parts[2] || '';
+                if (/^FRE-[A-Za-z0-9]+$/.test(code)) {
+                    chain.push({ email, code });
+                }
+            }
+        }
+
+        let last = null;
+        if (fs.existsSync(lastFile)) {
+            const v = fs.readFileSync(lastFile, 'utf8').trim();
+            if (/^FRE-[A-Za-z0-9]+$/.test(v)) last = v;
+        }
+
+        let initial = null;
+        try {
+            // Clear require-cache so edits to config.js show up live.
+            delete require.cache[require.resolve(configFile)];
+            const cfg = require(configFile);
+            if (/^FRE-[A-Za-z0-9]+$/.test(cfg.INITIAL_INVITE || '')) initial = cfg.INITIAL_INVITE;
+        } catch {}
+
+        jsonRes(res, 200, { last, initial, chain: chain.reverse() });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
+async function handleFreemodelSetInvite(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const code = (body.code || '').trim();
+        if (!/^FRE-[A-Za-z0-9]+$/.test(code)) {
+            return jsonRes(res, 400, { error: 'invalid code (expected FRE-xxx)' });
+        }
+        const lastFile = path.join(__dirname, '..', 'freemodel', '.last_invite');
+        fs.writeFileSync(lastFile, code + '\n', 'utf8');
+        jsonRes(res, 200, { ok: true, code });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
 async function handleDevinSessions(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const refresh = url.searchParams.get('refresh') === '1';
@@ -408,6 +465,14 @@ const server = http.createServer((req, res) => {
 
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/freemodel/sessions')) {
         return handleFreemodelSessions(req, res);
+    }
+
+    if (req.method === 'GET' && req.url === '/__switch/api/freemodel/invites') {
+        return handleFreemodelInvites(req, res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-invite') {
+        return handleFreemodelSetInvite(req, res);
     }
 
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/devin/sessions')) {

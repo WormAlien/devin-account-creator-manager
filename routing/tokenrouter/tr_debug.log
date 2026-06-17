@@ -1,0 +1,23 @@
+[BOOT] camoufox autoreg started at 2026-06-17 14:12:11
+============================================================
+  TokenRouter.me — Camoufox (Firefox + patched Juggler)
+  Accounts: 1
+============================================================
+
+[14:12:17] [acc] === Account #1 ===
+[14:12:21] [email] 8abusg1qsd@fpklm.com
+[14:12:52] [turnstile] looking...
+[14:13:00] [turnstile] clicked inside iframe
+[14:13:02] [turnstile] PASSED!
+[EMAIL] poll: total=0, new=0
+[EMAIL] poll: total=1, new=1
+[EMAIL] raw text: 3d561e8e-91e0-4184-8fc0-fb9210dfe907 TokenRouter [TokenRouter] Email verification code body { margin: 0; padding: 24px; background: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #18181b; } .container { max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(15, 23, 42, 0.10); } .header { background: #4f46e5; color: #ffffff; padding: 28px 32px; } .header h1 { margin: 0; font-size: 24px; line-height: 1.25; } .content { padding: 32px; font-size: 15px; line-height: 1.7; } .button { display: inline-block; margin-top: 12px; padding: 11px 18px; border-radius: 8px; background: #4f46e5; color: 
+[EMAIL] extracted: code=987352, link=None
+[14:13:10] [email] OTP: 987352
+[14:13:14] [save] saved (total: 12)
+[14:13:14] [save] account saved (no key yet): 8abusg1qsd@fpklm.com
+[14:13:14] [nav] going to /keys...
+[14:13:22] [keys] group selected: True
+[14:13:25] [keys] KEY: ***790add91
+[14:13:26] [save] updated: 8abusg1qsd@fpklm.com
+[14:13:26] [acc] DONE: 8abusg1qsd@fpklm.com ***790add91  session → C:\Users\WormAlien\Desktop\Autoreger_Clean\routing\tokenrouter\sessions\8abusg1qsd_fpklm_com

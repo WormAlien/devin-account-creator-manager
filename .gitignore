@@ -106,3 +106,24 @@ autoreger_data/
 
 # Playwright MCP runtime artefacts
 .playwright-mcp/
+
+# Archived subprojects (moved out of working tree but kept locally)
+# viktor-bridge-main/
+# notion-abuz_ai/
+
+# Root configs with secrets
+/config.js
+/freemodel/config.js
+
+# Python environments
+.venv/
+__pycache__/
+*.pyc
+
+# TokenRouter secrets
+routing/tokenrouter/accounts.json
+routing/tokenrouter/sessions/
+routing/tokenrouter/debug/
+
+# Recorder output
+recordings/

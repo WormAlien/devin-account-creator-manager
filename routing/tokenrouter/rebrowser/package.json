@@ -1,0 +1,7 @@
+{
+  "name": "tokenrouter-rebrowser",
+  "private": true,
+  "dependencies": {
+    "rebrowser-playwright": "1.48.2"
+  }
+}

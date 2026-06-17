@@ -20,6 +20,10 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8300 " ^| findstr LISTENING
 REM Brief wait so the OS releases the port
 ping 127.0.0.1 -n 2 >nul
 
+echo Starting Freemodel Key Rotator on :20126 ...
+start "FM Rotator" /B node freemodel-rotator.js
+ping 127.0.0.1 -n 2 >nul
+
 echo Starting transparent-proxy.js (switcher + dashboard) on :8200 ...
 start "Backend Switcher" /MIN node transparent-proxy.js
 

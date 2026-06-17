@@ -98,6 +98,7 @@ function saveConfig() {
     replaceField('MANUAL_MODE', config.MANUAL_MODE);
     replaceField('SOUND_NOTIFICATIONS', config.SOUND_NOTIFICATIONS);
     replaceField('HEADLESS', config.HEADLESS);
+    replaceField('AUTO_ADD_TOKENROUTER_TO_OMNIROUTE', config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE);
     
     fs.writeFileSync(configPath, content);
     console.log('✅ Конфигурация сохранена в config.js');
@@ -265,6 +266,7 @@ async function mainMenu() {
         { label: `🤖  FreeModel autoreg v3 (instanttempemail, пирамида)`, value: 'freemodel-autoreg-v3' },
         { label: `🗂️   Notion сессии     [${notionSessionsCount()}]`, value: 'notion-sessions' },
         { label: `📝  Notion         [${notionStatusLine()}]`, value: 'notion-create' },
+        { label: `🔑  TokenRouter autoreg [OmniRoute: ${config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE ? 'вкл' : 'выкл'}]`, value: 'tokenrouter-autoreg' },
         { label: '──────────────────────────────', value: null, disabled: true },
         { label: '✖️   Выход', value: 'exit' },
     ]);
@@ -277,6 +279,7 @@ async function mainMenu() {
         case 'freemodel-autoreg-v3': await freemodelAutoregV3({ clearScreen, setKeypressListener, rawInput }); break;
         case 'notion-sessions': await notionSessionsMenu({ clearScreen, setKeypressListener, rawList, rawInput }); break;
         case 'notion-create': await notionCreateMenu(); break;
+        case 'tokenrouter-autoreg': await tokenrouterAutoregMenu(); break;
         case 'exit':
             clearScreen();
             process.exit(0);
@@ -1867,7 +1870,97 @@ async function freemodelAutoregV3({ clearScreen, rawInput }) {
         console.log('    Сохранён в freemodel/.last_invite — следующий запуск стартует с него.');
     }
 
-    console.log('\nНажми любую клавишу для возврата...');
+    console.log('\nНажмите любую клавишу для возврата...');
+    await new Promise(resolve => {
+        process.stdin.resume();
+        if (process.stdin.isTTY && process.stdin.setRawMode) {
+            try { process.stdin.setRawMode(true); } catch {}
+        }
+        process.stdin.once('keypress', () => {
+            if (process.stdin.isTTY && process.stdin.setRawMode) {
+                try { process.stdin.setRawMode(false); } catch {}
+            }
+            process.stdin.pause();
+            resolve();
+        });
+    });
+}
+
+// ─── TokenRouter autoreg ──────────────────────────────────────────────────────
+async function tokenrouterAutoregMenu() {
+    clearScreen();
+
+    const accountsFile = path.join(__dirname, 'routing', 'tokenrouter', 'accounts.json');
+    let existingCount = 0;
+    try {
+        if (fs.existsSync(accountsFile)) {
+            const data = JSON.parse(fs.readFileSync(accountsFile, 'utf-8'));
+            if (Array.isArray(data)) existingCount = data.length;
+        }
+    } catch {}
+
+    const action = await rawList('🔑  TokenRouter autoreg', [
+        { label: `Авто-добавление в OmniRoute: ${config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE ? 'ВКЛ' : 'ВЫКЛ'}`, value: 'toggle' },
+        { label: `Аккаунтов в базе: ${existingCount}`, value: null, disabled: true },
+        { label: '──────────────────────────────', value: null, disabled: true },
+        { label: '▶️  Запустить регистрацию', value: 'run' },
+        { label: '← Назад', value: 'back' },
+    ]);
+
+    switch (action) {
+        case 'toggle':
+            config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE = !config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE;
+            saveConfig();
+            return tokenrouterAutoregMenu();
+        case 'run':
+            return tokenrouterRunMenu();
+        case 'back':
+        default:
+            return;
+    }
+}
+
+async function tokenrouterRunMenu() {
+    clearScreen();
+    const countStr = await rawInput('Сколько аккаунтов создать? (Enter = 1)', '1');
+    const count = Math.max(1, parseInt(countStr, 10) || 1);
+
+    clearScreen();
+    console.log('🔑  Запуск TokenRouter autoreg...\n');
+    console.log(`   Авто-добавление в OmniRoute: ${config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE ? 'ВКЛ' : 'ВЫКЛ'}`);
+    console.log(`   Аккаунтов: ${count}`);
+    console.log('\n   Ctrl+C — остановка\n');
+
+    process.removeListener('SIGINT', menuSigintHandler);
+    const noopSigint = () => {};
+    process.on('SIGINT', noopSigint);
+
+    await new Promise(resolve => {
+        const child = spawn(
+            'python',
+            [path.join(__dirname, 'routing', 'tokenrouter', 'camoufox_autoreg.py'), String(count)],
+            {
+                stdio: 'inherit',
+                env: {
+                    ...process.env,
+                    AUTO_ADD_TOKENROUTER_TO_OMNIROUTE: config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE ? '1' : '0',
+                },
+            }
+        );
+        child.on('close', resolve);
+    });
+
+    process.removeListener('SIGINT', noopSigint);
+    process.on('SIGINT', menuSigintHandler);
+
+    if (process.stdin.isTTY && process.stdin.setRawMode) {
+        try { process.stdin.setRawMode(false); } catch {}
+    }
+    try { process.stdin.pause(); } catch {}
+    clearScreen();
+
+    console.log('\n  TokenRouter autoreg завершён');
+    console.log('\n  Нажмите любую клавишу для возврата...');
     await new Promise(resolve => {
         process.stdin.resume();
         if (process.stdin.isTTY && process.stdin.setRawMode) {

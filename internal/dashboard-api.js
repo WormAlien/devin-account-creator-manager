@@ -115,6 +115,74 @@ function saveFreemodelQuotaCache(cache) {
     } catch {}
 }
 
+// ───── FreeModel meta (banned-маркер + связь с TG-пулом) ──────────
+// Хранится отдельно от quota-кэша чтобы рефреш квот не затирал маркеры.
+// Ключ — session.name (имя папки v3 или manual_sessions/...).
+const FREEMODEL_META_FILE = path.join(PROJECT_ROOT, 'logs', '.freemodel_meta.json');
+
+function loadFreemodelMeta() {
+    try {
+        if (fs.existsSync(FREEMODEL_META_FILE)) {
+            return JSON.parse(fs.readFileSync(FREEMODEL_META_FILE, 'utf-8')) || {};
+        }
+    } catch {}
+    return {};
+}
+
+function saveFreemodelMeta(meta) {
+    try {
+        fs.mkdirSync(path.dirname(FREEMODEL_META_FILE), { recursive: true });
+        fs.writeFileSync(FREEMODEL_META_FILE, JSON.stringify(meta, null, 2), 'utf-8');
+    } catch {}
+}
+
+function setFreemodelBanned(name, banned) {
+    const meta = loadFreemodelMeta();
+    meta[name] = meta[name] || {};
+    if (banned) {
+        meta[name].banned = true;
+        meta[name].bannedAt = new Date().toISOString();
+    } else {
+        delete meta[name].banned;
+        delete meta[name].bannedAt;
+    }
+    saveFreemodelMeta(meta);
+    return meta[name];
+}
+
+// Привязать TG-phone к freemodel-аккаунту (вызывается из автореги после
+// успешной привязки бота — для UI-карточки).
+function setFreemodelTgPhone(name, tgPhone) {
+    const meta = loadFreemodelMeta();
+    meta[name] = meta[name] || {};
+    if (tgPhone) {
+        meta[name].tgPhone = String(tgPhone);
+        meta[name].tgLinkedAt = new Date().toISOString();
+    } else {
+        delete meta[name].tgPhone;
+        delete meta[name].tgLinkedAt;
+    }
+    saveFreemodelMeta(meta);
+    return meta[name];
+}
+
+function setFreemodelApiKey(name, apiKey) {
+    const meta = loadFreemodelMeta();
+    meta[name] = meta[name] || {};
+    if (apiKey) meta[name].apiKey = String(apiKey);
+    else delete meta[name].apiKey;
+    saveFreemodelMeta(meta);
+    return meta[name];
+}
+
+async function extractFreemodelApiKey(name) {
+    if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
+    const { getFreemodelSessions, extractFreemodelApiKey: extractKey } = freemodelMod();
+    const session = getFreemodelSessions().find(s => s.name === name);
+    if (!session) throw new Error(`session not found: ${name}`);
+    return await extractKey(session);
+}
+
 // withQuotas behavior:
 //   'cache'   — return cached quotas only (instant, no Playwright)
 //   'refresh' — refresh via Playwright in parallel, update cache, return new values
@@ -122,26 +190,52 @@ function saveFreemodelQuotaCache(cache) {
 async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } = {}) {
     const { getFreemodelSessions, checkFreemodelQuota } = freemodelMod();
     const sessions = getFreemodelSessions();
-    if (withQuotas === false) return sessions.map(s => ({ ...s, quota: null }));
+    const meta = loadFreemodelMeta();
+    // Подхватываем apiKey из freemodel/accounts/<dir>/account_info.txt
+    // и кладём в meta — UI получает всё из одного места.
+    for (const s of sessions) {
+        if (!meta[s.name]?.apiKey) {
+            try {
+                const infoFile = path.join(s.path, 'account_info.txt');
+                if (fs.existsSync(infoFile)) {
+                    const raw = fs.readFileSync(infoFile, 'utf-8');
+                    const km = raw.match(/^API Key:\s*((?:fe[_-]|sk-)[A-Za-z0-9_-]{20,})/m);
+                    if (km) {
+                        meta[s.name] = meta[s.name] || {};
+                        meta[s.name].apiKey = km[1];
+                    }
+                }
+            } catch {}
+        }
+    }
+    const withMeta = (s, extra) => ({ ...s, ...extra, meta: meta[s.name] || {} });
+    if (withQuotas === false) return sessions.map(s => withMeta(s, { quota: null }));
 
     const cache = loadFreemodelQuotaCache();
 
     if (withQuotas === 'cache') {
-        return sessions.map(s => ({ ...s, quota: cache[s.name] || null }));
+        return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
     }
 
-    // refresh
-    const out = sessions.map(s => ({ ...s, quota: cache[s.name] || null }));
+    // refresh — skip banned and error sessions
+    const eligible = sessions.filter(s => {
+        const m = meta[s.name] || {};
+        return s.status === '✅' && !m.banned;
+    });
+    if (eligible.length === 0) return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
+
+    const out = sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
     let idx = 0;
-    const workers = Array.from({ length: Math.min(concurrency, sessions.length) }, async () => {
+    const workers = Array.from({ length: Math.min(concurrency, eligible.length) }, async () => {
         while (true) {
             const i = idx++;
-            if (i >= sessions.length) return;
+            if (i >= eligible.length) return;
             try {
-                const q = await checkFreemodelQuota(sessions[i]);
+                const q = await checkFreemodelQuota(eligible[i]);
                 if (q) {
-                    out[i].quota = { ...q, updatedAt: Date.now() };
-                    cache[sessions[i].name] = out[i].quota;
+                    const origIdx = sessions.indexOf(eligible[i]);
+                    if (origIdx >= 0) out[origIdx].quota = { ...q, updatedAt: Date.now() };
+                    cache[eligible[i].name] = out[origIdx >= 0 ? origIdx : i].quota;
                 }
             } catch { /* keep cached value */ }
         }
@@ -276,7 +370,7 @@ async function openSessionInBrowser(kind, name) {
             extraHTTPHeaders: { 'accept-language': 'en-US,en;q=0.9' },
         });
         const page = await context.newPage();
-        await page.goto('https://freemodel.dev/dashboard/usage', { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await page.goto('https://freemodel.dev/dashboard', { waitUntil: 'domcontentloaded' }).catch(() => {});
         return { ok: true, kind, name, url: 'https://freemodel.dev/dashboard/usage' };
     }
     if (kind === 'devin') {
@@ -399,6 +493,7 @@ function launchScript(kind, extraArgs = []) {
         // FreeModel: single manual login (legacy, for restoring sessions)
         'freemodel-login': { title: 'FreeModel: Manual Login',args: [path.join(PROJECT_ROOT, 'freemodel', 'create_first_session.js')] },
         'notion-create':   { title: 'Notion: New Account',    args: [path.join(PROJECT_ROOT, 'notion', 'notion_workflow.js')] },
+        'tokenrouter-create': { title: 'TokenRouter Autoreg', args: [path.join(PROJECT_ROOT, 'routing', 'tokenrouter-autoreg.js')] },
     };
     const t = TARGETS[kind];
     if (!t) throw new Error(`unknown launch kind: ${kind}`);
@@ -411,18 +506,238 @@ function launchScript(kind, extraArgs = []) {
 
     const finalArgs = [...t.args, ...safeExtra];
 
+    const exe = t.cmd || node;
     if (process.platform === 'win32') {
-        // cmd /c start "" cmd /k "node <script> [args...]"
-        spawn('cmd.exe', ['/c', 'start', t.title, 'cmd.exe', '/k', node, ...finalArgs], {
+        // cmd /c start "" cmd /k "<exe> <script> [args...]"
+        spawn('cmd.exe', ['/c', 'start', t.title, 'cmd.exe', '/k', exe, ...finalArgs], {
             cwd: PROJECT_ROOT,
             detached: true,
             stdio: 'ignore',
             windowsHide: false,
         }).unref();
     } else {
-        spawn(node, finalArgs, { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
+        spawn(exe, finalArgs, { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
     }
     return { ok: true, kind, args: finalArgs };
+}
+
+const TR_HEALTH_CACHE = path.join(PROJECT_ROOT, 'logs', '.tokenrouter_health.json');
+
+function loadTrHealthCache() {
+    try { return fs.existsSync(TR_HEALTH_CACHE) ? JSON.parse(fs.readFileSync(TR_HEALTH_CACHE, 'utf-8')) : {}; }
+    catch { return {}; }
+}
+function saveTrHealthCache(cache) {
+    try { fs.writeFileSync(TR_HEALTH_CACHE, JSON.stringify(cache, null, 2), 'utf-8'); } catch {}
+}
+
+function getCachedTrHealth(email) {
+    const cache = loadTrHealthCache();
+    return cache[email] || null;
+}
+
+const TR_USAGE_CACHE = path.join(PROJECT_ROOT, 'logs', '.tokenrouter_usage.json');
+const TR_DAILY_BUDGET = 1.0; // $1 в сутки по словам пользователя
+
+function loadTrUsageCache() {
+    try { return fs.existsSync(TR_USAGE_CACHE) ? JSON.parse(fs.readFileSync(TR_USAGE_CACHE, 'utf-8')) : {}; }
+    catch { return {}; }
+}
+function saveTrUsageCache(cache) {
+    try { fs.writeFileSync(TR_USAGE_CACHE, JSON.stringify(cache, null, 2), 'utf-8'); } catch {}
+}
+
+function getCachedTrUsage(email) {
+    return loadTrUsageCache()[email] || null;
+}
+
+async function checkTokenrouterUsage(apiKey, email) {
+    const https = require('https');
+    return new Promise((resolve) => {
+        const req = https.request({
+            hostname: 'tokenrouter.me', port: 443, method: 'GET', path: '/v1/usage',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            timeout: 15000,
+        }, (res) => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => {
+                let result;
+                try {
+                    if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}`);
+                    const j = JSON.parse(data);
+                    const today = j?.usage?.today || {};
+                    const todayCost = parseFloat(today.actual_cost || today.cost || 0);
+                    const totalCost = parseFloat(j?.usage?.total?.actual_cost || j?.usage?.total?.cost || 0);
+                    const remaining = Math.max(0, TR_DAILY_BUDGET - todayCost);
+                    result = {
+                        ok: true,
+                        isValid: !!j.isValid,
+                        mode: j.mode || '-',
+                        planName: j.planName || '-',
+                        unit: j.unit || 'USD',
+                        todayCost,
+                        totalCost,
+                        dailyBudget: TR_DAILY_BUDGET,
+                        remaining,
+                        requests: today.requests || 0,
+                    };
+                } catch (e) {
+                    result = { ok: false, error: e.message };
+                }
+                if (email) {
+                    const cache = loadTrUsageCache();
+                    cache[email] = { ...result, checkedAt: Date.now() };
+                    saveTrUsageCache(cache);
+                }
+                resolve(result);
+            });
+        });
+        req.on('error', (err) => {
+            const result = { ok: false, error: err.message };
+            if (email) {
+                const cache = loadTrUsageCache();
+                cache[email] = { ...result, checkedAt: Date.now() };
+                saveTrUsageCache(cache);
+            }
+            resolve(result);
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            const result = { ok: false, error: 'timeout' };
+            if (email) {
+                const cache = loadTrUsageCache();
+                cache[email] = { ...result, checkedAt: Date.now() };
+                saveTrUsageCache(cache);
+            }
+            resolve(result);
+        });
+        req.end();
+    });
+}
+
+async function checkTokenrouterKey(apiKey, email) {
+    const https = require('https');
+    const checkBody = JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'hi' }],
+    });
+
+    return new Promise((resolve) => {
+        const req = https.request({
+            hostname: 'tokenrouter.me', port: 443, method: 'POST', path: '/v1/messages',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+                'anthropic-version': '2023-06-01',
+            },
+            timeout: 15000,
+        }, (res) => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => {
+                if (res.statusCode === 200) {
+                    resolve({ ok: true, status: 200 });
+                    return;
+                }
+                let errMsg = `HTTP ${res.statusCode}`;
+                let alive = false;
+                try {
+                    const j = JSON.parse(data);
+                    if (j?.error?.message) {
+                        errMsg = j.error.message;
+                        // "group does not allow" = key valid, plan restricted
+                        if (/group|plan|allow|dispatch/i.test(errMsg) && !/invalid|unauthorized|denied|key/i.test(errMsg)) {
+                            alive = true;
+                        }
+                    } else if (j?.error?.type) {
+                        errMsg = j.error.type;
+                    }
+                } catch {}
+                let result;
+                if (res.statusCode === 401) {
+                    result = { ok: false, status: 401, error: 'ключ отклонён (expired/dead)' };
+                } else if (alive) {
+                    result = { ok: true, status: res.statusCode, note: errMsg.substring(0, 100) };
+                } else {
+                    result = { ok: false, status: res.statusCode, error: errMsg.substring(0, 150) };
+                }
+                if (email) {
+                    const cache = loadTrHealthCache();
+                    cache[email] = { ...result, checkedAt: Date.now() };
+                    saveTrHealthCache(cache);
+                }
+                resolve(result);
+            });
+        });
+        req.on('error', (err) => {
+            const result = { ok: false, status: 0, error: err.code === 'ENOTFOUND' ? 'tokenrouter.me недоступен' : err.message };
+            if (email) {
+                const cache = loadTrHealthCache();
+                cache[email] = { ...result, checkedAt: Date.now() };
+                saveTrHealthCache(cache);
+            }
+            resolve(result);
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            const result = { ok: false, status: 0, error: 'timeout' };
+            if (email) {
+                const cache = loadTrHealthCache();
+                cache[email] = { ...result, checkedAt: Date.now() };
+                saveTrHealthCache(cache);
+            }
+            resolve(result);
+        });
+        req.write(checkBody);
+        req.end();
+    });
+}
+
+function openTokenrouterSession(email) {
+    const fs = require('fs');
+    const path = require('path');
+    const { chromium } = require('playwright');
+    const dirName = email.replace(/[@.]/g, '_');
+    const sessionDir = path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'sessions', dirName);
+    const sessionFile = path.join(sessionDir, 'session.json');
+
+    if (!fs.existsSync(sessionFile)) {
+        return { ok: false, error: 'session.json не найден — запусти авторег для этого аккаунта' };
+    }
+
+    // Launch in background (don't await — browser stays open)
+    (async () => {
+        try {
+            const browser = await chromium.launch({ headless: false });
+            const context = await browser.newContext({ storageState: sessionFile });
+            const page = await context.newPage();
+            await page.goto('https://tokenrouter.me/keys', { waitUntil: 'domcontentloaded', timeout: 20000 });
+            // Browser stays open, user closes manually
+        } catch (e) {
+            console.error('[TR] open session error:', e.message);
+        }
+    })();
+
+    // Also update cookies from saved session into accounts.json for compatibility
+    try {
+        const session = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
+        const TOKENROUTER_ACCOUNTS = path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'accounts.json');
+        if (fs.existsSync(TOKENROUTER_ACCOUNTS)) {
+            const accounts = JSON.parse(fs.readFileSync(TOKENROUTER_ACCOUNTS, 'utf-8'));
+            const acc = accounts.find(a => a.email === email);
+            if (acc && session.cookies && session.cookies.length > 0) {
+                acc.cookies = session.cookies;
+                fs.writeFileSync(TOKENROUTER_ACCOUNTS, JSON.stringify(accounts, null, 2), 'utf-8');
+            }
+        }
+    } catch {}
+
+    return { ok: true };
 }
 
 module.exports = {
@@ -439,6 +754,13 @@ module.exports = {
     setNotionCardIndex,
     launchScript,
     sqliteJson,
+    setFreemodelBanned,
+    setFreemodelTgPhone,
+    setFreemodelApiKey,
+    extractFreemodelApiKey,
+    checkTokenrouterKey,
+    openTokenrouterSession,
+    loadFreemodelMeta,
 };
 
 

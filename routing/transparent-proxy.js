@@ -34,6 +34,7 @@ const NOTION_KEY    = process.env.NOTION_API_KEY    || 'sk-local-dev-key';
 const LISTEN_PORT = 8200;
 const SETTINGS_FILE = path.join(os.homedir(), '.claude', 'settings.json');
 const STATE_FILE = path.join(__dirname, 'proxy-target.json');
+const TOKENROUTER_ACCOUNTS = path.join(__dirname, 'tokenrouter', 'accounts.json');
 
 // For /__switch/api/whoami — look up OmniRoute provider_connections by id prefix.
 const OMNI_DB = path.join(os.homedir(), '.omniroute', 'storage.sqlite');
@@ -55,11 +56,24 @@ const BACKENDS = {
         model: 'opus-4.8',
         // Cheap backend: short tasks without heavy tools.
     },
+    freemodel_rotator: {
+        label: 'FreeModel Rotator',
+        base_url: 'https://cc.freemodel.dev',
+        api_key: '__rotator__',     // resolved dynamically from rotator API
+        model: 'opus[1m]',
+        // Direct cc.freemodel.dev — key managed by freemodel-rotator.js
+    },
 };
+
+const LOG_BUFFER = [];
+const LOG_BUFFER_MAX = 500;
 
 function logLine(s) {
     const t = new Date().toISOString().substring(11, 23);
-    console.log(`[${t}] ${s}`);
+    const line = `[${t}] ${s}`;
+    console.log(line);
+    LOG_BUFFER.push(line);
+    if (LOG_BUFFER.length > LOG_BUFFER_MAX) LOG_BUFFER.shift();
 }
 
 function readSettings() {
@@ -77,11 +91,16 @@ function writeSettings(obj) {
     logLine(`settings.json written, backup at ${path.basename(bakPath)}`);
 }
 
-// Figure out which backend matches the URL/key currently in settings.json
+// Figure out which backend/config matches the URL/key currently in settings.json.
+// apiKeyHelper → ApiHelper (FreeModel direct), direct API key → backend by URL.
 function currentTarget() {
     try {
         const s = readSettings();
         const url = (s.env && s.env.ANTHROPIC_BASE_URL) || '';
+        const helper = s.apiKeyHelper || '';
+        if (helper.includes('fm-active-key.txt') || helper.includes('freemodel')) {
+            return 'apihelper';
+        }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
         }
@@ -97,18 +116,78 @@ function saveState(target) {
     catch (e) { logLine(`state file write failed: ${e.message}`); }
 }
 
-function applyTarget(target) {
+async function applyTarget(target) {
     const backend = BACKENDS[target];
     if (!backend) throw new Error('Unknown target: ' + target);
 
     const settings = readSettings();
     settings.env = settings.env || {};
     settings.env.ANTHROPIC_BASE_URL = backend.base_url;
-    settings.env.ANTHROPIC_API_KEY = backend.api_key;
+
+    let apiKey = backend.api_key;
+    // For freemodel_rotator, fetch active key from rotator API
+    if (target === 'freemodel_rotator') {
+        try {
+            apiKey = await new Promise((resolve, reject) => {
+                const rotReq = http.request({
+                    hostname: '127.0.0.1', port: 20126, path: '/__fmrot/api/active-key',
+                    method: 'GET', timeout: 3000,
+                }, (rotRes) => {
+                    let b = '';
+                    rotRes.on('data', c => b += c);
+                    rotRes.on('end', () => {
+                        try {
+                            const data = JSON.parse(b);
+                            if (data.apiKey) { resolve(data.apiKey); logLine(`rotator key: ${data.email} → ${data.apiKeyMask}`); }
+                            else reject(new Error('No active key in rotator'));
+                        } catch { reject(new Error('Invalid rotator response')); }
+                    });
+                });
+                rotReq.on('error', (e) => reject(e));
+                rotReq.end();
+            });
+        } catch (e) {
+            logLine(`rotator key fetch failed: ${e.message}`);
+            apiKey = '';
+        }
+    }
+
+    settings.env.ANTHROPIC_API_KEY = apiKey;
     if (backend.model) settings.model = backend.model;
     writeSettings(settings);
     saveState(target);
     logLine(`switched to ${target} (${backend.label})`);
+}
+
+// Settings presets: GET current, POST apply a merged JSON patch.
+function handleSettingsCurrent(res) {
+    try {
+        const s = readSettings();
+        return jsonRes(res, 200, { settings: s });
+    } catch (e) {
+        return jsonRes(res, 500, { error: e.message });
+    }
+}
+
+async function handleSettingsApply(req, res) {
+    try {
+        const { settings: patch } = await readJsonBody(req);
+        if (!patch || typeof patch !== 'object') return jsonRes(res, 400, { error: 'settings object required' });
+        const current = readSettings();
+        // Shallow merge top-level fields; for env, merge one level deeper.
+        const next = { ...current };
+        for (const [k, v] of Object.entries(patch)) {
+            if (k === 'env' && typeof v === 'object') {
+                next.env = { ...current.env, ...v };
+            } else {
+                next[k] = v;
+            }
+        }
+        writeSettings(next);
+        return jsonRes(res, 200, { ok: true, current: currentTarget() });
+    } catch (e) {
+        return jsonRes(res, 400, { error: e.message });
+    }
 }
 
 function jsonRes(res, code, body) {
@@ -413,6 +492,251 @@ async function handleNotionCardSelect(req, res) {
     } catch (e) { jsonRes(res, 400, { error: e.message }); }
 }
 
+// ---- /__switch/api/tg/* — пул Telegram-аккаунтов для freemodel-автореги -----
+//
+// Хранилище: freemodel/tg_pool.json. UI вкладка "Telegram" в proxy-dashboard.html.
+
+const tgPool = require('../freemodel/lib/tg-pool');
+const tgSessionParser = require('../freemodel/lib/tg-session-parser');
+
+function handleTgList(res) {
+    try {
+        const arr = tgPool.list();
+        // Маскируем auth_key для UI — полный ключ из дашборда никогда не отдаём.
+        const safe = arr.map(e => ({
+            phone: e.phone,
+            dc_id: e.dc_id,
+            user_id: e.user_id,
+            auth_key_mask: tgPool.maskAuthKey(e.auth_key_hex),
+            status: e.status,
+            addedAt: e.addedAt,
+            usedBy: e.usedBy || null,
+            usedAt: e.usedAt || null,
+            banReason: e.banReason || null,
+            isPlaceholderPhone: !!e.isPlaceholderPhone,
+        }));
+        jsonRes(res, 200, { entries: safe, stats: tgPool.stats() });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
+async function handleTgAddHex(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { phone, dc_id, user_id, auth_key_hex } = body || {};
+        const entry = tgPool.addHex({ phone, dc_id, user_id, auth_key_hex });
+        logLine(`tg pool: + ${entry.phone} dc=${entry.dc_id}`);
+        jsonRes(res, 200, { ok: true, phone: entry.phone });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+// Bulk import: текст со списком в свободном формате (phone|hex:dc / hex:dc / ...).
+async function handleTgAddBulk(req, res) {
+    try {
+        const { text } = await readJsonBody(req);
+        if (!text || typeof text !== 'string') return jsonRes(res, 400, { error: 'нет text' });
+        const parsed = tgPool.parseBulk(text);
+        const result = tgPool.addBulk(parsed.entries);
+        logLine(`tg pool: bulk +${result.added.length} parseErr=${parsed.errors.length} dupes=${parsed.duplicates.length}`);
+        jsonRes(res, 200, {
+            ok: true,
+            added: result.added,
+            errors: [...parsed.errors, ...result.errors],
+            duplicates: parsed.duplicates,
+        });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+// Принимает .session-файл как base64 в JSON-теле (UI читает FileReader → base64).
+async function handleTgAddSession(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { phone, base64 } = body || {};
+        if (!phone) return jsonRes(res, 400, { error: 'phone обязателен' });
+        if (!base64) return jsonRes(res, 400, { error: 'нет файла (base64)' });
+
+        const buf = Buffer.from(base64, 'base64');
+        const parsed = tgSessionParser.parseSessionBuffer(buf, phone);
+
+        if (!parsed.user_id) {
+            // user_id в .session может отсутствовать — это не критично для логина.
+            // Но pool хочет user_id строго. Кладём заглушку, если совсем пусто.
+            parsed.user_id = body.user_id || '0';
+        }
+
+        const entry = tgPool.addHex({
+            phone,
+            dc_id: parsed.dc_id,
+            user_id: parsed.user_id,
+            auth_key_hex: parsed.auth_key_hex,
+        });
+        logLine(`tg pool: + ${entry.phone} dc=${entry.dc_id} (.session)`);
+        jsonRes(res, 200, { ok: true, phone: entry.phone, dc_id: entry.dc_id, user_id: entry.user_id });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+async function handleTgDelete(req, res) {
+    try {
+        const { phone } = await readJsonBody(req);
+        if (!phone) return jsonRes(res, 400, { error: 'phone обязателен' });
+        const ok = tgPool.remove(phone);
+        if (!ok) return jsonRes(res, 404, { error: 'не найден' });
+        logLine(`tg pool: − ${phone}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+async function handleTgMarkFree(req, res) {
+    try {
+        const { phone } = await readJsonBody(req);
+        if (!phone) return jsonRes(res, 400, { error: 'phone обязателен' });
+        const e = tgPool.markFree(phone);
+        if (!e) return jsonRes(res, 404, { error: 'не найден' });
+        logLine(`tg pool: ${phone} → free`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+async function handleTgRename(req, res) {
+    try {
+        const { phone, newPhone } = await readJsonBody(req);
+        if (!phone || !newPhone) return jsonRes(res, 400, { error: 'phone и newPhone обязательны' });
+        const e = tgPool.rename(phone, newPhone);
+        logLine(`tg pool: rename ${phone} → ${e.phone}`);
+        jsonRes(res, 200, { ok: true, phone: e.phone });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+// ---- /__switch/api/freemodel/ban: пометить freemodel-аккаунт как banned 💀 ----
+async function handleFreemodelBan(req, res) {
+    try {
+        const { name, banned } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const m = dashApi.setFreemodelBanned(name, !!banned);
+        logLine(`freemodel ban: ${name} → ${banned ? '💀' : 'unban'}`);
+        jsonRes(res, 200, { ok: true, meta: m });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+// Ручное переключение TG-привязки. Принимает { name, tgPhone } —
+// tgPhone=null/'' = отвязать, явный номер = привязать.
+async function handleFreemodelSetTg(req, res) {
+    try {
+        const { name, tgPhone } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const cleanPhone = tgPhone ? String(tgPhone).replace(/^\+/, '').replace(/\s+/g, '') : null;
+        if (cleanPhone && !/^(?:\d{6,18}|tg_[0-9a-f]+)$/.test(cleanPhone)) {
+            return jsonRes(res, 400, { error: 'bad phone' });
+        }
+        const m = dashApi.setFreemodelTgPhone(name, cleanPhone);
+        logLine(`freemodel tg: ${name} → ${cleanPhone || 'unlinked'}`);
+        jsonRes(res, 200, { ok: true, meta: m });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+// Ручное проставление API-ключа (например, юзер скопировал руками).
+async function handleFreemodelSetKey(req, res) {
+    try {
+        const { name, apiKey } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const key = apiKey ? String(apiKey).trim() : null;
+        if (key && !/^(?:fe[_-]|sk-)[A-Za-z0-9_-]{20,}$/.test(key)) {
+            return jsonRes(res, 400, { error: 'формат ключа: fe_... или sk-...' });
+        }
+        const m = dashApi.setFreemodelApiKey(name, key);
+        logLine(`freemodel key: ${name} → ${key ? '***' + key.slice(-6) : 'cleared'}`);
+        jsonRes(res, 200, { ok: true, meta: m });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+async function handleFreemodelActivate(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name required' });
+        const keyFile = path.join(os.homedir(), '.claude', 'fm-active-key.txt');
+        const meta = dashApi.loadFreemodelMeta();
+        let apiKey = meta[name]?.apiKey;
+        if (!apiKey) {
+            const fm = require('../internal/freemodel-manager');
+            const cwd = process.cwd();
+            process.chdir(path.join(__dirname, '..'));
+            try {
+                const s = fm.getFreemodelSessions().find(x => x.name === name);
+                if (s) {
+                    const infoFile = path.join(s.path, 'account_info.txt');
+                    if (fs.existsSync(infoFile)) {
+                        const m = fs.readFileSync(infoFile, 'utf-8').match(/^API Key:\s*((?:fe[_-]|sk-)[A-Za-z0-9_-]{20,})/m);
+                        if (m) apiKey = m[1];
+                    }
+                }
+            } finally { process.chdir(cwd); }
+        }
+        if (!apiKey) return jsonRes(res, 400, { error: 'no API key found' });
+        fs.writeFileSync(keyFile, apiKey, { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
+            const raw = fs.readFileSync(settingsFile, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const bakPath = settingsFile + '.bak-fm-' + stamp;
+            fs.copyFileSync(settingsFile, bakPath);
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_API_KEY = apiKey;
+            fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+            logLine(`fm activate: wrote to settings.json`);
+        } catch (e) {
+            logLine(`fm activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`fm activate: ${name} → ${apiKey.substring(0, 8)}...`);
+        jsonRes(res, 200, { ok: true, name, mask: apiKey.substring(0, 8) + '...' + apiKey.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
+async function handleFreemodelExtractKey(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const cwd = process.cwd();
+        process.chdir(path.join(__dirname, '..'));
+        try {
+            const result = await dashApi.extractFreemodelApiKey(name);
+            if (result.ok) {
+                logLine(`freemodel extract-key: ${name} → ${result.apiKey ? result.apiKey.substring(0, 12) + '...' : 'none'} (${result.source})`);
+            } else {
+                logLine(`freemodel extract-key: ${name} → FAIL: ${result.error}`);
+            }
+            jsonRes(res, result.ok ? 200 : 400, result);
+        } finally {
+            process.chdir(cwd);
+        }
+    } catch (e) {
+        jsonRes(res, 500, { ok: false, error: e.message });
+    }
+}
+
 async function handleLaunch(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -435,20 +759,33 @@ const server = http.createServer((req, res) => {
         });
     }
 
+    if (req.method === 'GET' && req.url.startsWith('/__switch/api/logs')) {
+        const limit = parseInt(new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('limit') || '200', 10);
+        return jsonRes(res, 200, { lines: LOG_BUFFER.slice(-Math.max(1, limit)) });
+    }
+
     if (req.method === 'POST' && req.url === '/__switch/api/switch') {
         let body = '';
         req.on('data', c => body += c);
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
                 const { target } = JSON.parse(body);
                 if (!BACKENDS[target]) return jsonRes(res, 400, { error: 'Invalid target' });
-                applyTarget(target);
+                await applyTarget(target);
                 jsonRes(res, 200, { ok: true, target, restart_required: true });
             } catch (e) {
                 jsonRes(res, 400, { error: e.message });
             }
         });
         return;
+    }
+
+    if (req.method === 'GET' && req.url === '/__switch/api/settings/current') {
+        return handleSettingsCurrent(res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/settings/apply') {
+        return handleSettingsApply(req, res);
     }
 
     if (req.method === 'POST' && req.url === '/__switch/api/whoami') {
@@ -505,6 +842,189 @@ const server = http.createServer((req, res) => {
 
     if (req.method === 'POST' && req.url === '/__switch/api/launch') {
         return handleLaunch(req, res);
+    }
+
+    // ---- TG pool routes ----
+    if (req.method === 'GET'  && req.url === '/__switch/api/tg/list')        return handleTgList(res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/add-hex')     return handleTgAddHex(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/add-bulk')    return handleTgAddBulk(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/add-session') return handleTgAddSession(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/delete')      return handleTgDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/mark-free')   return handleTgMarkFree(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/rename')      return handleTgRename(req, res);
+
+    // ---- FreeModel ban/unban marker ----
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/ban')      return handleFreemodelBan(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-tg')   return handleFreemodelSetTg(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-key')      return handleFreemodelSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/extract-key')  return handleFreemodelExtractKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/activate')     return handleFreemodelActivate(req, res);
+
+    // ---- TokenRouter routes ----
+    if (req.method === 'GET' && req.url === '/__switch/api/tokenrouter/accounts') {
+        try {
+            if (!fs.existsSync(TOKENROUTER_ACCOUNTS)) {
+                return jsonRes(res, 200, { accounts: [] });
+            }
+            const accounts = JSON.parse(fs.readFileSync(TOKENROUTER_ACCOUNTS, 'utf8'));
+            const safe = accounts.map(a => ({
+                email: a.email,
+                password: a.password,
+                apiKey: a.apiKey,
+                apiKeyMask: a.apiKey ? '…' + a.apiKey.slice(-8) : null,
+                apiKeyName: a.apiKeyName,
+                createdAt: a.createdAt,
+            }));
+            jsonRes(res, 200, { accounts: safe });
+        } catch (e) {
+            jsonRes(res, 500, { error: e.message });
+        }
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/delete') {
+        (async () => {
+            try {
+                const { email } = await readJsonBody(req);
+                if (!email) return jsonRes(res, 400, { error: 'email required' });
+                if (!fs.existsSync(TOKENROUTER_ACCOUNTS))
+                    return jsonRes(res, 404, { error: 'no accounts file' });
+                let accounts = JSON.parse(fs.readFileSync(TOKENROUTER_ACCOUNTS, 'utf8'));
+                const before = accounts.length;
+                accounts = accounts.filter(a => a.email !== email);
+                fs.writeFileSync(TOKENROUTER_ACCOUNTS, JSON.stringify(accounts, null, 2), 'utf8');
+                logLine(`tokenrouter: deleted ${email} (${before} -> ${accounts.length})`);
+                jsonRes(res, 200, { ok: true, remaining: accounts.length });
+            } catch (e) {
+                jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/add') {
+        (async () => {
+            try {
+                const { email, apiKey } = await readJsonBody(req);
+                if (!email || !apiKey) return jsonRes(res, 400, { error: 'email + apiKey required' });
+                if (!/^sk-[A-Za-z0-9]{20,}$/.test(apiKey)) return jsonRes(res, 400, { error: 'bad key format' });
+
+                let accounts = [];
+                if (fs.existsSync(TOKENROUTER_ACCOUNTS)) {
+                    accounts = JSON.parse(fs.readFileSync(TOKENROUTER_ACCOUNTS, 'utf8'));
+                }
+                const existing = accounts.find(a => a.email === email);
+                if (existing) {
+                    existing.apiKey = apiKey;
+                    existing.apiKeyName = existing.apiKeyName || 'manual';
+                } else {
+                    accounts.push({
+                        email, apiKey, apiKeyName: 'manual',
+                        createdAt: new Date().toISOString().substring(0, 19) + 'Z',
+                        cookies: [],
+                    });
+                }
+                fs.writeFileSync(TOKENROUTER_ACCOUNTS, JSON.stringify(accounts, null, 2), 'utf8');
+                logLine(`tokenrouter: manual add ${email} (total: ${accounts.length})`);
+                jsonRes(res, 200, { ok: true, total: accounts.length });
+            } catch (e) {
+                jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/open') {
+        (async () => {
+            try {
+                const { email } = await readJsonBody(req);
+                if (!email) return jsonRes(res, 400, { error: 'email required' });
+                const result = dashApi.openTokenrouterSession(email);
+                logLine(`tokenrouter open: ${email} → ${result.ok ? 'OK' : result.error}`);
+                jsonRes(res, result.ok ? 200 : 400, result);
+            } catch (e) {
+                jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
+    if (req.method === 'GET' && req.url === '/__switch/api/tokenrouter/health-cache') {
+        try {
+            const TR_HEALTH = path.join(__dirname, '..', 'logs', '.tokenrouter_health.json');
+            const cache = fs.existsSync(TR_HEALTH) ? JSON.parse(fs.readFileSync(TR_HEALTH, 'utf-8')) : {};
+            jsonRes(res, 200, cache);
+        } catch (e) {
+            jsonRes(res, 200, {});
+        }
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/check-key') {
+        (async () => {
+            try {
+                const { email } = await readJsonBody(req);
+                if (!email) return jsonRes(res, 400, { error: 'email required' });
+                if (!fs.existsSync(TOKENROUTER_ACCOUNTS))
+                    return jsonRes(res, 404, { error: 'no accounts file' });
+                const accounts = JSON.parse(fs.readFileSync(TOKENROUTER_ACCOUNTS, 'utf8'));
+                const acc = accounts.find(a => a.email === email);
+                if (!acc || !acc.apiKey) return jsonRes(res, 404, { error: 'account or key not found' });
+                const result = await dashApi.checkTokenrouterKey(acc.apiKey, email);
+                logLine(`tokenrouter check: ${email} → ${result.ok ? 'OK' : 'DEAD (' + result.status + ')'}`);
+                jsonRes(res, 200, result);
+            } catch (e) {
+                jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
+    // ---- Freemodel Rotator proxy ----
+    if (req.method === 'GET' && req.url === '/__switch/api/rotator/status') {
+        const rotOpts = { hostname: '127.0.0.1', port: 20126, path: '/__fmrot/api/status', method: 'GET', timeout: 3000 };
+        const rotReq = http.request(rotOpts, (rotRes) => {
+            let b = '';
+            rotRes.on('data', c => b += c);
+            rotRes.on('end', () => {
+                try { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(b); }
+                catch { jsonRes(res, 200, {}); }
+            });
+        });
+        rotReq.on('error', () => jsonRes(res, 200, { error: 'rotator not running', keys: [], totalRequests: 0, activeCount: 0, totalCount: 0 }));
+        rotReq.end();
+        return;
+    }
+
+    // ---- Freemodel Rotator generic proxy (avoids CORS) ----
+    if (req.method === 'POST' && req.url === '/__switch/api/rotator/proxy') {
+        let b = '';
+        req.on('data', c => b += c);
+        req.on('end', () => {
+            try {
+                const { path: rotPath, method: rotMethod, body: rotBody } = JSON.parse(b);
+                const bodyStr = rotBody ? JSON.stringify(rotBody) : '';
+                const rotOpts = {
+                    hostname: '127.0.0.1', port: 20126,
+                    path: rotPath || '/__fmrot/api/status',
+                    method: rotMethod || 'GET',
+                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) },
+                    timeout: 15000,
+                };
+                const rotReq = http.request(rotOpts, (rotRes) => {
+                    let rb = '';
+                    rotRes.on('data', c => rb += c);
+                    rotRes.on('end', () => {
+                        try { res.writeHead(rotRes.statusCode, { 'Content-Type': 'application/json' }); res.end(rb); }
+                        catch { jsonRes(res, 500, { error: 'proxy error' }); }
+                    });
+                });
+                rotReq.on('error', () => jsonRes(res, 502, { error: 'rotator not running' }));
+                if (bodyStr) rotReq.write(bodyStr);
+                rotReq.end();
+            } catch (e) { jsonRes(res, 400, { error: e.message }); }
+        });
+        return;
     }
 
     if (req.method === 'GET' && (req.url === '/' || req.url === '/__switch' || req.url === '/__switch/')) {

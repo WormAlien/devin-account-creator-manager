@@ -196,7 +196,7 @@ async function checkFreemodelQuota(session) {
             const text = (document.body?.innerText || '').replace(/\r/g, '');
             const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
 
-            const out = { available: '', plan: '', bonus: '', h5: '', h5max: '', h5resets: '', d7: '', d7max: '', d7resets: '' };
+            const out = { available: '', plan: '', bonus: '', h5: '', h5max: '', h5resets: '', h5pct: null, d7: '', d7max: '', d7resets: '', d7pct: null };
 
             // "AVAILABLE NOW" → следующая строка с $X.XX (в правой колонке), либо в одной из ближайших строк
             const availIdx = lines.findIndex(l => /^AVAILABLE NOW$/i.test(l));
@@ -214,24 +214,36 @@ async function checkFreemodelQuota(session) {
                 if (mp) out.plan = `$${mp[1]}`;
                 if (mb) out.bonus = `$${mb[1]}`;
             }
-            // "5-Hour window" → следующие строки: "Resets in 3h 7m", потом "$0.13 / $10.00", потом "1% used"
+            // "5-Hour window" → "Resets in 3h 7m", "$0.13 / $10.00", "1% used"
+            // Also handles percentage-only displays
             const findWindow = (label) => {
-                const i = lines.findIndex(l => l.toLowerCase().startsWith(label.toLowerCase()));
+                // Skip fake "X-Hour window $0.00" lines in the AVAILABLE section
+                let i = -1;
+                for (let k = 0; k < lines.length; k++) {
+                    const l = lines[k].toLowerCase();
+                    if (l.startsWith(label.toLowerCase()) && !/\$/.test(l)) {
+                        i = k; break;
+                    }
+                }
                 if (i < 0) return null;
-                let used = '', max = '', resets = '';
+                let used = '', max = '', resets = '', pct = '';
                 for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
                     const ln = lines[j];
+                    // Stop if we hit the next section header
+                    if (/^(7-Day|AVAILABLE|Plan|API|Usage|Logs|Billing)/i.test(ln)) break;
                     let m = ln.match(/^Resets\s+(.+)$/i);
                     if (m) { resets = m[1].trim(); continue; }
                     m = ln.match(/^\$?([\d.,]+)\s*\/\s*\$?([\d.,]+)$/);
-                    if (m) { used = `$${m[1]}`; max = `$${m[2]}`; continue; }
+                    if (m) { used = `$${m[1]}`; max = `$${m[2]}`; break; }
+                    m = ln.match(/([\d.]+)\s*%\s*(?:used)?/i);
+                    if (m && !used) { pct = parseFloat(m[1]); }
                 }
-                return { used, max, resets };
+                return { used, max, resets, pct };
             };
             const w5 = findWindow('5-Hour window');
             const w7 = findWindow('7-Day window');
-            if (w5) { out.h5 = w5.used; out.h5max = w5.max; out.h5resets = w5.resets; }
-            if (w7) { out.d7 = w7.used; out.d7max = w7.max; out.d7resets = w7.resets; }
+            if (w5) { out.h5 = w5.used; out.h5max = w5.max; out.h5resets = w5.resets; out.h5pct = w5.pct || null; }
+            if (w7) { out.d7 = w7.used; out.d7max = w7.max; out.d7resets = w7.resets; out.d7pct = w7.pct || null; }
             return out;
         });
 
@@ -242,6 +254,181 @@ async function checkFreemodelQuota(session) {
         return data;
     } catch (e) {
         return null;
+    } finally {
+        if (browser) { try { await browser.close(); } catch {} }
+    }
+}
+
+// ─── Извлечение API ключа ───────────────────────────────────────
+// Открывает сессию, переходит на /dashboard/keys, создаёт новый ключ
+// (маскирован в таблице), извлекает полный ключ из модалки успеха,
+// сохраняет в account_info.txt и logs/.freemodel_meta.json.
+const KEY_RE = /(?:fe[_-]|sk-)[A-Za-z0-9_-]{20,}/;
+const KEY_PAGE_URL = 'https://freemodel.dev/dashboard/keys';
+
+async function extractFreemodelApiKey(session) {
+    let browser = null;
+    try {
+        const sessionFile = path.join(session.path, 'session.json');
+        if (!fs.existsSync(sessionFile)) return { ok: false, error: 'session.json not found' };
+
+        browser = await chromium.launch({ headless: true });
+        const context = await browser.newContext({ storageState: sessionFile, ...EN_CONTEXT_OPTS });
+        const page = await context.newPage();
+
+        await page.goto(KEY_PAGE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.waitForTimeout(2000);
+
+        // Проверяем лимит ключей (X / 5)
+        const bodyText = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
+        const limitMatch = bodyText.match(/(\d+)\s*\/\s*5/);
+        if (limitMatch && parseInt(limitMatch[1], 10) >= 5) {
+            await browser.close();
+            return { ok: false, error: 'key limit reached (5/5)' };
+        }
+
+        // Ищем уже существующий ключ в account_info.txt (v3) или meta
+        const infoFile = path.join(session.path, 'account_info.txt');
+        if (fs.existsSync(infoFile)) {
+            const infoText = fs.readFileSync(infoFile, 'utf-8');
+            const m = infoText.match(KEY_RE);
+            if (m) {
+                await browser.close();
+                return { ok: true, apiKey: m[0], source: 'account_info.txt' };
+            }
+        }
+
+        // Dismiss any overlay that blocks clicks
+        try {
+            // Try clicking any visible button in the overlay
+            const anyBtn = page.locator(".modal-backdrop button, .fixed.inset-0 button").first();
+            if (await anyBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await anyBtn.click({ timeout: 3000 });
+                await page.waitForTimeout(800);
+            }
+        } catch {}
+        try { await page.keyboard.press("Escape"); await page.waitForTimeout(400); } catch {}
+        // Nuclear option: remove modal-backdrop via JS if still present
+        try {
+            await page.evaluate(() => {
+                document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+            });
+            await page.waitForTimeout(300);
+        } catch {}
+
+        // Click "Create key" — try JS click first, fallback to Playwright click
+        let modalOpened = false;
+        for (const method of ['js', 'playwright', 'force']) {
+            try {
+                if (method === 'js') {
+                    await page.evaluate(() => {
+                        const btns = document.querySelectorAll('button');
+                        for (const b of btns) {
+                            if (b.textContent.includes('Create key')) { b.click(); return; }
+                        }
+                    });
+                } else if (method === 'playwright') {
+                    await page.locator('button').filter({ hasText: 'Create key' }).first().click({ timeout: 5000 });
+                } else if (method === 'force') {
+                    await page.locator('button').filter({ hasText: 'Create key' }).first().click({ force: true, timeout: 5000 });
+                }
+                await page.waitForTimeout(1500);
+                // Check if modal opened
+                const modalInput = page.locator('#newKeyName, .modal-input');
+                if (await modalInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+                    modalOpened = true;
+                    break;
+                }
+            } catch { continue; }
+        }
+
+        if (!modalOpened) {
+            throw new Error('could not open Create key modal');
+        }
+
+        // Заполняем имя ключа в модалке
+        const nameInput = page.locator('#newKeyName, .modal-input');
+        await nameInput.waitFor({ state: 'visible', timeout: 8000 });
+        const keyName = `autoreg-${Date.now().toString(36)}`;
+        await nameInput.fill(keyName);
+        await page.waitForTimeout(400);
+
+        // Submit — JS click for reliability
+        await page.evaluate(() => {
+            const modals = document.querySelectorAll('.modal, [role="dialog"]');
+            for (const m of modals) {
+                const btn = m.querySelector('button[type="submit"], button.dbtn-primary');
+                if (btn) { btn.click(); return; }
+            }
+        });
+        await page.waitForTimeout(2500);
+
+        // Ждём успешную модалку с ключом
+        const secretVal = page.locator('.secret-val');
+        try {
+            await secretVal.waitFor({ state: 'visible', timeout: 15000 });
+        } catch {
+            // Fallback: scan entire body for key text
+            const bodyText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+            const m = bodyText.match(KEY_RE);
+            if (m) {
+                const apiKey = m[0];
+                try { await page.keyboard.press("Escape"); } catch {}
+                await browser.close(); browser = null;
+                // Сохраняем
+                try {
+                    let infoText = '';
+                    if (fs.existsSync(infoFile)) { infoText = fs.readFileSync(infoFile, 'utf-8'); }
+                    if (/^API Key:/m.test(infoText)) { infoText = infoText.replace(/^API Key:.*$/m, 'API Key: ' + apiKey); }
+                    else { infoText = infoText.trimEnd() + '\nAPI Key: ' + apiKey + '\n'; }
+                    fs.writeFileSync(infoFile, infoText, 'utf-8');
+                } catch {}
+                return { ok: true, apiKey, source: 'body_scan' };
+            }
+            throw new Error('.secret-val not found and no key in body');
+        }
+        const apiKey = (await secretVal.innerText()).trim();
+
+        // Закрываем модалку
+        try {
+            const doneBtn = page.locator('.modal-backdrop .dbtn-primary').filter({ hasText: 'Done' });
+            await doneBtn.click({ timeout: 3000 });
+        } catch {}
+
+        await page.waitForTimeout(500);
+        await browser.close();
+        browser = null;
+
+        if (!KEY_RE.test(apiKey)) {
+            return { ok: false, error: `unexpected key format: ${apiKey.substring(0, 16)}...` };
+        }
+
+        // Сохраняем в account_info.txt
+        try {
+            let infoText = '';
+            if (fs.existsSync(infoFile)) {
+                infoText = fs.readFileSync(infoFile, 'utf-8');
+            }
+            if (/^API Key:/m.test(infoText)) {
+                infoText = infoText.replace(/^API Key:.*$/m, 'API Key: ' + apiKey);
+            } else {
+                infoText = infoText.trimEnd() + '\nAPI Key: ' + apiKey + '\n';
+            }
+            fs.writeFileSync(infoFile, infoText, 'utf-8');
+        } catch {}
+
+        // Сохраняем в logs/.freemodel_meta.json
+        const META_FILE = path.join('logs', '.freemodel_meta.json');
+        try {
+            const meta = fs.existsSync(META_FILE) ? JSON.parse(fs.readFileSync(META_FILE, 'utf-8')) : {};
+            meta[session.name] = meta[session.name] || {};
+            meta[session.name].apiKey = String(apiKey);
+            fs.writeFileSync(META_FILE, JSON.stringify(meta, null, 2), 'utf-8');
+        } catch {}
+
+        return { ok: true, apiKey, source: 'created' };
+    } catch (e) {
+        return { ok: false, error: e.message };
     } finally {
         if (browser) { try { await browser.close(); } catch {} }
     }
@@ -298,6 +485,7 @@ function renderList(sessions, row, quotaMap, loadingSet, focus, actionIdx, clear
         { id: 'open',        label: '➜ Открыть /dashboard/usage в браузере' },
         { id: 'refresh',     label: '↻ Обновить квоту' },
         { id: 'refresh-all', label: '↻ Обновить все квоты' },
+        { id: 'extract-key', label: '🔑 Извлечь API ключ' },
         { id: 'delete',      label: '✗ Удалить сессию' },
         { id: 'back',        label: '← Назад в меню' },
     ];
@@ -398,7 +586,7 @@ async function freemodelSessionsMenu({ clearScreen, setKeypressListener }) {
         next();
     };
 
-    const ACTIONS = ['open', 'refresh', 'refresh-all', 'delete', 'back'];
+    const ACTIONS = ['open', 'refresh', 'refresh-all', 'extract-key', 'delete', 'back'];
 
     const openBrowser = async (s) => {
         setKeypressListener(null);
@@ -431,6 +619,23 @@ async function freemodelSessionsMenu({ clearScreen, setKeypressListener }) {
             case 'open':        if (s) await openBrowser(s); break;
             case 'refresh':     if (s) loadOne(s); break;
             case 'refresh-all': loadAll(); break;
+            case 'extract-key': {
+                if (!s) return;
+                clearScreen();
+                process.stdout.write('\n  🔑 Извлекаю API ключ...\n');
+                const result = await extractFreemodelApiKey(s);
+                if (result.ok) {
+                    process.stdout.write(`  ✅ Ключ: ${result.apiKey}\n  Источник: ${result.source}\n`);
+                } else {
+                    process.stdout.write(`  ❌ Ошибка: ${result.error}\n`);
+                }
+                process.stdout.write('\n  Нажми любую клавишу для продолжения...');
+                await new Promise(r => {
+                    process.stdin.once('keypress', () => r());
+                });
+                rerender(true);
+                break;
+            }
             case 'delete': {
                 if (!s) return;
                 try { fs.rmSync(s.path, { recursive: true, force: true }); } catch {}
@@ -493,4 +698,4 @@ async function freemodelSessionsMenu({ clearScreen, setKeypressListener }) {
     return new Promise(res => { resolveOuter = res; setKeypressListener(onKey); });
 }
 
-module.exports = { freemodelSessionsMenu, getFreemodelSessions, checkFreemodelQuota };
+module.exports = { freemodelSessionsMenu, getFreemodelSessions, checkFreemodelQuota, extractFreemodelApiKey };

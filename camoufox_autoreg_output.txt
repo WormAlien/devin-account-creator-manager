@@ -1,0 +1,10 @@
+============================================================
+  TokenRouter.me — Camoufox (Firefox + patched Juggler)
+  Accounts: 1
+============================================================
+
+[14:00:12] [acc] === Account #1 ===
+[14:00:17] [email] 3kvljn5ane@fpklm.com
+[14:00:20] [turnstile] looking...
+[14:00:29] [turnstile] clicked inside iframe
+[14:00:31] [turnstile] PASSED!

@@ -106,21 +106,51 @@
         <span class="text-base">🔀</span>
         <span class="flex-1">Switcher</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="devin">
-        <span class="text-base">🤖</span>
-        <span class="flex-1">Devin</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-devin">—</span>
-      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="freemodel">
         <span class="text-base">🆓</span>
         <span class="flex-1">FreeModel</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-freemodel">—</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="notion">
-        <span class="text-base">📝</span>
-        <span class="flex-1">Notion</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-notion">—</span>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="tokenrouter">
+        <span class="text-base">🔑</span>
+        <span class="flex-1">TokenRouter</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-tokenrouter">—</span>
       </button>
+      <!-- Whoami -->
+      <div class="mt-4 pt-3 border-t border-line-soft">
+        <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
+             onclick="const s=this.nextElementSibling;const c=this.querySelector('.chev');s.classList.toggle('hidden');c.classList.toggle('rotate-90')">
+          <span class="chev inline-block transition-transform text-[9px]">▶</span>
+          <span>🔍 Whoami</span>
+        </div>
+        <div class="hidden px-3 pt-2 space-y-2">
+          <p class="text-[10px] text-faint">ID-фрагмент из лога OmniRoute → name / email.</p>
+          <textarea id="whoami-input" rows="2"
+            placeholder="fd48f370…"
+            class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-2 py-1.5 font-mono text-[11px] resize-y focus:outline-none focus:border-violet/60"></textarea>
+          <button onclick="runWhoami()" class="w-full px-2 py-1.5 text-[11px] font-medium bg-elevated border border-line-soft rounded-lg hover:border-violet/60 hover:text-violet transition">Найти</button>
+          <div id="whoami-results" class="text-[11px]"></div>
+        </div>
+      </div>
+
+      <!-- Чтим память (deprecated: Devin, Notion) -->
+      <div class="mt-4 pt-3 border-t border-line-soft">
+        <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
+             onclick="const s=this.nextElementSibling;const c=this.querySelector('.chev');s.classList.toggle('hidden');c.classList.toggle('rotate-90')">
+          <span class="chev inline-block transition-transform text-[9px]">▶</span>
+          <span>Чтим память</span>
+        </div>
+        <div class="hidden pl-4 space-y-0.5 mt-0.5">
+          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="devin">
+            🤖 Devin
+            <span class="text-[10px] font-mono opacity-50" id="nav-count-devin">—</span>
+          </button>
+          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="notion">
+            📝 Notion
+            <span class="text-[10px] font-mono opacity-50" id="nav-count-notion">—</span>
+          </button>
+        </div>
+      </div>
     </nav>
 
     <!-- Sidebar footer -->
@@ -142,14 +172,14 @@
 
         <header>
           <h1 class="text-2xl font-semibold tracking-tight">Switcher</h1>
-          <p class="text-sm text-muted mt-1">Управляет <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code> между двумя бэкендами.</p>
+          <p class="text-sm text-muted mt-1">Выбор конфига для <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>. Клик по пресету применяет его.</p>
         </header>
 
-        <!-- Hero: active backend -->
+        <!-- Hero: active config -->
         <div class="rounded-xl bg-surface border border-line-soft p-6 relative overflow-hidden">
           <div class="absolute -top-32 -right-32 size-64 rounded-full bg-gradient-to-br from-emerald/20 to-azure/0 blur-3xl pointer-events-none"></div>
           <div class="relative">
-            <div class="text-[11px] uppercase tracking-[0.2em] text-dim mb-2">Active backend</div>
+            <div class="text-[11px] uppercase tracking-[0.2em] text-dim mb-2">Active config</div>
             <div class="flex items-baseline gap-3">
               <div id="hero-name" class="text-xl font-semibold">Loading…</div>
               <span id="hero-pill" class="px-2 py-0.5 rounded-md text-[10px] font-mono uppercase tracking-wider bg-elevated border border-line-soft text-muted">—</span>
@@ -158,69 +188,19 @@
           </div>
         </div>
 
-        <!-- Switch buttons -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button id="btn-omniroute" data-target="omniroute" onclick="switchTo('omniroute')"
-                  class="group relative text-left bg-surface border-2 border-line-soft hover:border-emerald/60 rounded-xl p-5 transition data-[active]:border-emerald data-[active]:shadow-[0_0_30px_-8px_oklch(0.78_0.17_155_/_0.45)]">
-            <div class="flex items-center justify-between mb-1">
-              <span class="text-base font-semibold">FreeModel</span>
-              <span data-on-active class="hidden text-emerald text-[10px] font-mono uppercase tracking-wider">● Active</span>
-            </div>
-            <div class="text-xs text-muted leading-relaxed">основной — tools, vision, длинные сессии</div>
-            <div class="text-[10px] text-faint font-mono mt-3 flex items-center gap-2">
-              <span class="size-1.5 rounded-full bg-emerald inline-block"></span>
-              OmniRoute · :20128
-            </div>
-          </button>
-          <button id="btn-notion" data-target="notion" onclick="switchTo('notion')"
-                  class="group relative text-left bg-surface border-2 border-line-soft hover:border-azure/60 rounded-xl p-5 transition data-[active]:border-azure data-[active]:shadow-[0_0_30px_-8px_oklch(0.72_0.16_240_/_0.45)]">
-            <div class="flex items-center justify-between mb-1">
-              <span class="text-base font-semibold">Notion</span>
-              <span data-on-active class="hidden text-azure text-[10px] font-mono uppercase tracking-wider">● Active</span>
-            </div>
-            <div class="text-xs text-muted leading-relaxed">cheap — короткие запросы без tools</div>
-            <div class="text-[10px] text-faint font-mono mt-3 flex items-center gap-2">
-              <span class="size-1.5 rounded-full bg-azure inline-block"></span>
-              notion-manager · :8190
-            </div>
-          </button>
-        </div>
-
-        <!-- How it works -->
-        <details class="rounded-xl bg-surface border border-line-soft text-xs text-muted">
-          <summary class="cursor-pointer px-5 py-3 font-medium text-ink select-none flex items-center gap-2">
-            <span>Как это работает</span>
-            <span class="text-faint">— нажми чтобы развернуть</span>
-          </summary>
-          <div class="px-5 pb-5 space-y-2 leading-relaxed">
-            <div>Клик переписывает <code class="font-mono text-emerald">ANTHROPIC_BASE_URL</code> и <code class="font-mono text-emerald">ANTHROPIC_API_KEY</code> в <code class="font-mono">~/.claude/settings.json</code>.</div>
-            <div>Перед каждой записью создаётся <code class="font-mono">.bak-&lt;timestamp&gt;</code>.</div>
-            <div><span class="text-ink font-semibold">После переключения перезапусти Claude Code</span> (читает settings.json только при старте).</div>
-            <div class="pt-2 border-t border-line-soft">
-              <span class="text-emerald font-semibold">▶ Рестарт дашборда:</span> двойной клик по <code class="font-mono">routing\restart-dashboard.bat</code>
-            </div>
-            <div>
-              <span class="text-rose font-semibold">⏻ Откат settings.json:</span> <code class="font-mono">PANIC-restore-omniroute.bat</code> в корне проекта
-            </div>
-          </div>
-        </details>
-
-        <!-- Whoami -->
-        <section class="rounded-xl bg-surface border border-line-soft p-5 space-y-3">
-          <div>
+        <!-- Config presets -->
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold flex items-center gap-2">
-              <span class="text-violet">🔍</span> Whoami
+              <span class="text-emerald">⚡</span> Конфиги Claude Code
             </h2>
-            <p class="text-xs text-muted mt-1">Вставь любой ID-фрагмент из лога OmniRoute — найду name / email.</p>
+            <button onclick="saveCurrentAsPreset()" class="text-xs px-2.5 py-1.5 bg-elevated border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald transition">
+              💾 Сохранить текущий
+            </button>
           </div>
-          <textarea id="whoami-input" rows="2"
-            placeholder="anthropic-compatible-…:fd48f370-…  или  просто fd48f370"
-            class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2.5 font-mono text-xs resize-y focus:outline-none focus:border-violet/60 focus:ring-2 focus:ring-violet/20"></textarea>
-          <div class="flex gap-2">
-            <button onclick="runWhoami()" class="flex-1 px-3 py-2 text-xs font-medium bg-elevated border border-line-soft rounded-lg hover:border-violet/60 hover:text-violet transition">🔍 Найти</button>
-          </div>
-          <div id="whoami-results"></div>
-        </section>
+          <p class="text-xs text-muted">Нажми на конфиг — он запишется в <code class="font-mono text-emerald">~/.claude/settings.json</code>. Перед записью делается backup.</p>
+          <div id="switcher-presets" class="grid grid-cols-1 gap-2"></div>
+        </div>
 
       </div>
     </div>
@@ -276,6 +256,10 @@
           </div>
           <div class="flex gap-2 items-center flex-wrap">
             <input id="freemodel-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-amber/60 focus:ring-2 focus:ring-amber/20">
+            <label class="text-[10px] text-faint flex items-center gap-1 cursor-pointer select-none" title="Показывать аккаунты, помеченные 💀">
+              <input id="freemodel-show-banned" type="checkbox" class="accent-crimson" onchange="renderFreemodel(false)">
+              <span>💀 banned</span>
+            </label>
             <select id="freemodel-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-amber/60">
               <option value="date-desc">📅 дата ↓ (новые)</option>
               <option value="date-asc">📅 дата ↑ (старые)</option>
@@ -292,6 +276,7 @@
               <label class="text-[10px] text-faint">старт-реф</label>
               <select id="fm-invite-select"
                       onchange="setFreemodelInvite(this.value)"
+                      onfocus="loadFreemodelInvites()"
                       class="text-xs px-2 py-2 bg-surface border border-line-soft rounded-lg text-ink max-w-[260px]"
                       title="Выбрать стартовый реф-код для следующего запуска (запишется в .last_invite)">
                 <option value="">— загрузка…</option>
@@ -307,6 +292,43 @@
             </div>
           </div>
         </header>
+
+        <!-- ═══ TG POOL (свёрнут по умолчанию) ═══ -->
+        <details class="rounded-xl bg-surface border border-line-soft" id="tg-pool-details" open>
+          <summary class="cursor-pointer px-5 py-3 text-sm font-semibold flex items-center gap-2 hover:bg-elevated/40 select-none">
+            <span class="text-azure">📱</span>
+            <span>Telegram pool</span>
+            <span id="tg-stats" class="text-[11px] font-mono text-faint ml-2"></span>
+            <span class="text-[10px] text-faint ml-auto">Готовые TG-аккаунты для привязки. Регаются в порядке добавления.</span>
+          </summary>
+          <div class="p-5 pt-2 space-y-4 border-t border-line-soft">
+
+            <!-- Bulk paste -->
+            <div>
+              <h3 class="text-xs font-semibold flex items-center gap-2 mb-1">
+                <span class="text-emerald">➕</span> Вставить список
+                <span class="text-[10px] text-faint font-normal ml-1">
+                  поддерживается <code class="text-amber">phone|hex:dc</code> · <code class="text-amber">hex:dc</code> · <code class="text-amber">phone hex dc [user_id]</code>
+                </span>
+              </h3>
+              <textarea id="tg-bulk-input" rows="4"
+                placeholder="13678875285|2b58…1306c:1&#10;46ecaff1…f1469:5&#10;+14155551234 abcdef…6789ab 2 8681576074"
+                class="w-full text-[11px] bg-elevated border border-line-soft rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-emerald/60"></textarea>
+              <div class="mt-2 flex items-center gap-2">
+                <button onclick="addTgBulk()" class="text-xs px-3 py-1.5 bg-emerald/15 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/25 font-medium">➕ Импортировать всё</button>
+                <button onclick="document.getElementById('tg-file-input').click()" class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-line">📎 Импорт .session</button>
+                <input id="tg-file-input" type="file" accept=".session" class="hidden" onchange="pickTgSession(event)">
+                <span id="tg-bulk-hint" class="text-[10px] text-faint font-mono ml-2">—</span>
+              </div>
+            </div>
+
+            <!-- Pool table -->
+            <div id="tg-list" class="rounded-lg bg-elevated/30 border border-line-soft overflow-hidden">
+              <div class="p-6 text-center text-muted text-xs">пул пуст</div>
+            </div>
+          </div>
+        </details>
+
         <div id="freemodel-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
           <div class="p-12 text-center text-muted text-xs">—</div>
         </div>
@@ -356,6 +378,40 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: TOKENROUTER ═════════ -->
+    <div data-tab-content="tokenrouter">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-rose">🔑</span> TokenRouter keys
+            </h1>
+            <p class="text-sm text-muted mt-1">из <code class="font-mono text-rose text-xs">routing/tokenrouter/accounts.json</code> · регистрация через <code class="font-mono text-rose text-xs">tokenrouter-autoreg.js</code></p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadTokenrouterAccounts()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="checkAllTokenrouterKeys()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🩺 Проверить все</button>
+            <button onclick="launchTokenrouterCreate()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать аккаунт</button>
+            <button onclick="toggleManualAdd()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">➕ Вручную</button>
+          </div>
+        </header>
+
+        <!-- Manual add form (hidden by default) -->
+        <div id="tokenrouter-manual-add" class="hidden rounded-xl bg-elevated/30 border border-line-soft p-4 space-y-3">
+          <div class="text-xs font-medium text-muted">Добавить аккаунт вручную</div>
+          <div class="flex gap-2 flex-wrap">
+            <input id="tr-manual-email" placeholder="email" class="flex-1 min-w-[160px] text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-rose/60">
+            <input id="tr-manual-key" placeholder="sk-..." class="flex-[2] min-w-[260px] text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-rose/60">
+            <button onclick="addTokenrouterManual()" class="text-xs px-4 py-2 bg-rose/10 border border-rose/50 text-rose rounded-lg hover:bg-rose/20 font-medium">Добавить + проверить</button>
+          </div>
+        </div>
+
+        <div id="tokenrouter-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
+          <div class="p-12 text-center text-muted text-xs">—</div>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -367,7 +423,10 @@ const state = {
   devin:   [],
   freemodel: [],
   notion:  [],
-  loaded:  { devin: false, freemodel: false, notion: false },
+  tokenrouter: [],
+  tokenrouterHealth: {},
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false },
+  tg: [],
 };
 
 const $   = (id) => document.getElementById(id);
@@ -406,6 +465,7 @@ function pctColor(p) {
 
 // ═══════════════════ NAV / TABS ══════════════════════════════════════
 function showTab(name) {
+  localStorage.setItem('opencode_active_tab', name);
   document.querySelectorAll('.nav-btn').forEach(b => {
     const on = b.dataset.tab === name;
     b.classList.toggle('text-ink', on);
@@ -416,18 +476,29 @@ function showTab(name) {
     p.classList.toggle('active', p.dataset.tabContent === name);
   });
   if (name === 'devin'     && !state.loaded.devin)     { state.loaded.devin = true; loadDevinSessions(false); }
-  if (name === 'freemodel' && !state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); loadFreemodelInvites(); }
+  if (name === 'freemodel') {
+    // Invites + TG-пул перечитываем всегда (вне кеша) — chain и пул меняются.
+    // Sessions — только первый раз, т.к. там Playwright/квоты, дорогие.
+    loadFreemodelInvites();
+    loadTgPool();
+    if (!state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); }
+  }
   if (name === 'notion' && !state.loaded.notion) {
     state.loaded.notion = true;
     loadNotionSessions();
     loadNotionCards();
   }
+  if (name === 'tokenrouter' && !state.loaded.tokenrouter) {
+    state.loaded.tokenrouter = true;
+    loadTokenrouterAccounts();
+    loadTrHealthCache();
+  }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { omniroute: 'FreeModel (OmniRoute)', notion: 'Notion (cheap)', unknown: 'unknown' };
-const COLORS = { omniroute: 'text-emerald bg-emerald', notion: 'text-azure bg-azure', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'ApiHelper', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel direct', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -453,11 +524,7 @@ function paintStatus() {
   $('hero-url').textContent  = state.urls[t] || '';
   $('hero-pill').textContent = t || '?';
 
-  for (const btn of document.querySelectorAll('[data-target]')) {
-    const on = btn.dataset.target === t;
-    btn.toggleAttribute('data-active', on);
-    btn.querySelector('[data-on-active]').classList.toggle('hidden', !on);
-  }
+  renderPresets();
 }
 
 async function switchTo(target) {
@@ -472,6 +539,128 @@ async function switchTo(target) {
     state.current = target; paintStatus();
     toast(`✓ ${LABELS[target]} — перезапусти Claude Code!`, 'success', 7000);
   } catch (e) { toast('Switch: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ CONFIG PRESETS ═══════════════════════════════════
+const PRESETS_KEY = 'opencode_switcher_presets';
+const ACTIVE_PRESET_KEY = 'opencode_active_preset';
+
+function getDefaultPresets() {
+  return {
+    'apiHelper': {
+      label: 'ApiHelper',
+      desc: 'apiKeyHelper → fm-active-key.txt → cc.freemodel.dev',
+      icon: '🔑',
+      color: 'emerald',
+      settings: {
+        apiKeyHelper: 'cat ~/.claude/fm-active-key.txt',
+        env: {
+          ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0'
+        }
+      }
+    },
+    'omniroute': {
+      label: 'OmniRoute',
+      desc: 'localhost:20128/v1',
+      icon: '🔀',
+      color: 'azure',
+      settings: {
+        apiKeyHelper: '',
+        env: {
+          ANTHROPIC_BASE_URL: 'http://localhost:20128/v1',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0'
+        }
+      }
+    }
+  };
+}
+
+function getPresets() {
+  try {
+    const raw = localStorage.getItem(PRESETS_KEY);
+    const saved = raw ? JSON.parse(raw) : {};
+    return { ...getDefaultPresets(), ...saved };
+  } catch { return getDefaultPresets(); }
+}
+
+function savePresets(presets) {
+  const defaults = getDefaultPresets();
+  const toSave = {};
+  for (const [k, v] of Object.entries(presets)) {
+    if (!defaults[k]) toSave[k] = v;
+  }
+  localStorage.setItem(PRESETS_KEY, JSON.stringify(toSave));
+}
+
+function renderPresets() {
+  const box = $('switcher-presets');
+  if (!box) return;
+  const presets = getPresets();
+  const active = localStorage.getItem(ACTIVE_PRESET_KEY) || state.current || '';
+  const rows = Object.entries(presets).map(([key, p]) => {
+    const isActive = active === key;
+    return `
+      <div class="group relative flex items-center gap-3 p-3 rounded-lg border transition cursor-pointer ${isActive ? 'border-emerald/60 bg-emerald/5' : 'border-line-soft hover:border-emerald/40 bg-elevated/30'}"
+           onclick="applyPreset('${key}')">
+        <span class="text-lg">${p.icon}</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium ${isActive ? 'text-emerald' : 'text-ink'}">${esc(p.label)} ${isActive ? '●' : ''}</div>
+          <div class="text-[11px] text-muted truncate">${esc(p.desc)}</div>
+        </div>
+        ${!getDefaultPresets()[key] ? `<button onclick="event.stopPropagation(); deletePreset('${key}')" class="text-dim hover:text-crimson text-xs px-1">×</button>` : ''}
+      </div>
+    `;
+  }).join('');
+  box.innerHTML = rows;
+}
+
+async function applyPreset(key) {
+  const presets = getPresets();
+  const p = presets[key];
+  if (!p) return toast('Пресет не найден', 'error');
+  try {
+    const res = await fetch('/__switch/api/settings/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: p.settings }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    localStorage.setItem(ACTIVE_PRESET_KEY, key);
+    state.current = data.current || 'unknown'; paintStatus();
+    renderPresets();
+    toast(`✓ Применён конфиг «${p.label}» — перезапусти Claude Code!`, 'success', 7000);
+  } catch (e) { toast('Preset: ' + e.message, 'error'); }
+}
+
+async function saveCurrentAsPreset() {
+  const label = prompt('Название конфига:');
+  if (!label) return;
+  try {
+    const res = await fetch('/__switch/api/settings/current');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const key = 'custom_' + Date.now();
+    const presets = getPresets();
+    presets[key] = {
+      label: label,
+      desc: 'Сохранённый вручную',
+      icon: '💾',
+      color: 'violet',
+      settings: data.settings
+    };
+    savePresets(presets);
+    renderPresets();
+    toast('Конфиг сохранён', 'success');
+  } catch (e) { toast('Save preset: ' + e.message, 'error'); }
+}
+
+function deletePreset(key) {
+  const presets = getPresets();
+  delete presets[key];
+  savePresets(presets);
+  if (localStorage.getItem(ACTIVE_PRESET_KEY) === key) localStorage.removeItem(ACTIVE_PRESET_KEY);
+  renderPresets();
 }
 
 // ═══════════════════ WHOAMI ══════════════════════════════════════════
@@ -560,7 +749,7 @@ function actBtn(onclick, title, icon, color) {
   // Кавычки в onclick: используем одинарные снаружи (onclick='...'), чтобы внутри спокойно
   // жили двойные от JSON.stringify(имя сессии). Любые ' внутри expression экранируем как &#39;.
   const safe = String(onclick).replace(/'/g, '&#39;');
-  return `<button onclick='${safe}' title="${esc(title)}" class="size-7 inline-flex items-center justify-center rounded-md border border-line-soft text-${color} hover:border-${color}/60 hover:bg-${color}/10 transition text-[12px]">${icon}</button>`;
+  return `<button onclick='${safe}' title="${esc(title)}" class="size-8 inline-flex items-center justify-center rounded-md border border-line-soft text-${color} hover:border-${color}/60 hover:bg-${color}/10 transition text-[14px]">${icon}</button>`;
 }
 
 // ═══════════════════ DEVIN ═══════════════════════════════════════════
@@ -722,6 +911,7 @@ async function loadFreemodelSessions(refresh) {
 
 function renderFreemodel(refreshed) {
   const filter = $('freemodel-filter').value.toLowerCase();
+  const showBanned = $('freemodel-show-banned')?.checked;
   const sort   = $('freemodel-sort').value;
   const all = state.freemodel.slice();
 
@@ -765,19 +955,36 @@ function renderFreemodel(refreshed) {
   };
   all.sort(sortFns[sort] || sortFns['date-desc']);
 
+  // Фильтр banned: по умолчанию баненые скрыты.
+  const visBan = all.filter(s => showBanned ? true : !s.meta?.banned);
   const list = filter
-    ? all.filter(s => ((s.email || '') + ' ' + s.name).toLowerCase().includes(filter))
-    : all;
+    ? visBan.filter(s => ((s.email || '') + ' ' + s.name).toLowerCase().includes(filter))
+    : visBan;
 
   if (!list.length) {
-    $('freemodel-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}</div>`;
+    const bannedCount = all.filter(s => s.meta?.banned).length;
+    const hint = !showBanned && bannedCount
+      ? ` (${bannedCount} 💀 скрыто — поставь галку выше)`
+      : '';
+    $('freemodel-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто'}${hint}</div>`;
     return;
   }
 
   const rows = list.map(s => {
-    const ok    = s.status === '✅';
-    const email = s.email || s.name;
-    const q     = s.quota || null;
+    const ok      = s.status === '✅';
+    const email   = s.email || s.name;
+    const q       = s.quota || null;
+    const banned  = !!s.meta?.banned;
+    const tgPhone = s.meta?.tgPhone || null;
+    const apiKey  = s.meta?.apiKey  || null;
+    const rowDim  = banned ? 'opacity-60' : '';
+    const skull   = banned ? ' <span class="text-crimson" title="banned ' + esc((s.meta.bannedAt || '').slice(0,10)) + '">💀</span>' : '';
+    const nameJ   = JSON.stringify(s.name);
+    // TG-бэйдж кликабельный: клик = toggle (если привязан → unlink prompt; нет → link prompt).
+    const tgBadge = tgPhone
+      ? `<button onclick="freemodelToggleTg(${nameJ}, true)" class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/30 text-azure rounded font-mono hover:bg-azure/20" title="TG привязан · клик чтобы отвязать">📱 +${esc(tgPhone)}</button>`
+      : `<button onclick="freemodelToggleTg(${nameJ}, false)" class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-azure/60 hover:text-azure" title="TG не привязан · клик чтобы привязать">📱 —</button>`;
+    const keyBadge = '';
 
     let availCell = '<span class="text-faint">—</span>';
     let h5Cell    = '<span class="text-faint">—</span>';
@@ -785,33 +992,48 @@ function renderFreemodel(refreshed) {
     let ageCell   = '<span class="text-faint">нет в кеше</span>';
     if (q) {
       availCell = `<span class="text-emerald font-semibold font-mono">${esc(q.available || '—')}</span>`;
-      if (q.h5) {
-        const frac = parseFrac(q.h5, q.h5max);
-        h5Cell = frac != null
-          ? bar(frac * 100, frac > 0.7 ? 'bg-crimson' : frac > 0.4 ? 'bg-amber' : 'bg-emerald')
-          : `<span class="text-amber font-mono text-xs">${esc(q.h5)}/${esc(q.h5max)}</span>`;
+      if (q.h5 || q.h5pct != null) {
+        let pct = q.h5pct;
+        if (pct == null) {
+          const frac = parseFrac(q.h5, q.h5max);
+          pct = frac != null ? frac * 100 : null;
+        }
+        h5Cell = pct != null
+          ? bar(pct, pct > 70 ? 'bg-crimson' : pct > 40 ? 'bg-amber' : 'bg-emerald')
+          : `<span class="text-amber font-mono text-xs">${esc(q.h5 || '')}/${esc(q.h5max || '')}</span>`;
       }
-      if (q.d7) {
-        const frac = parseFrac(q.d7, q.d7max);
-        d7Cell = frac != null
-          ? bar(frac * 100, frac > 0.7 ? 'bg-crimson' : frac > 0.4 ? 'bg-amber' : 'bg-azure')
-          : `<span class="text-azure font-mono text-xs">${esc(q.d7)}/${esc(q.d7max)}</span>`;
+      if (q.d7 || q.d7pct != null) {
+        let pct = q.d7pct;
+        if (pct == null) {
+          const frac = parseFrac(q.d7, q.d7max);
+          pct = frac != null ? frac * 100 : null;
+        }
+        d7Cell = pct != null
+          ? bar(pct, pct > 70 ? 'bg-crimson' : pct > 40 ? 'bg-amber' : 'bg-azure')
+          : `<span class="text-azure font-mono text-xs">${esc(q.d7 || '')}/${esc(q.d7max || '')}</span>`;
       }
       ageCell = `<span class="text-muted">${ageStr(q.updatedAt)}</span>`;
     }
 
-    return `<tr class="hover:bg-elevated/40 transition">
+    return `<tr class="hover:bg-elevated/40 transition ${rowDim}">
       <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
-      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[260px]" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[420px]" title="${esc(email)}">
+        <span class="${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${skull}${tgBadge}${keyBadge}
+      </td>
       <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
       <td class="px-3 py-2.5 text-right">${availCell}</td>
       <td class="px-3 py-2.5">${h5Cell}</td>
       <td class="px-3 py-2.5">${d7Cell}</td>
       <td class="px-3 py-2.5 text-[10px] text-right text-muted font-mono">${ageCell}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
-        ${actBtn(`openSession('freemodel', ${JSON.stringify(s.name)})`,    'Открыть в Chrome (claude.ai/usage)', '🌐', 'azure')}
-        ${actBtn(`refreshQuota(${JSON.stringify(s.name)}, 'freemodel')`,    'Обновить квоту',                     '🔄', 'amber')}
-        ${actBtn(`deleteSession('freemodel', ${JSON.stringify(s.name)}, ${JSON.stringify(email)})`, 'Удалить сессию', '🗑', 'crimson')}
+        ${actBtn(`copyEmail(${nameJ})`,       'Скопировать email',          '📋✉', 'azure')}
+        ${actBtn(`copyKey(${nameJ})`,         'Скопировать API-ключ',       '📋🔑', 'emerald')}
+        ${apiKey ? actBtn(`activateFmKey(${nameJ})`, 'Активировать', '🌟', 'amber') : ''}
+        ${actBtn(`extractKey(${nameJ})`,      'Извлечь API-ключ (Playwright)', '🔑', 'violet')}
+        ${actBtn(`openSession('freemodel', ${nameJ})`,    'Открыть в Chrome (claude.ai/usage)', '🌐', 'azure')}
+        ${actBtn(`refreshQuota(${nameJ}, 'freemodel')`,   'Обновить квоту',                     '🔄', 'amber')}
+        ${actBtn(`freemodelToggleBan(${nameJ}, ${banned})`, banned ? 'Снять 💀 (unban)' : 'Пометить как 💀 banned', banned ? '↻' : '💀', banned ? 'emerald' : 'crimson')}
+        ${actBtn(`deleteSession('freemodel', ${nameJ}, ${JSON.stringify(email)})`, 'Удалить сессию', '🗑', 'crimson')}
       </td>
     </tr>`;
   }).join('');
@@ -1100,10 +1322,808 @@ async function deleteSession(kind, name, email) {
   } catch (e) { toast('Delete: ' + e.message, 'error'); }
 }
 
+// ═══════════════════ TG POOL ════════════════════════════════════════
+async function loadTgPool() {
+  try {
+    const res = await fetch('/__switch/api/tg/list');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    state.tg = data.entries || [];
+    const s = data.stats || { total: 0, free: 0, reserved: 0, used: 0, banned: 0 };
+    $('tg-stats').innerHTML =
+      `<span class="text-emerald">●</span> free <b class="text-emerald">${s.free}</b> · ` +
+      (s.reserved ? `<span class="text-azure">●</span> reserved <b class="text-azure">${s.reserved}</b> · ` : '') +
+      `<span class="text-amber">●</span> used <b class="text-amber">${s.used}</b> · ` +
+      `<span class="text-crimson">●</span> banned <b class="text-crimson">${s.banned}</b> · ` +
+      `total <b>${s.total}</b>`;
+    renderTgPool();
+  } catch (e) {
+    const list = $('tg-list');
+    if (list) list.innerHTML = `<div class="p-4 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function renderTgPool() {
+  const list = $('tg-list');
+  if (!list) return;
+  if (!state.tg.length) {
+    list.innerHTML = '<div class="p-6 text-center text-muted text-xs">пул пуст — вставь список выше</div>';
+    return;
+  }
+  const statusCell = (s) => {
+    const map = {
+      free:     ['emerald', '● free'],
+      reserved: ['azure',   '◐ reserved'],
+      used:     ['amber',   '● used'],
+      banned:   ['crimson', '✕ banned'],
+    };
+    const [c, l] = map[s] || ['faint', s];
+    return `<span class="text-${c}">${l}</span>`;
+  };
+  const rows = state.tg.map(e => {
+    const usedInfo = e.usedBy
+      ? `<div class="text-[10px] text-faint truncate max-w-[200px]" title="${esc(e.usedBy)}">${esc(e.usedBy)}</div>` : '';
+    const dim = (e.status === 'used' || e.status === 'banned') ? 'opacity-60' : '';
+    const phoneCell = e.isPlaceholderPhone
+      ? `<span class="text-amber italic" title="phone не указан — нажми ✎ чтобы задать">⚠ ${esc(e.phone)}</span>`
+      : `+${esc(e.phone)}`;
+    return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim}">
+        <td class="px-3 py-1.5 font-mono text-xs">${phoneCell}</td>
+        <td class="px-3 py-1.5 font-mono text-[11px] text-azure">DC${e.dc_id}</td>
+        <td class="px-3 py-1.5 font-mono text-[10px] text-faint">${esc(e.auth_key_mask)}</td>
+        <td class="px-3 py-1.5 text-[11px]">${statusCell(e.status)}${usedInfo}</td>
+        <td class="px-3 py-1.5 text-right whitespace-nowrap">
+          ${e.isPlaceholderPhone
+            ? `<button onclick="tgRename('${esc(e.phone)}')" title="Задать настоящий phone" class="text-[10px] px-2 py-0.5 bg-amber/10 border border-amber/40 text-amber rounded hover:bg-amber/20">✎</button>`
+            : ''}
+          ${(e.status === 'used' || e.status === 'banned')
+            ? `<button onclick="tgMarkFree('${esc(e.phone)}')" title="Вернуть в free" class="text-[10px] px-2 py-0.5 bg-emerald/10 border border-emerald/40 text-emerald rounded hover:bg-emerald/20 ml-1">↺</button>`
+            : ''}
+          <button onclick="tgDelete('${esc(e.phone)}')" title="Удалить" class="text-[10px] px-2 py-0.5 bg-crimson/10 border border-crimson/40 text-crimson rounded hover:bg-crimson/20 ml-1">🗑</button>
+        </td>
+      </tr>`;
+  }).join('');
+  list.innerHTML = `<table class="w-full">
+    <thead class="bg-elevated/60 text-[10px] uppercase tracking-wider text-muted">
+      <tr>
+        <th class="px-3 py-2 text-left">Phone</th>
+        <th class="px-3 py-2 text-left">DC</th>
+        <th class="px-3 py-2 text-left">Auth Key</th>
+        <th class="px-3 py-2 text-left">Status</th>
+        <th class="px-3 py-2 text-right">—</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function addTgBulk() {
+  const text = $('tg-bulk-input').value;
+  if (!text || !text.trim()) return toast('Вставь список аккаунтов', 'warn');
+  const hint = $('tg-bulk-hint');
+  hint.textContent = '⏳ парсинг…';
+  hint.className = 'text-[10px] text-azure font-mono ml-2';
+  try {
+    const res = await fetch('/__switch/api/tg/add-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+
+    const added = (data.added || []).length;
+    const errs = data.errors || [];
+    const dups = data.duplicates || [];
+    const parts = [];
+    if (added) parts.push(`✓ ${added} добавлено`);
+    if (dups.length) parts.push(`⊘ ${dups.length} дубль(я)`);
+    if (errs.length) parts.push(`✗ ${errs.length} ошибки`);
+    hint.textContent = parts.join(' · ') || '—';
+    hint.className = `text-[10px] font-mono ml-2 ${errs.length ? 'text-crimson' : added ? 'text-emerald' : 'text-faint'}`;
+
+    if (added) {
+      toast(`✓ Импортировано: ${added}`, 'success');
+      $('tg-bulk-input').value = '';
+    }
+    if (errs.length) {
+      const summary = errs.slice(0, 3).map(e => `строка ${e.line || '?'}: ${e.error}`).join('\n') +
+        (errs.length > 3 ? `\n…и ещё ${errs.length - 3}` : '');
+      toast('Парс-ошибки:\n' + summary, 'warn', 8000);
+    }
+    loadTgPool();
+  } catch (e) {
+    hint.textContent = '✗ ' + e.message;
+    hint.className = 'text-[10px] text-crimson font-mono ml-2';
+    toast('Bulk: ' + e.message, 'error');
+  }
+}
+
+async function pickTgSession(ev) {
+  const file = ev.target.files[0];
+  ev.target.value = '';
+  if (!file) return;
+  const phone = (file.name || '').replace(/\.session$/i, '').replace(/[^\d+]/g, '').replace(/^\+/, '');
+  if (!phone) return toast(`Не пойму phone из имени "${file.name}"`, 'warn');
+  toast(`⏳ ${file.name} → парсинг…`, 'info');
+  try {
+    const buf = await file.arrayBuffer();
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const res = await fetch('/__switch/api/tg/add-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, base64 }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    toast(`✓ Импортирован ${data.phone} (DC${data.dc_id})`, 'success');
+    loadTgPool();
+  } catch (e) { toast('.session: ' + e.message, 'error'); }
+}
+
+async function tgDelete(phone) {
+  if (!confirm(`Удалить +${phone} из пула?`)) return;
+  try {
+    const res = await fetch('/__switch/api/tg/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    toast(`✓ Удалён +${phone}`, 'success');
+    loadTgPool();
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function tgMarkFree(phone) {
+  try {
+    const res = await fetch('/__switch/api/tg/mark-free', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    toast(`✓ +${phone} → free`, 'success');
+    loadTgPool();
+  } catch (e) { toast('Reset: ' + e.message, 'error'); }
+}
+
+async function tgRename(phone) {
+  const input = prompt(`Задать настоящий номер для записи ${phone}:\n\n(только цифры, без +)`, '');
+  if (!input) return;
+  const newPhone = input.trim().replace(/^\+/, '').replace(/\s+/g, '');
+  if (!/^\d{6,18}$/.test(newPhone)) return toast('Phone должен быть числом 6–18 цифр', 'warn');
+  try {
+    const res = await fetch('/__switch/api/tg/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, newPhone }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    toast(`✓ ${phone} → +${data.phone}`, 'success');
+    loadTgPool();
+  } catch (e) { toast('Rename: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ CLIPBOARD ══════════════════════════════════════
+async function copyToClipboard(text, label = 'скопировано') {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`📋 ${label}`, 'success', 2500);
+  } catch (e) {
+    // Fallback для http (без secure context — clipboard API недоступен).
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      toast(`📋 ${label}`, 'success', 2500);
+    } catch (e2) {
+      toast('Не вышло скопировать: ' + (e.message || e2.message), 'error');
+    }
+  }
+}
+
+// ═══════════════════ FREEMODEL BAN ══════════════════════════════════
+async function freemodelToggleBan(name, currentBanned) {
+  const next = !currentBanned;
+  if (next && !confirm(`Пометить аккаунт как 💀 banned?\n\n${name}\n\nЭто только локальная пометка для тебя — данные не удаляются.`)) return;
+  try {
+    const res = await fetch('/__switch/api/freemodel/ban', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, banned: next }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    // Обновляем локально без дёргания сервера за всем списком — быстрее.
+    const s = state.freemodel.find(x => x.name === name);
+    if (s) { s.meta = s.meta || {}; if (next) s.meta.banned = true; else delete s.meta.banned; }
+    toast(next ? `💀 ${name}` : `↻ unban: ${name}`, next ? 'warn' : 'success');
+    renderFreemodel(false);
+  } catch (e) { toast('Ban: ' + e.message, 'error'); }
+}
+
+// Переключить TG-привязку вручную (пользователь указал привязал/отвязал).
+async function freemodelToggleTg(name, currentlyLinked) {
+  let tgPhone = null;
+  if (!currentlyLinked) {
+    const input = prompt(
+      `Указать TG-номер для\n${name}:\n\n(только цифры, без +; пусто = отвязать)`,
+      ''
+    );
+    if (input === null) return;
+    const cleaned = input.trim().replace(/^\+/, '').replace(/\s+/g, '');
+    if (cleaned && !/^\d{6,18}$/.test(cleaned)) return toast('Phone должен быть 6–18 цифр', 'warn');
+    tgPhone = cleaned || null;
+  } else {
+    if (!confirm(`Отвязать TG от\n${name}?`)) return;
+    tgPhone = null;
+  }
+  try {
+    const res = await fetch('/__switch/api/freemodel/set-tg', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, tgPhone }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    const s = state.freemodel.find(x => x.name === name);
+    if (s) {
+      s.meta = s.meta || {};
+      if (tgPhone) s.meta.tgPhone = tgPhone;
+      else delete s.meta.tgPhone;
+    }
+    toast(tgPhone ? `📱 +${tgPhone} → ${name}` : `📱 отвязан: ${name}`, 'success');
+    renderFreemodel(false);
+  } catch (e) { toast('TG: ' + e.message, 'error'); }
+}
+
+// Ручной ввод API-ключа (например, скопировал сам).
+async function freemodelEditKey(name, currentKey) {
+  const input = prompt(
+    `API-ключ для\n${name}:\n\n(формат fe_... или sk-...; пусто = очистить)`,
+    currentKey || ''
+  );
+  if (input === null) return;
+  const apiKey = input.trim() || null;
+  try {
+    const res = await fetch('/__switch/api/freemodel/set-key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, apiKey }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    const s = state.freemodel.find(x => x.name === name);
+    if (s) {
+      s.meta = s.meta || {};
+      if (apiKey) s.meta.apiKey = apiKey;
+      else delete s.meta.apiKey;
+    }
+    toast(apiKey ? `🔑 сохранён` : `🔑 очищен`, 'success');
+    renderFreemodel(false);
+  } catch (e) { toast('Key: ' + e.message, 'error'); }
+}
+
+// Copy-функции под кнопки 📋email / 📋key / 📋export.
+async function extractKey(name) {
+  const s = state.freemodel.find(x => x.name === name);
+  if (!s) return toast('сессия не найдена', 'error');
+  toast('Извлекаю ключ через Playwright...', 'info');
+  try {
+    const res = await fetch('/__switch/api/freemodel/extract-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`Ключ извлечён: ${data.source === 'account_info.txt' ? 'из файла' : 'создан новый'}\n${data.apiKey}`, 'success');
+      loadFreemodelSessions(false);
+    } else {
+      toast(`Ошибка: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    toast(`Ошибка: ${e.message}`, 'error');
+  }
+}
+
+function copyEmail(name) {
+  const s = state.freemodel.find(x => x.name === name);
+  if (!s || !s.email || s.email === '—') return toast('email пуст', 'warn');
+  copyToClipboard(s.email, `email: ${s.email}`);
+}
+function copyKey(name) {
+  const s = state.freemodel.find(x => x.name === name);
+  const k = s?.meta?.apiKey;
+  if (!k) return toast('API-ключ не задан — нажми 🔑 чтобы вставить', 'warn');
+  copyToClipboard(k, `key: ***${k.slice(-6)}`);
+}
+async function activateFmKey(name) {
+  const s = state.freemodel.find(x => x.name === name);
+  try {
+    const res = await fetch('/__switch/api/freemodel/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активирован: ${s.email} (${data.mask})`, 'success');
+    } else {
+      toast(`Ошибка: ${data.error}`, 'error');
+    }
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+function copyExport(name) {
+  const s = state.freemodel.find(x => x.name === name);
+  const k = s?.meta?.apiKey;
+  if (!k) return toast('API-ключ не задан — нажми 🔑 чтобы вставить', 'warn');
+  const baseUrl = (state.freemodelApiBase || 'http://rdp.wormalien.space:52128/v1').replace(/\/$/, '');
+  const text = `export ANTHROPIC_BASE_URL=${baseUrl}\nexport ANTHROPIC_API_KEY=${k}`;
+  copyToClipboard(text, `export-блок скопирован`);
+}
+
+// ═══════════════════ ROTATOR ══════════════════════════════════════════
+// All rotator calls go through transparent-proxy to avoid CORS issues
+function rotatorApi(path, method, body) {
+  return fetch('/__switch/api/rotator/proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, method, body: body || null }),
+  });
+}
+const ROTATOR_REFRESH_MS = 30000;
+
+async function rotatorRefresh() {
+  try {
+    const res = await fetch('/__switch/api/rotator/status');
+    if (!res.ok) throw new Error(res.status);
+    state.rotator = await res.json();
+    renderRotator();
+  } catch (e) {
+    state.rotator = null;
+    renderRotator();
+  }
+}
+
+function rotatorStartAutoRefresh() {
+  rotatorRefresh();
+  if (state.rotatorTimer) clearInterval(state.rotatorTimer);
+  state.rotatorTimer = setInterval(rotatorRefresh, ROTATOR_REFRESH_MS);
+}
+
+function rotatorStopAutoRefresh() {
+  if (state.rotatorTimer) { clearInterval(state.rotatorTimer); state.rotatorTimer = null; }
+}
+
+function renderRotator() {
+  const data = state.rotator;
+  if (!data || data.error) {
+    $('rot-hero-total').textContent = '—';
+    $('rot-hero-active').textContent = '—';
+    $('rot-hero-reqs').textContent = '—';
+    $('rot-hero-banned').textContent = '—';
+    $('nav-count-rotator').textContent = '0';
+    $('rotator-list').innerHTML = '<div class="p-12 text-center text-muted text-xs">Ротатор не запущен — стартуй freemodel-rotator.js</div>';
+    return;
+  }
+
+  $('rot-hero-total').textContent = data.totalCount || 0;
+  $('rot-hero-active').textContent = data.usableCount || 0;
+  $('rot-hero-reqs').textContent = data.totalActivations || 0;
+  $('rot-hero-banned').textContent = data.bannedCount || 0;
+  $('nav-count-rotator').textContent = (data.usableCount || 0) + '/' + (data.totalCount || 0);
+
+  const showBanned = $('rotator-show-banned')?.checked;
+  const showNokey = $('rotator-show-nokey')?.checked;
+  const sortVal = ($('rotator-sort')?.value) || 'email';
+  let keys = data.keys || [];
+  if (!showBanned) keys = keys.filter(k => !k.banned);
+  if (!showNokey) keys = keys.filter(k => k.status !== 'no_key');
+
+  const sortFns = {
+    'email':      (a, b) => (a.email || '').localeCompare(b.email || ''),
+    'status':     (a, b) => (a.status || '').localeCompare(b.status || '') || (a.email || '').localeCompare(b.email || ''),
+    'activations-desc': (a, b) => (b.activations || 0) - (a.activations || 0),
+  };
+  keys.sort(sortFns[sortVal] || sortFns['email']);
+
+  if (!keys.length) {
+    const bannedN = (data.keys || []).filter(k => k.banned).length;
+    const hint = !showBanned && bannedN ? ` (${bannedN} 💀 скрыто)` : '';
+    $('rotator-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">Нет ключей${hint}</div>`;
+    return;
+  }
+
+  const cards = keys.map(k => {
+    const banned = k.banned;
+    const dim = banned ? 'opacity-55' : '';
+    const skull = banned ? ' 💀' : '';
+    const isActive = k.isActive;
+    const idJ = JSON.stringify(k.id);
+    const emailJ = JSON.stringify(k.email);
+
+    const statusBadge = rotStatusBadge(k);
+    const compactKey = k.apiKeyMask && k.apiKeyMask !== '—'
+      ? `<span class="font-mono text-emerald/80 text-[10px]">${esc(k.apiKeyMask)}</span>`
+      : '';
+
+    const setKeyBtn = `<button onclick="rotatorSetKeyPrompt(${idJ}, ${emailJ})"
+      class="text-[10px] px-2 py-1 rounded-md bg-elevated border border-line-soft hover:border-emerald/50 hover:text-emerald transition font-mono"
+      title="Вставить API-ключ">🔑</button>`;
+
+    const checkBtn = k.apiKeyMask && k.apiKeyMask !== '—' && !banned
+      ? `<button onclick="rotatorCheckKey('${esc(k.email).replace(/'/g, "\\'")}')"
+          class="text-[10px] px-2 py-1 rounded-md bg-surface border border-line-soft hover:border-azure/50 hover:text-azure transition font-mono"
+          title="Ping (1 токен)">🔍</button>`
+      : '';
+
+    const activateBtn = (k.status === 'ready' || (k.status === 'active' && !isActive))
+      ? `<button onclick="rotatorActivateKey(${idJ})"
+          class="text-[10px] px-2.5 py-1 rounded-md bg-emerald/15 border border-emerald/40 text-emerald hover:bg-emerald/25 transition font-mono font-semibold"
+          title="Сделать активным → запишет в settings.json">▶ Активировать</button>`
+      : (isActive
+        ? `<span class="text-[10px] px-2 py-1 rounded-md bg-emerald/10 border border-emerald/30 text-emerald font-mono">● в settings.json</span>`
+        : '');
+
+    const activations = k.activations > 0
+      ? `<span class="text-[10px] text-faint font-mono">×${k.activations}</span>`
+      : '';
+
+    let rowClass = 'border-line-soft';
+    if (isActive) rowClass = 'border-emerald/40 bg-emerald/5';
+    if (banned) rowClass = 'border-crimson/30';
+
+    return `<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-elevated/30 border ${rowClass} hover:border-line transition ${dim}">
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-[12px] font-medium truncate max-w-[180px]">${esc(k.email)}${skull}</span>
+          ${compactKey}
+          ${statusBadge}
+          ${activations}
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5 shrink-0">
+        ${checkBtn}
+        ${setKeyBtn}
+        ${activateBtn}
+      </div>
+    </div>`;
+  }).join('');
+
+  $('rotator-list').innerHTML = cards;
+}
+
+function rotStatusBadge(k) {
+  if (k.isActive) return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono border bg-emerald/15 text-emerald border-emerald/40">● активен</span>`;
+  const map = {
+    'ready':       ['bg-azure/15   text-azure   border-azure/40',   '● готов'],
+    'no_key':      ['bg-faint/15   text-faint   border-faint/40',   '● нет ключа'],
+    'bad_format':  ['bg-crimson/15 text-crimson border-crimson/40', '● битый'],
+  };
+  const [cls, label] = map[k.status] || ['bg-faint/15 text-faint border-faint/40', '● ' + k.status];
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono border ${cls}">${label}</span>`;
+}
+
+function rotatorSetKeyPrompt(id, email) {
+  const current = state.rotator?.keys?.find(k => k.id === id);
+  const old = current?.apiKeyMask && current.apiKeyMask !== '—' ? current.apiKeyMask : '';
+  const key = prompt('API-ключ для ' + email + (old ? ' (сейчас: ' + old + ')' : '') + '\nВставь fe_oa_... :', '');
+  if (!key) return;
+  rotatorSetKeyById(id, key.trim());
+}
+
+async function rotatorSetKeyById(id, apiKey) {
+  try {
+    const res = await rotatorApi('/__fmrot/api/set-key', 'POST', { id, apiKey });
+    const data = await res.json();
+    if (data.ok) {
+      toast('🔑 Ключ сохранён: ' + data.email + ' → ' + data.apiKeyMask, 'success');
+      rotatorRefresh();
+    } else {
+      toast('❌ ' + (data.error || 'ошибка'), 'error');
+    }
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function rotatorCheckKey(email) {
+  toast('🔍 Проверяю ' + email + '…', 'info', 2000);
+  try {
+    const res = await rotatorApi('/__fmrot/api/check-key', 'POST', { email });
+    const data = await res.json();
+    if (data.result?.ok) toast('✅ ' + email + ' — жив', 'success');
+    else toast('❌ ' + email + ' — ' + (data.result?.error || 'ошибка'), 'error');
+    rotatorRefresh();
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function rotatorActivateKey(id) {
+  try {
+    const res = await rotatorApi('/__fmrot/api/activate', 'POST', { id });
+    const data = await res.json();
+    if (data.ok) {
+      toast('▶ Активирован: ' + data.email + ' → ' + data.apiKeyMask + '\nСделай /login в Claude Code', 'success', 6000);
+      rotatorRefresh();
+    } else {
+      toast('❌ ' + (data.error || 'ошибка'), 'error');
+    }
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function rotatorToggleKey(email, active) {
+  try {
+    const res = await rotatorApi('/__fmrot/api/toggle', 'POST', { email, active });
+    const data = await res.json();
+    toast((active ? '✅ Включён: ' : '⚫ Выключен: ') + email, active ? 'success' : 'warn');
+    rotatorRefresh();
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+async function rotatorReload() {
+  try {
+    const res = await rotatorApi('/__fmrot/api/reload', 'POST', null);
+    const data = await res.json();
+    toast('📋 Перечитано ключей: ' + (data.count || 0), 'success');
+    rotatorRefresh();
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+// ═══════════════════ TOKENROUTER ══════════════════════════════════════
+async function loadTokenrouterAccounts() {
+  $('tokenrouter-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/accounts');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.tokenrouter = data.accounts || [];
+    $('nav-count-tokenrouter').textContent = state.tokenrouter.length;
+    renderTokenrouter();
+  } catch (e) {
+    $('tokenrouter-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadTrHealthCache() {
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/health-cache');
+    const data = await res.json();
+    state.tokenrouterHealth = data || {};
+    renderTokenrouter();
+  } catch {}
+}
+
+function renderTokenrouter() {
+  const list = state.tokenrouter;
+  if (!list.length) {
+    $('tokenrouter-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">пусто — нажми «Создать аккаунт»</div>`;
+    return;
+  }
+
+  const rows = list.map(a => {
+    const email = a.email;
+    const keyBadge = a.apiKey
+      ? `<span class="font-mono text-emerald text-[11px]">🔑 …${esc(a.apiKey.slice(-8))}</span>`
+      : `<span class="font-mono text-crimson text-[11px]">⚠ нет ключа</span>`;
+    const emailJ = JSON.stringify(email);
+    const h = state.tokenrouterHealth?.[email];
+    const age = h?.checkedAt ? ageStr(h.checkedAt) : '';
+    const isAlive = h === true || (h && h.ok);
+    const healthCell = !h
+      ? `<span class="text-faint text-[11px]">—</span>`
+      : h === 'checking'
+      ? `<span class="text-amber text-[11px]">⏳</span>`
+      : isAlive && h?.note
+      ? `<span class="text-amber text-[11px] font-medium" title="${esc(h.note || '') + ' · ' + age}">✅ LIVE</span>`
+      : isAlive
+      ? `<span class="text-emerald text-[11px] font-medium" title="${esc(age)}">✅ OK</span>`
+      : `<span class="text-crimson text-[11px]" title="${esc((h.error || '') + ' · ' + age)}">❌ ${h?.error === 'ключ отклонён (expired/dead)' ? 'DEAD' : 'ERR'}</span>`;
+
+    return `<tr class="hover:bg-elevated/40 transition">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[240px]" title="${esc(email)}">${esc(email)}</td>
+      <td class="px-3 py-2.5">${keyBadge}</td>
+      <td class="px-3 py-2.5 text-center">${healthCell}</td>
+      <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc((a.createdAt || '').substring(0, 10))}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${actBtn(`copyTokenrouterKey(${emailJ})`,   'Скопировать API-ключ',  '📋🔑', 'emerald')}
+        ${actBtn(`copyTokenrouterExport(${emailJ})`, 'Скопировать export',   '📋💲', 'amber')}
+        ${actBtn(`copyTokenrouterEmail(${emailJ})`,  'Скопировать email',    '📋✉', 'azure')}
+        ${actBtn(`openTokenrouterSession(${emailJ})`, 'Открыть сессию', '🌐', 'azure')}
+        ${a.apiKey ? actBtn(`checkTokenrouterKey(${emailJ})`, 'Проверить ключ', '🩺', 'violet') : ''}
+        ${actBtn(`deleteTokenrouterAccount(${emailJ})`, 'Удалить аккаунт',   '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('tokenrouter-list').innerHTML = table(
+    [
+      { label: 'Email' },
+      { label: 'API Key' },
+      { label: 'Health', align: 'center', w: 'w-16' },
+      { label: 'Created' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${list.length} аккаунт${list.length === 1 ? '' : 'ов'}`
+  );
+}
+
+function copyTokenrouterKey(email) {
+  const a = state.tokenrouter.find(x => x.email === email);
+  if (!a || !a.apiKey) return toast('API-ключ не найден', 'warn');
+  copyToClipboard(a.apiKey, `key: ***${a.apiKey.slice(-8)}`);
+}
+
+function copyTokenrouterEmail(email) {
+  copyToClipboard(email, `email: ${email}`);
+}
+
+function copyTokenrouterExport(email) {
+  const a = state.tokenrouter.find(x => x.email === email);
+  if (!a || !a.apiKey) return toast('API-ключ не найден', 'warn');
+  const text = `export ANTHROPIC_BASE_URL=https://tokenrouter.me/v1\nexport ANTHROPIC_API_KEY=${a.apiKey}`;
+  copyToClipboard(text, 'export-блок');
+}
+
+async function deleteTokenrouterAccount(email) {
+  if (!confirm(`Удалить аккаунт ${email}?\n\nAPI-ключ будет потерян безвозвратно.`)) return;
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`✓ Удалён: ${email}`, 'success');
+    loadTokenrouterAccounts();
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function checkTokenrouterKey(email) {
+  if (!state.tokenrouterHealth) state.tokenrouterHealth = {};
+  state.tokenrouterHealth[email] = 'checking';
+  renderTokenrouter();
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/check-key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    state.tokenrouterHealth[email] = data.ok ? true : { error: data.error || 'status ' + data.status };
+    if (data.ok) {
+      const msg = data.note ? ` (ограничен: ${data.note})` : '';
+      toast(`✓ ${email}: ключ жив${msg}`, data.note ? 'warn' : 'success');
+    } else toast(`✗ ${email}: ${data.error || 'status ' + data.status}`, 'error');
+  } catch (e) {
+    state.tokenrouterHealth[email] = { error: e.message };
+    toast(`✗ ${email}: ${e.message}`, 'error');
+  }
+  renderTokenrouter();
+}
+
+async function openTokenrouterSession(email) {
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'open failed');
+    toast(`🌐 Открываю ${email}...`, 'info');
+  } catch (e) { toast('Open: ' + e.message, 'error'); }
+}
+
+async function checkAllTokenrouterKeys() {
+  const list = state.tokenrouter.filter(a => a.apiKey);
+  if (!list.length) return toast('нет ключей для проверки', 'warn');
+  toast(`Проверяю ${list.length} ключей…`, 'info');
+  for (const a of list) {
+    await checkTokenrouterKey(a.email);
+  }
+  toast('✓ Проверка завершена', 'success');
+}
+
+function toggleManualAdd() {
+  $('tokenrouter-manual-add').classList.toggle('hidden');
+}
+
+async function addTokenrouterManual() {
+  const email = $('tr-manual-email').value.trim();
+  const apiKey = $('tr-manual-key').value.trim();
+  if (!email || !apiKey) return toast('email и apiKey обязательны', 'warn');
+  if (!/^sk-[A-Za-z0-9]{20,}$/.test(apiKey)) return toast('формат ключа: sk-...', 'warn');
+
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, apiKey }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`✓ Добавлен: ${email}`, 'success');
+    $('tr-manual-email').value = '';
+    $('tr-manual-key').value = '';
+    $('tokenrouter-manual-add').classList.add('hidden');
+    loadTokenrouterAccounts();
+    // Auto-check after add
+    setTimeout(() => checkTokenrouterKey(email), 500);
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+function launchTokenrouterCreate() {
+  launchScript('tokenrouter-create', '➕ TokenRouter: autoreg запущен');
+}
+
+// ═══════════════════ LOG PANEL ════════════════════════════════════════
+let logPanelOpen = false;
+let logPollInterval = null;
+
+function toggleLogPanel() {
+  const panel = $('log-panel');
+  const btn = $('log-toggle-btn');
+  logPanelOpen = !logPanelOpen;
+  if (logPanelOpen) {
+    panel.classList.remove('hidden');
+    btn.classList.add('text-emerald');
+    loadLogs();
+    if (!logPollInterval) logPollInterval = setInterval(loadLogs, 2000);
+  } else {
+    panel.classList.add('hidden');
+    btn.classList.remove('text-emerald');
+    if (logPollInterval) { clearInterval(logPollInterval); logPollInterval = null; }
+  }
+}
+
+async function loadLogs() {
+  try {
+    const res = await fetch('/__switch/api/logs?limit=200');
+    if (!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    const box = $('log-box');
+    const text = (data.lines || []).join('\n');
+    if (box.value !== text) {
+      box.value = text;
+      box.scrollTop = box.scrollHeight;
+    }
+  } catch (e) { /* silent */ }
+}
+
 // ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
-showTab('switcher');
+showTab(localStorage.getItem('opencode_active_tab') || 'switcher');
 </script>
+
+<!-- Log panel -->
+<div id="log-panel" class="hidden fixed bottom-4 right-4 z-40 flex flex-col w-[520px] max-w-[90vw] h-[320px] bg-surface border border-line-soft rounded-xl shadow-2xl overflow-hidden">
+  <div class="flex items-center justify-between px-3 py-2 border-b border-line-soft bg-elevated/40">
+    <div class="text-xs font-medium text-muted flex items-center gap-2">
+      <span class="relative inline-block size-2 rounded-full bg-emerald pulse-dot"></span>
+      Server logs
+    </div>
+    <button onclick="toggleLogPanel()" class="text-dim hover:text-ink text-xs px-2 py-1">Скрыть</button>
+  </div>
+  <textarea id="log-box" readonly class="flex-1 w-full bg-bg text-[11px] font-mono text-dim p-3 resize-none focus:outline-none overflow-y-auto leading-relaxed" spellcheck="false"></textarea>
+</div>
+
+<!-- Log toggle button -->
+<button id="log-toggle-btn" onclick="toggleLogPanel()"
+        class="fixed bottom-4 right-4 z-30 size-10 rounded-full bg-surface border border-line-soft hover:border-emerald/60 text-dim hover:text-emerald flex items-center justify-center shadow-lg transition"
+        title="Логи">
+  <span class="text-base">📜</span>
+</button>
+
 </body>
 </html>

@@ -120,10 +120,14 @@ autoreger_data/
 __pycache__/
 *.pyc
 
-# TokenRouter secrets
-routing/tokenrouter/accounts.json
+# TokenRouter runtime/sensitive data
+routing/tokenrouter/chrome-profile/
+routing/tokenrouter/camoufox-*/
 routing/tokenrouter/sessions/
 routing/tokenrouter/debug/
+routing/tokenrouter/accounts.json
+routing/tokenrouter/*.png
+routing/tokenrouter/*.log
 
 # Recorder output
 recordings/

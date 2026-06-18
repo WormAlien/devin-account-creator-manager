@@ -474,7 +474,12 @@
             <button onclick="loadTokenrouterAccounts()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="checkAllTokenrouterKeys()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🩺 Проверить все</button>
             <button onclick="refreshAllTrUsage()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💰 Обновить балансы</button>
-            <button onclick="launchTokenrouterCreate()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать аккаунт</button>
+            <div class="flex items-center gap-1">
+              <label class="text-[10px] text-faint">кол-во</label>
+              <input id="tr-create-count" type="number" min="1" max="20" value="1"
+                     class="text-xs w-14 px-2 py-2 bg-surface border border-line-soft rounded-lg text-ink text-center" />
+              <button onclick="launchTokenrouterCreate()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать аккаунт</button>
+            </div>
             <button onclick="toggleManualAdd()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">➕ Вручную</button>
           </div>
         </header>
@@ -2490,7 +2495,11 @@ async function addTokenrouterManual() {
 }
 
 function launchTokenrouterCreate() {
-  launchScript('tokenrouter-create', '➕ TokenRouter: autoreg запущен');
+  const input = document.getElementById('tr-create-count');
+  const count = Math.max(1, Math.min(20, parseInt(input?.value || '1', 10) || 1));
+  launchScript('tokenrouter-create',
+    `➕ TokenRouter: создание ${count} аккаунт${count === 1 ? 'а' : 'ов'} запущено`,
+    [String(count)]);
 }
 
 // ═══════════════════ LOG PANEL ════════════════════════════════════════

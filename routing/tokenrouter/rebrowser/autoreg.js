@@ -5,7 +5,7 @@
 const { chromium } = require('rebrowser-playwright');
 const path = require('path');
 const fs = require('fs');
-const ite = require('../../../freemodel/lib/instanttempemail');
+const ite = require('../../../freemodel/lib/10minutemail');
 
 const TOKENROUTER_URL = 'https://tokenrouter.me';
 const KEYS_URL = 'https://tokenrouter.me/keys';

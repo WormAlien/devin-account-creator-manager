@@ -169,6 +169,30 @@ async function checkFreemodelQuota(session) {
         browser = await chromium.launch({ headless: true });
         const context = await browser.newContext({ storageState: sessionFile, ...EN_CONTEXT_OPTS });
         const page = await context.newPage();
+
+        // 1) Dashboard home: plan + renewal date (not present on /usage)
+        let planInfo = { plan: '', renews: '' };
+        try {
+            await page.goto('https://freemodel.dev/dashboard', { waitUntil: 'domcontentloaded', timeout: 20000 });
+            await page.waitForTimeout(1500);
+        const homeText = await page.evaluate(() => (document.body?.innerText || '').replace(/\r/g, ''));
+        const lines = homeText.split('\n').map(s => s.trim()).filter(Boolean);
+        const planIdx = lines.findIndex(l => /^CURRENT\s+PLAN$/i.test(l));
+        if (planIdx >= 0 && lines[planIdx + 1]) planInfo.plan = lines[planIdx + 1];
+        const renewsMatch = homeText.match(/Renews(?:\s+on)?\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+        if (renewsMatch) planInfo.renews = new Date(renewsMatch[1]).toISOString();
+        // Detect Telegram binding: phone near "Telegram" or "connected" text.
+        const tgPhoneMatch = homeText.match(/(?:telegram|tg)[\s\S]{0,60}?\+?(\d{6,15})/i) ||
+                             homeText.match(/\+?(\d{6,15})[\s\S]{0,60}?(?:telegram|tg)/i) ||
+                             homeText.match(/telegram\s*connected|telegram\s*verified|tg\s*connected/i);
+        if (tgPhoneMatch) {
+            planInfo.tgPhone = tgPhoneMatch[1] || 'connected';
+            planInfo.tgBound = true;
+        } else if (/Bind Telegram|Connect Telegram|Verify Telegram|Waiting for Telegram/i.test(homeText)) {
+            planInfo.tgBound = false;
+        }
+    } catch {}
+
         await page.goto(USAGE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
         // Ждём пока появится "AVAILABLE NOW" (заголовок блока)
@@ -196,7 +220,12 @@ async function checkFreemodelQuota(session) {
             const text = (document.body?.innerText || '').replace(/\r/g, '');
             const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
 
-            const out = { available: '', plan: '', bonus: '', h5: '', h5max: '', h5resets: '', h5pct: null, d7: '', d7max: '', d7resets: '', d7pct: null };
+            const out = { available: '', plan: '', bonus: '', h5: '', h5max: '', h5resets: '', h5pct: null, d7: '', d7max: '', d7resets: '', d7pct: null, renews: '' };
+
+            // "Renews <Month> <day>, <year>" / "Renews on ..." / "Next billing ..."
+            const renewsMatch = text.match(/Renews(?:\s+on)?\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i) ||
+                                text.match(/Next\s+(?:billing|renewal|payment)[\s\S]{0,40}?([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+            if (renewsMatch) out.renews = new Date(renewsMatch[1]).toISOString();
 
             // "AVAILABLE NOW" → следующая строка с $X.XX (в правой колонке), либо в одной из ближайших строк
             const availIdx = lines.findIndex(l => /^AVAILABLE NOW$/i.test(l));
@@ -249,6 +278,11 @@ async function checkFreemodelQuota(session) {
 
         await browser.close();
         browser = null;
+
+        if (planInfo.plan) data.plan = planInfo.plan;
+        if (planInfo.renews) data.renews = planInfo.renews;
+        if (planInfo.tgPhone) data.tgPhone = planInfo.tgPhone;
+        data.tgBound = planInfo.tgBound ?? null;
 
         if (!data.available && !data.h5 && !data.d7) return null;
         return data;

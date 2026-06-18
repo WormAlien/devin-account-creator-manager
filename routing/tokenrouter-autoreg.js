@@ -3,7 +3,7 @@
 // TokenRouter.me Auto-Registration + API Key Creator
 // Использует Playwright channel:'chrome' — НАСТОЯЩИЙ Google Chrome,
 // не Chromium. Cloudflare видит обычный пользовательский браузер.
-// Temp email via instanttempemail.com REST API (no browser needed for mail).
+// Temp email via 10minutemail.com cookie/curl API (no browser needed for mail).
 //
 // Usage: node routing/tokenrouter-autoreg.js [count]
 //   count — number of accounts to create (default 1)
@@ -11,7 +11,7 @@
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
-const ite = require('../freemodel/lib/instanttempemail');
+const ite = require('../freemodel/lib/10minutemail');
 
 // ═══════════════════ CONFIG ═══════════════════════════════════════════
 const TOKENROUTER_URL = 'https://tokenrouter.me';
@@ -259,7 +259,7 @@ async function createOneAccount(context, index) {
     log('account', `══════ Starting account #${index + 1} ══════`);
 
     // --- Step 1: Create temp email ---
-    log('email', 'creating temp email via instanttempemail.com...');
+    log('email', 'creating temp email via 10minutemail.com...');
     const emailData = await ite.createEmail();
     const email = emailData.address;
     const token = emailData.token;
@@ -808,7 +808,7 @@ async function main() {
     console.log('═'.repeat(60));
     console.log('  TokenRouter.me Auto-Registration + API Key Creator');
     console.log(`  Accounts: ${count}  |  Browser: Google Chrome (channel:chrome)`);
-    console.log(`  Email: instanttempemail.com  |  Profile: ${CHROME_PROFILE}`);
+    console.log(`  Email: 10minutemail.com  |  Profile: ${CHROME_PROFILE}`);
     console.log('═'.repeat(60));
     console.log('');
 

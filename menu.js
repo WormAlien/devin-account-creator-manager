@@ -26,6 +26,24 @@ function saveQuotaCache(cache) {
     } catch {}
 }
 
+// ─── Загрузка routing/.env в process.env ─────────────────────────────────────
+function loadEnvFile(filePath) {
+    try {
+        if (!fs.existsSync(filePath)) return;
+        const text = fs.readFileSync(filePath, 'utf-8');
+        for (const line of text.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eq = trimmed.indexOf('=');
+            if (eq === -1) continue;
+            const key = trimmed.substring(0, eq).trim();
+            const val = trimmed.substring(eq + 1).trim().replace(/^["']|["']$/g, '');
+            if (key && process.env[key] === undefined) process.env[key] = val;
+        }
+    } catch {}
+}
+loadEnvFile(path.join(__dirname, 'routing', '.env'));
+
 // Загружаем текущий config
 let config = require('./config.js');
 
@@ -263,7 +281,7 @@ async function mainMenu() {
         { label: `➕  Добавить аккаунт Devin`, value: 'devin-add' },
         { label: `🆓  FreeModel сессии`, value: 'freemodel-sessions' },
         { label: `➕  Создать аккаунт FreeModel (вручную, 1 шт)`, value: 'freemodel-create' },
-        { label: `🤖  FreeModel autoreg v3 (instanttempemail, пирамида)`, value: 'freemodel-autoreg-v3' },
+        { label: `🤖  FreeModel autoreg v3 (10minutemail, пирамида)`, value: 'freemodel-autoreg-v3' },
         { label: `🗂️   Notion сессии     [${notionSessionsCount()}]`, value: 'notion-sessions' },
         { label: `📝  Notion         [${notionStatusLine()}]`, value: 'notion-create' },
         { label: `🔑  TokenRouter autoreg [OmniRoute: ${config.AUTO_ADD_TOKENROUTER_TO_OMNIROUTE ? 'вкл' : 'выкл'}]`, value: 'tokenrouter-autoreg' },
@@ -1826,7 +1844,7 @@ async function freemodelAutoregV3({ clearScreen, rawInput }) {
     const initial = fmConfig.INITIAL_INVITE;
     const startInvite = lastInvite || initial;
 
-    console.log('🤖  FreeModel AutoReg v3 (instanttempemail + OTP)\n');
+    console.log('🤖  FreeModel AutoReg v3 (10minutemail + OTP)\n');
     console.log(`   Старт инвайт:  ${startInvite}`);
     if (lastInvite && lastInvite !== initial) {
         console.log('                  ↑ из freemodel/.last_invite (предыдущий запуск)');
@@ -1904,6 +1922,7 @@ async function tokenrouterAutoregMenu() {
         { label: `Аккаунтов в базе: ${existingCount}`, value: null, disabled: true },
         { label: '──────────────────────────────', value: null, disabled: true },
         { label: '▶️  Запустить регистрацию', value: 'run' },
+        { label: '⬆️  Импортировать существующие аккаунты в OmniRoute', value: 'import' },
         { label: '← Назад', value: 'back' },
     ]);
 
@@ -1914,10 +1933,56 @@ async function tokenrouterAutoregMenu() {
             return tokenrouterAutoregMenu();
         case 'run':
             return tokenrouterRunMenu();
+        case 'import':
+            return tokenrouterImportMenu();
         case 'back':
         default:
             return;
     }
+}
+
+async function tokenrouterImportMenu() {
+    clearScreen();
+    console.log('⬆️  Импорт TokenRouter в OmniRoute...\n');
+    console.log('   Запуск: node routing/tokenrouter/omniroute-api-client.js\n');
+
+    process.removeListener('SIGINT', menuSigintHandler);
+    const noopSigint = () => {};
+    process.on('SIGINT', noopSigint);
+
+    await new Promise(resolve => {
+        const child = spawn(
+            process.execPath,
+            [path.join(__dirname, 'routing', 'tokenrouter', 'omniroute-api-client.js')],
+            { stdio: 'inherit', env: { ...process.env } }
+        );
+        child.on('close', resolve);
+    });
+
+    process.removeListener('SIGINT', noopSigint);
+    process.on('SIGINT', menuSigintHandler);
+
+    if (process.stdin.isTTY && process.stdin.setRawMode) {
+        try { process.stdin.setRawMode(false); } catch {}
+    }
+    try { process.stdin.pause(); } catch {}
+    clearScreen();
+
+    console.log('\n  Импорт завершён');
+    console.log('\n  Нажмите любую клавишу для возврата...');
+    await new Promise(resolve => {
+        process.stdin.resume();
+        if (process.stdin.isTTY && process.stdin.setRawMode) {
+            try { process.stdin.setRawMode(true); } catch {}
+        }
+        process.stdin.once('keypress', () => {
+            if (process.stdin.isTTY && process.stdin.setRawMode) {
+                try { process.stdin.setRawMode(false); } catch {}
+            }
+            process.stdin.pause();
+            resolve();
+        });
+    });
 }
 
 async function tokenrouterRunMenu() {

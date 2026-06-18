@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Backend Switch</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2310b981'/><text x='50%25' y='54%25' dominant-baseline='middle' text-anchor='middle' font-size='20' fill='white'>⚡</text></svg>">
 <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -116,6 +117,10 @@
         <span class="flex-1">TokenRouter</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-tokenrouter">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="settings">
+        <span class="text-base">⚙</span>
+        <span class="flex-1">Настройки</span>
+      </button>
       <!-- Whoami -->
       <div class="mt-4 pt-3 border-t border-line-soft">
         <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
@@ -153,18 +158,20 @@
       </div>
     </nav>
 
-    <!-- Sidebar footer -->
-    <div class="p-3 mx-2 mb-2 rounded-md bg-elevated/40 border border-line-soft text-[11px] text-dim space-y-1.5">
-      <div class="flex items-center gap-1.5"><span class="text-emerald">▶</span> <code class="font-mono text-[10px]">restart-dashboard.bat</code></div>
-      <div class="flex items-center gap-1.5"><span class="text-rose">⏻</span> <code class="font-mono text-[10px]">PANIC-restore-omniroute.bat</code></div>
+    <!-- Sidebar footer: launchers -->
+    <div class="p-3 mx-2 mb-2 rounded-md bg-elevated/40 border border-line-soft space-y-2">
+      <div class="text-[10px] uppercase tracking-wider text-dim font-medium">Запуск из корня</div>
+      <button onclick="launchBat('restart-dashboard.bat')" class="w-full text-left px-2.5 py-2 rounded-lg bg-bg border border-line-soft hover:border-emerald/60 hover:text-emerald transition text-xs flex items-center gap-2">
+        <span class="text-emerald">🔄</span> Рестарт дешборда
+      </button>
     </div>
   </aside>
 
   <!-- ═══════════ MAIN ═══════════ -->
   <main class="min-w-0">
 
-    <!-- Toast container -->
-    <div id="toasts" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2 pointer-events-none"></div>
+    <!-- Toast container (above the log button / panel) -->
+    <div id="toasts" class="fixed bottom-20 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
     <!-- ═════════ TAB: SWITCHER ═════════ -->
     <div data-tab-content="switcher" class="active">
@@ -172,7 +179,7 @@
 
         <header>
           <h1 class="text-2xl font-semibold tracking-tight">Switcher</h1>
-          <p class="text-sm text-muted mt-1">Выбор конфига для <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>. Клик по пресету применяет его.</p>
+           <p class="text-sm text-muted mt-1">Прямое переключение ключа в <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>. Клик по пресету применяет его.</p>
         </header>
 
         <!-- Hero: active config -->
@@ -192,16 +199,84 @@
         <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
           <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold flex items-center gap-2">
-              <span class="text-emerald">⚡</span> Конфиги Claude Code
+               <span class="text-emerald">🔄</span> Simple API Switcher
             </h2>
             <button onclick="saveCurrentAsPreset()" class="text-xs px-2.5 py-1.5 bg-elevated border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald transition">
               💾 Сохранить текущий
             </button>
           </div>
-          <p class="text-xs text-muted">Нажми на конфиг — он запишется в <code class="font-mono text-emerald">~/.claude/settings.json</code>. Перед записью делается backup.</p>
+           <p class="text-xs text-muted">Нажми на пресет — он обновит ключ в <code class="font-mono text-emerald">~/.claude/settings.json</code>. Перед записью делается backup.</p>
           <div id="switcher-presets" class="grid grid-cols-1 gap-2"></div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: SETTINGS ═════════ -->
+    <div data-tab-content="settings">
+      <div class="max-w-2xl mx-auto px-6 py-8 space-y-6">
+        <header>
+          <h1 class="text-2xl font-semibold tracking-tight">Настройки</h1>
+          <p class="text-sm text-muted mt-1">Редактирование <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code> напрямую из дашборда.</p>
+        </header>
+
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <h2 class="text-sm font-semibold text-dim">Текущий конфиг</h2>
+          <div class="flex items-center gap-3 font-mono text-sm">
+            <span class="text-faint">Ключ:</span>
+            <span id="settings-cur-key" class="text-emerald">—</span>
+          </div>
+          <div class="flex items-center gap-3 font-mono text-xs text-faint flex-wrap">
+            <span>URL:</span><span id="settings-cur-url">—</span>
+            <span class="mx-1">|</span>
+            <span>Helper:</span><span id="settings-cur-helper" class="truncate max-w-[240px]">—</span>
+            <span class="mx-1">|</span>
+            <span>TTL:</span><span id="settings-cur-ttl">—</span>
+          </div>
+        </div>
+
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <h2 class="text-sm font-semibold">Редактор</h2>
+          <div class="space-y-3">
+            <div>
+              <label class="text-xs text-dim block mb-1">Из FreeModel (автозаполнение)</label>
+              <select id="settings-fm" onchange="onSettingsFm()"
+                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60">
+                <option value="">— вручную —</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-dim block mb-1">ANTHROPIC_API_KEY</label>
+              <input id="settings-key" type="password"
+                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
+                placeholder="fe_oa_... или sk-...">
+              <button onclick="toggleSettingsKey()" class="text-[10px] text-dim hover:text-emerald mt-1">👁 показать</button>
+            </div>
+            <div>
+              <label class="text-xs text-dim block mb-1">ANTHROPIC_BASE_URL</label>
+              <input id="settings-url-inp" type="text"
+                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
+                value="https://cc.freemodel.dev">
+            </div>
+            <div>
+              <label class="text-xs text-dim block mb-1">apiKeyHelper</label>
+              <input id="settings-helper-inp" type="text"
+                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
+                value="cat ~/.claude/fm-active-key.txt">
+            </div>
+            <div>
+              <label class="text-xs text-dim block mb-1">TTL (CLAUDE_CODE_API_KEY_HELPER_TTL_MS)</label>
+              <input id="settings-ttl-inp" type="text"
+                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
+                value="1">
+            </div>
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button onclick="saveSettings()" class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition">💾 Сохранить</button>
+            <button onclick="loadSettings()" class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄 Обновить</button>
+          </div>
+          <div id="settings-msg" class="text-xs text-emerald hidden"></div>
+        </div>
       </div>
     </div>
 
@@ -255,6 +330,7 @@
             <p class="text-sm text-muted mt-1">кеш — <code class="font-mono text-amber text-xs">logs/.freemodel_quota_cache.json</code></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadActiveFmKey()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Активный</button>
             <input id="freemodel-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-amber/60 focus:ring-2 focus:ring-amber/20">
             <label class="text-[10px] text-faint flex items-center gap-1 cursor-pointer select-none" title="Показывать аккаунты, помеченные 💀">
               <input id="freemodel-show-banned" type="checkbox" class="accent-crimson" onchange="renderFreemodel(false)">
@@ -292,6 +368,21 @@
             </div>
           </div>
         </header>
+
+        <!-- Active API key hero -->
+        <div id="fm-active-hero" class="hidden rounded-xl bg-surface border border-emerald/40 p-4 relative overflow-hidden">
+          <div class="absolute -top-16 -right-16 size-32 rounded-full bg-emerald/10 blur-2xl pointer-events-none"></div>
+          <div class="relative flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <div class="text-[10px] uppercase tracking-[0.2em] text-emerald/80 mb-1">Активный API в Claude Code</div>
+              <div id="fm-active-email" class="text-sm font-semibold text-ink">—</div>
+              <div id="fm-active-key" class="text-xs font-mono text-emerald mt-0.5">—</div>
+            </div>
+            <span class="text-xs px-3 py-1.5 bg-emerald/10 border border-emerald/40 text-emerald rounded-lg font-medium">
+              🌟 Активен
+            </span>
+          </div>
+        </div>
 
         <!-- ═══ TG POOL (свёрнут по умолчанию) ═══ -->
         <details class="rounded-xl bg-surface border border-line-soft" id="tg-pool-details" open>
@@ -386,11 +477,23 @@
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-rose">🔑</span> TokenRouter keys
             </h1>
-            <p class="text-sm text-muted mt-1">из <code class="font-mono text-rose text-xs">routing/tokenrouter/accounts.json</code> · регистрация через <code class="font-mono text-rose text-xs">tokenrouter-autoreg.js</code></p>
+            <p class="text-sm text-muted mt-1">из <code class="font-mono text-rose text-xs">routing/tokenrouter/accounts.json</code> · регистрация через <code class="font-mono text-rose text-xs">camoufox_autoreg.py</code></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <input id="tokenrouter-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-rose/60 focus:ring-2 focus:ring-rose/20">
+            <select id="tokenrouter-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-rose/60">
+              <option value="date-desc">📅 дата ↓ (новые)</option>
+              <option value="date-asc">📅 дата ↑ (старые)</option>
+              <option value="balance-desc">💰 баланс: больше</option>
+              <option value="balance-asc">💰 баланс: меньше</option>
+              <option value="usage-desc">📊 использовано: больше</option>
+              <option value="usage-asc">📊 использовано: меньше</option>
+              <option value="health">🩺 статус ключей</option>
+              <option value="email">📧 email A→Z</option>
+            </select>
             <button onclick="loadTokenrouterAccounts()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="checkAllTokenrouterKeys()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🩺 Проверить все</button>
+            <button onclick="refreshAllTrUsage()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💰 Обновить балансы</button>
             <button onclick="launchTokenrouterCreate()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать аккаунт</button>
             <button onclick="toggleManualAdd()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">➕ Вручную</button>
           </div>
@@ -406,7 +509,7 @@
           </div>
         </div>
 
-        <div id="tokenrouter-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
+        <div id="tokenrouter-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
           <div class="p-12 text-center text-muted text-xs">—</div>
         </div>
       </div>
@@ -424,7 +527,11 @@ const state = {
   freemodel: [],
   notion:  [],
   tokenrouter: [],
+  tokenrouterOmniroute: [],
   tokenrouterHealth: {},
+  tokenrouterUsage: {},
+  activeFm: { name: null, key: null },
+  toastLog: [],
   loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false },
   tg: [],
 };
@@ -445,6 +552,11 @@ function toast(text, kind='info', ms=4000) {
   el.textContent = text;
   $('toasts').appendChild(el);
   setTimeout(() => el.remove(), ms);
+
+  // history for log panel
+  state.toastLog.unshift({ t: Date.now(), text, kind });
+  if (state.toastLog.length > 200) state.toastLog.length = 200;
+  renderLogPanel();
 }
 
 function ageStr(ms) {
@@ -454,6 +566,60 @@ function ageStr(ms) {
   if (dt < 3_600_000) return Math.round(dt / 60_000) + 'м';
   if (dt < 86_400_000) return Math.round(dt / 3_600_000) + 'ч';
   return Math.round(dt / 86_400_000) + 'д';
+}
+
+function fmtDuration(ms) {
+  if (ms == null || ms <= 0) return '0м';
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}д ${h}ч`;
+  if (h > 0) return `${h}ч ${m}м`;
+  return `${m}м`;
+}
+
+function cmpNullable(a, b, getter, dir) {
+  const va = getter(a), vb = getter(b);
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  return dir === 'asc' ? va - vb : vb - va;
+}
+
+function timerHtml(createdAt, targetAt) {
+  if (!createdAt) return '<span class="text-faint">—</span>';
+  const t = new Date(createdAt).getTime();
+  if (!isFinite(t)) return '<span class="text-faint">—</span>';
+  let target;
+  if (targetAt) {
+    target = new Date(targetAt).getTime();
+    if (!isFinite(target)) target = t + 24 * 3600 * 1000;
+  } else {
+    target = t + 24 * 3600 * 1000;
+  }
+  const elapsed = Date.now() - t;
+  const left = target - Date.now();
+  const elapsedStr = fmtDuration(elapsed);
+  const regDate = new Date(t).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
+  const targetDate = new Date(target).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
+  if (left <= 0) {
+    return `<div class="text-[10px] leading-tight"><div class="text-faint">${regDate} → ${targetDate}</div><div class="text-crimson font-medium">истёк · ${elapsedStr} назад</div></div>`;
+  }
+  const leftStr = fmtDuration(left);
+  const color = left < 3600_000 ? 'text-crimson' : left < 4 * 3600_000 ? 'text-amber' : 'text-emerald';
+  return `<div class="text-[10px] leading-tight"><div class="text-faint">${regDate} → ${targetDate}</div><div class="${color} font-medium">ост. ${leftStr} · ${elapsedStr} назад</div></div>`;
+}
+
+function regAgeHtml(createdAt, note) {
+  if (!createdAt) return '<span class="text-faint">—</span>';
+  const t = new Date(createdAt).getTime();
+  if (!isFinite(t)) return '<span class="text-faint">—</span>';
+  const elapsed = Date.now() - t;
+  const elapsedStr = fmtDuration(elapsed);
+  const regDate = new Date(t).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
+  const noteHtml = note ? `<div class="text-[10px] text-dim">${note}</div>` : '';
+  return `<div class="text-[10px] leading-tight"><div class="text-faint">${regDate}</div><div class="text-ink">${elapsedStr} назад</div>${noteHtml}</div>`;
 }
 
 function pctColor(p) {
@@ -481,6 +647,7 @@ function showTab(name) {
     // Sessions — только первый раз, т.к. там Playwright/квоты, дорогие.
     loadFreemodelInvites();
     loadTgPool();
+    loadActiveFmKey();
     if (!state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); }
   }
   if (name === 'notion' && !state.loaded.notion) {
@@ -492,13 +659,15 @@ function showTab(name) {
     state.loaded.tokenrouter = true;
     loadTokenrouterAccounts();
     loadTrHealthCache();
+    loadTrUsageCache();
   }
+  if (name === 'settings') loadSettings();
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'ApiHelper', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel direct', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -548,15 +717,15 @@ const ACTIVE_PRESET_KEY = 'opencode_active_preset';
 function getDefaultPresets() {
   return {
     'apiHelper': {
-      label: 'ApiHelper',
-      desc: 'apiKeyHelper → fm-active-key.txt → cc.freemodel.dev',
-      icon: '🔑',
+      label: 'FreeModel',
+      desc: 'Простой свитчер — прямой ключ в settings.json',
+      icon: '🔄',
       color: 'emerald',
       settings: {
         apiKeyHelper: 'cat ~/.claude/fm-active-key.txt',
         env: {
           ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev',
-          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0'
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '1'
         }
       }
     },
@@ -629,12 +798,12 @@ async function applyPreset(key) {
     localStorage.setItem(ACTIVE_PRESET_KEY, key);
     state.current = data.current || 'unknown'; paintStatus();
     renderPresets();
-    toast(`✓ Применён конфиг «${p.label}» — перезапусти Claude Code!`, 'success', 7000);
+    toast(`✓ Применён «${p.label}» — перезапусти Claude Code!`, 'success', 7000);
   } catch (e) { toast('Preset: ' + e.message, 'error'); }
 }
 
 async function saveCurrentAsPreset() {
-  const label = prompt('Название конфига:');
+  const label = prompt('Название пресета:');
   if (!label) return;
   try {
     const res = await fetch('/__switch/api/settings/current');
@@ -891,6 +1060,26 @@ $('devin-filter').addEventListener('input', () => renderDevin(false));
 $('devin-sort').addEventListener('change', () => renderDevin(false));
 
 // ═══════════════════ FREEMODEL ═══════════════════════════════════════
+async function loadActiveFmKey() {
+  try {
+    const res = await fetch('/__switch/api/freemodel/active-key');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.activeFm = { name: data.activeName, key: data.activeKey };
+    const hero = $('fm-active-hero');
+    if (data.activeKey) {
+      hero.classList.remove('hidden');
+      const session = state.freemodel.find(s => s.name === data.activeName);
+      const display = session ? (session.email || data.activeName) : (data.activeName || 'неизвестный аккаунт');
+      $('fm-active-email').textContent = display;
+      $('fm-active-key').textContent = data.activeKey;
+    } else {
+      hero.classList.add('hidden');
+    }
+    renderFreemodel(false);
+  } catch (e) { /* silent */ }
+}
+
 async function loadFreemodelSessions(refresh) {
   $('freemodel-list').innerHTML = refresh
     ? `<div class="p-12 text-center text-amber text-xs">🔄 обновляю квоты FreeModel через headless Chrome… (~30s)</div>`
@@ -902,6 +1091,7 @@ async function loadFreemodelSessions(refresh) {
     if (!res.ok) throw new Error(data.error);
     state.freemodel = data.sessions || [];
     $('nav-count-freemodel').textContent = state.freemodel.length;
+    await loadActiveFmKey();
     renderFreemodel(data.refreshed);
     if (refresh) toast('✓ FreeModel: квоты обновлены', 'success');
   } catch (e) {
@@ -936,13 +1126,6 @@ function renderFreemodel(refreshed) {
     return parts.reduce((a, b) => a + b, 0) / parts.length;  // 0..1
   };
   const fmAvail = (s) => parseDollars(s?.quota?.available);
-  const cmpNullable = (a, b, getter, dir) => {
-    const va = getter(a), vb = getter(b);
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;   // no-data → end
-    if (vb == null) return -1;
-    return dir === 'asc' ? va - vb : vb - va;
-  };
   const sortFns = {
     'date-desc':   (a, b) => (b.date || '').localeCompare(a.date || ''),
     'date-asc':    (a, b) => (a.date || '').localeCompare(b.date || ''),
@@ -977,13 +1160,17 @@ function renderFreemodel(refreshed) {
     const banned  = !!s.meta?.banned;
     const tgPhone = s.meta?.tgPhone || null;
     const apiKey  = s.meta?.apiKey  || null;
+    const isActive = state.activeFm.name && s.name === state.activeFm.name;
     const rowDim  = banned ? 'opacity-60' : '';
+    const activeRow = isActive ? 'bg-emerald/5 border-l-2 border-l-emerald' : '';
     const skull   = banned ? ' <span class="text-crimson" title="banned ' + esc((s.meta.bannedAt || '').slice(0,10)) + '">💀</span>' : '';
     const nameJ   = JSON.stringify(s.name);
-    // TG-бэйдж кликабельный: клик = toggle (если привязан → unlink prompt; нет → link prompt).
+    const activeBadge = isActive ? ' <span class="text-[10px] px-1.5 py-0.5 bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium" title="Этот ключ активен в Claude Code">🌟 ACTIVE</span>' : '';
+    // TG-бэйдж: если привязан — клик отвязывает; если нет — клик запускает привязку из пула.
     const tgBadge = tgPhone
-      ? `<button onclick="freemodelToggleTg(${nameJ}, true)" class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/30 text-azure rounded font-mono hover:bg-azure/20" title="TG привязан · клик чтобы отвязать">📱 +${esc(tgPhone)}</button>`
-      : `<button onclick="freemodelToggleTg(${nameJ}, false)" class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-azure/60 hover:text-azure" title="TG не привязан · клик чтобы привязать">📱 —</button>`;
+      ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/30 text-azure rounded font-mono hover:bg-azure/20" title="TG привязан · клик чтобы отвязать">📱 ${/^\+?\d+$/.test(String(tgPhone)) ? '+' + esc(tgPhone) : esc(tgPhone)}</button>`
+      : `<button onclick='freemodelBindTelegram(${nameJ})' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-azure/60 hover:text-azure" title="TG не привязан · клик чтобы привязать из пула">📱 —</button>`;
+
     const keyBadge = '';
 
     let availCell = '<span class="text-faint">—</span>';
@@ -1015,12 +1202,17 @@ function renderFreemodel(refreshed) {
       ageCell = `<span class="text-muted">${ageStr(q.updatedAt)}</span>`;
     }
 
-    return `<tr class="hover:bg-elevated/40 transition ${rowDim}">
+    const activateBtn = isActive
+      ? `<button disabled class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium disabled:opacity-100 cursor-default">🌟 Активен</button>`
+      : `<button onclick='activateFmKey(${nameJ})' title="Сделать активным API-ключом Claude Code" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-crimson/10 border border-crimson/50 text-crimson rounded hover:bg-crimson/20 transition font-medium">🔴 Активировать</button>`;
+
+    return `<tr class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
       <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[420px]" title="${esc(email)}">
-        <span class="${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${skull}${tgBadge}${keyBadge}
+        ${activateBtn}<span class="${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${activeBadge}${skull}${tgBadge}${keyBadge}
       </td>
       <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
+      <td class="px-3 py-2.5">${s.quota?.renews ? timerHtml(s.date, s.quota.renews) : regAgeHtml(s.date, 'обнови квоту для renewal')}</td>
       <td class="px-3 py-2.5 text-right">${availCell}</td>
       <td class="px-3 py-2.5">${h5Cell}</td>
       <td class="px-3 py-2.5">${d7Cell}</td>
@@ -1028,7 +1220,7 @@ function renderFreemodel(refreshed) {
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${actBtn(`copyEmail(${nameJ})`,       'Скопировать email',          '📋✉', 'azure')}
         ${actBtn(`copyKey(${nameJ})`,         'Скопировать API-ключ',       '📋🔑', 'emerald')}
-        ${apiKey ? actBtn(`activateFmKey(${nameJ})`, 'Активировать', '🌟', 'amber') : ''}
+        ${tgPhone ? '' : actBtn(`freemodelBindTelegram(${nameJ})`, 'Привязать TG из пула', '📱', 'azure')}
         ${actBtn(`extractKey(${nameJ})`,      'Извлечь API-ключ (Playwright)', '🔑', 'violet')}
         ${actBtn(`openSession('freemodel', ${nameJ})`,    'Открыть в Chrome (claude.ai/usage)', '🌐', 'azure')}
         ${actBtn(`refreshQuota(${nameJ}, 'freemodel')`,   'Обновить квоту',                     '🔄', 'amber')}
@@ -1046,6 +1238,7 @@ function renderFreemodel(refreshed) {
       { label: '', w: 'w-8' },
       { label: 'Email' },
       { label: 'Created' },
+      { label: 'Timer' },
       { label: 'Available', align: 'right' },
       { label: '5h window' },
       { label: '7d window' },
@@ -1211,6 +1404,19 @@ async function selectNotionCard(index) {
 }
 
 // ═══════════════════ LAUNCH SCRIPTS ══════════════════════════════════
+async function launchBat(batName) {
+  if (!confirm(`Запустить «${batName}»?`)) return;
+  try {
+    const res = await fetch('/__switch/api/launch-bat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bat: batName }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`▶ ${batName} запущен`, 'success', 6000);
+  } catch (e) { toast('Launch bat: ' + e.message, 'error'); }
+}
+
 async function launchScript(kind, successMsg, extraArgs) {
   if (!confirm(`Запустить «${kind}» в новом окне терминала?`)) return;
   try {
@@ -1581,6 +1787,81 @@ async function freemodelToggleTg(name, currentlyLinked) {
   } catch (e) { toast('TG: ' + e.message, 'error'); }
 }
 
+// Модальное окно выбора TG-аккаунта для привязки.
+let __tgBindAccounts = [];
+let __tgBindSessionName = null;
+
+function closeTgBindModal() {
+  const modal = $('tg-bind-modal');
+  if (modal) modal.classList.add('hidden');
+  __tgBindAccounts = [];
+  __tgBindSessionName = null;
+}
+
+function openTgBindModal(name, freeAccounts) {
+  __tgBindAccounts = freeAccounts;
+  __tgBindSessionName = name;
+  const modal = $('tg-bind-modal');
+  const subtitle = $('tg-bind-modal-subtitle');
+  const list = $('tg-bind-modal-list');
+  if (!modal || !subtitle || !list) return toast('Модальное окно не найдено', 'error');
+  subtitle.textContent = name;
+  list.innerHTML = freeAccounts.map((e, i) => `
+    <button onclick="confirmTgBind(${i})" class="w-full text-left px-3 py-2 rounded-lg border border-line-soft hover:bg-elevated/60 hover:border-azure/40 transition flex items-center justify-between gap-2">
+      <span class="font-mono text-xs">+${esc(e.phone)}</span>
+      <span class="text-[10px] text-faint">DC${e.dc_id} · ${esc(e.auth_key_mask)}</span>
+    </button>
+  `).join('');
+  modal.classList.remove('hidden');
+}
+
+async function confirmTgBind(idx) {
+  if (!__tgBindAccounts[idx] || !__tgBindSessionName) return;
+  const phone = __tgBindAccounts[idx].phone;
+  const name = __tgBindSessionName;
+  closeTgBindModal();
+  await doTgBind(name, phone);
+}
+
+async function doTgBind(name, phone) {
+  const s = state.freemodel.find(x => x.name === name);
+  if (!s) return toast('сессия не найдена', 'error');
+  try {
+    toast('Привязываю Telegram...', 'info', 2000);
+    const bindRes = await fetch('/__switch/api/freemodel/bind-telegram', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, phone, headless: false }),
+    });
+    const bindData = await bindRes.json();
+    if (!bindRes.ok || !bindData.ok) throw new Error(bindData.error || 'bind failed');
+    toast(`📱 +${bindData.tgPhone} привязан\n${bindData.apiKey ? '🔑 ключ: ' + bindData.apiKey : 'ключ не получен'}`, 'success', 7000);
+    if (bindData.apiKey) {
+      s.meta = s.meta || {};
+      s.meta.apiKey = bindData.apiKey;
+    }
+    if (bindData.tgPhone) {
+      s.meta = s.meta || {};
+      s.meta.tgPhone = bindData.tgPhone;
+    }
+    toast('🔄 обновляю список сессий...', 'info', 1500);
+    await loadFreemodelSessions(false);
+  } catch (e) { toast('Bind TG: ' + e.message, 'error'); }
+}
+
+// Автопривязка Telegram из свободного пула к FreeModel-аккаунту.
+async function freemodelBindTelegram(name) {
+  const s = state.freemodel.find(x => x.name === name);
+  if (!s) return toast('сессия не найдена', 'error');
+  try {
+    const res = await fetch('/__switch/api/tg/list');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'tg list failed');
+    const free = (data.entries || []).filter(e => e.status === 'free');
+    if (!free.length) return toast('Нет свободных TG-аккаунтов в пуле', 'warn');
+    openTgBindModal(name, free);
+  } catch (e) { toast('Bind TG: ' + e.message, 'error'); }
+}
+
 // Ручной ввод API-ключа (например, скопировал сам).
 async function freemodelEditKey(name, currentKey) {
   const input = prompt(
@@ -1651,6 +1932,7 @@ async function activateFmKey(name) {
     const data = await res.json();
     if (data.ok) {
       toast(`🌟 Активирован: ${s.email} (${data.mask})`, 'success');
+      await loadActiveFmKey();
     } else {
       toast(`Ошибка: ${data.error}`, 'error');
     }
@@ -1891,8 +2173,21 @@ async function loadTokenrouterAccounts() {
     state.tokenrouter = data.accounts || [];
     $('nav-count-tokenrouter').textContent = state.tokenrouter.length;
     renderTokenrouter();
+    await loadTokenrouterOmnirouteConnections();
+    renderTokenrouter();
   } catch (e) {
     $('tokenrouter-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadTokenrouterOmnirouteConnections() {
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/omniroute-connections');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.tokenrouterOmniroute = data.connections || [];
+  } catch (e) {
+    state.tokenrouterOmniroute = [];
   }
 }
 
@@ -1905,22 +2200,103 @@ async function loadTrHealthCache() {
   } catch {}
 }
 
+async function loadTrUsageCache() {
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/usage-cache');
+    const data = await res.json();
+    state.tokenrouterUsage = data || {};
+    renderTokenrouter();
+  } catch {}
+}
+
+async function refreshTrUsage(email) {
+  if (!state.tokenrouterUsage) state.tokenrouterUsage = {};
+  state.tokenrouterUsage[email] = { checking: true };
+  renderTokenrouter();
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/refresh-usage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    state.tokenrouterUsage[email] = data;
+    if (data.ok) {
+      const rem = (data.remaining ?? 0).toFixed(2);
+      toast(`✓ ${email}: баланс $${rem} / $1.00`, 'success');
+    } else {
+      toast(`✗ ${email}: баланс недоступен — ${data.error || 'error'}`, 'error');
+    }
+  } catch (e) {
+    state.tokenrouterUsage[email] = { ok: false, error: e.message };
+    toast(`✗ ${email}: ${e.message}`, 'error');
+  }
+  renderTokenrouter();
+}
+
 function renderTokenrouter() {
-  const list = state.tokenrouter;
-  if (!list.length) {
-    $('tokenrouter-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">пусто — нажми «Создать аккаунт»</div>`;
+  const filter = ($('tokenrouter-filter')?.value || '').toLowerCase();
+  const sort = $('tokenrouter-sort')?.value || 'date-desc';
+  let all = state.tokenrouter.slice();
+
+  if (filter) {
+    all = all.filter(a => (a.email || '').toLowerCase().includes(filter));
+  }
+
+  // enrich with usage + health score for sorting
+  all = all.map(a => {
+    const u = state.tokenrouterUsage?.[a.email];
+    const used = u?.ok ? parseFloat(u.todayCost || 0) : null;
+    const budget = u?.ok ? parseFloat(u.dailyBudget || 1) : null;
+    const remaining = u?.ok ? parseFloat(u.remaining || 0) : null;
+    const h = state.tokenrouterHealth?.[a.email];
+    const isAlive = h === true || (h && h.ok);
+    const healthScore = !h ? -1 : h === 'checking' ? 0 : isAlive ? 1 : 2;
+    return {
+      ...a,
+      _used: used,
+      _budget: budget,
+      _remaining: remaining,
+      _healthScore: healthScore,
+      _usagePct: (used != null && budget && budget > 0) ? (used / budget) * 100 : null,
+    };
+  });
+
+  const sortFns = {
+    'date-desc':    (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0),
+    'date-asc':     (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0),
+    'balance-desc': (a, b) => cmpNullable(a, b, x => x._remaining, 'desc') || (b.createdAt || '').localeCompare(a.createdAt || ''),
+    'balance-asc':  (a, b) => cmpNullable(a, b, x => x._remaining, 'asc')  || (a.createdAt || '').localeCompare(b.createdAt || ''),
+    'usage-desc':   (a, b) => cmpNullable(a, b, x => x._used, 'desc')      || (b.createdAt || '').localeCompare(a.createdAt || ''),
+    'usage-asc':    (a, b) => cmpNullable(a, b, x => x._used, 'asc')       || (a.createdAt || '').localeCompare(b.createdAt || ''),
+    'health':       (a, b) => a._healthScore - b._healthScore || (a.email || '').localeCompare(b.email || ''),
+    'email':        (a, b) => (a.email || '').localeCompare(b.email || ''),
+  };
+  all.sort(sortFns[sort] || sortFns['date-desc']);
+
+  if (!all.length) {
+    $('tokenrouter-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто — нажми «Создать аккаунт»'}</div>`;
     return;
   }
 
-  const rows = list.map(a => {
+  const rows = all.map(a => {
     const email = a.email;
+    const imported = state.tokenrouterOmniroute.some(c => c.name === email || c.email === email);
+    const rowClass = imported ? 'bg-emerald/5 border-l-2 border-l-emerald' : '';
     const keyBadge = a.apiKey
       ? `<span class="font-mono text-emerald text-[11px]">🔑 …${esc(a.apiKey.slice(-8))}</span>`
       : `<span class="font-mono text-crimson text-[11px]">⚠ нет ключа</span>`;
     const emailJ = JSON.stringify(email);
+    const importBtn = imported
+      ? `<button disabled class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium disabled:opacity-100 cursor-default">✅ Импортировано</button>`
+      : a.apiKey
+        ? `<button onclick='importTokenrouterToOmniRoute(${emailJ})' title="Импортировать в OmniRoute" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-emerald/10 border border-emerald/50 text-emerald rounded hover:bg-emerald/20 transition font-medium">⬆ Импорт</button>`
+        : '';
     const h = state.tokenrouterHealth?.[email];
     const age = h?.checkedAt ? ageStr(h.checkedAt) : '';
-    const isAlive = h === true || (h && h.ok);
+    const isAlive = a._healthScore === 1;
+    const deleteBtn = imported && !isAlive
+      ? `<button onclick='deleteTokenrouterFromOmniRoute(${emailJ})' title="Удалить из OmniRoute" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-crimson/10 border border-crimson/50 text-crimson rounded hover:bg-crimson/20 transition font-medium">🗑 Из OmniRoute</button>`
+      : '';
     const healthCell = !h
       ? `<span class="text-faint text-[11px]">—</span>`
       : h === 'checking'
@@ -1931,16 +2307,39 @@ function renderTokenrouter() {
       ? `<span class="text-emerald text-[11px] font-medium" title="${esc(age)}">✅ OK</span>`
       : `<span class="text-crimson text-[11px]" title="${esc((h.error || '') + ' · ' + age)}">❌ ${h?.error === 'ключ отклонён (expired/dead)' ? 'DEAD' : 'ERR'}</span>`;
 
-    return `<tr class="hover:bg-elevated/40 transition">
-      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[240px]" title="${esc(email)}">${esc(email)}</td>
+    let balanceCell = '<span class="text-faint text-[11px]">—</span>';
+    if (state.tokenrouterUsage?.[email]?.checking) {
+      balanceCell = '<span class="text-amber text-[11px]">⏳</span>';
+    } else if (a._used != null) {
+      const remaining = (a._remaining ?? 0).toFixed(2);
+      const used = (a._used ?? 0).toFixed(3);
+      const pct = a._usagePct ?? 0;
+      balanceCell = `<div class="text-[11px] leading-tight text-right">
+        <div class="text-ink font-mono mb-1">$${used} / $${a._budget}</div>
+        ${bar(pct, pct > 90 ? 'bg-crimson' : pct > 60 ? 'bg-amber' : 'bg-emerald')}
+        <div class="text-faint mt-0.5">ост. $${remaining}</div>
+      </div>`;
+    } else if (state.tokenrouterUsage?.[email]?.error) {
+      balanceCell = `<span class="text-crimson text-[10px]" title="${esc(state.tokenrouterUsage[email].error)}">err</span>`;
+    }
+
+    const timerCell = regAgeHtml(a.createdAt, 'daily $1.00');
+
+    return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[200px]" title="${esc(email)}">
+        ${importBtn}${deleteBtn}<span class="${imported ? 'text-emerald' : ''}">${esc(email)}</span>
+      </td>
       <td class="px-3 py-2.5">${keyBadge}</td>
       <td class="px-3 py-2.5 text-center">${healthCell}</td>
-      <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc((a.createdAt || '').substring(0, 10))}</td>
+      <td class="px-3 py-2.5">${balanceCell}</td>
+      <td class="px-3 py-2.5">${timerCell}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${a.apiKey ? actBtn(`importTokenrouterToOmniRoute(${emailJ})`, 'Импорт в OmniRoute', '⬆️', 'emerald') : ''}
         ${actBtn(`copyTokenrouterKey(${emailJ})`,   'Скопировать API-ключ',  '📋🔑', 'emerald')}
         ${actBtn(`copyTokenrouterExport(${emailJ})`, 'Скопировать export',   '📋💲', 'amber')}
         ${actBtn(`copyTokenrouterEmail(${emailJ})`,  'Скопировать email',    '📋✉', 'azure')}
         ${actBtn(`openTokenrouterSession(${emailJ})`, 'Открыть сессию', '🌐', 'azure')}
+        ${a.apiKey ? actBtn(`refreshTrUsage(${emailJ})`, 'Обновить баланс', '💰', 'amber') : ''}
         ${a.apiKey ? actBtn(`checkTokenrouterKey(${emailJ})`, 'Проверить ключ', '🩺', 'violet') : ''}
         ${actBtn(`deleteTokenrouterAccount(${emailJ})`, 'Удалить аккаунт',   '🗑', 'crimson')}
       </td>
@@ -1952,13 +2351,17 @@ function renderTokenrouter() {
       { label: 'Email' },
       { label: 'API Key' },
       { label: 'Health', align: 'center', w: 'w-16' },
-      { label: 'Created' },
+      { label: 'Daily usage', align: 'right' },
+      { label: 'Timer' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
-    `${list.length} аккаунт${list.length === 1 ? '' : 'ов'}`
+    `${all.length} из ${state.tokenrouter.length}${filter ? ' (отфильтр.)' : ''}`
   );
 }
+
+$('tokenrouter-filter').addEventListener('input', () => renderTokenrouter());
+$('tokenrouter-sort').addEventListener('change', () => renderTokenrouter());
 
 function copyTokenrouterKey(email) {
   const a = state.tokenrouter.find(x => x.email === email);
@@ -1975,6 +2378,40 @@ function copyTokenrouterExport(email) {
   if (!a || !a.apiKey) return toast('API-ключ не найден', 'warn');
   const text = `export ANTHROPIC_BASE_URL=https://tokenrouter.me/v1\nexport ANTHROPIC_API_KEY=${a.apiKey}`;
   copyToClipboard(text, 'export-блок');
+}
+
+async function importTokenrouterToOmniRoute(email) {
+  const a = state.tokenrouter.find(x => x.email === email);
+  if (!a || !a.apiKey) return toast('API-ключ не найден', 'warn');
+  toast('Импорт в OmniRoute…', 'info');
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/import-to-omniroute', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: a.email, apiKey: a.apiKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'import failed');
+    await loadTokenrouterOmnirouteConnections();
+    renderTokenrouter();
+    toast(`Импортирован: ${email}`, 'success');
+  } catch (e) { toast('Import: ' + e.message, 'error'); }
+}
+
+async function deleteTokenrouterFromOmniRoute(email) {
+  const a = state.tokenrouter.find(x => x.email === email);
+  if (!a) return toast('Аккаунт не найден', 'warn');
+  if (!confirm(`Удалить аккаунт ${email} из OmniRoute?`)) return;
+  try {
+    const res = await fetch('/__switch/api/tokenrouter/delete-from-omniroute', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'delete failed');
+    await loadTokenrouterOmnirouteConnections();
+    renderTokenrouter();
+    toast(data.deleted ? `Удалено из OmniRoute: ${email}` : `Не найдено в OmniRoute: ${email}`, data.deleted ? 'success' : 'warn');
+  } catch (e) { toast('Delete from OmniRoute: ' + e.message, 'error'); }
 }
 
 async function deleteTokenrouterAccount(email) {
@@ -2035,6 +2472,16 @@ async function checkAllTokenrouterKeys() {
   toast('✓ Проверка завершена', 'success');
 }
 
+async function refreshAllTrUsage() {
+  const list = state.tokenrouter.filter(a => a.apiKey);
+  if (!list.length) return toast('нет ключей для баланса', 'warn');
+  toast(`Проверяю баланс ${list.length} аккаунтов…`, 'info');
+  for (const a of list) {
+    await refreshTrUsage(a.email);
+  }
+  toast('✓ Балансы обновлены', 'success');
+}
+
 function toggleManualAdd() {
   $('tokenrouter-manual-add').classList.toggle('hidden');
 }
@@ -2068,7 +2515,9 @@ function launchTokenrouterCreate() {
 
 // ═══════════════════ LOG PANEL ════════════════════════════════════════
 let logPanelOpen = false;
+let logMode = 'toasts';   // 'toasts' | 'server'
 let logPollInterval = null;
+let serverLogLines = [];
 
 function toggleLogPanel() {
   const panel = $('log-panel');
@@ -2077,8 +2526,8 @@ function toggleLogPanel() {
   if (logPanelOpen) {
     panel.classList.remove('hidden');
     btn.classList.add('text-emerald');
-    loadLogs();
-    if (!logPollInterval) logPollInterval = setInterval(loadLogs, 2000);
+    renderLogPanel();
+    if (logMode === 'server' && !logPollInterval) logPollInterval = setInterval(pollServerLogs, 2000);
   } else {
     panel.classList.add('hidden');
     btn.classList.remove('text-emerald');
@@ -2086,36 +2535,183 @@ function toggleLogPanel() {
   }
 }
 
-async function loadLogs() {
+function setLogMode(mode) {
+  logMode = mode;
+  $('log-tab-toasts').className = `text-[10px] px-2 py-1 ${mode === 'toasts' ? 'text-ink bg-elevated/60' : 'text-dim hover:text-ink'}`;
+  $('log-tab-server').className = `text-[10px] px-2 py-1 ${mode === 'server' ? 'text-ink bg-elevated/60' : 'text-dim hover:text-ink'}`;
+  $('log-title').textContent = mode === 'toasts' ? 'История уведомлений' : 'Server logs';
+  if (mode === 'server') {
+    if (!logPollInterval) logPollInterval = setInterval(pollServerLogs, 2000);
+    pollServerLogs();
+  } else {
+    if (logPollInterval) { clearInterval(logPollInterval); logPollInterval = null; }
+  }
+  renderLogPanel();
+}
+
+async function pollServerLogs() {
+  if (!logPanelOpen || logMode !== 'server') return;
   try {
     const res = await fetch('/__switch/api/logs?limit=200');
     if (!res.ok) throw new Error('fetch failed');
     const data = await res.json();
-    const box = $('log-box');
-    const text = (data.lines || []).join('\n');
-    if (box.value !== text) {
-      box.value = text;
+    serverLogLines = data.lines || [];
+    renderLogPanel();
+  } catch { /* silent */ }
+}
+
+function renderLogPanel() {
+  const box = $('log-box');
+  if (!box) return;
+  if (logMode === 'server') {
+    const text = serverLogLines.join('\n');
+    if (box.textContent !== text) {
+      box.textContent = text;
+      box.className = 'flex-1 w-full bg-bg overflow-y-auto p-3 font-mono text-[11px] text-dim leading-relaxed whitespace-pre-wrap';
       box.scrollTop = box.scrollHeight;
     }
-  } catch (e) { /* silent */ }
+    return;
+  }
+  box.className = 'flex-1 w-full bg-bg overflow-y-auto p-3 space-y-1.5';
+  const map = {
+    info:    'border-l-azure   bg-azure/5   text-azure',
+    success: 'border-l-emerald bg-emerald/5 text-emerald',
+    warn:    'border-l-amber   bg-amber/5   text-amber',
+    error:   'border-l-crimson bg-crimson/5 text-crimson',
+  };
+  if (!state.toastLog.length) {
+    box.innerHTML = '<div class="text-[11px] text-dim text-center py-8 font-sans">Уведомлений пока нет</div>';
+    return;
+  }
+  box.innerHTML = state.toastLog.map(e => {
+    const t = new Date(e.t).toLocaleTimeString('ru-RU', { hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const cls = map[e.kind] || map.info;
+    return `<div class="text-[11px] border-l-2 pl-2 py-1 pr-2 rounded-r ${cls}">
+      <span class="opacity-60 font-mono text-[10px] mr-2">${t}</span>
+      <span class="whitespace-pre-wrap font-sans">${esc(e.text)}</span>
+    </div>`;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+function clearLog() {
+  if (logMode === 'toasts') {
+    state.toastLog = [];
+  } else {
+    serverLogLines = [];
+  }
+  renderLogPanel();
+}
+
+// ═══════════════════ SETTINGS TAB ═════════════════════════════════════
+async function loadSettings() {
+  try {
+    const res = await fetch('/__switch/api/settings/current');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = data.settings;
+    const key = (s.env && s.env.ANTHROPIC_API_KEY) || '';
+    $('settings-cur-key').textContent = key ? key.slice(0,12)+'...'+key.slice(-6) : '—';
+    $('settings-cur-url').textContent = (s.env && s.env.ANTHROPIC_BASE_URL) || '—';
+    $('settings-cur-helper').textContent = s.apiKeyHelper || '—';
+    $('settings-cur-ttl').textContent = (s.env && s.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS) || '—';
+    $('settings-key').value = key;
+    $('settings-url-inp').value = (s.env && s.env.ANTHROPIC_BASE_URL) || 'https://cc.freemodel.dev';
+    $('settings-helper-inp').value = s.apiKeyHelper || 'cat ~/.claude/fm-active-key.txt';
+    $('settings-ttl-inp').value = (s.env && s.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS) || '1';
+    fillSettingsFmDropdown();
+  } catch(e) { toast('Settings load: '+e.message,'error'); }
+}
+
+async function saveSettings() {
+  try {
+    const key = $('settings-key').value.trim();
+    const url = $('settings-url-inp').value.trim();
+    const helper = $('settings-helper-inp').value.trim();
+    const ttl = $('settings-ttl-inp').value.trim();
+    const patch = {
+      apiKeyHelper: helper,
+      env: {
+        ANTHROPIC_BASE_URL: url,
+        CLAUDE_CODE_API_KEY_HELPER_TTL_MS: ttl,
+      }
+    };
+    if (key) patch.env.ANTHROPIC_API_KEY = key;
+    const res = await fetch('/__switch/api/settings/apply', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({settings:patch}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const el = $('settings-msg');
+    el.textContent = '✓ Сохранено! Перезапусти Claude Code.';
+    el.classList.remove('hidden');
+    setTimeout(()=>el.classList.add('hidden'),5000);
+    loadSettings();
+    loadStatus();
+  } catch(e){ toast('Settings save: '+e.message,'error'); }
+}
+
+function toggleSettingsKey() {
+  const el = $('settings-key');
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function fillSettingsFmDropdown() {
+  const sel = $('settings-fm');
+  if (!sel) return;
+  if (!state.freemodel) { setTimeout(fillSettingsFmDropdown,500); return; }
+  sel.innerHTML = '<option value="">— вручную —</option>' +
+    state.freemodel.filter(s=>!s.banned).map(s=>
+      `<option value="${esc(s.meta?.apiKey||'')}" data-name="${esc(s.name)}">${esc(s.name)} · $${esc(String(s.available||'?'))}</option>`
+    ).join('');
+}
+
+function onSettingsFm() {
+  const sel = $('settings-fm');
+  const key = sel.value;
+  if (key) $('settings-key').value = key;
 }
 
 // ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
 showTab(localStorage.getItem('opencode_active_tab') || 'switcher');
+toggleLogPanel(); // log panel open by default
 </script>
+<!-- TG bind modal -->
+<div id="tg-bind-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+  <div class="bg-surface rounded-xl border border-line-soft shadow-2xl p-5 w-[440px] max-w-[92vw] max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-semibold">📱 Привязать Telegram</h3>
+      <button onclick="closeTgBindModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-3">Выбери свободный TG-аккаунт для привязки к <span id="tg-bind-modal-subtitle" class="font-mono text-ink">—</span></p>
+    <div id="tg-bind-modal-list" class="space-y-1.5 overflow-y-auto mb-4 pr-1"></div>
+    <div class="flex justify-end">
+      <button onclick="closeTgBindModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
+    </div>
+  </div>
+</div>
 
 <!-- Log panel -->
-<div id="log-panel" class="hidden fixed bottom-4 right-4 z-40 flex flex-col w-[520px] max-w-[90vw] h-[320px] bg-surface border border-line-soft rounded-xl shadow-2xl overflow-hidden">
+<div id="log-panel" class="hidden fixed bottom-4 right-4 z-40 flex flex-col w-[560px] max-w-[92vw] h-[360px] bg-surface
+ border border-line-soft rounded-xl shadow-2xl overflow-hidden">
   <div class="flex items-center justify-between px-3 py-2 border-b border-line-soft bg-elevated/40">
     <div class="text-xs font-medium text-muted flex items-center gap-2">
       <span class="relative inline-block size-2 rounded-full bg-emerald pulse-dot"></span>
-      Server logs
+      <span id="log-title">История уведомлений</span>
     </div>
-    <button onclick="toggleLogPanel()" class="text-dim hover:text-ink text-xs px-2 py-1">Скрыть</button>
+    <div class="flex items-center gap-2">
+      <div class="flex bg-bg rounded-md border border-line-soft overflow-hidden">
+        <button id="log-tab-toasts" onclick="setLogMode('toasts')" class="text-[10px] px-2 py-1 text-ink bg-elevated/60">Уведомления</button>
+        <button id="log-tab-server" onclick="setLogMode('server')" class="text-[10px] px-2 py-1 text-dim hover:text-ink">Server logs</button>
+      </div>
+      <button onclick="clearLog()" class="text-dim hover:text-crimson text-[10px] px-2 py-1">Очистить</button>
+      <button onclick="toggleLogPanel()" class="text-dim hover:text-ink text-xs px-2 py-1">Скрыть</button>
+    </div>
   </div>
-  <textarea id="log-box" readonly class="flex-1 w-full bg-bg text-[11px] font-mono text-dim p-3 resize-none focus:outline-none overflow-y-auto leading-relaxed" spellcheck="false"></textarea>
+  <div id="log-box" class="flex-1 w-full bg-bg overflow-y-auto p-3 space-y-1.5 font-mono text-[11px] leading-relaxed"></div>
 </div>
 
 <!-- Log toggle button -->

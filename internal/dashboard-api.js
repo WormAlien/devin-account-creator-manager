@@ -236,12 +236,23 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
                     const origIdx = sessions.indexOf(eligible[i]);
                     if (origIdx >= 0) out[origIdx].quota = { ...q, updatedAt: Date.now() };
                     cache[eligible[i].name] = out[origIdx >= 0 ? origIdx : i].quota;
+                    // Update TG binding status from dashboard scan
+                    if (q.tgBound === true) {
+                        meta[eligible[i].name] = meta[eligible[i].name] || {};
+                        if (!meta[eligible[i].name].tgPhone) {
+                            meta[eligible[i].name].tgPhone = q.tgPhone || 'connected';
+                        }
+                    } else if (q.tgBound === false) {
+                        meta[eligible[i].name] = meta[eligible[i].name] || {};
+                        delete meta[eligible[i].name].tgPhone;
+                    }
                 }
             } catch { /* keep cached value */ }
         }
     });
     await Promise.all(workers);
     saveFreemodelQuotaCache(cache);
+    saveFreemodelMeta(meta);
     return out;
 }
 
@@ -483,17 +494,33 @@ function setNotionCardIndex(value) {
 // session there, the dashboard process stays clean.
 const { spawn } = require('child_process');
 
+function launchBatFile(batName) {
+    const batPath = path.join(PROJECT_ROOT, 'routing', batName);
+    if (!fs.existsSync(batPath)) throw new Error(`bat not found: ${batName}`);
+    if (process.platform === 'win32') {
+        spawn('cmd.exe', ['/c', 'start', batName.replace(/\.bat$/i, ''), 'cmd.exe', '/k', batPath], {
+            cwd: PROJECT_ROOT,
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: false,
+        }).unref();
+    } else {
+        spawn('bash', [batPath], { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
+    }
+    return { ok: true, bat: batName };
+}
+
 function launchScript(kind, extraArgs = []) {
     const node = process.execPath; // current Node binary
     const TARGETS = {
         'menu':            { title: 'Autoreger Menu',         args: [path.join(PROJECT_ROOT, 'menu.js')] },
         'devin-autoreg':   { title: 'Devin Autoreger',        args: [path.join(PROJECT_ROOT, 'autoreger.js')] },
-        // FreeModel: instanttempemail-based mass register (v3 — v2/emailnator deprecated)
+        // FreeModel: 10minutemail-based mass register (v3 — v2/emailnator deprecated)
         'freemodel-create':{ title: 'FreeModel Autoreg v3',   args: [path.join(PROJECT_ROOT, 'freemodel', 'freemodel_autoreger_v3.js')] },
         // FreeModel: single manual login (legacy, for restoring sessions)
         'freemodel-login': { title: 'FreeModel: Manual Login',args: [path.join(PROJECT_ROOT, 'freemodel', 'create_first_session.js')] },
         'notion-create':   { title: 'Notion: New Account',    args: [path.join(PROJECT_ROOT, 'notion', 'notion_workflow.js')] },
-        'tokenrouter-create': { title: 'TokenRouter Autoreg', args: [path.join(PROJECT_ROOT, 'routing', 'tokenrouter-autoreg.js')] },
+        'tokenrouter-create': { title: 'TokenRouter Autoreg', cmd: 'python', args: [path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'camoufox_autoreg.py')] },
     };
     const t = TARGETS[kind];
     if (!t) throw new Error(`unknown launch kind: ${kind}`);
@@ -549,6 +576,17 @@ function saveTrUsageCache(cache) {
 
 function getCachedTrUsage(email) {
     return loadTrUsageCache()[email] || null;
+}
+
+const FM_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'fm-active-key.txt');
+
+function getActiveFreemodelKey() {
+    try {
+        if (fs.existsSync(FM_ACTIVE_KEY_FILE)) {
+            return fs.readFileSync(FM_ACTIVE_KEY_FILE, 'utf-8').trim();
+        }
+    } catch {}
+    return null;
 }
 
 async function checkTokenrouterUsage(apiKey, email) {
@@ -753,12 +791,16 @@ module.exports = {
     getNotionCards,
     setNotionCardIndex,
     launchScript,
+    launchBatFile,
     sqliteJson,
     setFreemodelBanned,
     setFreemodelTgPhone,
     setFreemodelApiKey,
     extractFreemodelApiKey,
     checkTokenrouterKey,
+    checkTokenrouterUsage,
+    getCachedTrUsage,
+    getActiveFreemodelKey,
     openTokenrouterSession,
     loadFreemodelMeta,
 };

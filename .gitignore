@@ -21,6 +21,10 @@ freemodel/imports/
 freemodel/accounts/
 freemodel/sessions/
 freemodel/keys.txt
+freemodel/tg_pool.json
+freemodel/manual_email.txt
+freemodel/lib/camoufox_tmailor_profile_*/
+freemodel/lib/camoufox_recordings/
 freemodel/logs/
 freemodel/.last_invite
 freemodel/emailnator_debug_*.png
@@ -61,6 +65,7 @@ devin_session_*.json
 
 # Бэкапы
 backup_*/
+backups/
 *.backup
 
 # Документы продаж

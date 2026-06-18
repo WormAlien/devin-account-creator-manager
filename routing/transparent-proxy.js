@@ -278,6 +278,7 @@ function handleAccounts(res) {
 // All real work lives in internal/dashboard-api.js so the CLI menu and this
 // HTTP server stay in sync.
 const dashApi = require('../internal/dashboard-api');
+const freemodelManager = require('../internal/freemodel-manager');
 
 function readJsonBody(req) {
     return new Promise((resolve, reject) => {
@@ -498,6 +499,7 @@ async function handleNotionCardSelect(req, res) {
 
 const tgPool = require('../freemodel/lib/tg-pool');
 const tgSessionParser = require('../freemodel/lib/tg-session-parser');
+const fmTgBind = require('../freemodel/lib/fm-tg-bind');
 
 function handleTgList(res) {
     try {
@@ -651,6 +653,43 @@ async function handleFreemodelSetTg(req, res) {
     }
 }
 
+// Автоматическая привязка Telegram из пула к FreeModel-сессии.
+// Берёт свободный TG-аккаунт (или указанный phone), шлёт /start <token> боту,
+// ждёт verified и создаёт API-ключ.
+async function handleFreemodelBindTelegram(req, res) {
+    try {
+        const { name, phone, headless } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const cwd = process.cwd();
+        process.chdir(path.join(__dirname, '..'));
+        let result;
+        try {
+            const sessions = freemodelManager.getFreemodelSessions();
+            const session = sessions.find(s => s.name === name);
+            if (!session) {
+                process.chdir(cwd);
+                return jsonRes(res, 404, { error: 'session not found' });
+            }
+            logLine(`freemodel bind-telegram: ${name} ${phone ? 'phone=' + phone : 'auto'}`);
+            result = await fmTgBind.bindTelegram(session.path, phone, {
+                headless: headless !== false,
+                log: (msg) => logLine(msg),
+            });
+        } finally {
+            process.chdir(cwd);
+        }
+        if (!result.ok) {
+            logLine(`freemodel bind-telegram failed: ${result.error}`);
+            return jsonRes(res, 500, { ok: false, error: result.error, tgPhone: result.tgPhone });
+        }
+        logLine(`freemodel bind-telegram ok: ${name} tg=${result.tgPhone} key=${result.apiKey ? '***' + result.apiKey.slice(-6) : 'none'}`);
+        jsonRes(res, 200, { ok: true, tgPhone: result.tgPhone, apiKey: result.apiKey });
+    } catch (e) {
+        logLine(`freemodel bind-telegram error: ${e.message}`);
+        jsonRes(res, 500, { ok: false, error: e.message });
+    }
+}
+
 // Ручное проставление API-ключа (например, юзер скопировал руками).
 async function handleFreemodelSetKey(req, res) {
     try {
@@ -701,10 +740,11 @@ async function handleFreemodelActivate(req, res) {
             const bakPath = settingsFile + '.bak-fm-' + stamp;
             fs.copyFileSync(settingsFile, bakPath);
             settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = 'https://cc.freemodel.dev';
             settings.env.ANTHROPIC_API_KEY = apiKey;
             fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
-            logLine(`fm activate: wrote to settings.json`);
+            logLine(`fm activate: wrote direct key to settings.json`);
         } catch (e) {
             logLine(`fm activate: settings.json FAILED: ${e.message}`);
         }
@@ -744,6 +784,16 @@ async function handleLaunch(req, res) {
         if (!kind) return jsonRes(res, 400, { error: 'missing kind' });
         const result = dashApi.launchScript(kind, Array.isArray(args) ? args : []);
         logLine(`launch: ${kind}${result.args && result.args.length > 1 ? ' args=' + result.args.slice(1).join(' ') : ''}`);
+        jsonRes(res, 200, result);
+    } catch (e) { jsonRes(res, 400, { error: e.message }); }
+}
+
+async function handleLaunchBat(req, res) {
+    try {
+        const { bat } = await readJsonBody(req);
+        if (!bat) return jsonRes(res, 400, { error: 'missing bat' });
+        const result = dashApi.launchBatFile(bat);
+        logLine(`launch bat: ${bat}`);
         jsonRes(res, 200, result);
     } catch (e) { jsonRes(res, 400, { error: e.message }); }
 }
@@ -844,6 +894,10 @@ const server = http.createServer((req, res) => {
         return handleLaunch(req, res);
     }
 
+    if (req.method === 'POST' && req.url === '/__switch/api/launch-bat') {
+        return handleLaunchBat(req, res);
+    }
+
     // ---- TG pool routes ----
     if (req.method === 'GET'  && req.url === '/__switch/api/tg/list')        return handleTgList(res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/add-hex')     return handleTgAddHex(req, res);
@@ -856,11 +910,70 @@ const server = http.createServer((req, res) => {
     // ---- FreeModel ban/unban marker ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/ban')      return handleFreemodelBan(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-tg')   return handleFreemodelSetTg(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/bind-telegram') return handleFreemodelBindTelegram(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-key')      return handleFreemodelSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/extract-key')  return handleFreemodelExtractKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/activate')     return handleFreemodelActivate(req, res);
 
+    if (req.method === 'GET' && req.url === '/__switch/api/freemodel/active-key') {
+        (async () => {
+            try {
+                const cwd = process.cwd();
+                process.chdir(path.join(__dirname, '..'));
+                let activeKey, activeName = null;
+                try {
+                    activeKey = dashApi.getActiveFreemodelKey();
+                    if (activeKey) {
+                        const sessions = await dashApi.listFreemodelSessions({ withQuotas: false });
+                        const match = sessions.find(s => s.meta?.apiKey === activeKey || (() => {
+                            try {
+                                const infoFile = path.join(s.path, 'account_info.txt');
+                                if (fs.existsSync(infoFile)) {
+                                    const m = fs.readFileSync(infoFile, 'utf-8').match(/^API Key:\s*((?:fe[_-]|sk-)[A-Za-z0-9_-]{20,})/m);
+                                    return m && m[1] === activeKey;
+                                }
+                            } catch {}
+                            return false;
+                        })());
+                        if (match) activeName = match.name;
+                    }
+                } finally { process.chdir(cwd); }
+                jsonRes(res, 200, { activeKey: activeKey ? activeKey.slice(0, 12) + '...' + activeKey.slice(-6) : null, activeName });
+            } catch (e) {
+                jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
     // ---- TokenRouter routes ----
+    if (req.method === 'GET' && req.url === '/__switch/api/tokenrouter/omniroute-connections') {
+        (async () => {
+            try {
+                const response = await fetch('http://localhost:20128/api/providers', {
+                    method: 'GET',
+                    headers: { 'Authorization': `Bearer ${OMNIROUTE_KEY}` },
+                });
+                if (!response.ok) throw new Error(`providers ${response.status}`);
+                const data = await response.json();
+                const list = data.connections || [];
+                const connections = list.filter(p =>
+                    p.provider === 'openai-compatible-chat-8f2ae822-58f2-49b4-b212-393f686b00c5'
+                ).map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    email: p.email,
+                }));
+                logLine(`tokenrouter omniroute connections: ${connections.length}`);
+                jsonRes(res, 200, { connections });
+            } catch (e) {
+                logLine(`tokenrouter omniroute connections failed: ${e.message}`);
+                jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
     if (req.method === 'GET' && req.url === '/__switch/api/tokenrouter/accounts') {
         try {
             if (!fs.existsSync(TOKENROUTER_ACCOUNTS)) {
@@ -960,6 +1073,37 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    if (req.method === 'GET' && req.url === '/__switch/api/tokenrouter/usage-cache') {
+        try {
+            const TR_USAGE = path.join(__dirname, '..', 'logs', '.tokenrouter_usage.json');
+            const usage = fs.existsSync(TR_USAGE) ? JSON.parse(fs.readFileSync(TR_USAGE, 'utf-8')) : {};
+            jsonRes(res, 200, usage);
+        } catch (e) {
+            jsonRes(res, 200, {});
+        }
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/refresh-usage') {
+        (async () => {
+            try {
+                const { email } = await readJsonBody(req);
+                if (!email) return jsonRes(res, 400, { error: 'email required' });
+                if (!fs.existsSync(TOKENROUTER_ACCOUNTS))
+                    return jsonRes(res, 404, { error: 'no accounts file' });
+                const accounts = JSON.parse(fs.readFileSync(TOKENROUTER_ACCOUNTS, 'utf8'));
+                const acc = accounts.find(a => a.email === email);
+                if (!acc || !acc.apiKey) return jsonRes(res, 404, { error: 'account or key not found' });
+                const result = await dashApi.checkTokenrouterUsage(acc.apiKey, email);
+                logLine(`tokenrouter usage: ${email} → $${(result.todayCost || 0).toFixed(4)} / $1.00`);
+                jsonRes(res, 200, result);
+            } catch (e) {
+                jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
     if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/check-key') {
         (async () => {
             try {
@@ -975,6 +1119,66 @@ const server = http.createServer((req, res) => {
                 jsonRes(res, 200, result);
             } catch (e) {
                 jsonRes(res, 500, { error: e.message });
+            }
+        })();
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/import-to-omniroute') {
+        (async () => {
+            try {
+                const { email, apiKey } = await readJsonBody(req);
+                if (!email || !apiKey) return jsonRes(res, 400, { error: 'email and apiKey required' });
+                const stdout = execFileSync('node', [path.join(__dirname, 'tokenrouter', 'omniroute-api-client.js'), email, apiKey], {
+                    encoding: 'utf8',
+                    maxBuffer: 1024 * 1024,
+                    timeout: 60000,
+                    env: process.env,
+                });
+                const lines = stdout.trim().split(/\r?\n/);
+                let summary = null;
+                try { summary = JSON.parse(lines[lines.length - 1]); } catch {}
+                logLine(`tokenrouter import to omniroute: ${email} → ${summary?.ok ? 'OK' : (summary?.error || 'done')}`);
+                jsonRes(res, 200, { ok: true, output: stdout, summary });
+            } catch (e) {
+                logLine(`tokenrouter import to omniroute failed: ${e.message}`);
+                jsonRes(res, 500, { error: e.message || 'import failed' });
+            }
+        })();
+        return;
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/tokenrouter/delete-from-omniroute') {
+        (async () => {
+            try {
+                const { email } = await readJsonBody(req);
+                if (!email) return jsonRes(res, 400, { error: 'email required' });
+
+                const response = await fetch('http://localhost:20128/api/providers', {
+                    method: 'GET',
+                    headers: { 'Authorization': `Bearer ${OMNIROUTE_KEY}` },
+                });
+                if (!response.ok) throw new Error(`providers ${response.status}`);
+                const data = await response.json();
+                const list = data.connections || [];
+                const match = list.find(p =>
+                    p.provider === 'openai-compatible-chat-8f2ae822-58f2-49b4-b212-393f686b00c5' &&
+                    (p.name === email || p.email === email)
+                );
+                if (!match) {
+                    logLine(`tokenrouter delete from omniroute: ${email} not found`);
+                    return jsonRes(res, 200, { ok: true, deleted: false, reason: 'not found' });
+                }
+                const del = await fetch(`http://localhost:20128/api/providers/${match.id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${OMNIROUTE_KEY}` },
+                });
+                if (!del.ok) throw new Error(`delete ${del.status}`);
+                logLine(`tokenrouter delete from omniroute: ${match.id.substring(0, 8)} (${email})`);
+                return jsonRes(res, 200, { ok: true, deleted: true, id: match.id });
+            } catch (e) {
+                logLine(`tokenrouter delete from omniroute failed: ${e.message}`);
+                return jsonRes(res, 500, { error: e.message });
             }
         })();
         return;
@@ -1030,7 +1234,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET' && (req.url === '/' || req.url === '/__switch' || req.url === '/__switch/')) {
         try {
             const html = fs.readFileSync(path.join(__dirname, 'proxy-dashboard.html'), 'utf8');
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.writeHead(200, {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+              'Pragma': 'no-cache',
+              'Expires': '0',
+            });
             return res.end(html);
         } catch (e) {
             res.writeHead(500); return res.end('Dashboard not found: ' + e.message);

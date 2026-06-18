@@ -196,8 +196,11 @@ function stats() {
 // заканчивающийся на hex. Не-hex и не-whitespace (`:`, `|`, `+`, любая буква
 // кроме a-f) обрывают рейн — значит соседние записи не сливаются между собой.
 function preprocessBulk(text) {
-    return String(text || '').replace(/[0-9a-fA-F][0-9a-fA-F\s]*[0-9a-fA-F]/g, (m) => {
-        const stripped = m.replace(/\s+/g, '');
+    // Склеиваем пробелы/табы ВНУТРИ строки, но НЕ переносы строк: dc-цифра (1–5 —
+    // валидный hex) иначе приклеивается через \n к следующему ключу и весь батч
+    // схлопывается в одну строку. \n = разделитель аккаунтов.
+    return String(text || '').replace(/[0-9a-fA-F][0-9a-fA-F \t]*[0-9a-fA-F]/g, (m) => {
+        const stripped = m.replace(/[ \t]+/g, '');
         return stripped.length >= 200 ? stripped : m;
     });
 }

@@ -6,9 +6,9 @@
 
 <br>
 
-![Dashboard](docs/dashboard.png)
+![Switcher](docs/dashboard.png)
 
-<sub>Backend Switch · <code>localhost:8200/__switch</code> — менеджер FreeModel-сессий с пулом Telegram-привязок и квотами</sub>
+<sub>Backend Switch · <code>localhost:8200/__switch</code> — переключение backend'а Claude Code (FreeModel / API Helper / OmniRoute) одним кликом</sub>
 
 <br>
 
@@ -31,6 +31,15 @@ npx playwright install chromium
 pip install camoufox requests
 python -m camoufox fetch
 ```
+
+**2b. Telegram session opener** (опционально) — для кнопки **✈ Открыть** (открыть TG-сессию пула в портативном Telegram Desktop). Нужен **Python 3.12** (`opentele` тянет `telethon` + `PyQt5`).
+
+```bash
+python3.12 -m venv tools/tg-venv
+tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt
+```
+
+Скачай **портативный Telegram Desktop** и положи бинарь в `tools/telegram-portable/Telegram/Telegram.exe`. Профили сессий складываются в `tools/tg-profiles/<phone>/` (всё в `.gitignore`).
 
 **3. Конфиг**
 
@@ -90,10 +99,15 @@ routing\restart-dashboard.bat
 
 ### FreeModel
 
+![FreeModel](docs/freemodel.png)
+
 Менеджер сессий `freemodel.dev` с квотами и пулом Telegram-привязок.
 
-- **Активный API в Claude Code** — какой ключ сейчас в `settings.json`.
-- **Telegram pool** — готовые TG-аккаунты (`phone|auth_key_hex:dc`) для привязки к новым freemodel-аккаунтам. Расходуются по порядку: `free → used → banned`. Импорт списком или `.session`.
+- **Активный API в Claude Code** — какой ключ сейчас в `settings.json`. Бейдж режима: 🔑 **Прямой ключ** (`env.ANTHROPIC_API_KEY`) или 🤝 **API Helper** (`apiKeyHelper` читает `~/.claude/fm-active-key.txt`). На каждой сессии — тумблер 🔑 Ключ / 🤝 Helper.
+- **Telegram pool** — готовые TG-аккаунты для привязки к новым freemodel-аккаунтам. Расходуются по порядку: `free → used → banned`.
+  - **Импорт** списком: `phone|hex:dc`, `hex:dc`, `phone hex dc [user_id]` (по строке на акк) — или загрузкой `.session` (Pyrogram/Telethon).
+  - `hex:dc` без номера → имя-плейсхолдер `tg_<hex8>`; привязка идёт по `auth_key`, **номер не нужен**. Тег источника: **сессия** (`.session`) / **вручную** (hex).
+  - **✈ Открыть** — открыть сессию в портативном Telegram Desktop (`tools/tg-open.py` → `opentele`, `UseCurrentSession`). Отдельный `-workdir` на аккаунт — твой основной клиент не трогается.
 - **Сессии** — таблица с таймером, доступным `$`, окнами 5h/7d и квотой. **➕ Создать v3** реги пачкой, **🔄 Квоты ~30s** перепрогон через headless Chrome.
 
 **Цвет квоты:** 🟢 < 40% · 🟡 40–70% · 🔴 > 70%
@@ -250,6 +264,8 @@ node routing/transparent-proxy.js        # switcher вручную
 | `internal/dashboard-api.js` | Прослойка CLI ↔ HTTP |
 | `internal/freemodel-manager.js` | FreeModel-сессии + квоты + TG-пул |
 | `freemodel/` · `routing/tokenrouter/` | Auto-reg скрипты |
+| `tools/tg-open.py` | Открытие TG-сессии в портативном Telegram Desktop (opentele) |
+| `tools/{tg-venv,telegram-portable,tg-profiles}` | _gitignored_ — venv, бинарь Telegram, tdata-профили |
 | `manual_sessions/` · `ready_to_sell/` · `errors/` | _gitignored_ — сессии и ошибки |
 | `menu.js` | TUI-меню (всё-в-одном) |
 
@@ -278,6 +294,10 @@ node routing/transparent-proxy.js        # switcher вручную
 <tr>
   <td>Квоты в кеше устарели</td>
   <td>Кнопка <b>🔄 Квоты ~30s</b> в табе — перепрогон через headless Chrome</td>
+</tr>
+<tr>
+  <td><b>✈ Открыть</b> падает / <code>нет tools/tg-venv</code></td>
+  <td>Не создан venv или нет бинаря — см. install шаг <b>2b</b> (<code>opentele</code> + портативный Telegram в <code>tools/telegram-portable/Telegram/Telegram.exe</code>). Проверка: <code>tools/tg-venv/Scripts/python.exe tools/tg-open.py &lt;phone&gt; --check</code></td>
 </tr>
 </table>
 

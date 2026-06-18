@@ -51,6 +51,8 @@ notion/.dashboard-cache.json
 *.png
 *.jpg
 *.jpeg
+# README-скриншоты — трекаем
+!docs/*.png
 
 # Битые артефакты
 nul

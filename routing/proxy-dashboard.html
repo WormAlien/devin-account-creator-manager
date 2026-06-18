@@ -1590,7 +1590,7 @@ function renderTgPool() {
       ? `<div class="text-[10px] text-faint truncate max-w-[200px]" title="${esc(e.usedBy)}">${esc(e.usedBy)}</div>` : '';
     const dim = (e.status === 'used' || e.status === 'banned') ? 'opacity-60' : '';
     const phoneCell = e.isPlaceholderPhone
-      ? `<span class="text-amber italic" title="phone не указан — нажми ✎ чтобы задать">⚠ ${esc(e.phone)}</span>`
+      ? `<span class="text-azure" title="Импортирован по auth_key — номер не нужен, привязка по TG-аккаунту">📲 ${esc(e.phone)}</span> <span class="text-[9px] text-dim align-middle">по имени</span>`
       : `+${esc(e.phone)}`;
     return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim}">
         <td class="px-3 py-1.5 font-mono text-xs">${phoneCell}</td>
@@ -1599,7 +1599,7 @@ function renderTgPool() {
         <td class="px-3 py-1.5 text-[11px]">${statusCell(e.status)}${usedInfo}</td>
         <td class="px-3 py-1.5 text-right whitespace-nowrap">
           ${e.isPlaceholderPhone
-            ? `<button onclick="tgRename('${esc(e.phone)}')" title="Задать настоящий phone" class="text-[10px] px-2 py-0.5 bg-amber/10 border border-amber/40 text-amber rounded hover:bg-amber/20">✎</button>`
+            ? `<button onclick="tgRename('${esc(e.phone)}')" title="Указать номер (необязательно)" class="text-[10px] px-2 py-0.5 bg-elevated border border-line-soft text-muted rounded hover:border-azure/60 hover:text-azure">✎ номер</button>`
             : ''}
           ${(e.status === 'used' || e.status === 'banned')
             ? `<button onclick="tgMarkFree('${esc(e.phone)}')" title="Вернуть в free" class="text-[10px] px-2 py-0.5 bg-emerald/10 border border-emerald/40 text-emerald rounded hover:bg-emerald/20 ml-1">↺</button>`
@@ -1611,7 +1611,7 @@ function renderTgPool() {
   list.innerHTML = `<table class="w-full">
     <thead class="bg-elevated/60 text-[10px] uppercase tracking-wider text-muted">
       <tr>
-        <th class="px-3 py-2 text-left">Phone</th>
+        <th class="px-3 py-2 text-left">TG / номер</th>
         <th class="px-3 py-2 text-left">DC</th>
         <th class="px-3 py-2 text-left">Auth Key</th>
         <th class="px-3 py-2 text-left">Status</th>

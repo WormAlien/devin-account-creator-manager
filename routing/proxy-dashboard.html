@@ -217,65 +217,45 @@
       <div class="max-w-2xl mx-auto px-6 py-8 space-y-6">
         <header>
           <h1 class="text-2xl font-semibold tracking-tight">Настройки</h1>
-          <p class="text-sm text-muted mt-1">Редактирование <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code> напрямую из дашборда.</p>
+          <p class="text-sm text-muted mt-1">Настройки OmniRoute и бэкапы <code class="font-mono text-emerald text-xs">settings.json</code>.</p>
         </header>
 
         <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
-          <h2 class="text-sm font-semibold text-dim">Текущий конфиг</h2>
-          <div class="flex items-center gap-3 font-mono text-sm">
-            <span class="text-faint">Ключ:</span>
-            <span id="settings-cur-key" class="text-emerald">—</span>
-          </div>
-          <div class="flex items-center gap-3 font-mono text-xs text-faint flex-wrap">
-            <span>URL:</span><span id="settings-cur-url">—</span>
-            <span class="mx-1">|</span>
-            <span>Helper:</span><span id="settings-cur-helper" class="truncate max-w-[240px]">—</span>
-            <span class="mx-1">|</span>
-            <span>TTL:</span><span id="settings-cur-ttl">—</span>
-          </div>
-        </div>
-
-        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
-          <h2 class="text-sm font-semibold">Редактор</h2>
+          <h2 class="text-sm font-semibold">OmniRoute — импорт TokenRouter</h2>
+          <p class="text-sm text-muted">URL и manage-ключ твоего OmniRoute (по этому API добавляются email + ключ TokenRouter). Сохраняется в <code class="font-mono text-emerald text-xs">routing/.env</code>, применяется сразу.</p>
           <div class="space-y-3">
             <div>
-              <label class="text-xs text-dim block mb-1">Из FreeModel (автозаполнение)</label>
-              <select id="settings-fm" onchange="onSettingsFm()"
-                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60">
-                <option value="">— вручную —</option>
-              </select>
+              <label class="text-xs text-dim block mb-1">OMNIROUTE_BASE_URL</label>
+              <input id="env-omni-url" type="text"
+                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
+                placeholder="http://localhost:20128">
             </div>
             <div>
-              <label class="text-xs text-dim block mb-1">ANTHROPIC_API_KEY</label>
-              <input id="settings-key" type="password"
+              <label class="text-xs text-dim block mb-1">OMNIROUTE_API_KEY (scope manage)</label>
+              <input id="env-omni-key" type="password"
                 class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
-                placeholder="fe_oa_... или sk-...">
-              <button onclick="toggleSettingsKey()" class="text-[10px] text-dim hover:text-emerald mt-1">👁 показать</button>
-            </div>
-            <div>
-              <label class="text-xs text-dim block mb-1">ANTHROPIC_BASE_URL</label>
-              <input id="settings-url-inp" type="text"
-                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
-                value="https://cc.freemodel.dev">
-            </div>
-            <div>
-              <label class="text-xs text-dim block mb-1">apiKeyHelper</label>
-              <input id="settings-helper-inp" type="text"
-                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
-                value="cat ~/.claude/fm-active-key.txt">
-            </div>
-            <div>
-              <label class="text-xs text-dim block mb-1">TTL (CLAUDE_CODE_API_KEY_HELPER_TTL_MS)</label>
-              <input id="settings-ttl-inp" type="text"
-                class="w-full bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald/60"
-                value="1">
+                placeholder="sk-...">
+              <button onclick="toggleEnvKey()" class="text-[10px] text-dim hover:text-emerald mt-1">👁 показать</button>
             </div>
           </div>
           <div class="flex gap-2 pt-2">
-            <button onclick="saveSettings()" class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition">💾 Сохранить</button>
-            <button onclick="loadSettings()" class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄 Обновить</button>
+            <button onclick="saveEnvSettings()" class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition">💾 Сохранить</button>
+            <button onclick="loadEnvSettings()" class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄 Обновить</button>
           </div>
-          <div id="settings-msg" class="text-xs text-emerald hidden"></div>
+          <div id="env-msg" class="text-xs text-emerald hidden"></div>
+        </div>
+
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-sm font-semibold">Бэкапы <code class="font-mono text-emerald text-xs">settings.json</code></h2>
+              <p class="text-xs text-muted mt-0.5">Сохранение/восстановление конфига Claude Code. При восстановлении текущий сохраняется автоматически.</p>
+            </div>
+            <button onclick="backupSettingsNow()" class="shrink-0 px-3 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition">💾 Создать бэкап</button>
+          </div>
+          <div id="settings-backups-list" class="divide-y divide-line-soft/40">
+            <div class="text-xs text-faint py-2">—</div>
+          </div>
         </div>
       </div>
     </div>
@@ -661,7 +641,7 @@ function showTab(name) {
     loadTrHealthCache();
     loadTrUsageCache();
   }
-  if (name === 'settings') loadSettings();
+  if (name === 'settings') { loadEnvSettings(); loadSettingsBackups(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -1203,8 +1183,8 @@ function renderFreemodel(refreshed) {
     }
 
     const activateBtn = isActive
-      ? `<button disabled class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium disabled:opacity-100 cursor-default">🌟 Активен</button>`
-      : `<button onclick='activateFmKey(${nameJ})' title="Сделать активным API-ключом Claude Code" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-crimson/10 border border-crimson/50 text-crimson rounded hover:bg-crimson/20 transition font-medium">🔴 Активировать</button>`;
+      ? `<button disabled class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] w-[128px] h-[28px] whitespace-nowrap bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium disabled:opacity-100 cursor-default">🌟 Активен</button>`
+      : `<button onclick='activateFmKey(${nameJ})' title="Сделать активным API-ключом Claude Code" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] w-[128px] h-[28px] whitespace-nowrap bg-crimson/10 border border-crimson/50 text-crimson rounded hover:bg-crimson/20 transition font-medium">🔴 Активировать</button>`;
 
     return `<tr class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
       <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
@@ -2287,15 +2267,15 @@ function renderTokenrouter() {
       : `<span class="font-mono text-crimson text-[11px]">⚠ нет ключа</span>`;
     const emailJ = JSON.stringify(email);
     const importBtn = imported
-      ? `<button disabled class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium disabled:opacity-100 cursor-default">✅ Импортировано</button>`
+      ? `<button disabled class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] w-[128px] h-[28px] whitespace-nowrap bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium disabled:opacity-100 cursor-default">✅ Импортировано</button>`
       : a.apiKey
-        ? `<button onclick='importTokenrouterToOmniRoute(${emailJ})' title="Импортировать в OmniRoute" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-emerald/10 border border-emerald/50 text-emerald rounded hover:bg-emerald/20 transition font-medium">⬆ Импорт</button>`
+        ? `<button onclick='importTokenrouterToOmniRoute(${emailJ})' title="Импортировать в OmniRoute" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] w-[128px] h-[28px] whitespace-nowrap bg-emerald/10 border border-emerald/50 text-emerald rounded hover:bg-emerald/20 transition font-medium">⬆ Импорт</button>`
         : '';
     const h = state.tokenrouterHealth?.[email];
     const age = h?.checkedAt ? ageStr(h.checkedAt) : '';
     const isAlive = a._healthScore === 1;
     const deleteBtn = imported && !isAlive
-      ? `<button onclick='deleteTokenrouterFromOmniRoute(${emailJ})' title="Удалить из OmniRoute" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] px-4 h-[28px] min-h-[28px] min-w-[90px] bg-crimson/10 border border-crimson/50 text-crimson rounded hover:bg-crimson/20 transition font-medium">🗑 Из OmniRoute</button>`
+      ? `<button onclick='deleteTokenrouterFromOmniRoute(${emailJ})' title="Удалить из OmniRoute" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] w-[128px] h-[28px] whitespace-nowrap bg-crimson/10 border border-crimson/50 text-crimson rounded hover:bg-crimson/20 transition font-medium">🗑 Из OmniRoute</button>`
       : '';
     const healthCell = !h
       ? `<span class="text-faint text-[11px]">—</span>`
@@ -2604,6 +2584,97 @@ function clearLog() {
 }
 
 // ═══════════════════ SETTINGS TAB ═════════════════════════════════════
+async function loadSettingsBackups() {
+  try {
+    const res = await fetch('/__switch/api/settings/backups');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    const list = $('settings-backups-list');
+    const items = d.backups || [];
+    if (!items.length) { list.innerHTML = '<div class="text-xs text-faint py-2">пока нет бэкапов</div>'; return; }
+    list.innerHTML = items.map(b => {
+      const dt = new Date(b.mtime).toLocaleString();
+      const nj = JSON.stringify(b.name);
+      return `<div class="flex items-center justify-between gap-2 py-2">
+        <div class="min-w-0">
+          <div class="font-mono text-xs truncate" title="${esc(b.name)}">${esc(b.name)}</div>
+          <div class="text-[10px] text-faint">${esc(dt)} · ${(b.size/1024).toFixed(1)} KB</div>
+        </div>
+        <div class="flex gap-1 shrink-0">
+          <button onclick='restoreSettingsBackup(${nj})' class="text-[10px] px-2 py-1 rounded bg-emerald/10 border border-emerald/40 text-emerald hover:bg-emerald/20 transition">↩ Восстановить</button>
+          <button onclick='deleteSettingsBackup(${nj})' title="Удалить" class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-faint hover:text-crimson hover:border-crimson/50 transition">🗑</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) { toast('бэкапы: ' + e.message, 'error'); }
+}
+async function backupSettingsNow() {
+  try {
+    const res = await fetch('/__switch/api/settings/backup', { method: 'POST' });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast('💾 бэкап создан: ' + d.name, 'success');
+    loadSettingsBackups();
+  } catch (e) { toast('бэкап: ' + e.message, 'error'); }
+}
+async function restoreSettingsBackup(name) {
+  if (!confirm('Восстановить settings.json из\n' + name + '?\n\nТекущий будет сохранён в бэкап автоматически.')) return;
+  try {
+    const res = await fetch('/__switch/api/settings/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast('↩ восстановлено из ' + d.restored, 'success');
+    loadSettingsBackups();
+  } catch (e) { toast('restore: ' + e.message, 'error'); }
+}
+async function deleteSettingsBackup(name) {
+  if (!confirm('Удалить бэкап\n' + name + '?')) return;
+  try {
+    const res = await fetch('/__switch/api/settings/backup-delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast('🗑 удалён', 'success');
+    loadSettingsBackups();
+  } catch (e) { toast('delete: ' + e.message, 'error'); }
+}
+
+async function loadEnvSettings() {
+  try {
+    const res = await fetch('/__switch/api/env');
+    const e = await res.json();
+    if (!res.ok) throw new Error(e.error || 'fail');
+    $('env-omni-url').value = e.OMNIROUTE_BASE_URL || 'http://localhost:20128';
+    $('env-omni-key').value = e.OMNIROUTE_API_KEY || '';
+  } catch (err) { toast('env: ' + err.message, 'error'); }
+}
+async function saveEnvSettings() {
+  try {
+    const body = {
+      OMNIROUTE_BASE_URL: $('env-omni-url').value.trim(),
+      OMNIROUTE_API_KEY: $('env-omni-key').value.trim(),
+    };
+    const res = await fetch('/__switch/api/env', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    const el = $('env-msg');
+    el.textContent = '✓ сохранено и применено: ' + (d.applied || []).join(', ');
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 3000);
+    toast('OmniRoute настройки применены', 'success');
+  } catch (err) { toast('env: ' + err.message, 'error'); }
+}
+function toggleEnvKey() {
+  const el = $('env-omni-key');
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
 async function loadSettings() {
   try {
     const res = await fetch('/__switch/api/settings/current');

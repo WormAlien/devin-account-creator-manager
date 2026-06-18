@@ -28,11 +28,57 @@ function loadEnv(file) {
 }
 loadEnv(path.join(__dirname, '.env'));
 
-const OMNIROUTE_KEY = process.env.OMNIROUTE_API_KEY || 'sk-local-dev-key';
+// OmniRoute creds read LIVE from process.env — POST /__switch/api/env updates them
+// without restarting the proxy. Never freeze into a startup const.
+function omniBase() { return (process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128').replace(/\/+$/, ''); }
+function omniKey()  { return process.env.OMNIROUTE_API_KEY || 'sk-local-dev-key'; }
 const NOTION_KEY    = process.env.NOTION_API_KEY    || 'sk-local-dev-key';
+
+const ENV_FILE = path.join(__dirname, '.env');
+function readEnvFile() {
+    const out = {};
+    try {
+        for (const line of fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/)) {
+            if (line.trimStart().startsWith('#')) continue;
+            const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
+            if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, '');
+        }
+    } catch {}
+    return out;
+}
+// Upsert keys into routing/.env (keep other lines/comments) + apply live to process.env.
+function upsertEnvFile(updates) {
+    let lines = [];
+    try { lines = fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/); } catch {}
+    for (const [k, v] of Object.entries(updates)) {
+        const re = new RegExp('^\\s*' + k + '\\s*=');
+        const i = lines.findIndex(l => re.test(l) && !l.trimStart().startsWith('#'));
+        if (i >= 0) lines[i] = `${k}=${v}`;
+        else lines.push(`${k}=${v}`);
+        process.env[k] = v;
+    }
+    fs.writeFileSync(ENV_FILE, lines.join('\n'), 'utf8');
+}
 
 const LISTEN_PORT = 8200;
 const SETTINGS_FILE = path.join(os.homedir(), '.claude', 'settings.json');
+const SETTINGS_BACKUP_DIR = path.join(os.homedir(), '.claude', 'settings-backups');
+const BACKUP_NAME_RE = /^settings-[0-9A-Za-z._-]+\.json$/;
+function listSettingsBackups() {
+    try {
+        return fs.readdirSync(SETTINGS_BACKUP_DIR)
+            .filter(n => BACKUP_NAME_RE.test(n))
+            .map(n => { const st = fs.statSync(path.join(SETTINGS_BACKUP_DIR, n)); return { name: n, size: st.size, mtime: st.mtimeMs }; })
+            .sort((a, b) => b.mtime - a.mtime);
+    } catch { return []; }
+}
+function makeSettingsBackup(prefix = 'settings') {
+    if (!fs.existsSync(SETTINGS_FILE)) throw new Error('settings.json не найден');
+    fs.mkdirSync(SETTINGS_BACKUP_DIR, { recursive: true });
+    const name = `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    fs.copyFileSync(SETTINGS_FILE, path.join(SETTINGS_BACKUP_DIR, name));
+    return name;
+}
 const STATE_FILE = path.join(__dirname, 'proxy-target.json');
 const TOKENROUTER_ACCOUNTS = path.join(__dirname, 'tokenrouter', 'accounts.json');
 
@@ -45,7 +91,7 @@ const BACKENDS = {
     omniroute: {
         label: 'FreeModel (OmniRoute)',
         base_url: 'http://localhost:20128/v1',
-        api_key: OMNIROUTE_KEY,
+        api_key: omniKey(),
         model: 'ComboWombo',
         // Main backend: full tools, long contexts, vision.
     },
@@ -838,6 +884,84 @@ const server = http.createServer((req, res) => {
         return handleSettingsApply(req, res);
     }
 
+    if (req.method === 'GET' && req.url === '/__switch/api/settings/backups') {
+        return jsonRes(res, 200, { dir: SETTINGS_BACKUP_DIR, backups: listSettingsBackups() });
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/settings/backup') {
+        (async () => {
+            try { const name = makeSettingsBackup(); logLine(`settings backup: ${name}`); return jsonRes(res, 200, { ok: true, name }); }
+            catch (e) { return jsonRes(res, 500, { error: e.message }); }
+        })();
+        return;
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/settings/restore') {
+        (async () => {
+            try {
+                const { name } = await readJsonBody(req);
+                const base = path.basename(String(name || ''));
+                if (!BACKUP_NAME_RE.test(base)) return jsonRes(res, 400, { error: 'bad backup name' });
+                const src = path.join(SETTINGS_BACKUP_DIR, base);
+                if (!fs.existsSync(src)) return jsonRes(res, 404, { error: 'backup not found' });
+                const raw = fs.readFileSync(src, 'utf8');
+                try { JSON.parse(raw.replace(/^﻿/, '')); } catch { return jsonRes(res, 400, { error: 'backup не валидный JSON' }); }
+                const prev = makeSettingsBackup('settings-prerestore');
+                fs.writeFileSync(SETTINGS_FILE, raw, 'utf8');
+                logLine(`settings restored from ${base} (prev → ${prev})`);
+                return jsonRes(res, 200, { ok: true, restored: base, previous: prev });
+            } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+        })();
+        return;
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/settings/backup-delete') {
+        (async () => {
+            try {
+                const { name } = await readJsonBody(req);
+                const base = path.basename(String(name || ''));
+                if (!BACKUP_NAME_RE.test(base)) return jsonRes(res, 400, { error: 'bad backup name' });
+                const f = path.join(SETTINGS_BACKUP_DIR, base);
+                if (fs.existsSync(f)) fs.unlinkSync(f);
+                return jsonRes(res, 200, { ok: true, deleted: base });
+            } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+        })();
+        return;
+    }
+
+    // OmniRoute creds (URL + manage key) for tokenrouter import — routing/.env, live.
+    if (req.url === '/__switch/api/env') {
+        if (req.method === 'GET') {
+            const e = readEnvFile();
+            return jsonRes(res, 200, {
+                OMNIROUTE_BASE_URL: process.env.OMNIROUTE_BASE_URL || e.OMNIROUTE_BASE_URL || 'http://localhost:20128',
+                OMNIROUTE_API_KEY: process.env.OMNIROUTE_API_KEY || e.OMNIROUTE_API_KEY || '',
+            });
+        }
+        if (req.method === 'POST') {
+            (async () => {
+                try {
+                    const body = await readJsonBody(req);
+                    const updates = {};
+                    if (typeof body.OMNIROUTE_BASE_URL === 'string') {
+                        const u = body.OMNIROUTE_BASE_URL.trim().replace(/\/+$/, '');
+                        if (!/^https?:\/\/.+/.test(u)) return jsonRes(res, 400, { error: 'URL должен начинаться с http:// или https://' });
+                        updates.OMNIROUTE_BASE_URL = u;
+                    }
+                    if (typeof body.OMNIROUTE_API_KEY === 'string') {
+                        const k = body.OMNIROUTE_API_KEY.trim();
+                        if (!k) return jsonRes(res, 400, { error: 'OMNIROUTE_API_KEY пустой' });
+                        updates.OMNIROUTE_API_KEY = k;
+                    }
+                    if (!Object.keys(updates).length) return jsonRes(res, 400, { error: 'нечего сохранять' });
+                    upsertEnvFile(updates);
+                    logLine(`env updated: ${Object.keys(updates).join(', ')}`);
+                    return jsonRes(res, 200, { ok: true, applied: Object.keys(updates) });
+                } catch (e) {
+                    return jsonRes(res, 500, { error: e.message });
+                }
+            })();
+            return;
+        }
+    }
+
     if (req.method === 'POST' && req.url === '/__switch/api/whoami') {
         return handleWhoami(req, res);
     }
@@ -950,9 +1074,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/__switch/api/tokenrouter/omniroute-connections') {
         (async () => {
             try {
-                const response = await fetch('http://localhost:20128/api/providers', {
+                const response = await fetch(`${omniBase()}/api/providers`, {
                     method: 'GET',
-                    headers: { 'Authorization': `Bearer ${OMNIROUTE_KEY}` },
+                    headers: { 'Authorization': `Bearer ${omniKey()}` },
                 });
                 if (!response.ok) throw new Error(`providers ${response.status}`);
                 const data = await response.json();
@@ -1154,9 +1278,9 @@ const server = http.createServer((req, res) => {
                 const { email } = await readJsonBody(req);
                 if (!email) return jsonRes(res, 400, { error: 'email required' });
 
-                const response = await fetch('http://localhost:20128/api/providers', {
+                const response = await fetch(`${omniBase()}/api/providers`, {
                     method: 'GET',
-                    headers: { 'Authorization': `Bearer ${OMNIROUTE_KEY}` },
+                    headers: { 'Authorization': `Bearer ${omniKey()}` },
                 });
                 if (!response.ok) throw new Error(`providers ${response.status}`);
                 const data = await response.json();
@@ -1169,9 +1293,9 @@ const server = http.createServer((req, res) => {
                     logLine(`tokenrouter delete from omniroute: ${email} not found`);
                     return jsonRes(res, 200, { ok: true, deleted: false, reason: 'not found' });
                 }
-                const del = await fetch(`http://localhost:20128/api/providers/${match.id}`, {
+                const del = await fetch(`${omniBase()}/api/providers/${match.id}`, {
                     method: 'DELETE',
-                    headers: { 'Authorization': `Bearer ${OMNIROUTE_KEY}` },
+                    headers: { 'Authorization': `Bearer ${omniKey()}` },
                 });
                 if (!del.ok) throw new Error(`delete ${del.status}`);
                 logLine(`tokenrouter delete from omniroute: ${match.id.substring(0, 8)} (${email})`);

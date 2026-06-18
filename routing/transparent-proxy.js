@@ -224,7 +224,11 @@ async function handleSettingsApply(req, res) {
         const next = { ...current };
         for (const [k, v] of Object.entries(patch)) {
             if (k === 'env' && typeof v === 'object') {
-                next.env = { ...current.env, ...v };
+                next.env = { ...current.env };
+                for (const [ek, ev] of Object.entries(v)) {
+                    if (ev === null) delete next.env[ek];   // null = drop key (e.g. clear shadowing ANTHROPIC_API_KEY)
+                    else next.env[ek] = ev;
+                }
             } else {
                 next[k] = v;
             }
@@ -755,8 +759,9 @@ async function handleFreemodelSetKey(req, res) {
 
 async function handleFreemodelActivate(req, res) {
     try {
-        const { name } = await readJsonBody(req);
+        const { name, mode } = await readJsonBody(req);
         if (!name) return jsonRes(res, 400, { error: 'name required' });
+        const helperMode = mode === 'helper';
         const keyFile = path.join(os.homedir(), '.claude', 'fm-active-key.txt');
         const meta = dashApi.loadFreemodelMeta();
         let apiKey = meta[name]?.apiKey;
@@ -787,15 +792,22 @@ async function handleFreemodelActivate(req, res) {
             fs.copyFileSync(settingsFile, bakPath);
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = 'https://cc.freemodel.dev';
-            settings.env.ANTHROPIC_API_KEY = apiKey;
+            if (helperMode) {
+                settings.apiKeyHelper = 'cat ~/.claude/fm-active-key.txt';
+                settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+                delete settings.env.ANTHROPIC_API_KEY;   // helper drives auth; direct key would shadow it
+            } else {
+                settings.apiKeyHelper = '';
+                settings.env.ANTHROPIC_API_KEY = apiKey;
+            }
             fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
-            logLine(`fm activate: wrote direct key to settings.json`);
+            logLine(`fm activate: wrote ${helperMode ? 'apiKeyHelper' : 'direct key'} to settings.json`);
         } catch (e) {
             logLine(`fm activate: settings.json FAILED: ${e.message}`);
         }
         logLine(`fm activate: ${name} → ${apiKey.substring(0, 8)}...`);
-        jsonRes(res, 200, { ok: true, name, mask: apiKey.substring(0, 8) + '...' + apiKey.slice(-6), settingsUpdated: settingsOk });
+        jsonRes(res, 200, { ok: true, name, mode: helperMode ? 'helper' : 'direct', mask: apiKey.substring(0, 8) + '...' + apiKey.slice(-6), settingsUpdated: settingsOk });
     } catch (e) {
         jsonRes(res, 500, { error: e.message });
     }

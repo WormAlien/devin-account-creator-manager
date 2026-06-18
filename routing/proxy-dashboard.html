@@ -97,6 +97,7 @@
       <div class="flex items-center gap-2">
         <span id="side-dot" class="relative inline-block size-2 rounded-full text-emerald bg-emerald pulse-dot"></span>
         <span id="side-current" class="text-sm font-semibold truncate">…</span>
+        <span id="side-mode" class="hidden shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium"></span>
       </div>
       <div id="side-url" class="text-[10px] text-faint font-mono mt-1 truncate">…</div>
     </div>
@@ -358,7 +359,7 @@
               <div id="fm-active-email" class="text-sm font-semibold text-ink">—</div>
               <div id="fm-active-key" class="text-xs font-mono text-emerald mt-0.5">—</div>
             </div>
-            <span class="text-xs px-3 py-1.5 bg-emerald/10 border border-emerald/40 text-emerald rounded-lg font-medium">
+            <span id="fm-active-mode" class="text-xs px-3 py-1.5 bg-emerald/10 border border-emerald/40 text-emerald rounded-lg font-medium">
               🌟 Активен
             </span>
           </div>
@@ -671,6 +672,10 @@ function paintStatus() {
   const dotClass = COLORS[t] || COLORS.unknown;
 
   $('side-current').textContent = label;
+  const modeEl = $('side-mode');
+  if (t === 'apihelper') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
+  else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
+  else modeEl.className = 'hidden';
   $('side-url').textContent     = state.urls[t] || '';
   $('side-dot').className       = `relative inline-block size-2 rounded-full pulse-dot ${dotClass}`;
 
@@ -701,16 +706,30 @@ const ACTIVE_PRESET_KEY = 'opencode_active_preset';
 
 function getDefaultPresets() {
   return {
-    'apiHelper': {
-      label: 'FreeModel',
-      desc: 'Простой свитчер — прямой ключ в settings.json',
-      icon: '🔄',
+    'fmDirect': {
+      label: 'FreeModel · прямой ключ',
+      desc: 'env.ANTHROPIC_API_KEY в settings.json (задаётся 🔴 Активировать)',
+      icon: '🔑',
+      color: 'emerald',
+      settings: {
+        apiKeyHelper: '',
+        env: {
+          ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0'
+        }
+      }
+    },
+    'fmHelper': {
+      label: 'FreeModel · API Helper',
+      desc: 'apiKeyHelper → cat ~/.claude/fm-active-key.txt',
+      icon: '🤝',
       color: 'emerald',
       settings: {
         apiKeyHelper: 'cat ~/.claude/fm-active-key.txt',
         env: {
           ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev',
-          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '1'
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_API_KEY: null  // drop direct key so it can't shadow the helper
         }
       }
     },
@@ -751,7 +770,9 @@ function renderPresets() {
   const box = $('switcher-presets');
   if (!box) return;
   const presets = getPresets();
-  const active = localStorage.getItem(ACTIVE_PRESET_KEY) || state.current || '';
+  const curMap = { apihelper: 'fmHelper', freemodel_rotator: 'fmDirect', freemodel: 'fmDirect' };
+  const stored = localStorage.getItem(ACTIVE_PRESET_KEY);
+  const active = (stored && presets[stored]) ? stored : (curMap[state.current] || state.current || '');
   const rows = Object.entries(presets).map(([key, p]) => {
     const isActive = active === key;
     return `
@@ -1058,6 +1079,10 @@ async function loadActiveFmKey() {
       const display = session ? (session.email || data.activeName) : (data.activeName || 'неизвестный аккаунт');
       $('fm-active-email').textContent = display;
       $('fm-active-key').textContent = data.activeKey;
+      const helper = state.current === 'apihelper';
+      const modeEl = $('fm-active-mode');
+      modeEl.textContent = helper ? '🤝 API Helper' : '🔑 Прямой ключ';
+      modeEl.className = `text-xs px-3 py-1.5 rounded-lg font-medium border ${helper ? 'bg-azure/10 border-azure/40 text-azure' : 'bg-emerald/10 border-emerald/40 text-emerald'}`;
     } else {
       hero.classList.add('hidden');
     }
@@ -1146,11 +1171,12 @@ function renderFreemodel(refreshed) {
     const tgPhone = s.meta?.tgPhone || null;
     const apiKey  = s.meta?.apiKey  || null;
     const isActive = state.activeFm.name && s.name === state.activeFm.name;
+    const fmMode = state.current === 'apihelper' ? 'helper' : 'direct';  // глобальный режим из settings.json
     const rowDim  = banned ? 'opacity-60' : '';
     const activeRow = isActive ? 'bg-emerald/5 border-l-2 border-l-emerald' : '';
     const skull   = banned ? ' <span class="text-crimson" title="banned ' + esc((s.meta.bannedAt || '').slice(0,10)) + '">💀</span>' : '';
     const nameJ   = JSON.stringify(s.name);
-    const activeBadge = isActive ? ' <span class="text-[10px] px-1.5 py-0.5 bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium" title="Этот ключ активен в Claude Code">🌟 ACTIVE</span>' : '';
+    const activeBadge = '';  // активность видно по зелёной кнопке 🌟 + подсветке строки; чип убран, чтобы не прятать TG-номер
     // TG-бэйдж: если привязан — клик отвязывает; если нет — клик запускает привязку из пула.
     const tgBadge = tgPhone
       ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/30 text-azure rounded font-mono hover:bg-azure/20" title="TG привязан · клик чтобы отвязать">📱 ${/^\+?\d+$/.test(String(tgPhone)) ? '+' + esc(tgPhone) : esc(tgPhone)}</button>`
@@ -1187,9 +1213,17 @@ function renderFreemodel(refreshed) {
       ageCell = `<span class="text-muted">${ageStr(q.updatedAt)}</span>`;
     }
 
-    const activateBtn = isActive
-      ? `<button disabled class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] w-[128px] h-[28px] whitespace-nowrap bg-emerald/15 border border-emerald/40 text-emerald rounded font-medium disabled:opacity-100 cursor-default">🌟 Активен</button>`
-      : `<button onclick='activateFmKey(${nameJ})' title="Сделать активным API-ключом Claude Code" class="mr-2 inline-flex items-center justify-center box-border leading-none text-[10px] w-[128px] h-[28px] whitespace-nowrap bg-crimson/10 border border-crimson/50 text-crimson rounded hover:bg-crimson/20 transition font-medium">🔴 Активировать</button>`;
+    // Сегмент-переключатель режима. Выбранный = сплошная зелёная заливка; второй на активном аккаунте = призрачный («переключить»); на неактивном — цветной outline («активировать»).
+    const fmSeg = (mode, icon, label, offCls, ghostHover) => {
+      if (isActive && fmMode === mode)
+        return `<button disabled title="Выбрано сейчас: ${label}" class="mr-1 inline-flex items-center justify-center box-border leading-none text-[10px] w-[96px] h-[28px] whitespace-nowrap bg-emerald/20 border border-emerald/60 text-emerald rounded font-semibold disabled:opacity-100 cursor-default">✓ ${label}</button>`;
+      const cls = isActive ? `bg-transparent border border-line-soft text-muted ${ghostHover}` : offCls;
+      const ttl = isActive ? `Переключить активный аккаунт на: ${label}` : `Активировать · ${label}`;
+      return `<button onclick='activateFmKey(${nameJ}, "${mode}")' title="${ttl}" class="mr-1 inline-flex items-center justify-center box-border leading-none text-[10px] w-[96px] h-[28px] whitespace-nowrap ${cls} rounded transition font-medium">${icon} ${label}</button>`;
+    };
+    const activateBtn =
+        fmSeg('direct', '🔑', 'Ключ', 'bg-crimson/10 border border-crimson/50 text-crimson hover:bg-crimson/20', 'hover:border-crimson/60 hover:text-crimson')
+      + fmSeg('helper', '🤝', 'Helper', 'bg-azure/10 border border-azure/50 text-azure hover:bg-azure/20', 'hover:border-azure/60 hover:text-azure');
 
     return `<tr class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
       <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
@@ -1907,16 +1941,19 @@ function copyKey(name) {
   if (!k) return toast('API-ключ не задан — нажми 🔑 чтобы вставить', 'warn');
   copyToClipboard(k, `key: ***${k.slice(-6)}`);
 }
-async function activateFmKey(name) {
+async function activateFmKey(name, mode = 'direct') {
   const s = state.freemodel.find(x => x.name === name);
   try {
     const res = await fetch('/__switch/api/freemodel/activate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, mode }),
     });
     const data = await res.json();
     if (data.ok) {
-      toast(`🌟 Активирован: ${s.email} (${data.mask})`, 'success');
+      const tag = data.mode === 'helper' ? '🤝 API Helper' : '🔑 прямой ключ';
+      toast(`🌟 Активирован (${tag}): ${s.email} (${data.mask}) — перезапусти Claude Code`, 'success', 6000);
+      state.current = data.mode === 'helper' ? 'apihelper' : 'freemodel_rotator';  // обновить режим сразу, без отдельного запроса
+      paintStatus();
       await loadActiveFmKey();
     } else {
       toast(`Ошибка: ${data.error}`, 'error');

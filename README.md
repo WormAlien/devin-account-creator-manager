@@ -16,32 +16,41 @@
 
 ## Установка
 
+Нужно: **Node.js + npm**, **Python 3** (только для TokenRouter) и запущенный **OmniRoute** на `:20128` (если используешь бэкенд OmniRoute).
+
+**1. Node-зависимости и браузер Playwright**
+
 ```bash
-# 1. Node-зависимости + браузер для Playwright (FreeModel)
 npm install
 npx playwright install chromium
-
-# 2. Python + Camoufox — только для вкладки TokenRouter (Firefox + patched Juggler)
-pip install camoufox requests
-python -m camoufox fetch          # скачивает браузер один раз
-
-# 3. Секреты
-cp routing/.env.example routing/.env
-#   OMNIROUTE_API_KEY — впиши сюда или задай позже через дашборд → Настройки
-
-# 4. Запуск дашборда (поднимает freemodel-rotator :20126 + switcher :8200)
-routing\restart-dashboard.bat     # Windows — один клик, сам убивает старый процесс
-# или вручную:
-#   node routing/freemodel-rotator.js
-#   node routing/transparent-proxy.js
-
-# 5. Открой http://localhost:8200/__switch
 ```
 
-> [!NOTE]
-> Python/Camoufox нужен **только** для TokenRouter. FreeModel работает на Playwright (Chromium).
+**2. Python и Camoufox** — только для вкладки TokenRouter (Firefox + patched Juggler)
 
-Альтернатива — классическое TUI-меню: `node menu.js`
+```bash
+pip install camoufox requests
+python -m camoufox fetch
+```
+
+**3. Конфиг**
+
+```bash
+cp routing/.env.example routing/.env
+```
+
+**4. Запуск дашборда** — поднимает freemodel-rotator `:20126` и switcher `:8200`
+
+```bash
+routing\restart-dashboard.bat
+```
+
+Вручную: `node routing/freemodel-rotator.js` и `node routing/transparent-proxy.js`. Альтернатива — TUI-меню: `node menu.js`.
+
+**5. Открой дашборд** → <http://localhost:8200/__switch>
+
+**6. OmniRoute API-ключ** — для бэкенда OmniRoute
+
+Создай в своём OmniRoute API-ключ со scope **manage**, затем в дашборде открой **⚙ Настройки** → впиши его в `OMNIROUTE_API_KEY` → 💾 **Сохранить**. Ключ запишется в `routing/.env` и применится сразу, без рестарта.
 
 ## Что это
 

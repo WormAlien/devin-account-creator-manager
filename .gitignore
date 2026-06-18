@@ -136,3 +136,9 @@ routing/tokenrouter/*.log
 
 # Recorder output
 recordings/
+
+# Telegram session tooling — heavy binaries + LIVE tdata (secrets), never commit.
+# Keep only the code: tools/tg-open.py + tools/tg-venv-requirements.txt
+tools/tg-venv/
+tools/telegram-portable/
+tools/tg-profiles/

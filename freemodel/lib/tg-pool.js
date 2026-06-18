@@ -70,9 +70,10 @@ function list() {
     return load();
 }
 
-function addHex({ phone, dc_id, user_id, auth_key_hex }) {
+function addHex({ phone, dc_id, user_id, auth_key_hex, source }) {
     const entry = validateEntry({
         phone, dc_id: Number(dc_id), user_id, auth_key_hex,
+        source: source || 'hex',   // 'session' = из .session (Pyrogram/Telethon), 'hex' = ручной импорт
         status: 'free',
         addedAt: new Date().toISOString(),
         usedBy: null,

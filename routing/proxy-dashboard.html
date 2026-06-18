@@ -1589,18 +1589,21 @@ function renderTgPool() {
     const usedInfo = e.usedBy
       ? `<div class="text-[10px] text-faint truncate max-w-[200px]" title="${esc(e.usedBy)}">${esc(e.usedBy)}</div>` : '';
     const dim = (e.status === 'used' || e.status === 'banned') ? 'opacity-60' : '';
-    const phoneCell = e.isPlaceholderPhone
-      ? `<span class="text-azure" title="Импортирован по auth_key — номер не нужен, привязка по TG-аккаунту">📲 ${esc(e.phone)}</span> <span class="text-[9px] text-dim align-middle">по имени</span>`
-      : `+${esc(e.phone)}`;
+    const src = e.source || (e.isPlaceholderPhone ? 'hex' : 'session');  // legacy: нет source → по наличию номера
+    const typeTag = src === 'session'
+      ? `<span class="text-[9px] text-emerald/80 align-middle" title="Импорт .session (Pyrogram/Telethon)">сессия</span>`
+      : `<span class="text-[9px] text-dim align-middle" title="Ручной импорт auth_key (hex:dc)">вручную</span>`;
+    const phoneTxt = e.isPlaceholderPhone ? esc(e.phone) : '+' + esc(e.phone);
+    // Открыть сессию в отдельном Telegram Desktop. Banned = ключ отозван → прячем.
+    const openBtn = e.status === 'banned' ? '' :
+      `<button onclick="tgOpen('${esc(e.phone)}', this)" title="Открыть в Telegram Desktop" class="mr-2 inline-flex items-center gap-1 box-border leading-none text-[10px] px-2 py-1 align-middle bg-azure/10 border border-azure/50 text-azure rounded hover:bg-azure/20 transition">✈ Открыть</button>`;
+    const phoneCell = `${openBtn}<span class="text-azure align-middle" title="TG-аккаунт">📲 ${phoneTxt}</span> ${typeTag}`;
     return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim}">
-        <td class="px-3 py-1.5 font-mono text-xs">${phoneCell}</td>
+        <td class="px-3 py-1.5 font-mono text-xs whitespace-nowrap">${phoneCell}</td>
         <td class="px-3 py-1.5 font-mono text-[11px] text-azure">DC${e.dc_id}</td>
         <td class="px-3 py-1.5 font-mono text-[10px] text-faint">${esc(e.auth_key_mask)}</td>
         <td class="px-3 py-1.5 text-[11px]">${statusCell(e.status)}${usedInfo}</td>
         <td class="px-3 py-1.5 text-right whitespace-nowrap">
-          ${e.isPlaceholderPhone
-            ? `<button onclick="tgRename('${esc(e.phone)}')" title="Указать номер (необязательно)" class="text-[10px] px-2 py-0.5 bg-elevated border border-line-soft text-muted rounded hover:border-azure/60 hover:text-azure">✎ номер</button>`
-            : ''}
           ${(e.status === 'used' || e.status === 'banned')
             ? `<button onclick="tgMarkFree('${esc(e.phone)}')" title="Вернуть в free" class="text-[10px] px-2 py-0.5 bg-emerald/10 border border-emerald/40 text-emerald rounded hover:bg-emerald/20 ml-1">↺</button>`
             : ''}
@@ -1698,6 +1701,24 @@ async function tgDelete(phone) {
     toast(`✓ Удалён +${phone}`, 'success');
     loadTgPool();
   } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function tgOpen(phone, btn) {
+  const orig = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ запуск…'; }
+  try {
+    const res = await fetch('/__switch/api/tg/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    toast(`✈ Открываю ${phone} в Telegram Desktop`, 'success');
+  } catch (e) {
+    toast('Открыть TG: ' + e.message, 'error', 7000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+  }
 }
 
 async function tgMarkFree(phone) {

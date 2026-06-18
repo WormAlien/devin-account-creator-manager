@@ -1,0 +1,3 @@
+opentele==1.15.1
+TgCrypto-pyrofork
+PyQt5

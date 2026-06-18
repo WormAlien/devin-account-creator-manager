@@ -626,6 +626,7 @@ async function handleTgAddSession(req, res) {
             dc_id: parsed.dc_id,
             user_id: parsed.user_id,
             auth_key_hex: parsed.auth_key_hex,
+            source: 'session',
         });
         logLine(`tg pool: + ${entry.phone} dc=${entry.dc_id} (.session)`);
         jsonRes(res, 200, { ok: true, phone: entry.phone, dc_id: entry.dc_id, user_id: entry.user_id });
@@ -669,6 +670,45 @@ async function handleTgRename(req, res) {
         jsonRes(res, 200, { ok: true, phone: e.phone });
     } catch (e) {
         jsonRes(res, 400, { error: e.message });
+    }
+}
+
+// Открыть TG-сессию в отдельном портативном Telegram Desktop.
+// auth_key_hex+dc_id -> tdata через tools/tg-open.py (venv py3.12 + opentele),
+// затем launch Telegram.exe -workdir. Первый раз идёт в сеть (~5-10с),
+// дальше tdata переиспользуется. AyuGram пользователя не трогаем.
+const { spawn } = require('child_process');
+const TG_VENV_PY = path.join(__dirname, '..', 'tools', 'tg-venv', 'Scripts', 'python.exe');
+const TG_OPEN_PY = path.join(__dirname, '..', 'tools', 'tg-open.py');
+
+async function handleTgOpen(req, res) {
+    try {
+        const { phone } = await readJsonBody(req);
+        if (!phone) return jsonRes(res, 400, { error: 'phone обязателен' });
+        if (!fs.existsSync(TG_VENV_PY)) {
+            return jsonRes(res, 500, { error: 'нет tools/tg-venv — venv не создан' });
+        }
+        logLine(`tg open: ${phone} → конвертация + запуск`);
+        const child = spawn(TG_VENV_PY, [TG_OPEN_PY, String(phone)], {
+            cwd: path.join(__dirname, '..'),
+            windowsHide: true,
+        });
+        let err = '';
+        child.stderr.on('data', d => { err += d.toString(); });
+        const code = await new Promise((resolve) => {
+            const t = setTimeout(() => { try { child.kill(); } catch {} resolve(-1); }, 90_000);
+            child.on('close', c => { clearTimeout(t); resolve(c); });
+            child.on('error', e => { clearTimeout(t); err += e.message; resolve(-1); });
+        });
+        if (code !== 0) {
+            const last = err.trim().split('\n').pop() || 'неизвестная ошибка';
+            logLine(`tg open: ${phone} FAIL (${code}): ${last}`);
+            return jsonRes(res, 500, { error: last });
+        }
+        logLine(`tg open: ${phone} → запущен`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
     }
 }
 
@@ -1042,6 +1082,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tg/delete')      return handleTgDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/mark-free')   return handleTgMarkFree(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/rename')      return handleTgRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/open')        return handleTgOpen(req, res);
 
     // ---- FreeModel ban/unban marker ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/ban')      return handleFreemodelBan(req, res);

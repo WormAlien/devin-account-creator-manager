@@ -106,6 +106,70 @@ routing\restart-dashboard.bat     # Windows — один клик, сам уби
 
 Claude Code читает `~/.claude/settings.json`, берёт оттуда `ANTHROPIC_BASE_URL` + ключ и шлёт запросы в выбранный бэкенд: **FreeModel** через ротатор на `:20126` → `cc.freemodel.dev`, либо **OmniRoute** на `:20128/v1`. **Switcher** на `:8200` (`transparent-proxy.js`) переписывает `settings.json` одним кликом и кладёт `.bak-<timestamp>` рядом. Реальные ключи — в `routing/.env` (gitignored); CC получает только литералку, которую роутер подменяет.
 
+<div align="center">
+
+![Architecture](docs/architecture.svg)
+
+<sub>🟢 FreeModel · 🔵 OmniRoute · 🟣 локальная control-plane (Switcher + .env)</sub>
+
+</div>
+
+## OpenCode
+
+OmniRoute — обычный OpenAI-совместимый endpoint, поэтому в него можно ходить не только из Claude Code, но и из [OpenCode](https://opencode.ai). Добавь провайдер в `opencode.json` (рядом с проектом или в `~/.config/opencode/`) — ключ тот же `OMNIROUTE_API_KEY`, что и в `routing/.env`. Бонус: разные агенты роутятся на разные модели через один OmniRoute (`review` → DeepSeek, `architect` → Qwen).
+
+<details>
+<summary><b>opencode.json</b> — провайдер OmniRoute + пример агентов</summary>
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "omniroute/tokenrouter/kimi-k2p7-code",
+  "small_model": "omniroute/tokenrouter/deepseek-v4-flash",
+  "provider": {
+    "omniroute": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OmniRoute",
+      "options": {
+        "baseURL": "http://localhost:20128/v1",
+        "apiKey": "<OMNIROUTE_API_KEY>",
+        "timeout": 600000
+      },
+      "models": {
+        "tokenrouter/deepseek-v4-pro":      { "name": "DeepSeek V4 Pro" },
+        "tokenrouter/deepseek-v4-flash":    { "name": "DeepSeek V4 Flash" },
+        "tokenrouter/glm-5p1":              { "name": "GLM 5.1" },
+        "tokenrouter/glm-5p1-fast":         { "name": "GLM 5.1 Fast" },
+        "tokenrouter/gpt-oss-120b":         { "name": "GPT-OSS 120B" },
+        "tokenrouter/kimi-k2p5":            { "name": "Kimi K2.5" },
+        "tokenrouter/kimi-k2p6":            { "name": "Kimi K2.6" },
+        "tokenrouter/kimi-k2p7-code":       { "name": "Kimi K2.7 Code" },
+        "tokenrouter/kimi-k2p7-code-fast":  { "name": "Kimi K2.7 Code Fast" },
+        "tokenrouter/minimax-m2p7":         { "name": "MiniMax M2.7" },
+        "tokenrouter/minimax-m3":           { "name": "MiniMax M3" },
+        "tokenrouter/qwen3p6-plus":         { "name": "Qwen 3.6 Plus" },
+        "tokenrouter/qwen3p7-plus":         { "name": "Qwen 3.7 Plus" }
+      }
+    }
+  },
+  "agent": {
+    "review": {
+      "description": "Баг-хантер",
+      "model": "omniroute/tokenrouter/deepseek-v4-pro",
+      "prompt": "You are a senior code reviewer. Find bugs, security issues, and bad patterns. Be concise.",
+      "tools": { "write": false, "edit": false, "bash": false }
+    },
+    "architect": {
+      "description": "План перед кодом",
+      "model": "omniroute/tokenrouter/qwen3p7-plus",
+      "prompt": "You are a software architect. Output a numbered implementation checklist.",
+      "tools": { "write": false, "edit": false }
+    }
+  }
+}
+```
+</details>
+
 ## Скрипты
 
 <details>
@@ -219,10 +283,6 @@ node routing/transparent-proxy.js        # switcher вручную
 ```bash
 git diff --cached | grep -E "sk-[a-z]{2,}-[a-f0-9]+|auth_key_hex" || echo "OK: no keys in staged diff"
 ```
-
-## Community
-
-[**t.me/abuz_ai**](https://t.me/abuz_ai) — присоединяйся.
 
 ## Disclaimer
 

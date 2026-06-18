@@ -1,71 +1,71 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 470" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
   <defs>
     <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
     </marker>
-    <marker id="arr-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+    <marker id="arr-v" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#a371f7"/>
     </marker>
   </defs>
 
   <!-- Claude Code -->
-  <g transform="translate(330,30)">
-    <rect width="240" height="80" rx="10" fill="none" stroke="#8b949e" stroke-width="1.5"/>
+  <g transform="translate(320,24)">
+    <rect width="240" height="78" rx="10" fill="none" stroke="#8b949e" stroke-width="1.5"/>
     <text x="120" y="32" text-anchor="middle" font-size="18" font-weight="600" fill="#8b949e">Claude Code</text>
-    <text x="120" y="58" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#8b949e">~/.claude/settings.json</text>
+    <text x="120" y="56" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#8b949e">~/.claude/settings.json</text>
   </g>
 
   <!-- Switcher -->
-  <g transform="translate(40,200)">
-    <rect width="220" height="100" rx="10" fill="none" stroke="#a371f7" stroke-width="2"/>
-    <text x="110" y="32" text-anchor="middle" font-size="17" font-weight="600" fill="#a371f7">Switcher</text>
-    <text x="110" y="56" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#a371f7">:8200</text>
-    <text x="110" y="80" text-anchor="middle" font-size="12" fill="#a371f7" opacity="0.85">transparent-proxy.js</text>
+  <g transform="translate(30,200)">
+    <rect width="210" height="96" rx="10" fill="none" stroke="#a371f7" stroke-width="2"/>
+    <text x="105" y="32" text-anchor="middle" font-size="17" font-weight="600" fill="#a371f7">Switcher</text>
+    <text x="105" y="56" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#a371f7">:8200</text>
+    <text x="105" y="78" text-anchor="middle" font-size="12" fill="#a371f7" opacity="0.85">transparent-proxy.js</text>
   </g>
 
   <!-- .env -->
-  <g transform="translate(40,360)">
-    <rect width="220" height="70" rx="10" fill="none" stroke="#a371f7" stroke-width="1.5" stroke-dasharray="5 4"/>
-    <text x="110" y="30" text-anchor="middle" font-size="14" font-weight="600" fill="#a371f7">routing/.env</text>
-    <text x="110" y="52" text-anchor="middle" font-size="12" fill="#a371f7" opacity="0.85">real API keys (gitignored)</text>
+  <g transform="translate(30,356)">
+    <rect width="210" height="66" rx="10" fill="none" stroke="#a371f7" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="105" y="29" text-anchor="middle" font-size="14" font-weight="600" fill="#a371f7">routing/.env</text>
+    <text x="105" y="50" text-anchor="middle" font-size="12" fill="#a371f7" opacity="0.85">real keys · gitignored</text>
+  </g>
+
+  <!-- FreeModel -->
+  <g transform="translate(300,270)">
+    <rect width="250" height="110" rx="10" fill="none" stroke="#3fb950" stroke-width="2"/>
+    <text x="125" y="34" text-anchor="middle" font-size="17" font-weight="600" fill="#3fb950">FreeModel</text>
+    <text x="125" y="60" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#3fb950">rotator :20126</text>
+    <text x="125" y="84" text-anchor="middle" font-size="12" fill="#3fb950" opacity="0.9">→ cc.freemodel.dev</text>
   </g>
 
   <!-- OmniRoute -->
-  <g transform="translate(340,250)">
-    <rect width="240" height="100" rx="10" fill="none" stroke="#3fb950" stroke-width="2"/>
-    <text x="120" y="32" text-anchor="middle" font-size="17" font-weight="600" fill="#3fb950">OmniRoute</text>
-    <text x="120" y="56" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#3fb950">:20128/v1</text>
-    <text x="120" y="80" text-anchor="middle" font-size="12" fill="#3fb950" opacity="0.9">Pro/Max OAuth · FreeModel pool</text>
+  <g transform="translate(600,270)">
+    <rect width="250" height="110" rx="10" fill="none" stroke="#58a6ff" stroke-width="2"/>
+    <text x="125" y="34" text-anchor="middle" font-size="17" font-weight="600" fill="#58a6ff">OmniRoute</text>
+    <text x="125" y="60" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#58a6ff">:20128/v1</text>
+    <text x="125" y="84" text-anchor="middle" font-size="12" fill="#58a6ff" opacity="0.9">Pro/Max · TokenRouter pool</text>
   </g>
 
-  <!-- notion-manager -->
-  <g transform="translate(640,250)">
-    <rect width="240" height="100" rx="10" fill="none" stroke="#58a6ff" stroke-width="2"/>
-    <text x="120" y="32" text-anchor="middle" font-size="17" font-weight="600" fill="#58a6ff">notion-manager</text>
-    <text x="120" y="56" text-anchor="middle" font-size="13" font-family="ui-monospace, 'Cascadia Code', monospace" fill="#58a6ff">:8190</text>
-    <text x="120" y="80" text-anchor="middle" font-size="12" fill="#58a6ff" opacity="0.9">Notion bypass</text>
-  </g>
+  <!-- CC -> FreeModel -->
+  <path d="M 430 102 Q 420 185 425 270" fill="none" stroke="#8b949e" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="378" y="190" font-size="12" font-family="ui-monospace, monospace" fill="#8b949e">HTTP</text>
 
-  <!-- arrows: CC -> OmniRoute -->
-  <path d="M 430 110 Q 430 180 460 250" fill="none" stroke="#8b949e" stroke-width="1.6" marker-end="url(#arr)"/>
-  <text x="395" y="190" font-size="12" font-family="ui-monospace, monospace" fill="#8b949e">HTTP</text>
-
-  <!-- CC -> notion-manager -->
-  <path d="M 470 110 Q 600 180 720 250" fill="none" stroke="#8b949e" stroke-width="1.6" marker-end="url(#arr)" stroke-dasharray="4 4"/>
-  <text x="630" y="195" font-size="12" font-family="ui-monospace, monospace" fill="#8b949e">HTTP</text>
+  <!-- CC -> OmniRoute -->
+  <path d="M 480 102 Q 640 175 715 270" fill="none" stroke="#8b949e" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="620" y="182" font-size="12" font-family="ui-monospace, monospace" fill="#8b949e">HTTP</text>
 
   <!-- Switcher -> CC (rewrites) -->
-  <path d="M 260 230 Q 320 180 340 110" fill="none" stroke="#a371f7" stroke-width="1.6" marker-end="url(#arr-dash)" stroke-dasharray="5 4"/>
-  <text x="265" y="160" font-size="12" font-family="ui-monospace, monospace" fill="#a371f7">rewrites</text>
+  <path d="M 240 222 Q 300 150 320 96" fill="none" stroke="#a371f7" stroke-width="1.6" marker-end="url(#arr-v)" stroke-dasharray="5 4"/>
+  <text x="246" y="150" font-size="12" font-family="ui-monospace, monospace" fill="#a371f7">rewrites</text>
 
-  <!-- .env -> OmniRoute (injects) -->
-  <path d="M 260 395 Q 350 400 360 350" fill="none" stroke="#a371f7" stroke-width="1.4" marker-end="url(#arr-dash)" stroke-dasharray="3 4"/>
-  <text x="280" y="385" font-size="12" font-family="ui-monospace, monospace" fill="#a371f7">injects</text>
+  <!-- .env -> FreeModel (injects) -->
+  <path d="M 240 380 Q 290 372 300 358" fill="none" stroke="#a371f7" stroke-width="1.4" marker-end="url(#arr-v)" stroke-dasharray="3 4"/>
+  <text x="250" y="405" font-size="12" font-family="ui-monospace, monospace" fill="#a371f7">injects keys</text>
 
   <!-- legend -->
-  <g transform="translate(40,470)" font-size="12" fill="#6e7681">
+  <g transform="translate(30,452)" font-size="12" fill="#6e7681">
     <text x="0" y="0">─── solid: live request</text>
-    <text x="220" y="0">- - dashed: config / control</text>
-    <text x="500" y="0" fill="#a371f7">violet: local control plane</text>
+    <text x="210" y="0">- - dashed: config / control</text>
+    <text x="470" y="0" fill="#a371f7">violet: local control plane</text>
   </g>
 </svg>

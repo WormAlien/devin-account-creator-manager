@@ -310,7 +310,9 @@ async def main():
             main_world_eval=True,
             i_know_what_im_doing=True,
         ) as browser:
-            page = await browser.new_page()
+            # persistent_context уже даёт пустую вкладку (page 0) — переиспользуем
+            # её, иначе new_page() плодит лишнюю пустую вкладку в окне.
+            page = browser.pages[0] if browser.pages else await browser.new_page()
             page.on("pageerror", lambda e: None)
 
             current_email = None

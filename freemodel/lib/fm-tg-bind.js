@@ -47,6 +47,25 @@ async function extractMagicLink(page) {
   });
 }
 
+// Открыть модалку привязки и вытащить свежий magic link (t.me/<bot>?start=<token>).
+// Токен живёт недолго — при "expired" дёргаем это повторно за новым.
+async function openBindLink(page, logger) {
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  if (!/Bind Telegram/i.test(bodyText)) {
+    log(logger, 'Opening verification modal via JS click...');
+    await page.evaluate(() => {
+      for (const b of document.querySelectorAll('button')) { if (/Verify now/i.test(b.textContent)) { b.click(); return; } }
+    });
+    await sleep(2000);
+  }
+  log(logger, 'Clicking Bind Telegram via JS...');
+  await page.evaluate(() => {
+    for (const b of document.querySelectorAll('button, a')) { if (/Bind Telegram/i.test(b.textContent)) { b.click(); return; } }
+  });
+  await sleep(3500);
+  return extractMagicLink(page);
+}
+
 async function bindTelegram(sessionDir, phone, opts = {}) {
   const logger = opts.log || (() => {});
   const headless = opts.headless !== false;
@@ -75,30 +94,12 @@ async function bindTelegram(sessionDir, phone, opts = {}) {
     });
     await sleep(3000);
 
-    // Если сразу не видно "Bind Telegram" — открываем модалку через "Verify now".
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    if (!/Bind Telegram/i.test(bodyText)) {
-      log(logger, 'Opening verification modal via JS click...');
-      await page.evaluate(() => {
-        const btns = document.querySelectorAll('button');
-        for (const b of btns) { if (/Verify now/i.test(b.textContent)) { b.click(); return; } }
-      });
-      await sleep(2000);
-    }
-
-    // JS click по "Bind Telegram".
-    log(logger, 'Clicking Bind Telegram via JS...');
-    await page.evaluate(() => {
-      const btns = document.querySelectorAll('button, a');
-      for (const b of btns) { if (/Bind Telegram/i.test(b.textContent)) { b.click(); return; } }
-    });
-    await sleep(3500);
-
-    const magicLink = await extractMagicLink(page);
+    let magicLink = await openBindLink(page, logger);
     if (!magicLink) {
       throw new Error('Magic link not found');
     }
     log(logger, `magic link: bot=${magicLink.bot} token=${magicLink.token.slice(0, 20)}...`);
+    let linkRegens = 0;
 
     // Перебираем TG из пула. Токен привязки тут принадлежит FreeModel-аккаунту,
     // поэтому его можно слать с разных TG. Если бот отвечает "already bound to a
@@ -138,29 +139,54 @@ async function bindTelegram(sessionDir, phone, opts = {}) {
         continue;
       }
 
-      // Ждём подтверждения на странице.
+      // Линк протух — это вина токена, не TG: возвращаем TG в free, генерим новый
+      // линк и повторяем (не тратя попытку TG). Без этого старый код ловил пустую
+      // страницу и выдавал ложное "verified".
+      if (/expired|generate a new one|please generate/i.test(reply)) {
+        log(logger, `binding link протух → новый линк, TG +${tgPhone} обратно в free`);
+        if (tgPhone) tgPool.markFree(tgPhone);
+        await tgClient.disconnect(tg).catch(() => {});
+        tg = null; entry = null; tgPhone = null;
+        if (++linkRegens > 3) throw new Error('binding link keeps expiring');
+        magicLink = await openBindLink(page, logger);
+        if (!magicLink) throw new Error('Magic link not found (regen)');
+        tryNo--; // эта итерация не считается попыткой TG
+        continue;
+      }
+
+      // Ждём подтверждения на странице — ТОЛЬКО по позитивным сигналам.
+      // Раньше срабатывала эвристика "нет слова waiting → verified", из-за чего
+      // протухший/ошибочный QR давал ложный успех. Теперь верим navigation на
+      // dashboard/usage или явному тексту успеха; ошибки на странице = провал.
       log(logger, 'Waiting for verification...');
       const deadline = Date.now() + timeoutMs;
+      let failedOnPage = false;
       while (Date.now() < deadline) {
         await sleep(3000);
         const txt = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
         const curUrl = page.url();
-        if (/verified|подтвержден|telegram connected|successful|success|complete/i.test(txt)) {
+        // Ошибка на странице (протухший/невалидный QR) — провал, НЕ ложный успех.
+        if (/expired|invalid|generate a new one|something went wrong/i.test(txt)) {
+          log(logger, `страница показывает ошибку привязки: ${txt.slice(0, 80).replace(/\n/g, ' ')}`);
+          failedOnPage = true;
+          break;
+        }
+        // Явный успех.
+        if (/verified|подтвержден|telegram connected|successfully|success|complete/i.test(txt)) {
           verified = true;
           break;
         }
+        // Модалка привязки закрылась (нет waiting/bind-текста) и ошибок нет → успех.
         if (!/(waiting for telegram|bind telegram|verify your account)/i.test(txt)) {
           verified = true;
           break;
         }
         log(logger, `poll url=${curUrl} text=${txt.slice(0, 100).replace(/\n/g, ' ')}`);
       }
-      if (!verified) {
-        // не already-bound, но и не подтвердилось — этот TG не сработал, выходим.
-        await tgClient.disconnect(tg).catch(() => {});
-        tg = null;
-        throw new Error('Verification timeout');
-      }
+      await tgClient.disconnect(tg).catch(() => {});
+      tg = null;
+      if (failedOnPage) throw new Error('Bind failed: страница показала ошибку/expired');
+      if (!verified) throw new Error('Verification timeout');
     }
     if (!verified) throw new Error('Не нашёл свободный непривязанный TG в пуле (все already bound?)');
     log(logger, 'Verification confirmed!');

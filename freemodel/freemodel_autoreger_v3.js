@@ -23,6 +23,22 @@ const fmTgBind = require("./lib/fm-tg-bind");
 const tgPool = require("./lib/tg-pool");
 const dashApi = require("../internal/dashboard-api");
 
+// Постоянный блок-лист email-доменов, которые FreeModel отверг по signup-лимиту.
+// Растёт во время работы и переживает рестарты — следующие реги не тратят на них
+// время. Хардкод DEAD_EMAIL_DOMAINS — для тех, что вообще не доставляют письмо.
+const EMAIL_BLOCKLIST_FILE = path.join(__dirname, ".email_blocklist.json");
+function loadEmailBlocklist() {
+  try { return JSON.parse(fs.readFileSync(EMAIL_BLOCKLIST_FILE, "utf8")) || []; }
+  catch { return []; }
+}
+function addEmailBlocklist(domain) {
+  if (!domain) return;
+  const list = loadEmailBlocklist();
+  if (list.includes(domain)) return;
+  list.push(domain);
+  try { fs.writeFileSync(EMAIL_BLOCKLIST_FILE, JSON.stringify(list, null, 2) + "\n", "utf8"); } catch {}
+}
+
 // Persist реф-цепочку между запусками.
 const LAST_INVITE_FILE = path.join(__dirname, ".last_invite");
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -484,7 +500,11 @@ async function registerOne(index, inviteCode) {
     // письмо не приходит → 5 мин впустую). Сидим блок-лист сразу, чтобы переген
     // уходил мимо. Расширяется через config.EMAIL_BLOCKED_DOMAINS.
     const DEAD_EMAIL_DOMAINS = ['mailcom.cc'];
-    const rejectedDomains = new Set([...DEAD_EMAIL_DOMAINS, ...(config.EMAIL_BLOCKED_DOMAINS || [])]);
+    const rejectedDomains = new Set([
+      ...DEAD_EMAIL_DOMAINS,
+      ...(config.EMAIL_BLOCKED_DOMAINS || []),
+      ...loadEmailBlocklist(),
+    ]);
     const allowedDomains = config.EMAIL_ALLOWED_DOMAINS || [];
 
     for (let attempt = 0; attempt < MAX_EMAIL_RETRIES; attempt++) {
@@ -585,6 +605,12 @@ async function registerOne(index, inviteCode) {
         const reason = sendOtpError ? `send-otp: ${sendOtpError}` : banHit;
         log(`[#${index}] ❌ email отклонён (${reason}), беру новую почту`);
         rejectedDomains.add(domain);
+        // Лимит на домен — это надолго: пишем в постоянный блок-лист, чтобы
+        // следующие реги (и прогоны) даже не пробовали этот домен.
+        if (/signup limit|domain has reached|reach\w*\s+\w*\s*limit/i.test(reason)) {
+          addEmailBlocklist(domain);
+          log(`[#${index}] 🚫 @${domain} → постоянный blacklist (signup limit)`);
+        }
         await page.close().catch(() => {});
         page = null;
         continue;

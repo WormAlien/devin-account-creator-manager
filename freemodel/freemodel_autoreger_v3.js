@@ -480,7 +480,11 @@ async function registerOne(index, inviteCode) {
       throw new Error(`tmailor (Camoufox) не отвечает: ${e.message}`);
     }
 
-    const rejectedDomains = new Set();
+    // Домены, на которые FreeModel молча НЕ доставляет OTP (форма принимается,
+    // письмо не приходит → 5 мин впустую). Сидим блок-лист сразу, чтобы переген
+    // уходил мимо. Расширяется через config.EMAIL_BLOCKED_DOMAINS.
+    const DEAD_EMAIL_DOMAINS = ['mailcom.cc'];
+    const rejectedDomains = new Set([...DEAD_EMAIL_DOMAINS, ...(config.EMAIL_BLOCKED_DOMAINS || [])]);
     const allowedDomains = config.EMAIL_ALLOWED_DOMAINS || [];
 
     for (let attempt = 0; attempt < MAX_EMAIL_RETRIES; attempt++) {

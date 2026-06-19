@@ -1594,9 +1594,10 @@ function renderTgPool() {
       ? `<span class="text-[9px] text-emerald/80 align-middle" title="Импорт .session (Pyrogram/Telethon)">сессия</span>`
       : `<span class="text-[9px] text-dim align-middle" title="Ручной импорт auth_key (hex:dc)">вручную</span>`;
     const phoneTxt = e.isPlaceholderPhone ? esc(e.phone) : '+' + esc(e.phone);
-    // Открыть сессию в отдельном Telegram Desktop. Banned = ключ отозван → прячем.
-    const openBtn = e.status === 'banned' ? '' :
-      `<button onclick="tgOpen('${esc(e.phone)}', this)" title="Открыть в Telegram Desktop" class="mr-2 inline-flex items-center gap-1 box-border leading-none text-[10px] px-2 py-1 align-middle bg-azure/10 border border-azure/50 text-azure rounded hover:bg-azure/20 transition">✈ Открыть</button>`;
+    // Открыть сессию в отдельном Telegram Desktop. Banned = ключ отозван → красная disabled-кнопка в том же слоте (выравнивание не плывёт).
+    const openBtn = e.status === 'banned'
+      ? `<button disabled title="Аккаунт забанен — ключ отозван, открыть нельзя" class="mr-2 inline-flex items-center gap-1 box-border leading-none text-[10px] px-2 py-1 align-middle bg-crimson/10 border border-crimson/50 text-crimson rounded cursor-not-allowed opacity-100">✕ Баннед</button>`
+      : `<button onclick="tgOpen('${esc(e.phone)}', this)" title="Открыть в Telegram Desktop" class="mr-2 inline-flex items-center gap-1 box-border leading-none text-[10px] px-2 py-1 align-middle bg-azure/10 border border-azure/50 text-azure rounded hover:bg-azure/20 transition">✈ Открыть</button>`;
     const phoneCell = `${openBtn}<span class="text-azure align-middle" title="TG-аккаунт">📲 ${phoneTxt}</span> ${typeTag}`;
     return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim}">
         <td class="px-3 py-1.5 font-mono text-xs whitespace-nowrap">${phoneCell}</td>

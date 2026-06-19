@@ -25,6 +25,14 @@ npm install
 npx playwright install chromium
 ```
 
+> [!IMPORTANT]
+> **Для FreeModel нужен Claude Code `2.1.146`.** На свежих версиях ломается `apiKeyHelper`/FreeModel-флоу — обязательно зафиксируй версию:
+> ```bash
+> npm config delete prefix
+> npm uninstall -g @anthropic-ai/claude-code
+> npm install -g @anthropic-ai/claude-code@2.1.146
+> ```
+
 **2. Python и Camoufox** — только для вкладки TokenRouter (Firefox + patched Juggler)
 
 ```bash

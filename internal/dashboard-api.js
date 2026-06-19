@@ -361,8 +361,8 @@ async function openSessionInBrowser(kind, name) {
         const dir = path.join(PROJECT_ROOT, 'notion', 'sessions', name);
         if (!fs.existsSync(dir)) throw new Error(`notion session not found: ${name}`);
         const { chromium } = require('playwright');
-        const browser = await chromium.launch({ headless: false });
-        const context = await browser.newContext({ storageState: path.join(dir, 'session.json') });
+        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+        const context = await browser.newContext({ storageState: path.join(dir, 'session.json'), viewport: null });
         const page = await context.newPage();
         await page.goto('https://www.notion.so/', { waitUntil: 'domcontentloaded' }).catch(() => {});
         return { ok: true, kind, name, url: 'https://www.notion.so/' };
@@ -373,9 +373,10 @@ async function openSessionInBrowser(kind, name) {
         const dir = session.path;
         if (!fs.existsSync(dir)) throw new Error(`freemodel session dir gone: ${dir}`);
         const { chromium } = require('playwright');
-        const browser = await chromium.launch({ headless: false });
+        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
         const context = await browser.newContext({
             storageState: path.join(dir, 'session.json'),
+            viewport: null,  // заполнять окно (--start-maximized), не фикс 1280×720
             // Форсим английский UI: иначе ru-системные акки откроются на русском
             locale: 'en-US',
             extraHTTPHeaders: { 'accept-language': 'en-US,en;q=0.9' },
@@ -393,8 +394,8 @@ async function openSessionInBrowser(kind, name) {
             ? `https://app.devin.ai/org/${orgName}/settings/usage`
             : 'https://app.devin.ai/';
         const { chromium } = require('playwright');
-        const browser = await chromium.launch({ headless: false });
-        const context = await browser.newContext({ storageState: path.join(session.path, 'session.json') });
+        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+        const context = await browser.newContext({ storageState: path.join(session.path, 'session.json'), viewport: null });
         const page = await context.newPage();
         await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
         return { ok: true, kind, name, url };
@@ -737,44 +738,23 @@ async function checkTokenrouterKey(apiKey, email) {
 }
 
 function openTokenrouterSession(email) {
-    const fs = require('fs');
     const path = require('path');
-    const { chromium } = require('playwright');
-    const dirName = email.replace(/[@.]/g, '_');
-    const sessionDir = path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'sessions', dirName);
-    const sessionFile = path.join(sessionDir, 'session.json');
-
-    if (!fs.existsSync(sessionFile)) {
-        return { ok: false, error: 'session.json не найден — запусти авторег для этого аккаунта' };
+    const { spawn } = require('child_process');
+    // Открываем в Camoufox (как регали), не в Playwright-chromium: тот же
+    // движок/фингерпринт, плюс авто-логин сохранёнными кредами в --open режиме
+    // (session.json не годится — токен протухает, формат не storageState).
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ''))) {
+        return { ok: false, error: 'bad email' };
     }
-
-    // Launch in background (don't await — browser stays open)
-    (async () => {
-        try {
-            const browser = await chromium.launch({ headless: false });
-            const context = await browser.newContext({ storageState: sessionFile });
-            const page = await context.newPage();
-            await page.goto('https://tokenrouter.me/keys', { waitUntil: 'domcontentloaded', timeout: 20000 });
-            // Browser stays open, user closes manually
-        } catch (e) {
-            console.error('[TR] open session error:', e.message);
-        }
-    })();
-
-    // Also update cookies from saved session into accounts.json for compatibility
-    try {
-        const session = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
-        const TOKENROUTER_ACCOUNTS = path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'accounts.json');
-        if (fs.existsSync(TOKENROUTER_ACCOUNTS)) {
-            const accounts = JSON.parse(fs.readFileSync(TOKENROUTER_ACCOUNTS, 'utf-8'));
-            const acc = accounts.find(a => a.email === email);
-            if (acc && session.cookies && session.cookies.length > 0) {
-                acc.cookies = session.cookies;
-                fs.writeFileSync(TOKENROUTER_ACCOUNTS, JSON.stringify(accounts, null, 2), 'utf-8');
-            }
-        }
-    } catch {}
-
+    const script = path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'camoufox_autoreg.py');
+    const args = [script, '--open', email];
+    if (process.platform === 'win32') {
+        spawn('cmd.exe', ['/c', 'start', `TokenRouter ${email}`, 'cmd.exe', '/k', 'python', ...args], {
+            cwd: PROJECT_ROOT, detached: true, stdio: 'ignore', windowsHide: false,
+        }).unref();
+    } else {
+        spawn('python', args, { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
+    }
     return { ok: true };
 }
 

@@ -736,9 +736,48 @@ def cleanup_old_profiles():
             try: shutil.rmtree(entry, ignore_errors=True)
             except: pass
 
+async def open_account(email):
+    """Открыть аккаунт в Camoufox с авто-логином. Профиль стабильный (на email),
+    поэтому после первого входа сессия переиспользуется — логин пропускается."""
+    acc = next((a for a in load_accounts() if a.get("email") == email), None)
+    if not acc or not acc.get("password"):
+        print(f"[open] нет email/пароля для {email} в accounts.json")
+        return
+    profile = BASE_DIR / f"camoufox-open-{email.replace('@', '_').replace('.', '_')}"
+    async with AsyncCamoufox(
+        # ponytail: крупное окно под FHD (не фикс 1280×720). Реальный размер
+        # экрана детектить, если будут другие разрешения.
+        headless=False, os="windows", window=(1900, 1040),
+        persistent_context=True, user_data_dir=str(profile),
+        disable_coop=True, humanize=10.0, main_world_eval=True,
+        i_know_what_im_doing=True,
+    ) as browser:
+        page = browser.pages[0] if browser.pages else await browser.new_page()
+        await page.goto(KEYS_URL, wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(1)
+        if await page.query_selector("input[type='email']"):
+            await js_fill(page, "input[type='email']", acc["email"])
+            await js_fill(page, "input[type='password']", acc["password"])
+            await handle_turnstile(page)
+            await js_click(page, "button[type='submit']")
+            await asyncio.sleep(2)
+            if "/keys" not in page.url:
+                await page.goto(KEYS_URL, wait_until="domcontentloaded", timeout=30000)
+        print(f"[open] {email} — окно открыто, закрой вручную (Ctrl+C тоже закроет)")
+        await asyncio.Future()  # держим окно, пока юзер не закроет
+
+
 async def main():
+    args = sys.argv[1:]
+    if args and args[0] == "--open":
+        if len(args) < 2:
+            print("usage: camoufox_autoreg.py --open <email>")
+            return
+        await open_account(args[1])
+        return
+
     count = 1
-    for a in sys.argv[1:]:
+    for a in args:
         if a.isdigit():
             count = max(1, min(20, int(a)))
 

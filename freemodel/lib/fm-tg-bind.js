@@ -58,20 +58,10 @@ async function bindTelegram(sessionDir, phone, opts = {}) {
     return { ok: false, error: 'session.json not found' };
   }
 
-  const entry = phone
-    ? tgPool.list().find(e => e.phone === String(phone).replace(/^\+/, ''))
-    : tgPool.reserve(sessionDir);
-  if (!entry) {
-    return { ok: false, error: phone ? `TG ${phone} not found` : 'No free TG account in pool' };
-  }
-  if (phone) {
-    tgPool.markUsed(entry.phone, sessionDir);
-  }
-  const tgPhone = entry.phone;
-  log(logger, `reserved TG +${tgPhone}`);
-
   let browser = null;
   let tg = null;
+  let entry = null;
+  let tgPhone = null;
   try {
     browser = await chromium.launch({ headless });
     const context = await browser.newContext({
@@ -110,34 +100,69 @@ async function bindTelegram(sessionDir, phone, opts = {}) {
     }
     log(logger, `magic link: bot=${magicLink.bot} token=${magicLink.token.slice(0, 20)}...`);
 
-    // Подключаемся Telegram и шлём /start <token>
-    const created = await tgClient.createClient(entry, { logger });
-    tg = created.client;
-    const sent = await tgClient.sendStartWithToken(tg, magicLink.bot, magicLink.token, {
-      timeoutMs: 15000,
-      logger,
-    });
-    log(logger, 'Sent /start to bot, reply: ' + (sent?.reply || '(none)'));
-
-    // Ждём подтверждения на странице.
-    log(logger, 'Waiting for verification...');
-    const deadline = Date.now() + timeoutMs;
+    // Перебираем TG из пула. Токен привязки тут принадлежит FreeModel-аккаунту,
+    // поэтому его можно слать с разных TG. Если бот отвечает "already bound to a
+    // different account" — этот TG уже занят на стороне FreeModel (в пуле мог
+    // числиться free): помечаем used и берём следующий свободный.
+    const maxTries = phone ? 1 : 6;
     let verified = false;
-    while (Date.now() < deadline) {
-      await sleep(3000);
-      const txt = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
-      const curUrl = page.url();
-      if (/verified|подтвержден|telegram connected|successful|success|complete/i.test(txt)) {
-        verified = true;
-        break;
+    for (let tryNo = 0; tryNo < maxTries && !verified; tryNo++) {
+      entry = phone
+        ? tgPool.list().find(e => e.phone === String(phone).replace(/^\+/, ''))
+        : tgPool.reserve(sessionDir);
+      if (!entry) {
+        throw new Error(phone ? `TG ${phone} not found` : 'No free TG account in pool');
       }
-      if (!/(waiting for telegram|bind telegram|verify your account)/i.test(txt)) {
-        verified = true;
-        break;
+      if (phone) tgPool.markUsed(entry.phone, sessionDir);
+      tgPhone = entry.phone;
+      log(logger, `reserved TG +${tgPhone} (попытка ${tryNo + 1}/${maxTries})`);
+
+      const created = await tgClient.createClient(entry, { logger });
+      tg = created.client;
+      const sent = await tgClient.sendStartWithToken(tg, magicLink.bot, magicLink.token, {
+        timeoutMs: 15000,
+        logger,
+      });
+      const reply = sent?.reply || '';
+      log(logger, 'Sent /start to bot, reply: ' + (reply || '(none)'));
+
+      // TG уже привязан к другому FreeModel-аккаунту → used, берём следующий.
+      if (/already bound to a different account|already (?:bound|linked)/i.test(reply)) {
+        log(logger, `TG +${tgPhone} уже привязан к другому аккаунту → used, беру следующий`);
+        tgPool.markUsed(tgPhone, 'bound-elsewhere');
+        await tgClient.disconnect(tg).catch(() => {});
+        tg = null;
+        const skipped = tgPhone;
+        entry = null; tgPhone = null;
+        if (phone) return { ok: false, error: 'TG already bound to a different account', tgPhone: skipped };
+        continue;
       }
-      log(logger, `poll url=${curUrl} text=${txt.slice(0, 100).replace(/\n/g, ' ')}`);
+
+      // Ждём подтверждения на странице.
+      log(logger, 'Waiting for verification...');
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await sleep(3000);
+        const txt = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+        const curUrl = page.url();
+        if (/verified|подтвержден|telegram connected|successful|success|complete/i.test(txt)) {
+          verified = true;
+          break;
+        }
+        if (!/(waiting for telegram|bind telegram|verify your account)/i.test(txt)) {
+          verified = true;
+          break;
+        }
+        log(logger, `poll url=${curUrl} text=${txt.slice(0, 100).replace(/\n/g, ' ')}`);
+      }
+      if (!verified) {
+        // не already-bound, но и не подтвердилось — этот TG не сработал, выходим.
+        await tgClient.disconnect(tg).catch(() => {});
+        tg = null;
+        throw new Error('Verification timeout');
+      }
     }
-    if (!verified) throw new Error('Verification timeout');
+    if (!verified) throw new Error('Не нашёл свободный непривязанный TG в пуле (все already bound?)');
     log(logger, 'Verification confirmed!');
 
     await context.storageState({ path: sessionFile });

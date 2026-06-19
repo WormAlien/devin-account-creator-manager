@@ -1587,7 +1587,7 @@ async function loadTgPool() {
     $('tg-stats').innerHTML =
       `<span class="text-emerald">●</span> free <b class="text-emerald">${s.free}</b> · ` +
       (s.reserved ? `<span class="text-azure">●</span> reserved <b class="text-azure">${s.reserved}</b> · ` : '') +
-      `<span class="text-amber">●</span> used <b class="text-amber">${s.used}</b> · ` +
+      `<span class="text-crimson">●</span> used <b class="text-crimson">${s.used}</b> · ` +
       `<span class="text-crimson">●</span> banned <b class="text-crimson">${s.banned}</b> · ` +
       `total <b>${s.total}</b>`;
     renderTgPool();
@@ -1608,7 +1608,7 @@ function renderTgPool() {
     const map = {
       free:     ['emerald', '● free'],
       reserved: ['azure',   '◐ reserved'],
-      used:     ['amber',   '● used'],
+      used:     ['crimson', '● used'],
       banned:   ['crimson', '✕ banned'],
     };
     const [c, l] = map[s] || ['faint', s];

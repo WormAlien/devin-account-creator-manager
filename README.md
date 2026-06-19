@@ -70,6 +70,7 @@ routing\restart-dashboard.bat
 | Саб-система | Что делает | Файлы |
 | :--- | :--- | :--- |
 | **FreeModel** | Аккаунты `freemodel.dev` (Claude через клуб) + пул Telegram для привязки + ротация ключей | `freemodel/` · `internal/freemodel-manager.js` · `routing/freemodel-rotator.js` |
+| **Telegram-сессии** | Менеджер TG-аккаунтов: импорт списком / `.session` / hex, привязка по `auth_key`, открытие в Telegram Desktop | `freemodel/lib/tg-*.js` · `tools/tg-open.py` |
 | **TokenRouter** | Аккаунты `tokenrouter.me` через Camoufox-автореги; трекинг баланса / health / usage | `routing/tokenrouter/` · `camoufox_autoreg.py` |
 | **Backend Switch** | Web-UI на `:8200` — переключатель backend + менеджер всех сессий | `routing/transparent-proxy.js` · `routing/proxy-dashboard.html` |
 
@@ -104,13 +105,25 @@ routing\restart-dashboard.bat
 Менеджер сессий `freemodel.dev` с квотами и пулом Telegram-привязок.
 
 - **Активный API в Claude Code** — какой ключ сейчас в `settings.json`. Бейдж режима: 🔑 **Прямой ключ** (`env.ANTHROPIC_API_KEY`) или 🤝 **API Helper** (`apiKeyHelper` читает `~/.claude/fm-active-key.txt`). На каждой сессии — тумблер 🔑 Ключ / 🤝 Helper.
-- **Telegram pool** — готовые TG-аккаунты для привязки к новым freemodel-аккаунтам. Расходуются по порядку: `free → used → banned`.
-  - **Импорт** списком: `phone|hex:dc`, `hex:dc`, `phone hex dc [user_id]` (по строке на акк) — или загрузкой `.session` (Pyrogram/Telethon).
-  - `hex:dc` без номера → имя-плейсхолдер `tg_<hex8>`; привязка идёт по `auth_key`, **номер не нужен**. Тег источника: **сессия** (`.session`) / **вручную** (hex).
-  - **✈ Открыть** — открыть сессию в портативном Telegram Desktop (`tools/tg-open.py` → `opentele`, `UseCurrentSession`). Отдельный `-workdir` на аккаунт — твой основной клиент не трогается.
+- **Telegram pool** — готовые TG-аккаунты для привязки (импорт списком / `.session` / hex, ✈ открытие в Telegram Desktop). Подробно ↓ **Telegram — менеджер сессий**.
 - **Сессии** — таблица с таймером, доступным `$`, окнами 5h/7d и квотой. **➕ Создать v3** реги пачкой, **🔄 Квоты ~30s** перепрогон через headless Chrome.
 
 **Цвет квоты:** 🟢 < 40% · 🟡 40–70% · 🔴 > 70%
+
+### Telegram — менеджер сессий
+
+Пул готовых Telegram-аккаунтов прямо в дашборде: **импорт → хранение → привязка к FreeModel → открытие в Telegram Desktop**. Один аккаунт = `auth_key + dc_id`, всё крутится вокруг него — номер опционален.
+
+**Добавить аккаунты:**
+
+- **списком** — `phone|hex:dc`, `hex:dc` или `phone hex dc [user_id]`, по строке на аккаунт. Hex, разорванный переносами при вставке из браузера, парсер склеивает сам; `:dc` (1–5) на конце.
+- **`.session`-файлом** — Pyrogram **или** Telethon. `auth_key` + `phone` + `user_id` достаются автоматически (через системный `sqlite3`, без `better-sqlite3`).
+
+`hex:dc` без номера → имя-плейсхолдер `tg_<hex8>`; **номер не обязателен** — и привязка, и логин идут по `auth_key`. В таблице видно **источник** (`сессия` для `.session` / `вручную` для hex), статус `free → reserved → used → banned` и маскированный ключ.
+
+**✈ Открыть** — конвертит `auth_key → tdata` (`opentele`, `UseCurrentSession` — без релогина и SMS) и поднимает аккаунт в **портативном Telegram Desktop** с отдельным `-workdir` на каждого. Твой основной клиент (Telegram/AyuGram) не трогается. Первый запуск ~5–10с в сеть, дальше `tdata` переиспользуется из `tools/tg-profiles/<phone>/`.
+
+> Зависимость для ✈ Открыть — `tools/tg-venv` + портативный Telegram, см. install шаг **2b**. Офлайн-проверка ключа: `tools/tg-venv/Scripts/python.exe tools/tg-open.py <phone> --check`.
 
 ### TokenRouter
 

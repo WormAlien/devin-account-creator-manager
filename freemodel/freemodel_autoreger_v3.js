@@ -409,40 +409,46 @@ async function createApiKey(page) {
   return null;
 }
 
-async function grabReferralCode(page) {
-  log("[реф] ищу свою реф-ссылку");
-  const urls = [
-    `${config.DASHBOARD_URL}/refer`,
-    `${config.DASHBOARD_URL}/invite`,
-    `${config.DASHBOARD_URL}/referrals`,
-    config.DASHBOARD_URL,
-  ];
+async function grabReferralCodeInner(page) {
+  // Сначала пробуем БЕЗ навигации — часто реф-ссылка уже в DOM (dashboard/refer).
+  // SPA-роутер иногда вешает page.goto на domcontentloaded → отсюда зависания,
+  // поэтому навигацию делаем "load" с коротким таймаутом и не падаем на ней.
+  const tryExtract = async () => {
+    const text = await page.locator("body").innerText().catch(() => "");
+    let code = extractInviteCode(text);
+    if (code) return code;
+    const hrefs = await page.locator('a[href*="/invite/"]').all().catch(() => []);
+    for (const a of hrefs) {
+      const c = extractInviteCode(await a.getAttribute("href").catch(() => ""));
+      if (c) return c;
+    }
+    return null;
+  };
+
+  let code = await tryExtract();
+  if (code) { log(`[реф] 🔗 ${code}`); return code; }
+
+  const urls = [`${config.DASHBOARD_URL}/refer`, `${config.DASHBOARD_URL}/invite`, `${config.DASHBOARD_URL}/referrals`];
   for (const u of urls) {
     try {
-      await page.goto(u, { waitUntil: "domcontentloaded", timeout: 15000 });
-      await page.waitForTimeout(10000);
-      const text = await page
-        .locator("body")
-        .innerText()
-        .catch(() => "");
-      const code = extractInviteCode(text);
-      if (code) {
-        log(`[реф] 🔗 ${code}`);
-        return code;
-      }
-      const hrefs = await page.locator('a[href*="/invite/"]').all();
-      for (const a of hrefs) {
-        const href = await a.getAttribute("href").catch(() => "");
-        const c = extractInviteCode(href);
-        if (c) {
-          log(`[реф] 🔗 ${c}`);
-          return c;
-        }
-      }
+      await page.goto(u, { waitUntil: "load", timeout: 12000 }).catch(() => {});
+      await page.waitForTimeout(2500);
+      code = await tryExtract();
+      if (code) { log(`[реф] 🔗 ${code}`); return code; }
     } catch {}
   }
   log("[реф] ⚠️ реф-код не найден");
   return null;
+}
+
+async function grabReferralCode(page) {
+  log("[реф] ищу свою реф-ссылку");
+  // Жёсткий потолок на всю функцию — что бы ни зависло (goto/SPA), не виснем
+  // навсегда: аккаунт уже зареган, реф-код опционален.
+  return Promise.race([
+    grabReferralCodeInner(page),
+    new Promise((r) => setTimeout(() => { log("[реф] ⏱ таймаут поиска реф-кода"); r(null); }, 45000)),
+  ]);
 }
 
 // ─── ОДИН АККАУНТ ───────────────────────────────────────────────

@@ -22,6 +22,7 @@ freemodel/accounts/
 freemodel/sessions/
 freemodel/keys.txt
 freemodel/tg_pool.json
+freemodel/.tg_health_cache.json
 freemodel/manual_email.txt
 freemodel/lib/camoufox_tmailor_profile_*/
 freemodel/lib/camoufox_recordings/

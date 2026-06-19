@@ -390,6 +390,7 @@
                 <button onclick="addTgBulk()" class="text-xs px-3 py-1.5 bg-emerald/15 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/25 font-medium">➕ Импортировать всё</button>
                 <button onclick="document.getElementById('tg-file-input').click()" class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-line">📎 Импорт .session</button>
                 <input id="tg-file-input" type="file" accept=".session" class="hidden" onchange="pickTgSession(event)">
+                <button onclick="tgHealthCheck(this)" title="Безбанный чек: connect+getMe по каждому, кэшируется" class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-azure/60 hover:text-azure">🩺 Health-чек</button>
                 <span id="tg-bulk-hint" class="text-[10px] text-faint font-mono ml-2">—</span>
               </div>
             </div>
@@ -1548,6 +1549,35 @@ async function deleteSession(kind, name, email) {
 }
 
 // ═══════════════════ TG POOL ════════════════════════════════════════
+async function tgHealthCheck(btn) {
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '🩺 чекаю… (~мин)';
+  try {
+    const res = await fetch('/__switch/api/tg/health-check', { method: 'POST' });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || 'fail');
+    toast(`🩺 alive ${d.alive} · dead ${d.dead} · err ${d.error}`, d.dead ? 'warn' : 'success', 6000);
+    loadTgPool();
+  } catch (e) { toast('Health: ' + e.message, 'error', 7000); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function tgHealthOne(phone, btn) {
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳';
+  try {
+    const res = await fetch('/__switch/api/tg/health-check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || 'fail');
+    toast(`🩺 ${phone}: ${d.status}`, d.status === 'alive' ? 'success' : d.status === 'dead' ? 'error' : 'warn', 5000);
+    loadTgPool();
+  } catch (e) { toast('Health: ' + e.message, 'error', 7000); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
 async function loadTgPool() {
   try {
     const res = await fetch('/__switch/api/tg/list');
@@ -1596,15 +1626,24 @@ function renderTgPool() {
     const phoneTxt = e.isPlaceholderPhone ? esc(e.phone) : '+' + esc(e.phone);
     // Открыть сессию в отдельном Telegram Desktop. Banned = ключ отозван → красная disabled-кнопка в том же слоте (выравнивание не плывёт).
     const openBtn = e.status === 'banned'
-      ? `<button disabled title="Аккаунт забанен — ключ отозван, открыть нельзя" class="mr-2 inline-flex items-center gap-1 box-border leading-none text-[10px] px-2 py-1 align-middle bg-crimson/10 border border-crimson/50 text-crimson rounded cursor-not-allowed opacity-100">✕ Баннед</button>`
-      : `<button onclick="tgOpen('${esc(e.phone)}', this)" title="Открыть в Telegram Desktop" class="mr-2 inline-flex items-center gap-1 box-border leading-none text-[10px] px-2 py-1 align-middle bg-azure/10 border border-azure/50 text-azure rounded hover:bg-azure/20 transition">✈ Открыть</button>`;
+      ? `<button disabled title="Аккаунт забанен — ключ отозван, открыть нельзя" class="mr-2 inline-flex items-center justify-center gap-1 box-border leading-none text-[10px] w-[88px] h-[24px] align-middle bg-crimson/10 border border-crimson/50 text-crimson rounded cursor-not-allowed opacity-100">🚫 Banned</button>`
+      : `<button onclick="tgOpen('${esc(e.phone)}', this)" title="Открыть в Telegram Desktop" class="mr-2 inline-flex items-center justify-center gap-1 box-border leading-none text-[10px] w-[88px] h-[24px] align-middle bg-azure/10 border border-azure/50 text-azure rounded hover:bg-azure/20 transition">✈ Открыть</button>`;
     const phoneCell = `${openBtn}<span class="text-azure align-middle" title="TG-аккаунт">📲 ${phoneTxt}</span> ${typeTag}`;
+    const h = e.health;
+    const healthBadge = h
+      ? (h.status === 'alive'
+          ? `<span class="ml-2 text-[10px] text-emerald" title="getMe OK${h.username ? ' · @' + esc(h.username) : ''} · ${esc(ageStr(h.checkedAt))}">🟢 alive</span>`
+          : h.status === 'dead'
+            ? `<span class="ml-2 text-[10px] text-crimson" title="${esc(h.error || 'ключ отозван')} · ${esc(ageStr(h.checkedAt))}">🔴 dead</span>`
+            : `<span class="ml-2 text-[10px] text-amber" title="${esc(h.error || 'ошибка')} · ${esc(ageStr(h.checkedAt))}">🟠 ?</span>`)
+      : `<span class="ml-2 text-[10px] text-dim" title="health-чек не запускался">—</span>`;
     return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim}">
         <td class="px-3 py-1.5 font-mono text-xs whitespace-nowrap">${phoneCell}</td>
         <td class="px-3 py-1.5 font-mono text-[11px] text-azure">DC${e.dc_id}</td>
         <td class="px-3 py-1.5 font-mono text-[10px] text-faint">${esc(e.auth_key_mask)}</td>
-        <td class="px-3 py-1.5 text-[11px]">${statusCell(e.status)}${usedInfo}</td>
+        <td class="px-3 py-1.5 text-[11px]">${statusCell(e.status)}${healthBadge}${usedInfo}</td>
         <td class="px-3 py-1.5 text-right whitespace-nowrap">
+          <button onclick="tgHealthOne('${esc(e.phone)}', this)" title="Health-чек этого аккаунта" class="text-[10px] px-2 py-0.5 bg-azure/10 border border-azure/40 text-azure rounded hover:bg-azure/20">🩺</button>
           ${(e.status === 'used' || e.status === 'banned')
             ? `<button onclick="tgMarkFree('${esc(e.phone)}')" title="Вернуть в free" class="text-[10px] px-2 py-0.5 bg-emerald/10 border border-emerald/40 text-emerald rounded hover:bg-emerald/20 ml-1">↺</button>`
             : ''}

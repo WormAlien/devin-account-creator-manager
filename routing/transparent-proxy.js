@@ -550,10 +550,12 @@ async function handleNotionCardSelect(req, res) {
 const tgPool = require('../freemodel/lib/tg-pool');
 const tgSessionParser = require('../freemodel/lib/tg-session-parser');
 const fmTgBind = require('../freemodel/lib/fm-tg-bind');
+const tgHealth = require('../freemodel/lib/tg-health');
 
 function handleTgList(res) {
     try {
         const arr = tgPool.list();
+        const health = tgHealth.loadCache();
         // Маскируем auth_key для UI — полный ключ из дашборда никогда не отдаём.
         const safe = arr.map(e => ({
             phone: e.phone,
@@ -561,13 +563,34 @@ function handleTgList(res) {
             user_id: e.user_id,
             auth_key_mask: tgPool.maskAuthKey(e.auth_key_hex),
             status: e.status,
+            source: e.source || (e.isPlaceholderPhone ? 'hex' : 'session'),
             addedAt: e.addedAt,
             usedBy: e.usedBy || null,
             usedAt: e.usedAt || null,
             banReason: e.banReason || null,
             isPlaceholderPhone: !!e.isPlaceholderPhone,
+            health: health[e.phone] || null,
         }));
         jsonRes(res, 200, { entries: safe, stats: tgPool.stats() });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// Безбанный health-чек: connect+getMe по каждому не-banned, результат в кэш.
+async function handleTgHealthCheck(req, res) {
+    try {
+        let body = {};
+        try { body = await readJsonBody(req); } catch { body = {}; }
+        if (body && body.phone) {
+            const r = await tgHealth.checkPhone(body.phone, msg => logLine(msg));
+            logLine(`tg health: ${body.phone} → ${r.status}`);
+            return jsonRes(res, 200, { ok: true, phone: body.phone, ...r });
+        }
+        logLine('tg health: проверка всех не-banned (connect+getMe)…');
+        const summary = await tgHealth.checkAll(msg => logLine(msg));
+        logLine(`tg health: alive=${summary.alive} dead=${summary.dead} error=${summary.error}`);
+        jsonRes(res, 200, { ok: true, ...summary });
     } catch (e) {
         jsonRes(res, 500, { error: e.message });
     }
@@ -1083,6 +1106,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tg/mark-free')   return handleTgMarkFree(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/rename')      return handleTgRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/open')        return handleTgOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tg/health-check') return handleTgHealthCheck(req, res);
 
     // ---- FreeModel ban/unban marker ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/ban')      return handleFreemodelBan(req, res);

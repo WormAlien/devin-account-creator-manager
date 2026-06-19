@@ -236,15 +236,15 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
                     const origIdx = sessions.indexOf(eligible[i]);
                     if (origIdx >= 0) out[origIdx].quota = { ...q, updatedAt: Date.now() };
                     cache[eligible[i].name] = out[origIdx >= 0 ? origIdx : i].quota;
-                    // Update TG binding status from dashboard scan
+                    // TG-привязка — локальная мета (ставится при bind) авторитетна.
+                    // Скан freemodel.dev может ДОБАВИТь номер, если локально пусто,
+                    // но НИКОГДА не удаляет: tgBound===false на ненадёжном скане раньше
+                    // стирал привязки (оставался осиротевший tgLinkedAt).
                     if (q.tgBound === true) {
                         meta[eligible[i].name] = meta[eligible[i].name] || {};
                         if (!meta[eligible[i].name].tgPhone) {
                             meta[eligible[i].name].tgPhone = q.tgPhone || 'connected';
                         }
-                    } else if (q.tgBound === false) {
-                        meta[eligible[i].name] = meta[eligible[i].name] || {};
-                        delete meta[eligible[i].name].tgPhone;
                     }
                 }
             } catch { /* keep cached value */ }

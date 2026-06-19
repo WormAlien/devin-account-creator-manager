@@ -401,7 +401,7 @@
           </div>
         </details>
 
-        <div id="freemodel-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
+        <div id="freemodel-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
           <div class="p-12 text-center text-muted text-xs">—</div>
         </div>
       </div>
@@ -590,11 +590,11 @@ function timerHtml(createdAt, targetAt) {
   const regDate = new Date(t).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
   const targetDate = new Date(target).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
   if (left <= 0) {
-    return `<div class="text-[10px] leading-tight"><div class="text-faint">${regDate} → ${targetDate}</div><div class="text-crimson font-medium">истёк · ${elapsedStr} назад</div></div>`;
+    return `<div class="text-[10px] leading-tight whitespace-nowrap"><div class="text-faint">${regDate} → ${targetDate}</div><div class="text-crimson font-medium">истёк · ${elapsedStr} назад</div></div>`;
   }
   const leftStr = fmtDuration(left);
   const color = left < 3600_000 ? 'text-crimson' : left < 4 * 3600_000 ? 'text-amber' : 'text-emerald';
-  return `<div class="text-[10px] leading-tight"><div class="text-faint">${regDate} → ${targetDate}</div><div class="${color} font-medium">ост. ${leftStr} · ${elapsedStr} назад</div></div>`;
+  return `<div class="text-[10px] leading-tight whitespace-nowrap"><div class="text-faint">${regDate} → ${targetDate}</div><div class="${color} font-medium">ост. ${leftStr} · ${elapsedStr} назад</div></div>`;
 }
 
 function regAgeHtml(createdAt, note) {
@@ -605,7 +605,7 @@ function regAgeHtml(createdAt, note) {
   const elapsedStr = fmtDuration(elapsed);
   const regDate = new Date(t).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
   const noteHtml = note ? `<div class="text-[10px] text-dim">${note}</div>` : '';
-  return `<div class="text-[10px] leading-tight"><div class="text-faint">${regDate}</div><div class="text-ink">${elapsedStr} назад</div>${noteHtml}</div>`;
+  return `<div class="text-[10px] leading-tight whitespace-nowrap"><div class="text-faint">${regDate}</div><div class="text-ink">${elapsedStr} назад</div>${noteHtml}</div>`;
 }
 
 function pctColor(p) {

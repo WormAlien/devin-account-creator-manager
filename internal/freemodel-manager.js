@@ -377,6 +377,14 @@ async function extractFreemodelApiKey(session) {
         }
 
         if (!modalOpened) {
+            // На неверифицированном аккаунте клик "Create key" открывает не поле
+            // имени, а окно верификации (Bind phone / Bind Telegram / Buy API
+            // credit). Ловим это и отдаём понятную ошибку вместо "could not open".
+            const gateText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+            if (/complete account verification|bind a phone number|bind telegram|buy api credit|top up \$?\d|before creating an api key/i.test(gateText)) {
+                await browser.close(); browser = null;
+                return { ok: false, error: 'account not verified — bind Telegram/phone first', needsVerification: true };
+            }
             throw new Error('could not open Create key modal');
         }
 
@@ -404,6 +412,13 @@ async function extractFreemodelApiKey(session) {
         } catch {
             // Fallback: scan entire body for key text
             const bodyText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+            // FreeModel гейтит создание ключа за верификацией: если аккаунт не
+            // привязал телефон/Telegram и не пополнил $10, сайт показывает это
+            // вместо ключа. Возвращаем понятную ошибку, а не ".secret-val not found".
+            if (/complete account verification|bind a phone number|top up \$?\d|before creating an api key/i.test(bodyText)) {
+                await browser.close(); browser = null;
+                return { ok: false, error: 'account not verified — bind Telegram/phone first', needsVerification: true };
+            }
             const m = bodyText.match(KEY_RE);
             if (m) {
                 const apiKey = m[0];

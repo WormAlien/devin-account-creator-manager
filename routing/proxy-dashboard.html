@@ -364,6 +364,44 @@
           </div>
         </div>
 
+        <!-- Авто-ротация (API Helper, балансировка нагрузки) -->
+        <div class="rounded-xl bg-surface border border-azure/40 p-4 relative overflow-hidden">
+          <div class="absolute -top-16 -left-16 size-32 rounded-full bg-azure/10 blur-2xl pointer-events-none"></div>
+          <div class="relative flex items-start justify-between gap-4 flex-wrap">
+            <div class="min-w-0">
+              <div class="text-sm font-semibold text-ink flex items-center gap-2">
+                <span class="text-azure">🔁</span> Авто-ротация
+                <span class="text-[10px] px-1.5 py-0.5 rounded border bg-azure/10 border-azure/40 text-azure font-medium">API Helper</span>
+              </div>
+              <div class="text-[11px] text-muted mt-1 max-w-md">
+                Держит активным наименее использованный аккаунт и переписывает
+                <code class="font-mono text-azure">~/.claude/fm-active-key.txt</code> — без перезапуска Claude Code.
+              </div>
+              <div id="fm-auto-status" class="text-[11px] font-mono text-faint mt-2">—</div>
+            </div>
+            <div class="flex flex-col items-end gap-2">
+              <button id="fm-auto-toggle" onclick="fmAutoToggle()"
+                      class="text-xs px-4 py-2 rounded-lg font-medium border bg-elevated border-line-soft text-muted hover:border-azure/60 hover:text-azure transition">
+                ○ Выключена
+              </button>
+              <div class="flex items-center gap-2 text-[10px] text-faint">
+                <label class="flex items-center gap-1">интервал
+                  <input id="fm-auto-interval" type="number" min="15" max="600" value="90"
+                         class="w-14 px-1.5 py-1 bg-surface border border-line-soft rounded text-ink text-center" />с
+                </label>
+                <label class="flex items-center gap-1">потолок
+                  <input id="fm-auto-ceiling" type="number" min="10" max="100" value="70"
+                         class="w-12 px-1.5 py-1 bg-surface border border-line-soft rounded text-ink text-center" />%
+                </label>
+              </div>
+            </div>
+          </div>
+          <div id="fm-auto-log" class="relative mt-3 pt-3 border-t border-line-soft/60 hidden">
+            <div class="text-[10px] uppercase tracking-wider text-faint mb-1.5">Последние переключения</div>
+            <div id="fm-auto-log-rows" class="space-y-0.5 text-[11px] font-mono"></div>
+          </div>
+        </div>
+
         <!-- ═══ TG POOL (свёрнут по умолчанию) ═══ -->
         <details class="rounded-xl bg-surface border border-line-soft" id="tg-pool-details" open>
           <summary class="cursor-pointer px-5 py-3 text-sm font-semibold flex items-center gap-2 hover:bg-elevated/40 select-none">
@@ -634,6 +672,7 @@ function showTab(name) {
     loadFreemodelInvites();
     loadTgPool();
     loadActiveFmKey();
+    fmAutoStartPolling();
     if (!state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); }
   }
   if (name === 'notion' && !state.loaded.notion) {
@@ -1088,6 +1127,115 @@ async function loadActiveFmKey() {
     }
     renderFreemodel(false);
   } catch (e) { /* silent */ }
+}
+
+// ═══════════════════ FREEMODEL AUTO-ROTATION ═════════════════════════
+let fmAutoTimer = null;
+let fmAutoLast = { enabled: false };
+
+function fmAgo(ts) {
+  if (!ts) return '—';
+  const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (sec < 60) return sec + 'с назад';
+  const min = Math.round(sec / 60);
+  if (min < 60) return min + 'м назад';
+  return Math.round(min / 60) + 'ч назад';
+}
+
+function fmAutoApplyStatus(st) {
+  fmAutoLast = st;
+  const btn = $('fm-auto-toggle');
+  if (st.enabled) {
+    btn.textContent = '● Включена';
+    btn.className = 'text-xs px-4 py-2 rounded-lg font-medium border bg-azure/15 border-azure/60 text-azure hover:bg-azure/25 transition';
+  } else {
+    btn.textContent = '○ Выключена';
+    btn.className = 'text-xs px-4 py-2 rounded-lg font-medium border bg-elevated border-line-soft text-muted hover:border-azure/60 hover:text-azure transition';
+  }
+
+  const statusEl = $('fm-auto-status');
+  if (st.enabled) {
+    const sess = state.freemodel.find(s => s.name === st.activeName);
+    const who = sess ? (sess.email || st.activeName) : (st.activeName || '—');
+    const nextSec = st.nextTickAt ? Math.max(0, Math.round((st.nextTickAt - Date.now()) / 1000)) : null;
+    const parts = [
+      `активный: ${esc(who)}`,
+      `свич: ${fmAgo(st.lastSwitch)}`,
+    ];
+    if (st.ticking) parts.push('⏳ опрос квот…');
+    else if (nextSec != null) parts.push(`след. через ${nextSec}с`);
+    statusEl.innerHTML = parts.join(' · ');
+    statusEl.className = 'text-[11px] font-mono text-azure mt-2';
+  } else {
+    statusEl.textContent = `выключена · интервал ${Math.round(st.intervalMs / 1000)}с · потолок ${Math.round(st.ceiling * 100)}%`;
+    statusEl.className = 'text-[11px] font-mono text-faint mt-2';
+  }
+
+  const logWrap = $('fm-auto-log');
+  const rows = (st.recent || []);
+  if (rows.length) {
+    logWrap.classList.remove('hidden');
+    $('fm-auto-log-rows').innerHTML = rows.map(r => {
+      const reasonTag = { balance: '⚖️ баланс', ceiling: '🛑 потолок', 'no-active': '▶️ старт' }[r.reason] || r.reason;
+      return `<div class="flex items-center gap-2 text-muted">
+        <span class="text-faint w-16 shrink-0">${fmAgo(r.ts)}</span>
+        <span class="text-azure truncate flex-1">${esc(r.email || r.to)}</span>
+        <span class="text-faint">${r.used}%</span>
+        <span class="text-[10px] text-dim w-20 text-right">${reasonTag}</span>
+      </div>`;
+    }).join('');
+  } else {
+    logWrap.classList.add('hidden');
+  }
+}
+
+async function fmAutoFetchStatus() {
+  try {
+    const res = await fetch('/__switch/api/freemodel/auto/status');
+    const st = await res.json();
+    if (!res.ok) return;
+    fmAutoApplyStatus(st);
+  } catch {}
+}
+
+async function fmAutoToggle() {
+  const enable = !fmAutoLast.enabled;
+  const btn = $('fm-auto-toggle');
+  btn.disabled = true;
+  try {
+    if (enable) {
+      const intervalMs = (parseInt($('fm-auto-interval').value, 10) || 90) * 1000;
+      const ceiling = (parseInt($('fm-auto-ceiling').value, 10) || 70) / 100;
+      const res = await fetch('/__switch/api/freemodel/auto/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intervalMs, ceiling }),
+      });
+      const st = await res.json();
+      if (!res.ok) throw new Error(st.error || 'start failed');
+      fmAutoApplyStatus(st);
+      toast(st.helperChanged ? '✓ Авто-ротация ВКЛ · settings.json → API Helper' : '✓ Авто-ротация включена', 'success');
+      loadActiveFmKey();
+    } else {
+      const res = await fetch('/__switch/api/freemodel/auto/stop', { method: 'POST' });
+      const st = await res.json();
+      if (!res.ok) throw new Error(st.error || 'stop failed');
+      fmAutoApplyStatus(st);
+      toast('Авто-ротация выключена', 'warn');
+    }
+  } catch (e) {
+    toast('Авто-ротация: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function fmAutoStartPolling() {
+  if (fmAutoTimer) return;
+  fmAutoFetchStatus();
+  fmAutoTimer = setInterval(() => {
+    const visible = document.querySelector('[data-tab-content="freemodel"]')?.offsetParent !== null;
+    if (visible && !document.hidden) fmAutoFetchStatus();
+  }, 3000);
 }
 
 async function loadFreemodelSessions(refresh) {
@@ -1587,7 +1735,7 @@ async function loadTgPool() {
     $('tg-stats').innerHTML =
       `<span class="text-emerald">●</span> free <b class="text-emerald">${s.free}</b> · ` +
       (s.reserved ? `<span class="text-azure">●</span> reserved <b class="text-azure">${s.reserved}</b> · ` : '') +
-      `<span class="text-crimson">●</span> used <b class="text-crimson">${s.used}</b> · ` +
+      `<span class="text-amber">●</span> used <b class="text-amber">${s.used}</b> · ` +
       `<span class="text-crimson">●</span> banned <b class="text-crimson">${s.banned}</b> · ` +
       `total <b>${s.total}</b>`;
     renderTgPool();
@@ -1608,7 +1756,7 @@ function renderTgPool() {
     const map = {
       free:     ['emerald', '● free'],
       reserved: ['azure',   '◐ reserved'],
-      used:     ['crimson', '● used'],
+      used:     ['amber',   '● used'],
       banned:   ['crimson', '✕ banned'],
     };
     const [c, l] = map[s] || ['faint', s];

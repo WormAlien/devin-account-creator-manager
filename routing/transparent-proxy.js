@@ -342,6 +342,222 @@ function readJsonBody(req) {
     });
 }
 
+// ───── FreeModel auto-rotation (API Helper load balancer) ─────────────
+// В режиме API Helper claude code на каждый запрос читает ключ из
+// ~/.claude/fm-active-key.txt (TTL=0). Значит ротация = переписывать этот
+// файл лучшим (наименее использованным) ключом. Перезапуск не нужен.
+// Цель: равномерно размазать нагрузку по всем аккаунтам с самого начала
+// (0%/1%), а не выкачивать один до потолка.
+const FM_ACTIVE_KEY_FILE   = path.join(os.homedir(), '.claude', 'fm-active-key.txt');
+const FM_AUTOROTATE_FILE   = path.join(__dirname, '..', 'logs', '.freemodel_autorotate.json');
+
+const fmAuto = {
+    enabled: false,
+    intervalMs: 90000,    // как часто переоцениваем + рефрешим квоты
+    ceiling: 0.70,        // жёсткий потолок used%: при достижении уступаем место
+    hysteresis: 0.01,     // свич только если кандидат свободнее текущего на >1%
+    refreshK: 3,          // рефрешим активный + K наименее использованных
+    activeName: null,
+    lastSwitch: 0,
+    lastTickAt: 0,
+    nextTickAt: 0,
+    ticking: false,
+    timer: null,
+    recent: [],           // [{ts, from, to, email, reason, used}]
+};
+
+function fmParseDollars(s) {
+    if (s == null) return null;
+    const m = String(s).match(/[\d.,]+/);
+    if (!m) return null;
+    const n = parseFloat(m[0].replace(',', ''));
+    return isFinite(n) ? n : null;
+}
+// used% = среднее использования по окнам 5h и 7d (0..1). null если нет данных.
+function fmUsedFraction(q) {
+    if (!q) return null;
+    const u5 = fmParseDollars(q.h5), m5 = fmParseDollars(q.h5max);
+    const u7 = fmParseDollars(q.d7), m7 = fmParseDollars(q.d7max);
+    const parts = [];
+    if (u5 != null && m5 && m5 > 0) parts.push(u5 / m5);
+    if (u7 != null && m7 && m7 > 0) parts.push(u7 / m7);
+    if (!parts.length) return null;
+    return parts.reduce((a, b) => a + b, 0) / parts.length;
+}
+function fmReadKeyFromInfo(s) {
+    try {
+        const f = path.join(s.path, 'account_info.txt');
+        if (fs.existsSync(f)) {
+            const m = fs.readFileSync(f, 'utf-8').match(/^API Key:\s*((?:fe[_-]|sk-)[A-Za-z0-9_-]{20,})/m);
+            if (m) return m[1];
+        }
+    } catch {}
+    return null;
+}
+// Пригодные кандидаты: статус ✅, не banned, есть валидный ключ.
+async function fmGetUsable() {
+    const sessions = await dashApi.listFreemodelSessions({ withQuotas: 'cache' });
+    const out = [];
+    for (const s of sessions) {
+        if (s.status !== '✅' || s.meta?.banned) continue;
+        const key = s.meta?.apiKey || fmReadKeyFromInfo(s);
+        if (!key) continue;
+        out.push({ name: s.name, email: s.email || s.name, key, used: fmUsedFraction(s.quota) });
+    }
+    return out;
+}
+// Для сортировки неизвестную квоту трактуем как 0 (свежий аккаунт = полный запас),
+// чтобы новые аккаунты пробовались первыми, а затем рефрешились.
+const fmUsedSort = s => (s.used == null ? 0 : s.used);
+
+function fmWriteActiveKey(key) {
+    try {
+        fs.writeFileSync(FM_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        return true;
+    } catch (e) {
+        logLine(`fm auto: write key failed: ${e.message}`);
+        return false;
+    }
+}
+// Гарантируем helper-режим в settings.json (как кнопка «Активировать» с mode=helper).
+function fmEnsureHelperMode() {
+    try {
+        const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
+        const raw = fs.readFileSync(settingsFile, 'utf-8');
+        const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        const want = 'cat ~/.claude/fm-active-key.txt';
+        const already = settings.apiKeyHelper === want
+            && settings.env?.ANTHROPIC_BASE_URL === 'https://cc.freemodel.dev'
+            && !settings.env?.ANTHROPIC_API_KEY;
+        if (already) return { changed: false };
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        fs.copyFileSync(settingsFile, settingsFile + '.bak-fmauto-' + stamp);
+        settings.env = settings.env || {};
+        settings.env.ANTHROPIC_BASE_URL = 'https://cc.freemodel.dev';
+        settings.apiKeyHelper = want;
+        settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+        delete settings.env.ANTHROPIC_API_KEY;  // direct key would shadow the helper
+        fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+        logLine('fm auto: settings.json → API Helper mode');
+        return { changed: true };
+    } catch (e) {
+        return { changed: false, error: e.message };
+    }
+}
+
+async function fmAutoTick() {
+    if (fmAuto.ticking) return;
+    fmAuto.ticking = true;
+    fmAuto.lastTickAt = Date.now();
+    const cwd = process.cwd();
+    try {
+        process.chdir(path.join(__dirname, '..'));
+
+        let usable = await fmGetUsable();
+        if (!usable.length) { logLine('fm auto: нет пригодных аккаунтов'); return; }
+
+        // 1) Рефреш квот: активный + K наименее использованных (дорого по Chrome).
+        usable.sort((a, b) => fmUsedSort(a) - fmUsedSort(b));
+        const refreshNames = new Set();
+        if (fmAuto.activeName) refreshNames.add(fmAuto.activeName);
+        for (const s of usable.slice(0, fmAuto.refreshK)) refreshNames.add(s.name);
+        for (const name of refreshNames) {
+            try { await dashApi.refreshOneFreemodelQuota(name); } catch {}
+        }
+
+        // 2) Перечитываем со свежим кешем и выбираем наименее использованный.
+        usable = await fmGetUsable();
+        if (!usable.length) return;
+        usable.sort((a, b) => fmUsedSort(a) - fmUsedSort(b));
+        const best = usable[0];
+        const active = usable.find(s => s.name === fmAuto.activeName) || null;
+
+        let doSwitch = false, reason = '';
+        if (!active) { doSwitch = true; reason = 'no-active'; }
+        else if (fmUsedSort(active) >= fmAuto.ceiling && best.name !== active.name) { doSwitch = true; reason = 'ceiling'; }
+        else if (best.name !== active.name && fmUsedSort(best) < fmUsedSort(active) - fmAuto.hysteresis) { doSwitch = true; reason = 'balance'; }
+
+        if (doSwitch && best && fmWriteActiveKey(best.key)) {
+            const from = fmAuto.activeName;
+            fmAuto.activeName = best.name;
+            fmAuto.lastSwitch = Date.now();
+            const usedPct = Math.round(fmUsedSort(best) * 100);
+            fmAuto.recent.unshift({ ts: Date.now(), from, to: best.name, email: best.email, reason, used: usedPct });
+            fmAuto.recent = fmAuto.recent.slice(0, 20);
+            fmAutoSavePersist();
+            logLine(`fm auto: ${reason} → ${best.email} (${usedPct}% used)`);
+        }
+    } catch (e) {
+        logLine(`fm auto tick error: ${e.message}`);
+    } finally {
+        try { process.chdir(cwd); } catch {}
+        fmAuto.ticking = false;
+    }
+}
+
+function fmAutoSchedule() {
+    if (fmAuto.timer) clearTimeout(fmAuto.timer);
+    fmAuto.nextTickAt = Date.now() + fmAuto.intervalMs;
+    fmAuto.timer = setTimeout(async () => {
+        await fmAutoTick();
+        if (fmAuto.enabled) fmAutoSchedule();
+    }, fmAuto.intervalMs);
+}
+function fmAutoStart(opts = {}) {
+    if (typeof opts.intervalMs === 'number' && opts.intervalMs >= 15000) fmAuto.intervalMs = opts.intervalMs;
+    if (typeof opts.ceiling === 'number' && opts.ceiling > 0 && opts.ceiling <= 1) fmAuto.ceiling = opts.ceiling;
+    if (typeof opts.hysteresis === 'number' && opts.hysteresis >= 0 && opts.hysteresis < 0.5) fmAuto.hysteresis = opts.hysteresis;
+    const helper = fmEnsureHelperMode();
+    fmAuto.enabled = true;
+    fmAutoSavePersist();
+    // Немедленный тик, затем расписание.
+    fmAutoTick().finally(() => { if (fmAuto.enabled) fmAutoSchedule(); });
+    return { helper };
+}
+function fmAutoStop() {
+    fmAuto.enabled = false;
+    if (fmAuto.timer) { clearTimeout(fmAuto.timer); fmAuto.timer = null; }
+    fmAuto.nextTickAt = 0;
+    fmAutoSavePersist();
+}
+function fmAutoStatus() {
+    return {
+        enabled: fmAuto.enabled,
+        intervalMs: fmAuto.intervalMs,
+        ceiling: fmAuto.ceiling,
+        hysteresis: fmAuto.hysteresis,
+        activeName: fmAuto.activeName,
+        lastSwitch: fmAuto.lastSwitch,
+        lastTickAt: fmAuto.lastTickAt,
+        nextTickAt: fmAuto.nextTickAt,
+        ticking: fmAuto.ticking,
+        recent: fmAuto.recent,
+    };
+}
+function fmAutoSavePersist() {
+    try {
+        const dir = path.dirname(FM_AUTOROTATE_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(FM_AUTOROTATE_FILE, JSON.stringify({
+            enabled: fmAuto.enabled, intervalMs: fmAuto.intervalMs,
+            ceiling: fmAuto.ceiling, hysteresis: fmAuto.hysteresis, activeName: fmAuto.activeName,
+        }, null, 2), 'utf-8');
+    } catch {}
+}
+function fmAutoLoadPersist() {
+    try {
+        if (fs.existsSync(FM_AUTOROTATE_FILE)) {
+            const j = JSON.parse(fs.readFileSync(FM_AUTOROTATE_FILE, 'utf-8'));
+            if (typeof j.intervalMs === 'number') fmAuto.intervalMs = j.intervalMs;
+            if (typeof j.ceiling === 'number') fmAuto.ceiling = j.ceiling;
+            if (typeof j.hysteresis === 'number') fmAuto.hysteresis = j.hysteresis;
+            if (j.activeName) fmAuto.activeName = j.activeName;
+            return !!j.enabled;
+        }
+    } catch {}
+    return false;
+}
+
 function handleNotionSessions(res) {
     try {
         // Resolve relative to project root (we live in routing/, sessions in ../manual_sessions)
@@ -1116,6 +1332,25 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/extract-key')  return handleFreemodelExtractKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/activate')     return handleFreemodelActivate(req, res);
 
+    // ---- FreeModel auto-rotation (API Helper load balancer) ----
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/auto/start') {
+        (async () => {
+            try {
+                const body = await readJsonBody(req).catch(() => ({}));
+                const r = fmAutoStart(body || {});
+                jsonRes(res, 200, { ok: true, ...fmAutoStatus(), helperChanged: r.helper?.changed, helperError: r.helper?.error });
+            } catch (e) { jsonRes(res, 500, { error: e.message }); }
+        })();
+        return;
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/auto/stop') {
+        fmAutoStop();
+        return jsonRes(res, 200, { ok: true, ...fmAutoStatus() });
+    }
+    if (req.method === 'GET' && req.url === '/__switch/api/freemodel/auto/status') {
+        return jsonRes(res, 200, fmAutoStatus());
+    }
+
     if (req.method === 'GET' && req.url === '/__switch/api/freemodel/active-key') {
         (async () => {
             try {
@@ -1456,5 +1691,11 @@ server.listen(LISTEN_PORT, () => {
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);
+
+    // Возобновляем авто-ротацию FreeModel, если она была включена до рестарта.
+    if (fmAutoLoadPersist()) {
+        console.log('  FreeModel auto-rotation: resuming (was enabled)');
+        fmAutoStart();
+    }
 });
 

@@ -353,10 +353,10 @@ const FM_AUTOROTATE_FILE   = path.join(__dirname, '..', 'logs', '.freemodel_auto
 
 const fmAuto = {
     enabled: false,
-    intervalMs: 90000,    // как часто переоцениваем + рефрешим квоты
+    intervalMs: 90000,    // как часто переоцениваем
     ceiling: 0.70,        // жёсткий потолок used%: при достижении уступаем место
-    hysteresis: 0.01,     // свич только если кандидат свободнее текущего на >1%
-    refreshK: 3,          // рефрешим активный + K наименее использованных
+    hysteresis: 0.10,     // свич только если кандидат свободнее текущего на >10%
+    quotaTtlMs: 5 * 60 * 1000, // не рефрешим квоту аккаунта чаще, чем раз в TTL (энергоэффективность)
     activeName: null,
     lastSwitch: 0,
     lastTickAt: 0,
@@ -402,9 +402,28 @@ async function fmGetUsable() {
         if (s.status !== '✅' || s.meta?.banned) continue;
         const key = s.meta?.apiKey || fmReadKeyFromInfo(s);
         if (!key) continue;
-        out.push({ name: s.name, email: s.email || s.name, key, used: fmUsedFraction(s.quota) });
+        out.push({
+            name: s.name,
+            email: s.email || s.name,
+            key,
+            used: fmUsedFraction(s.quota),
+            quotaAt: s.quota?.updatedAt || 0,   // для TTL-проверки свежести кэша
+        });
     }
     return out;
+}
+// Кэш квоты протух? (нет данных или старше TTL)
+function fmStale(entry, ttlMs) {
+    return !entry || !entry.quotaAt || (Date.now() - entry.quotaAt) > ttlMs;
+}
+// Кто реально активен по версии Claude Code: владелец ключа из fm-active-key.txt.
+// Это источник правды — на него и должен смотреть ротатор, иначе мониторит чужой акк.
+function fmActiveFromFile(usable) {
+    try {
+        const key = fs.readFileSync(FM_ACTIVE_KEY_FILE, 'utf-8').trim();
+        if (!key) return null;
+        return usable.find(s => s.key === key) || null;
+    } catch { return null; }
 }
 // Для сортировки неизвестную квоту трактуем как 0 (свежий аккаунт = полный запас),
 // чтобы новые аккаунты пробовались первыми, а затем рефрешились.
@@ -456,36 +475,52 @@ async function fmAutoTick() {
         let usable = await fmGetUsable();
         if (!usable.length) { logLine('fm auto: нет пригодных аккаунтов'); return; }
 
-        // 1) Рефреш квот: активный + K наименее использованных (дорого по Chrome).
-        usable.sort((a, b) => fmUsedSort(a) - fmUsedSort(b));
-        const refreshNames = new Set();
-        if (fmAuto.activeName) refreshNames.add(fmAuto.activeName);
-        for (const s of usable.slice(0, fmAuto.refreshK)) refreshNames.add(s.name);
-        for (const name of refreshNames) {
-            try { await dashApi.refreshOneFreemodelQuota(name); } catch {}
+        // (A) РЕКОНСИЛЯЦИЯ: активный = владелец ключа из fm-active-key.txt (источник
+        // правды). Без этого persist-activeName расходится с реальностью, и ротатор
+        // мониторит чужой простаивающий аккаунт, не видя нагрузку на рабочем.
+        const fileActive = fmActiveFromFile(usable);
+        if (fileActive && fileActive.name !== fmAuto.activeName) {
+            logLine(`fm auto: реконсиляция активного → ${fileActive.email} (из fm-active-key.txt)`);
+            fmAuto.activeName = fileActive.name;
+            fmAutoSavePersist();
         }
 
-        // 2) Перечитываем со свежим кешем и выбираем наименее использованный.
-        usable = await fmGetUsable();
-        if (!usable.length) return;
+        // (B) Рефреш ТОЛЬКО активного и только если кэш протух (энергоэффективно —
+        // один Chrome максимум за тик, обычно ноль).
+        let active = usable.find(s => s.name === fmAuto.activeName) || null;
+        if (active && fmStale(active, fmAuto.quotaTtlMs)) {
+            try { await dashApi.refreshOneFreemodelQuota(active.name); } catch {}
+            usable = await fmGetUsable();
+            active = usable.find(s => s.name === fmAuto.activeName) || null;
+        }
+
+        // (C) Решение о свиче. Кандидатов ранжируем по КЭШУ (без массового скана).
         usable.sort((a, b) => fmUsedSort(a) - fmUsedSort(b));
-        const best = usable[0];
-        const active = usable.find(s => s.name === fmAuto.activeName) || null;
+        let target = null, reason = '';
+        if (!active) {
+            target = usable[0]; reason = 'no-active';            // активного нет — берём наименее использованного
+        } else if (fmUsedSort(active) >= fmAuto.ceiling) {
+            target = usable.find(s => s.name !== active.name) || null;  // упёрся в потолок — лучший кандидат
+            reason = 'ceiling';
+        }
 
-        let doSwitch = false, reason = '';
-        if (!active) { doSwitch = true; reason = 'no-active'; }
-        else if (fmUsedSort(active) >= fmAuto.ceiling && best.name !== active.name) { doSwitch = true; reason = 'ceiling'; }
-        else if (best.name !== active.name && fmUsedSort(best) < fmUsedSort(active) - fmAuto.hysteresis) { doSwitch = true; reason = 'balance'; }
-
-        if (doSwitch && best && fmWriteActiveKey(best.key)) {
-            const from = fmAuto.activeName;
-            fmAuto.activeName = best.name;
-            fmAuto.lastSwitch = Date.now();
-            const usedPct = Math.round(fmUsedSort(best) * 100);
-            fmAuto.recent.unshift({ ts: Date.now(), from, to: best.name, email: best.email, reason, used: usedPct });
-            fmAuto.recent = fmAuto.recent.slice(0, 20);
-            fmAutoSavePersist();
-            logLine(`fm auto: ${reason} → ${best.email} (${usedPct}% used)`);
+        if (target) {
+            // Перед свичем рефрешим ТОЛЬКО кандидата — подтверждаем, что он реально
+            // свободен (и не дохлый), не сканируя весь пул.
+            try { await dashApi.refreshOneFreemodelQuota(target.name); } catch {}
+            const fresh = (await fmGetUsable()).find(s => s.name === target.name) || target;
+            if (active && fmUsedSort(fresh) >= fmAuto.ceiling) {
+                logLine(`fm auto: кандидат ${fresh.email} тоже у потолка (${Math.round(fmUsedSort(fresh)*100)}%) — свич отменён`);
+            } else if (fmWriteActiveKey(fresh.key)) {
+                const from = fmAuto.activeName;
+                fmAuto.activeName = fresh.name;
+                fmAuto.lastSwitch = Date.now();
+                const usedPct = Math.round(fmUsedSort(fresh) * 100);
+                fmAuto.recent.unshift({ ts: Date.now(), from, to: fresh.name, email: fresh.email, reason, used: usedPct });
+                fmAuto.recent = fmAuto.recent.slice(0, 20);
+                fmAutoSavePersist();
+                logLine(`fm auto: ${reason} → ${fresh.email} (${usedPct}% used)`);
+            }
         }
     } catch (e) {
         logLine(`fm auto tick error: ${e.message}`);

@@ -106,9 +106,11 @@
   }
   .energy-bolt {
     position: absolute; top: 50%; left: 0;
-    transform: translate(-50%, -50%);   /* кончик заливки = центр глифа, ровно на любом разрешении */
+    transform: translate(-50%, -50%);   /* кончик заливки = центр болта, ровно на любом разрешении */
     transform-origin: center center;
-    font-size: 30px; line-height: 1;
+    width: 40px; height: 40px;   /* SVG-болт центрирован в квадратном viewBox */
+    margin-left: -5px;           /* лёгкий сдвиг влево — накрывает скруглённый торец заливки */
+    fill: color-mix(in oklch, var(--glow, #fbbf24), white 30%);
     filter: drop-shadow(0 0 8px var(--glow, #fbbf24)) drop-shadow(0 0 3px var(--glow, #fbbf24)) drop-shadow(0 0 1px rgba(0,0,0,0.7));
     animation: bolt-flicker 1.1s ease-in-out infinite;
     transition: left 0.9s cubic-bezier(0.22, 1, 0.36, 1);
@@ -1305,7 +1307,7 @@ function renderEnergyGauge(el, opts) {
           <span class="text-sm font-mono font-semibold text-ink" style="text-shadow:0 1px 3px rgba(0,0,0,0.65)">${pct}%<span class="text-[10px] text-ink/70 ml-1">запас</span></span>
         </div>
       </div>
-      ${pct > 2 && pct < 99 ? `<span class="energy-bolt" style="left:${pct}%; --glow:${cv};">⚡</span>` : ''}
+      ${pct > 2 && pct < 99 ? `<svg class="energy-bolt" viewBox="0 0 32 32" style="left:${pct}%; --glow:${cv};" aria-hidden="true"><path d="M19 3 L8 18 H14 L13 29 L24 14 H18 Z"/></svg>` : ''}
     </div>
     ${opts.sub ? `<div class="mt-2.5 flex items-center gap-x-4 gap-y-1 text-xs font-mono text-muted flex-wrap">${opts.sub}</div>` : ''}
     ${opts.extra || ''}

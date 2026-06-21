@@ -1,0 +1,14 @@
+# Windows-скрипты ОБЯЗАНЫ быть CRLF, иначе cmd.exe не находит метки (:LABEL)
+# и падает с "Не удаётся найти указанную метку пакетного файла".
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Unix-скрипты — строго LF.
+*.sh    text eol=lf
+
+# На всякий — нормализуем переводы строк для текстовых исходников.
+*.js    text
+*.html  text
+*.json  text
+*.md    text

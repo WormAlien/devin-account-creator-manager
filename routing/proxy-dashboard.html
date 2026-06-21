@@ -105,7 +105,9 @@
     70%      { transform: translate(-50%, -50%) scale(1.06) rotate(-2deg); }
   }
   .energy-bolt {
-    position: absolute; top: 50%;
+    position: absolute; top: 50%; left: 0;
+    transform: translate(-50%, -50%);   /* кончик заливки = центр глифа, ровно на любом разрешении */
+    transform-origin: center center;
     font-size: 30px; line-height: 1;
     filter: drop-shadow(0 0 8px var(--glow, #fbbf24)) drop-shadow(0 0 3px var(--glow, #fbbf24)) drop-shadow(0 0 1px rgba(0,0,0,0.7));
     animation: bolt-flicker 1.1s ease-in-out infinite;

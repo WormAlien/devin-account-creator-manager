@@ -1329,6 +1329,20 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Список плагинов Claude Code: установленные (plugins/installed_plugins.json)
+    // ∪ включённые (settings.enabledPlugins). Тоггл делается через /settings/apply.
+    if (req.method === 'GET' && req.url === '/__switch/api/plugins/list') {
+        try {
+            const enabled = (readSettings().enabledPlugins) || {};
+            let installed = {};
+            try { installed = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; }
+            catch {}
+            const ids = [...new Set([...Object.keys(installed), ...Object.keys(enabled)])].sort();
+            const plugins = ids.map(id => ({ id, enabled: enabled[id] === true, installed: id in installed }));
+            return jsonRes(res, 200, { plugins });
+        } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+    }
+
     if (req.method === 'GET' && req.url === '/__switch/api/settings/backups') {
         return jsonRes(res, 200, { dir: SETTINGS_BACKUP_DIR, backups: listSettingsBackups() });
     }

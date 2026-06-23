@@ -195,6 +195,11 @@
         <span class="flex-1">Aerolink</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-aerolink">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="plugins">
+        <span class="text-base">🧩</span>
+        <span class="flex-1">Плагины</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-plugins">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="settings">
         <span class="text-base">⚙</span>
         <span class="flex-1">Настройки</span>
@@ -300,6 +305,24 @@
     </div>
 
     <!-- ═════════ TAB: SETTINGS ═════════ -->
+    <!-- ═════════ TAB: PLUGINS ═════════ -->
+    <div data-tab-content="plugins">
+      <div class="max-w-2xl mx-auto px-6 py-8 space-y-6">
+        <header class="flex items-center justify-between gap-3">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Плагины</h1>
+            <p class="text-sm text-muted mt-1">Вкл/выкл плагинов Claude Code. Пишет в <code class="font-mono text-emerald text-xs">enabledPlugins</code> внутри <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>. ★ — рекомендую. Перезапусти Claude Code после изменений.</p>
+          </div>
+          <button onclick="loadPlugins()" class="shrink-0 px-3 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄</button>
+        </header>
+        <div class="rounded-xl bg-surface border border-line-soft p-3">
+          <div id="plugins-list" class="divide-y divide-line-soft/40">
+            <div class="text-xs text-faint py-3 px-2">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div data-tab-content="settings">
       <div class="max-w-2xl mx-auto px-6 py-8 space-y-6">
         <header>
@@ -718,7 +741,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, plugins: false },
   tg: [],
   aerolink: [],
 };
@@ -852,6 +875,7 @@ function showTab(name) {
     loadTrUsageCache();
   }
   if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); }
+  if (name === 'plugins') { loadPlugins(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -3349,6 +3373,58 @@ function clearLog() {
     serverLogLines = [];
   }
   renderLogPanel();
+}
+
+// ═══════════════════ PLUGINS TAB ══════════════════════════════════════
+// Рекомендованные (по короткому имени до @). ★ в списке.
+const PLUGIN_RECO = new Set(['ponytail','feature-dev','code-review','commit-commands','context7','chrome-devtools-mcp','frontend-design','remember','playwright']);
+let _plugins = [];
+
+async function loadPlugins() {
+  const box = $('plugins-list');
+  box.innerHTML = '<div class="text-xs text-faint py-3 px-2">загрузка…</div>';
+  try {
+    const res = await fetch('/__switch/api/plugins/list');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    _plugins = d.plugins;
+    const on = _plugins.filter(p => p.enabled).length;
+    $('nav-count-plugins').textContent = on + '/' + _plugins.length;
+    box.innerHTML = _plugins.map(p => {
+      const short = p.id.split('@')[0];
+      const reco = PLUGIN_RECO.has(short);
+      const mkt = p.id.includes('@') ? p.id.split('@')[1] : '';
+      return `<div class="flex items-center gap-3 py-2.5 px-2">
+        <span class="w-4 text-center text-amber-400 ${reco ? '' : 'opacity-0'}">★</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium truncate">${short}</div>
+          <div class="text-[10px] text-faint font-mono truncate">${mkt}${p.installed ? '' : ' · не установлен'}</div>
+        </div>
+        <button onclick="togglePlugin('${p.id}', ${!p.enabled})"
+          class="shrink-0 px-3 py-1 rounded-md text-xs font-medium border transition ${p.enabled
+            ? 'bg-emerald/15 border-emerald/40 text-emerald hover:bg-emerald/25'
+            : 'bg-elevated border-line-soft text-dim hover:text-ink'}">
+          ${p.enabled ? '● ВКЛ' : 'выкл'}</button>
+      </div>`;
+    }).join('');
+  } catch (e) { box.innerHTML = `<div class="text-xs text-crimson py-3 px-2">✗ ${e.message}</div>`; }
+}
+
+async function togglePlugin(id, enable) {
+  // /settings/apply делает shallow-merge верхних ключей → шлём ВЕСЬ enabledPlugins.
+  const map = {};
+  _plugins.forEach(p => { map[p.id] = p.enabled; });
+  map[id] = enable;
+  try {
+    const res = await fetch('/__switch/api/settings/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { enabledPlugins: map } }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast(`${enable ? '✓ включён' : '✗ выключен'} ${id.split('@')[0]} — перезапусти Claude Code`, 'success', 5000);
+    loadPlugins();
+  } catch (e) { toast('Plugin: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ SETTINGS TAB ═════════════════════════════════════

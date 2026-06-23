@@ -313,7 +313,10 @@
             <h1 class="text-2xl font-semibold tracking-tight">Плагины</h1>
             <p class="text-sm text-muted mt-1">Вкл/выкл плагинов Claude Code. Пишет в <code class="font-mono text-emerald text-xs">enabledPlugins</code> внутри <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>. ★ — рекомендую. Перезапусти Claude Code после изменений.</p>
           </div>
-          <button onclick="loadPlugins()" class="shrink-0 px-3 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄</button>
+          <div class="shrink-0 flex gap-2">
+            <button onclick="applyRecommended()" class="px-3 py-2 bg-amber-400/15 border border-amber-400/40 text-amber-300 text-sm rounded-lg hover:bg-amber-400/25 transition">★ Включить рекомендованные</button>
+            <button onclick="loadPlugins()" class="px-3 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄</button>
+          </div>
         </header>
         <div class="rounded-xl bg-surface border border-line-soft p-3">
           <div id="plugins-list" class="divide-y divide-line-soft/40">
@@ -3408,6 +3411,21 @@ async function loadPlugins() {
       </div>`;
     }).join('');
   } catch (e) { box.innerHTML = `<div class="text-xs text-crimson py-3 px-2">✗ ${e.message}</div>`; }
+}
+
+async function applyRecommended() {
+  const map = {};
+  _plugins.forEach(p => { map[p.id] = p.enabled || PLUGIN_RECO.has(p.id.split('@')[0]); });
+  try {
+    const res = await fetch('/__switch/api/settings/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { enabledPlugins: map } }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast('★ Рекомендованные включены — перезапусти Claude Code', 'success', 5000);
+    loadPlugins();
+  } catch (e) { toast('Recommended: ' + e.message, 'error'); }
 }
 
 async function togglePlugin(id, enable) {

@@ -934,6 +934,20 @@ function getDefaultPresets() {
         }
       }
     },
+    'alHelper': {
+      label: 'Aerolink · API Helper',
+      desc: 'apiKeyHelper → cat ~/.claude/al-active-key.txt',
+      icon: '🔗',
+      color: 'azure',
+      settings: {
+        apiKeyHelper: 'cat ~/.claude/al-active-key.txt',
+        env: {
+          ANTHROPIC_BASE_URL: 'https://capi.aerolink.lat/',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_API_KEY: null
+        }
+      }
+    },
     'omniroute': {
       label: 'OmniRoute',
       desc: 'localhost:20128/v1',
@@ -971,9 +985,20 @@ function renderPresets() {
   const box = $('switcher-presets');
   if (!box) return;
   const presets = getPresets();
-  const curMap = { apihelper: 'fmHelper', freemodel_rotator: 'fmDirect', freemodel: 'fmDirect' };
+  // подсветка = пресет, чей бэкенд совпадает с реальным settings.json (state.current),
+  // а не последний клик из localStorage (иначе аэро показывало бы старый fmHelper).
+  const presetBackend = (p) => {
+    const h = p.settings?.apiKeyHelper || '';
+    if (h.includes('al-active-key')) return 'aerolink';
+    if (h.includes('fm-active-key')) return 'apihelper';
+    const url = p.settings?.env?.ANTHROPIC_BASE_URL || '';
+    if (url.includes('20128')) return 'omniroute';
+    if (url.includes('freemodel')) return state.current === 'apihelper' ? '' : 'freemodel_rotator';
+    return '';
+  };
   const stored = localStorage.getItem(ACTIVE_PRESET_KEY);
-  const active = (stored && presets[stored]) ? stored : (curMap[state.current] || state.current || '');
+  const matches = Object.keys(presets).filter(k => presetBackend(presets[k]) === state.current);
+  const active = matches.includes(stored) ? stored : (matches[0] || '');
   const rows = Object.entries(presets).map(([key, p]) => {
     const isActive = active === key;
     return `

@@ -52,6 +52,7 @@
 | **Switcher**  | активна (главная) | пресеты, hero, **глобальная шкала запаса** | `/api/status`, `/api/switch`, `/api/settings/*` |
 | **FreeModel** | активна   | сессии + квоты (5h/7d, $), TG-пул, авто-ротация, **шкала запаса** | `/api/freemodel/*` |
 | **Aerolink**  | активна   | ручной пул email+ключ, статус (пинг `/v1/me`), активация через API Helper | `/api/al/*` |
+| **Плагины**   | активна   | вкл/выкл плагинов Claude Code (тоггл `enabledPlugins`), ★ рекомендованные | `/api/plugins/list`, `/api/settings/apply` |
 | **TokenRouter** | архив («Чтим память») | аккаунты, usage, health   | `/api/tokenrouter/*` |
 | **Devin**     | архив     | сессии + квоты (daily/weekly %)     | `/api/session/*` |
 | **Notion**    | архив     | сессии + карты                      | `/api/notion/*` |
@@ -95,6 +96,18 @@ API-обвязка: `internal/dashboard-api.js`.
 - `#global-energy` — **общий** запас (вкладка Switcher). Считает **только FreeModel**.
   Исключены: **TokenRouter** (ключ живёт ~1 день, ложно «активен»), **Notion/Devin** (архив).
 - Бейдж авто-ротации (вкл/выкл) показан на обеих шкалах и в сайдбаре (`#side-auto`).
+
+---
+
+## Плагины — вкл/выкл
+
+`GET /api/plugins/list` отдаёт объединение установленных
+(`~/.claude/plugins/installed_plugins.json`) и включённых
+(`settings.enabledPlugins`). Тоггл шлёт **весь** `enabledPlugins` через
+`/api/settings/apply` (shallow-merge верхних ключей). Рекомендованный набор —
+константа `PLUGIN_RECO` в `proxy-dashboard.html`; кнопка «★ Включить
+рекомендованные» добавляет их, не трогая остальные. Установка новых из
+маркетплейса не реализована (нужен `claude plugin install`).
 
 ---
 

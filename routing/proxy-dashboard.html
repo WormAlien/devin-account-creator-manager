@@ -335,6 +335,23 @@
         <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
+              <h2 class="text-sm font-semibold">Текущий конфиг <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code></h2>
+              <p class="text-xs text-muted mt-0.5">Активный бэкенд: <span id="settings-cur-target" class="text-emerald font-medium">—</span>. Редактируй JSON вручную — перед записью делается бэкап.</p>
+            </div>
+            <span id="settings-json-status" class="shrink-0 text-xs text-faint">—</span>
+          </div>
+          <textarea id="settings-json" spellcheck="false"
+            class="w-full h-80 bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-xs font-mono leading-relaxed focus:outline-none focus:border-emerald/60 resize-y"
+            placeholder="{ ... }"></textarea>
+          <div class="flex gap-2">
+            <button onclick="saveSettingsJson()" class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition">💾 Сохранить</button>
+            <button onclick="loadSettingsJson()" class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄 Сбросить</button>
+          </div>
+        </div>
+
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
               <h2 class="text-sm font-semibold">Бэкапы <code class="font-mono text-emerald text-xs">settings.json</code></h2>
               <p class="text-xs text-muted mt-0.5">Сохранение/восстановление конфига Claude Code. При восстановлении текущий сохраняется автоматически.</p>
             </div>
@@ -834,7 +851,7 @@ function showTab(name) {
     loadTrHealthCache();
     loadTrUsageCache();
   }
-  if (name === 'settings') { loadEnvSettings(); loadSettingsBackups(); }
+  if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -3335,6 +3352,36 @@ function clearLog() {
 }
 
 // ═══════════════════ SETTINGS TAB ═════════════════════════════════════
+async function loadSettingsJson() {
+  const ta = $('settings-json'), st = $('settings-json-status');
+  try {
+    const res = await fetch('/__switch/api/settings/current');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    ta.value = JSON.stringify(d.settings, null, 2);
+    $('settings-cur-target').textContent = LABELS[state.current] || state.current || '—';
+    st.textContent = 'загружено'; st.className = 'shrink-0 text-xs text-faint';
+  } catch (e) { st.textContent = '✗ ' + e.message; st.className = 'shrink-0 text-xs text-crimson'; }
+}
+
+async function saveSettingsJson() {
+  const ta = $('settings-json'), st = $('settings-json-status');
+  let parsed;
+  try { parsed = JSON.parse(ta.value); }
+  catch (e) { st.textContent = '✗ невалидный JSON: ' + e.message; st.className = 'shrink-0 text-xs text-crimson'; return; }
+  try {
+    const res = await fetch('/__switch/api/settings/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: parsed })
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    st.textContent = '✓ сохранено'; st.className = 'shrink-0 text-xs text-emerald';
+    toast('💾 settings.json сохранён · бэкенд: ' + (d.current || '?'), 'success');
+    loadStatus(); loadSettingsBackups();
+  } catch (e) { st.textContent = '✗ ' + e.message; st.className = 'shrink-0 text-xs text-crimson'; toast('Сохранение: ' + e.message, 'error'); }
+}
+
 async function loadSettingsBackups() {
   try {
     const res = await fetch('/__switch/api/settings/backups');

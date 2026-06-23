@@ -1312,6 +1312,23 @@ const server = http.createServer((req, res) => {
         return handleSettingsApply(req, res);
     }
 
+    // Полная перезапись settings.json (ручной JSON-редактор). Бэкап перед записью.
+    if (req.method === 'POST' && req.url === '/__switch/api/settings/save') {
+        (async () => {
+            try {
+                const { settings } = await readJsonBody(req);
+                if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+                    return jsonRes(res, 400, { error: 'settings должен быть JSON-объектом' });
+                }
+                const bak = makeSettingsBackup('settings-preedit');
+                writeSettings(settings);
+                logLine(`settings.json saved manually (prev → ${bak})`);
+                return jsonRes(res, 200, { ok: true, previous: bak, current: currentTarget() });
+            } catch (e) { return jsonRes(res, 400, { error: e.message }); }
+        })();
+        return;
+    }
+
     if (req.method === 'GET' && req.url === '/__switch/api/settings/backups') {
         return jsonRes(res, 200, { dir: SETTINGS_BACKUP_DIR, backups: listSettingsBackups() });
     }

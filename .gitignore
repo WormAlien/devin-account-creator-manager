@@ -96,6 +96,9 @@ routing/mode.txt
 # Routing secrets (real keys). .env.example IS committed.
 routing/.env
 
+# Aerolink ручной пул ключей (содержит реальные aero_live_*). al-sessions.example.json IS committed.
+routing/al-sessions.json
+
 # Операционные системы
 .DS_Store
 Thumbs.db

@@ -147,6 +147,9 @@ function currentTarget() {
         if (helper.includes('fm-active-key.txt') || helper.includes('freemodel')) {
             return 'apihelper';
         }
+        if (helper.includes('al-active-key.txt')) {
+            return 'aerolink';
+        }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
         }
@@ -1170,6 +1173,105 @@ async function handleLaunchBat(req, res) {
     } catch (e) { jsonRes(res, 400, { error: e.message }); }
 }
 
+// ───── Aerolink (al) — ручной пул email+ключ, активация через API Helper ─────
+const AL_SESSIONS_FILE = path.join(__dirname, 'al-sessions.json');
+const AL_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'al-active-key.txt');
+const AL_BASE_URL = 'https://capi.aerolink.lat';
+
+function alLoad() {
+    try {
+        const raw = fs.readFileSync(AL_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function alSave(arr) {
+    fs.writeFileSync(AL_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+// Пинг ключа: GET /v1/me → 401 = DEAD, иначе LIVE.
+async function alProbe(apiKey) {
+    try {
+        const r = await fetch(`${AL_BASE_URL}/v1/me`, {
+            method: 'GET',
+            headers: { 'x-api-key': apiKey },
+            signal: AbortSignal.timeout(12000),
+        });
+        return r.status === 401 ? 'dead' : 'live';
+    } catch { return 'unknown'; }
+}
+
+async function handleAlSessions(req, res) {
+    try {
+        const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
+        const sessions = alLoad();
+        if (probe) {
+            await Promise.all(sessions.map(async s => { s.status = await alProbe(s.api_key); }));
+        }
+        jsonRes(res, 200, { sessions });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleAlAdd(req, res) {
+    try {
+        const { email, api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = alLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({ email: mail, api_key: key, active: false });
+        alSave(sessions);
+        logLine(`aerolink add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleAlDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const sessions = alLoad().filter(s => s.api_key !== key);
+        alSave(sessions);
+        logLine(`aerolink delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Клик по ключу → активный: пишем ключ в al-active-key.txt + apiKeyHelper в settings.json.
+async function handleAlActivate(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = alLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(AL_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        alSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-al');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AL_BASE_URL + '/';
+            settings.apiKeyHelper = 'cat ~/.claude/al-active-key.txt';
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`aerolink activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`aerolink activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/__switch/api/status') {
         return jsonRes(res, 200, {
@@ -1366,6 +1468,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-key')      return handleFreemodelSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/extract-key')  return handleFreemodelExtractKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/activate')     return handleFreemodelActivate(req, res);
+
+    // ---- Aerolink (al) — ручной пул, активация через API Helper ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/al/sessions')) return handleAlSessions(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/al/add')       return handleAlAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/al/delete')    return handleAlDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/al/activate')  return handleAlActivate(req, res);
 
     // ---- FreeModel auto-rotation (API Helper load balancer) ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/auto/start') {

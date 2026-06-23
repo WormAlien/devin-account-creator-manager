@@ -190,10 +190,10 @@
         <span class="flex-1">FreeModel</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-freemodel">—</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="tokenrouter">
-        <span class="text-base">🔑</span>
-        <span class="flex-1">TokenRouter</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-tokenrouter">—</span>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="aerolink">
+        <span class="text-base">🔗</span>
+        <span class="flex-1">Aerolink</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-aerolink">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="settings">
         <span class="text-base">⚙</span>
@@ -224,6 +224,10 @@
           <span>Чтим память</span>
         </div>
         <div class="hidden pl-4 space-y-0.5 mt-0.5">
+          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="tokenrouter">
+            🔑 TokenRouter
+            <span class="text-[10px] font-mono opacity-50" id="nav-count-tokenrouter">—</span>
+          </button>
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="devin">
             🤖 Devin
             <span class="text-[10px] font-mono opacity-50" id="nav-count-devin">—</span>
@@ -378,6 +382,45 @@
         </header>
         <div id="devin-list" class="rounded-xl bg-surface border border-line-soft overflow-hidden">
           <div class="p-12 text-center text-muted text-xs">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: AEROLINK ═════════ -->
+    <div data-tab-content="aerolink">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-azure">🔗</span> Aerolink
+            </h1>
+            <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-azure text-xs">routing/al-sessions.json</code> · клик по ключу = активный (API Helper)</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadAlSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadAlSessions(true)" class="text-xs px-3 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">📡 Пинг статусов</button>
+            <button onclick="alShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          </div>
+        </header>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="al-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="al-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key</span>
+              <input id="al-add-key" placeholder="aero_live_…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="alAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="alShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="al-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
         </div>
       </div>
     </div>
@@ -658,8 +701,9 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false },
   tg: [],
+  aerolink: [],
 };
 
 const $   = (id) => document.getElementById(id);
@@ -783,6 +827,7 @@ function showTab(name) {
     loadNotionSessions();
     loadNotionCards();
   }
+  if (name === 'aerolink' && !state.loaded.aerolink) { state.loaded.aerolink = true; loadAlSessions(false); }
   if (name === 'tokenrouter' && !state.loaded.tokenrouter) {
     state.loaded.tokenrouter = true;
     loadTokenrouterAccounts();
@@ -808,8 +853,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -829,7 +874,7 @@ function paintStatus() {
 
   $('side-current').textContent = label;
   const modeEl = $('side-mode');
-  if (t === 'apihelper') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
+  if (t === 'apihelper' || t === 'aerolink') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
   else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
   else modeEl.className = 'hidden';
   $('side-url').textContent     = state.urls[t] || '';
@@ -1220,6 +1265,111 @@ function renderDevin(refreshed) {
 
 $('devin-filter').addEventListener('input', () => renderDevin(false));
 $('devin-sort').addEventListener('change', () => renderDevin(false));
+
+// ═══════════════════ AEROLINK ════════════════════════════════════════
+async function loadAlSessions(probe) {
+  if (probe) $('al-list').innerHTML = `<div class="p-12 text-center text-azure text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/al/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.aerolink = data.sessions || [];
+    $('nav-count-aerolink').textContent = state.aerolink.length;
+    renderAerolink();
+    if (probe) toast('✓ Aerolink: статусы обновлены', 'success');
+  } catch (e) {
+    $('al-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function alStatusBadge(st) {
+  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
+  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
+  return '<span class="text-faint">⚪ —</span>';
+}
+
+function renderAerolink() {
+  const rows = state.aerolink;
+  if (!rows.length) {
+    $('al-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить</div>`;
+    return;
+  }
+  const body = rows.map(s => {
+    const active = !!s.active;
+    const keyMask = s.api_key.length > 18 ? s.api_key.slice(0, 14) + '…' + s.api_key.slice(-6) : s.api_key;
+    const kJ = JSON.stringify(s.api_key);
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
+      <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(s.email)}</td>
+      <td class="px-4 py-2.5">
+        <button onclick='alActivate(${kJ})' title="Сделать активным (API Helper)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-azure hover:border-azure/50'} transition">${esc(keyMask)}</button>
+      </td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${alStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs text-faint">—</td>
+      <td class="px-4 py-2.5 text-right">
+        <button onclick='alDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('al-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">email</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">статус</th>
+      <th class="px-4 py-2 font-medium">daily usage</th>
+      <th class="px-4 py-2"></th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function alShowAdd(show = true) {
+  $('al-add-form').classList.toggle('hidden', !show);
+  if (show) { $('al-add-email').value = ''; $('al-add-key').value = ''; $('al-add-email').focus(); }
+}
+
+async function alAdd() {
+  const email = $('al-add-email').value.trim();
+  const api_key = $('al-add-key').value.trim();
+  if (!email || !api_key) return toast('email и api_key обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/al/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ добавлен', 'success'); alShowAdd(false); loadAlSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function alDelete(api_key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    const res = await fetch('/__switch/api/al/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadAlSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function alActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/al/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      state.current = 'aerolink';
+      state.urls.aerolink = 'https://capi.aerolink.lat/';
+      paintStatus();
+      loadAlSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
 
 // ═══════════════════ FREEMODEL ═══════════════════════════════════════
 async function loadActiveFmKey() {

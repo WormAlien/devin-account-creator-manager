@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  "_README": "Пример рабочего ~/.claude/settings.json (НЕ .claude/settings.json в проекте!). Скопируй в ~/.claude/settings.json и поправь под себя. Switcher на :8200 правит только apiKeyHelper + env.ANTHROPIC_BASE_URL + env.ANTHROPIC_API_KEY — всё остальное (TTL=0, отключённый авто-апдейт, модель) должно уже стоять, иначе FreeModel/Aerolink API Helper не заведётся.",
+
+  "apiKeyHelper": "cat ~/.claude/al-active-key.txt",
+
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://capi.aerolink.lat/",
+
+    "_pitfall_TTL": "0 = читать ключ из apiKeyHelper на КАЖДОМ запросе. Без этого ротация ключей на лету не работает.",
+    "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "0",
+
+    "_pitfall_autoupdate": "Claude Code обязан остаться на 2.1.146 — новее ломает apiKeyHelper. Обе строки ниже + autoUpdates:false выключают авто-обновление.",
+    "DISABLE_AUTOUPDATER": "1",
+
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "API_TIMEOUT_MS": "120000",
+    "BASH_DEFAULT_TIMEOUT_MS": "300000",
+    "BASH_MAX_TIMEOUT_MS": "1200000"
+  },
+
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "WebFetch",
+      "WebSearch"
+    ],
+    "deny": []
+  },
+
+  "model": "claude-opus-4-8",
+
+  "_pitfall_autoUpdates": "Дублирующая страховка к DISABLE_AUTOUPDATER. НЕ возвращай autoUpdatesChannel:latest — оно перетянет на свежую версию.",
+  "autoUpdates": false,
+
+  "theme": "auto"
+}

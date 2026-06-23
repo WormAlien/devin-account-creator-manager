@@ -16,6 +16,11 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8300 " ^| findstr LISTENING
     echo Stopping legacy PID %%P on :8300 ...
     taskkill /F /PID %%P >nul 2>&1
 )
+REM Kill the FreeModel rotator on :20126 (else it fails with EADDRINUSE)
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20126 " ^| findstr LISTENING') do (
+    echo Stopping PID %%P on :20126 ...
+    taskkill /F /PID %%P >nul 2>&1
+)
 
 REM Brief wait so the OS releases the port
 ping 127.0.0.1 -n 2 >nul

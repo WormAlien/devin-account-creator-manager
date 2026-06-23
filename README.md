@@ -120,12 +120,20 @@ cp routing/.env.example routing/.env
 ```
 
 > [!IMPORTANT]
-> **Для FreeModel нужен Claude Code `2.1.146`.** На свежих версиях ломается `apiKeyHelper`/FreeModel-флоу — обязательно зафиксируй версию:
+> **Для FreeModel / Aerolink нужен Claude Code `2.1.146`.** На свежих версиях ломается `apiKeyHelper`-флоу (ротация ключей на лету) — обязательно зафиксируй версию:
 > ```bash
 > npm config delete prefix
 > npm uninstall -g @anthropic-ai/claude-code
 > npm install -g @anthropic-ai/claude-code@2.1.146
 > ```
+> **И сразу отключи авто-обновление**, иначе CC молча обновится и всё сломается. В `~/.claude/settings.json`:
+> ```json
+> { "env": { "DISABLE_AUTOUPDATER": "1" }, "autoUpdates": false }
+> ```
+> Не оставляй `autoUpdatesChannel: "latest"` — оно перетянет на свежую версию.
+
+> [!TIP]
+> Switcher правит только `apiKeyHelper` + `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY`. Остальное (`CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0`, отключённый авто-апдейт, `model`) должно уже стоять в `~/.claude/settings.json`, иначе на чистой машине ничего не заведётся. Готовый шаблон со всеми подводными камнями — **[`claude-settings.example.json`](claude-settings.example.json)**: скопируй в `~/.claude/settings.json` и поправь под себя.
 
 **2. Запуск** — поднимает freemodel-rotator `:20126` и switcher `:8200`, затем открой <http://localhost:8200/__switch>
 

@@ -385,6 +385,17 @@ async function openSessionInBrowser(kind, name) {
         await page.goto('https://freemodel.dev/dashboard', { waitUntil: 'domcontentloaded' }).catch(() => {});
         return { ok: true, kind, name, url: 'https://freemodel.dev/dashboard/usage' };
     }
+    if (kind === 'conduit') {
+        const account = conduitMod().getConduitAccounts().find(s => s.name === name);
+        if (!account) throw new Error(`conduit account not found: ${name}`);
+        if (!account.sessionFile || !fs.existsSync(account.sessionFile)) throw new Error(`conduit session.json gone (key-only акк?): ${name}`);
+        const { chromium } = require('playwright');
+        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+        const context = await browser.newContext({ storageState: account.sessionFile, viewport: null });
+        const page = await context.newPage();
+        await page.goto('https://conduit.ozdoev.net/#cabinet', { waitUntil: 'domcontentloaded' }).catch(() => {});
+        return { ok: true, kind, name, url: 'https://conduit.ozdoev.net/#cabinet' };
+    }
     if (kind === 'devin') {
         const session = devinMod().getDevinSessions().find(s => s.name === name);
         if (!session) throw new Error(`devin session not found: ${name}`);
@@ -521,6 +532,9 @@ function launchScript(kind, extraArgs = []) {
         // FreeModel: single manual login (legacy, for restoring sessions)
         'freemodel-login': { title: 'FreeModel: Manual Login',args: [path.join(PROJECT_ROOT, 'freemodel', 'create_first_session.js')] },
         'notion-create':   { title: 'Notion: New Account',    args: [path.join(PROJECT_ROOT, 'notion', 'notion_workflow.js')] },
+        // Conduit: автореги из ТГ (gramjs device-code) + ручное сохранение сессии
+        'conduit-create':  { title: 'Conduit Autoreg',        args: [path.join(PROJECT_ROOT, 'conduit', 'conduit_autoreger.js')] },
+        'conduit-login':   { title: 'Conduit: Save Session',  args: [path.join(PROJECT_ROOT, 'conduit', 'record_conduit.js')] },
         'tokenrouter-create': { title: 'TokenRouter Autoreg', cmd: 'python', args: [path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'camoufox_autoreg.py')] },
     };
     const t = TARGETS[kind];
@@ -529,7 +543,7 @@ function launchScript(kind, extraArgs = []) {
     // Safety: позитивный целочисленный count / FRE-инвайт только, выкидываем мусор
     const safeExtra = (Array.isArray(extraArgs) ? extraArgs : [])
         .map(a => String(a))
-        .filter(a => /^(\d{1,3}|FRE-[A-Za-z0-9]+)$/.test(a))
+        .filter(a => /^(\d{1,3}|FRE-[A-Za-z0-9]+|ref_[A-Za-z0-9]+)$/.test(a))
         .slice(0, 4);
 
     const finalArgs = [...t.args, ...safeExtra];
@@ -758,9 +772,124 @@ function openTokenrouterSession(email) {
     return { ok: true };
 }
 
+// ───── Conduit sessions + cached quotas/balance ────────────────────
+// Conduit (conduit.ozdoev.net) — Anthropic-совместимый endpoint, ключи sk-cdt-.
+// В отличие от FreeModel, квоты читаются дешёвым cookie-fetch (conduit-manager),
+// не Playwright → refresh быстрый, concurrency выше.
+let _conduit = null;
+function conduitMod() {
+    if (!_conduit) _conduit = require('../conduit/lib/conduit-manager');
+    return _conduit;
+}
+
+const CONDUIT_QUOTA_CACHE = path.join(PROJECT_ROOT, 'logs', '.conduit_quota_cache.json');
+const CONDUIT_META_FILE   = path.join(PROJECT_ROOT, 'logs', '.conduit_meta.json');
+
+function loadConduitQuotaCache() {
+    try { if (fs.existsSync(CONDUIT_QUOTA_CACHE)) return JSON.parse(fs.readFileSync(CONDUIT_QUOTA_CACHE, 'utf-8')) || {}; } catch {}
+    return {};
+}
+function saveConduitQuotaCache(cache) {
+    try { fs.mkdirSync(path.dirname(CONDUIT_QUOTA_CACHE), { recursive: true }); fs.writeFileSync(CONDUIT_QUOTA_CACHE, JSON.stringify(cache, null, 2), 'utf-8'); } catch {}
+}
+function loadConduitMeta() {
+    try { if (fs.existsSync(CONDUIT_META_FILE)) return JSON.parse(fs.readFileSync(CONDUIT_META_FILE, 'utf-8')) || {}; } catch {}
+    return {};
+}
+function saveConduitMeta(meta) {
+    try { fs.mkdirSync(path.dirname(CONDUIT_META_FILE), { recursive: true }); fs.writeFileSync(CONDUIT_META_FILE, JSON.stringify(meta, null, 2), 'utf-8'); } catch {}
+}
+
+function setConduitBanned(name, banned) {
+    const meta = loadConduitMeta();
+    meta[name] = meta[name] || {};
+    if (banned) { meta[name].banned = true; meta[name].bannedAt = new Date().toISOString(); }
+    else { delete meta[name].banned; delete meta[name].bannedAt; }
+    saveConduitMeta(meta);
+    return meta[name];
+}
+function setConduitApiKey(name, apiKey) {
+    const meta = loadConduitMeta();
+    meta[name] = meta[name] || {};
+    if (apiKey) meta[name].apiKey = String(apiKey); else delete meta[name].apiKey;
+    saveConduitMeta(meta);
+    return meta[name];
+}
+
+// withQuotas: 'cache' (мгновенно) | 'refresh' (fetch, обновить кеш) | false (только список)
+async function listConduitSessions({ withQuotas = 'cache', concurrency = 6 } = {}) {
+    const { getConduitAccounts, checkConduitQuota } = conduitMod();
+    const sessions = getConduitAccounts();
+    const meta = loadConduitMeta();
+    const withMeta = (s, extra) => ({ ...s, ...extra, meta: meta[s.name] || {} });
+    if (withQuotas === false) return sessions.map(s => withMeta(s, { quota: null }));
+
+    const cache = loadConduitQuotaCache();
+    if (withQuotas === 'cache') return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
+
+    // refresh — пропускаем banned
+    const eligible = sessions.filter(s => !(meta[s.name] || {}).banned);
+    const out = sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
+    let idx = 0;
+    const workers = Array.from({ length: Math.min(concurrency, eligible.length || 1) }, async () => {
+        while (true) {
+            const i = idx++;
+            if (i >= eligible.length) return;
+            try {
+                const q = await checkConduitQuota(eligible[i]);
+                if (q) {
+                    const origIdx = sessions.indexOf(eligible[i]);
+                    const val = { ...q, updatedAt: Date.now() };
+                    if (origIdx >= 0) out[origIdx].quota = val;
+                    cache[eligible[i].name] = val;
+                    // мёртвую сессию помечаем в мете (UI покажет 💀)
+                    if (q.dead) setConduitBanned(eligible[i].name, true);
+                    else if (q.apiKey) { meta[eligible[i].name] = meta[eligible[i].name] || {}; meta[eligible[i].name].apiKey = q.apiKey; }
+                }
+            } catch { /* keep cached */ }
+        }
+    });
+    await Promise.all(workers);
+    saveConduitQuotaCache(cache);
+    saveConduitMeta(meta);
+    return out;
+}
+
+async function refreshOneConduitQuota(name) {
+    if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
+    const { getConduitAccounts, checkConduitQuota } = conduitMod();
+    const account = getConduitAccounts().find(s => s.name === name);
+    if (!account) throw new Error(`conduit account not found: ${name}`);
+    const q = await checkConduitQuota(account);
+    const cache = loadConduitQuotaCache();
+    if (q) { cache[name] = { ...q, updatedAt: Date.now() }; saveConduitQuotaCache(cache); }
+    return cache[name] || null;
+}
+
+async function extractConduitApiKey(name) {
+    if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
+    const { getConduitAccounts, extractConduitApiKey: extractKey } = conduitMod();
+    const account = getConduitAccounts().find(s => s.name === name);
+    if (!account) throw new Error(`conduit account not found: ${name}`);
+    return await extractKey(account);
+}
+
+const CDT_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'cdt-active-key.txt');
+function getActiveConduitKey() {
+    try { if (fs.existsSync(CDT_ACTIVE_KEY_FILE)) return fs.readFileSync(CDT_ACTIVE_KEY_FILE, 'utf-8').trim(); } catch {}
+    return null;
+}
+
 module.exports = {
     listNotionSessions,
     listFreemodelSessions,
+    listConduitSessions,
+    refreshOneConduitQuota,
+    extractConduitApiKey,
+    setConduitBanned,
+    setConduitApiKey,
+    getActiveConduitKey,
+    loadConduitMeta,
     listDevinSessions,
     listOmniAccountsWithQuotas,
     toggleOmniAccount,

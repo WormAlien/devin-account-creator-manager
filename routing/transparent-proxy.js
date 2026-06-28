@@ -150,6 +150,9 @@ function currentTarget() {
         if (helper.includes('al-active-key.txt')) {
             return 'aerolink';
         }
+        if (helper.includes('cdt-active-key.txt')) {
+            return 'conduit';
+        }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
         }
@@ -806,10 +809,41 @@ const tgSessionParser = require('../freemodel/lib/tg-session-parser');
 const fmTgBind = require('../freemodel/lib/fm-tg-bind');
 const tgHealth = require('../freemodel/lib/tg-health');
 
+// На каких сервисах зареган каждый ТГ — собираем из существующих источников
+// истины (без отдельного кэша). Возвращает Map<phone, {freemodel,conduit}>.
+//   freemodel: usedBy в пуле похож на email, ИЛИ phone есть в freemodel-мете как tgPhone.
+//   conduit:   phone в conduit/.tg_used.json.
+function tgServicesMap(poolArr) {
+    const map = {};
+    const set = (phone, svc) => { (map[phone] = map[phone] || {})[svc] = true; };
+
+    // FreeModel — поле usedBy в пуле ставит ТОЛЬКО FreeModel-логика (email,
+    // путь freemodel\accounts\…, или "bound-elsewhere"=уже привязан к другому
+    // FM-аккаунту). Любой непустой usedBy ⇒ ТГ зареган/использован на FreeModel.
+    for (const e of poolArr) {
+        if (e.usedBy && String(e.usedBy).trim()) set(String(e.phone), 'freemodel');
+    }
+    // FreeModel — по мете (tgPhone — реальный номер, не "вручную"/"connected")
+    try {
+        const meta = dashApi.loadFreemodelMeta();
+        for (const v of Object.values(meta)) {
+            const ph = String(v.tgPhone || '');
+            if (/^\+?\d{6,}$/.test(ph)) set(ph.replace(/^\+/, ''), 'freemodel');
+        }
+    } catch {}
+    // Conduit — по .tg_used.json
+    try {
+        const used = require('../conduit/conduit_autoreger').loadTgUsed();
+        for (const ph of used) set(String(ph), 'conduit');
+    } catch {}
+    return map;
+}
+
 function handleTgList(res) {
     try {
         const arr = tgPool.list();
         const health = tgHealth.loadCache();
+        const svc = tgServicesMap(arr);
         // Маскируем auth_key для UI — полный ключ из дашборда никогда не отдаём.
         const safe = arr.map(e => ({
             phone: e.phone,
@@ -824,6 +858,7 @@ function handleTgList(res) {
             banReason: e.banReason || null,
             isPlaceholderPhone: !!e.isPlaceholderPhone,
             health: health[e.phone] || null,
+            services: svc[String(e.phone)] || {},   // { freemodel?:true, conduit?:true }
         }));
         jsonRes(res, 200, { entries: safe, stats: tgPool.stats() });
     } catch (e) {
@@ -1272,6 +1307,81 @@ async function handleAlActivate(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── Conduit (cdt) — пул ТГ-аккаунтов, активация через API Helper ─────
+// conduit.ozdoev.net — Anthropic-совместимый endpoint. Квоты/баланс читает
+// dashApi.listConduitSessions (cookie-fetch, не Playwright). Активация = записать
+// ключ в cdt-active-key.txt + apiKeyHelper в settings.json (как Aerolink/FreeModel).
+const CDT_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'cdt-active-key.txt');
+const CDT_BASE_URL = 'https://conduit.ozdoev.net/api/v1';
+
+async function handleConduitSessions(req, res) {
+    try {
+        const refresh = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('refresh') === '1';
+        const sessions = await dashApi.listConduitSessions({ withQuotas: refresh ? 'refresh' : 'cache' });
+        jsonRes(res, 200, { sessions, activeKey: dashApi.getActiveConduitKey() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleConduitRefreshQuota(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const quota = await dashApi.refreshOneConduitQuota(name);
+        logLine(`conduit refresh quota: ${name}`);
+        jsonRes(res, 200, { ok: true, name, quota });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleConduitActiveKey(req, res) {
+    const key = dashApi.getActiveConduitKey();
+    jsonRes(res, 200, { key: key || null, mask: key ? key.slice(0, 10) + '…' + key.slice(-4) : null });
+}
+
+// Клик по аккаунту → активный: достаём ключ (из меты/account_info/api), пишем в
+// cdt-active-key.txt + apiKeyHelper в settings.json.
+async function handleConduitActivate(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const extract = await dashApi.extractConduitApiKey(name);
+        if (!extract.ok || !extract.apiKey) return jsonRes(res, 400, { error: extract.error || 'ключ не найден' });
+        const key = extract.apiKey;
+
+        fs.writeFileSync(CDT_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        dashApi.setConduitApiKey(name, key);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-cdt');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = CDT_BASE_URL;
+            settings.apiKeyHelper = 'cat ~/.claude/cdt-active-key.txt';
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`conduit activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`conduit activate: ${name} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, name, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleConduitAutoreg(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const count = Math.max(1, Math.min(50, parseInt(body.count, 10) || 1));
+        const args = [String(count)];
+        if (body.ref && /^ref_[A-Za-z0-9]+$/.test(String(body.ref))) args.push(String(body.ref));
+        const result = dashApi.launchScript('conduit-create', args);
+        logLine(`conduit autoreg launched: count=${count}${body.ref ? ' ref=' + body.ref : ''}`);
+        jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/__switch/api/status') {
         return jsonRes(res, 200, {
@@ -1505,6 +1615,13 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/al/add')       return handleAlAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/delete')    return handleAlDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/activate')  return handleAlActivate(req, res);
+
+    // ---- Conduit (cdt) — пул ТГ-аккаунтов, активация через API Helper ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/conduit/sessions'))  return handleConduitSessions(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/conduit/active-key')          return handleConduitActiveKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/conduit/refresh-quota')       return handleConduitRefreshQuota(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/conduit/activate')            return handleConduitActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/conduit/autoreg')             return handleConduitAutoreg(req, res);
 
     // ---- FreeModel auto-rotation (API Helper load balancer) ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/auto/start') {

@@ -195,6 +195,11 @@
         <span class="flex-1">Aerolink</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-aerolink">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="conduit">
+        <span class="text-base">🚇</span>
+        <span class="flex-1">Conduit</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-conduit">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="plugins">
         <span class="text-base">🧩</span>
         <span class="flex-1">Плагины</span>
@@ -468,6 +473,67 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: CONDUIT ═════════ -->
+    <div data-tab-content="conduit">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-violet">🚇</span> Conduit
+            </h1>
+            <p class="text-sm text-muted mt-1">ТГ-аккаунты <code class="font-mono text-violet text-xs">conduit.ozdoev.net</code> · клик по ключу = активный (API Helper) · реги из ТГ</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadConduitSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadConduitSessions(true)" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🔄 Баланс/квоты</button>
+            <input id="conduit-count" type="number" min="1" max="50" value="1" class="text-xs bg-surface border border-line-soft rounded-lg px-2 py-2 w-16 focus:outline-none focus:border-emerald/60" title="сколько аккаунтов зарегать">
+            <button onclick="conduitAutoreg()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium" title="Автореги из ТГ-пула (новое окно)">➕ Зарегать</button>
+            <button onclick="launchScript('conduit-login', '🚇 Окно сохранения сессии Conduit открыто')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line" title="Залогиниться вручную и сохранить сессию">🔑 Сессия</button>
+          </div>
+        </header>
+
+        <div id="conduit-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <div id="conduit-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <!-- ТГ-пул — ЗЕРКАЛО блока из FreeModel (тот же пул, те же глобальные хендлеры
+             addTgBulk/tgHealthCheck/tgOpen/tgMarkFree/tgDelete). .tg-stats/.tg-list
+             рендерятся в оба места одновременно из loadTgPool/renderTgPool. -->
+        <details class="rounded-xl bg-surface border border-line-soft" open>
+          <summary class="cursor-pointer px-5 py-3 text-sm font-semibold flex items-center gap-2 hover:bg-elevated/40 select-none">
+            <span class="text-violet">📱</span>
+            <span>Telegram pool</span>
+            <span class="tg-stats text-[11px] font-mono text-faint ml-2"></span>
+            <span class="text-[10px] text-faint ml-auto">Общий пул с FreeModel. Регаются в порядке добавления.</span>
+          </summary>
+          <div class="p-5 pt-2 space-y-4 border-t border-line-soft">
+            <div>
+              <h3 class="text-xs font-semibold flex items-center gap-2 mb-1">
+                <span class="text-emerald">➕</span> Вставить список
+                <span class="text-[10px] text-faint font-normal ml-1">
+                  поддерживается <code class="text-amber">phone|hex:dc</code> · <code class="text-amber">hex:dc</code> · <code class="text-amber">phone hex dc [user_id]</code>
+                </span>
+              </h3>
+              <textarea id="tg-bulk-input-cdt" rows="4"
+                placeholder="13678875285|2b58…1306c:1&#10;46ecaff1…f1469:5&#10;+14155551234 abcdef…6789ab 2 8681576074"
+                class="w-full text-[11px] bg-elevated border border-line-soft rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-emerald/60"></textarea>
+              <div class="mt-2 flex items-center gap-2">
+                <button onclick="addTgBulk('tg-bulk-input-cdt')" class="text-xs px-3 py-1.5 bg-emerald/15 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/25 font-medium">➕ Импортировать всё</button>
+                <button onclick="document.getElementById('tg-file-input').click()" class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-line">📎 Импорт .session</button>
+                <button onclick="tgHealthCheck(this)" title="Безбанный чек: connect+getMe по каждому, кэшируется" class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-azure/60 hover:text-azure">🩺 Health-чек</button>
+                <span id="tg-bulk-hint-cdt" class="text-[10px] text-faint font-mono ml-2">—</span>
+              </div>
+            </div>
+            <div class="tg-list rounded-lg bg-elevated/30 border border-line-soft overflow-hidden">
+              <div class="p-6 text-center text-muted text-xs">пул пуст</div>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: FREEMODEL ═════════ -->
     <div data-tab-content="freemodel">
       <div class="px-6 py-8 space-y-4">
@@ -593,7 +659,7 @@
           <summary class="cursor-pointer px-5 py-3 text-sm font-semibold flex items-center gap-2 hover:bg-elevated/40 select-none">
             <span class="text-azure">📱</span>
             <span>Telegram pool</span>
-            <span id="tg-stats" class="text-[11px] font-mono text-faint ml-2"></span>
+            <span id="tg-stats" class="tg-stats text-[11px] font-mono text-faint ml-2"></span>
             <span class="text-[10px] text-faint ml-auto">Готовые TG-аккаунты для привязки. Регаются в порядке добавления.</span>
           </summary>
           <div class="p-5 pt-2 space-y-4 border-t border-line-soft">
@@ -619,7 +685,7 @@
             </div>
 
             <!-- Pool table -->
-            <div id="tg-list" class="rounded-lg bg-elevated/30 border border-line-soft overflow-hidden">
+            <div id="tg-list" class="tg-list rounded-lg bg-elevated/30 border border-line-soft overflow-hidden">
               <div class="p-6 text-center text-muted text-xs">пул пуст</div>
             </div>
           </div>
@@ -744,9 +810,10 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, plugins: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, plugins: false, conduit: false },
   tg: [],
   aerolink: [],
+  conduit: [],
 };
 
 const $   = (id) => document.getElementById(id);
@@ -871,6 +938,7 @@ function showTab(name) {
     loadNotionCards();
   }
   if (name === 'aerolink' && !state.loaded.aerolink) { state.loaded.aerolink = true; loadAlSessions(false); }
+  if (name === 'conduit') { loadTgPool(); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'tokenrouter' && !state.loaded.tokenrouter) {
     state.loaded.tokenrouter = true;
     loadTokenrouterAccounts();
@@ -897,8 +965,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', conduit: 'Conduit', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -918,7 +986,7 @@ function paintStatus() {
 
   $('side-current').textContent = label;
   const modeEl = $('side-mode');
-  if (t === 'apihelper' || t === 'aerolink') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
+  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
   else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
   else modeEl.className = 'hidden';
   $('side-url').textContent     = state.urls[t] || '';
@@ -992,6 +1060,20 @@ function getDefaultPresets() {
         }
       }
     },
+    'cdtHelper': {
+      label: 'Conduit · API Helper',
+      desc: 'apiKeyHelper → cat ~/.claude/cdt-active-key.txt',
+      icon: '🚇',
+      color: 'violet',
+      settings: {
+        apiKeyHelper: 'cat ~/.claude/cdt-active-key.txt',
+        env: {
+          ANTHROPIC_BASE_URL: 'https://conduit.ozdoev.net/api/v1',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_API_KEY: null
+        }
+      }
+    },
     'omniroute': {
       label: 'OmniRoute',
       desc: 'localhost:20128/v1',
@@ -1034,6 +1116,7 @@ function renderPresets() {
   const presetBackend = (p) => {
     const h = p.settings?.apiKeyHelper || '';
     if (h.includes('al-active-key')) return 'aerolink';
+    if (h.includes('cdt-active-key')) return 'conduit';
     if (h.includes('fm-active-key')) return 'apihelper';
     const url = p.settings?.env?.ANTHROPIC_BASE_URL || '';
     if (url.includes('20128')) return 'omniroute';
@@ -1438,6 +1521,166 @@ async function alActivate(api_key) {
       loadAlSessions(false);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ CONDUIT ═════════════════════════════════════════
+async function loadConduitSessions(refresh) {
+  if (refresh) $('conduit-list').innerHTML = `<div class="p-12 text-center text-violet text-xs">🔄 тяну баланс/квоты…</div>`;
+  try {
+    const res = await fetch('/__switch/api/conduit/sessions' + (refresh ? '?refresh=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.conduit = data.sessions || [];
+    state.activeConduitKey = data.activeKey || null;
+    $('nav-count-conduit').textContent = state.conduit.length;
+    renderConduit();
+    if (refresh) toast('✓ Conduit: данные обновлены', 'success');
+  } catch (e) {
+    $('conduit-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+// Запас пула: среднее (1 - usedFraction) по аккаунтам с квотой; нет данных → 100%.
+function conduitPoolStats(sessions) {
+  let remSum = 0, withQ = 0, ok = 0, total = 0, banned = 0, availSum = 0;
+  for (const s of (sessions || [])) {
+    if (s.meta?.banned || s.quota?.dead) { banned++; continue; }
+    total++;
+    if (s.status === '✅') ok++;
+    const u = s.quota?.usedFraction;
+    if (typeof u === 'number') { remSum += (1 - u); withQ++; }
+    if (typeof s.quota?.balance === 'number') availSum += s.quota.balance;
+  }
+  return { remPct: withQ ? (remSum / withQ) * 100 : 100, ok, total, banned, withQ, availSum };
+}
+function renderConduitGauge() {
+  const st = conduitPoolStats(state.conduit);
+  renderEnergyGauge($('conduit-energy'), {
+    title: 'Conduit · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> акк</span>`,
+      `<span class="text-emerald">${st.ok} ✅</span>`,
+      st.banned ? `<span class="text-crimson/80">${st.banned} 💀</span>` : '',
+      st.availSum > 0 ? `<span class="text-emerald">$${st.availSum.toFixed(2)} баланс</span>` : '',
+      `<span class="text-faint">${st.withQ} с квотой</span>`,
+    ].filter(Boolean).join(''),
+  });
+}
+function conduitStatusBadge(s) {
+  if (s.meta?.banned || s.quota?.dead) return '<span class="text-crimson">💀 dead</span>';
+  if (s.status === '✅') return '<span class="text-emerald">🟢 ok</span>';
+  return '<span class="text-faint">⚪ —</span>';
+}
+function renderConduit() {
+  renderConduitGauge();
+  const rows = state.conduit;
+  if (!rows.length) {
+    $('conduit-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Зарегать или 🔑 Сессия</div>`;
+    return;
+  }
+  const activeKey = state.activeConduitKey;
+  const body = rows.map(s => {
+    const q = s.quota || {};
+    const key = q.apiKey || s.apiKey || s.meta?.apiKey || '';
+    const active = !!key && key === activeKey;
+    const keyMask = key ? (key.slice(0, 10) + '…' + key.slice(-4)) : '—';
+    const nameJ = JSON.stringify(s.name);
+    const keyJ = JSON.stringify(key);
+    const bal = (typeof q.balance === 'number') ? '$' + q.balance.toFixed(2) : '—';
+    const plan = q.plan ? `${esc(q.plan)}${q.subActive ? '' : ' триал'}` : '—';
+    const lim = q.limits ? `${q.limits.dailyRequests}/д · ${q.limits.requestsPerMinute}/мин` : '—';
+    const user = q.username || s.username || '—';
+    const hasSession = s.hasSession;
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
+      <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(user)}</td>
+      <td class="px-4 py-2.5">
+        <span class="inline-flex items-center gap-1">
+          <code class="font-mono text-[11px] text-faint" id="cdtkey-${esc(s.name)}" data-mask="${esc(keyMask)}">${esc(keyMask)}</code>
+          ${key ? `<button onclick='conduitToggleKey(${nameJ},${keyJ})' title="Показать/скрыть" class="text-[11px] text-faint hover:text-violet px-0.5">👁</button>
+          <button onclick='conduitCopyKey(${keyJ})' title="Копировать ключ" class="text-[11px] text-faint hover:text-violet px-0.5">📋</button>` : ''}
+        </span>
+      </td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${esc(plan)}</td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap text-emerald">${bal}</td>
+      <td class="px-4 py-2.5 text-xs text-faint whitespace-nowrap">${esc(lim)}</td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${conduitStatusBadge(s)}</td>
+      <td class="px-4 py-2.5 text-right whitespace-nowrap">
+        <button onclick='conduitActivate(${nameJ})' title="Сделать активным (API Helper)" ${key ? '' : 'disabled'}
+          class="text-xs px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-violet hover:border-violet/50'} transition ${key ? '' : 'opacity-40 cursor-not-allowed'}">${active ? '🌟 активен' : 'активировать'}</button>
+        ${hasSession ? `<button onclick='openSession("conduit", ${nameJ})' title="Открыть в браузере (conduit.ozdoev.net)" class="text-xs text-faint hover:text-azure px-1 ml-1">🌐</button>` : ''}
+        <button onclick='conduitRefreshOne(${nameJ})' title="Обновить квоту/баланс" class="text-xs text-faint hover:text-violet px-1">🔄</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('conduit-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">аккаунт</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">план</th>
+      <th class="px-4 py-2 font-medium">баланс</th>
+      <th class="px-4 py-2 font-medium">лимиты</th>
+      <th class="px-4 py-2 font-medium">статус</th>
+      <th class="px-4 py-2 text-right">действия</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// Показать/скрыть полный ключ в ячейке.
+function conduitToggleKey(name, key) {
+  const el = $('cdtkey-' + name);
+  if (!el) return;
+  const showing = el.dataset.showing === '1';
+  el.textContent = showing ? el.dataset.mask : key;
+  el.dataset.showing = showing ? '0' : '1';
+  el.classList.toggle('text-violet', !showing);
+  el.classList.toggle('text-faint', showing);
+}
+function conduitCopyKey(key) {
+  if (!key) return toast('Ключа нет', 'warn');
+  if (navigator.clipboard) navigator.clipboard.writeText(key).then(() => toast('📋 Ключ скопирован', 'success'), () => toast('Не удалось', 'error'));
+  else toast('Clipboard недоступен', 'warn');
+}
+
+async function conduitActivate(name) {
+  try {
+    const res = await fetch('/__switch/api/conduit/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${name} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      state.current = 'conduit';
+      state.urls.conduit = 'https://conduit.ozdoev.net/api/v1';
+      paintStatus();
+      loadConduitSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+async function conduitRefreshOne(name) {
+  try {
+    const res = await fetch('/__switch/api/conduit/refresh-quota', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.ok) { loadConduitSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Refresh: ' + e.message, 'error'); }
+}
+
+async function conduitAutoreg() {
+  const count = Math.max(1, Math.min(50, parseInt($('conduit-count').value, 10) || 1));
+  try {
+    const res = await fetch('/__switch/api/conduit/autoreg', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count }),
+    });
+    const data = await res.json();
+    if (data.ok) toast(`🚇 Conduit autoreg запущен (${count}) — смотри новое окно`, 'success', 4000);
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Autoreg: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ FREEMODEL ═══════════════════════════════════════
@@ -2246,24 +2489,26 @@ async function loadTgPool() {
     if (!res.ok) throw new Error(data.error || 'fail');
     state.tg = data.entries || [];
     const s = data.stats || { total: 0, free: 0, reserved: 0, used: 0, banned: 0 };
-    $('tg-stats').innerHTML =
+    const statsHtml =
       `<span class="text-emerald">●</span> free <b class="text-emerald">${s.free}</b> · ` +
       (s.reserved ? `<span class="text-azure">●</span> reserved <b class="text-azure">${s.reserved}</b> · ` : '') +
       `<span class="text-amber">●</span> used <b class="text-amber">${s.used}</b> · ` +
       `<span class="text-crimson">●</span> banned <b class="text-crimson">${s.banned}</b> · ` +
       `total <b>${s.total}</b>`;
+    document.querySelectorAll('.tg-stats').forEach(el => el.innerHTML = statsHtml);
     renderTgPool();
   } catch (e) {
-    const list = $('tg-list');
-    if (list) list.innerHTML = `<div class="p-4 text-crimson text-xs">${esc(e.message)}</div>`;
+    document.querySelectorAll('.tg-list').forEach(el => el.innerHTML = `<div class="p-4 text-crimson text-xs">${esc(e.message)}</div>`);
   }
 }
 
+// Зеркалит готовый HTML пула во ВСЕ контейнеры .tg-list (FreeModel + Conduit).
+function paintTgLists(html) { document.querySelectorAll('.tg-list').forEach(el => el.innerHTML = html); }
+
 function renderTgPool() {
-  const list = $('tg-list');
-  if (!list) return;
+  if (!document.querySelector('.tg-list')) return;
   if (!state.tg.length) {
-    list.innerHTML = '<div class="p-6 text-center text-muted text-xs">пул пуст — вставь список выше</div>';
+    paintTgLists('<div class="p-6 text-center text-muted text-xs">пул пуст — вставь список выше</div>');
     return;
   }
   const statusCell = (s) => {
@@ -2311,6 +2556,13 @@ function renderTgPool() {
             ? `<span class="ml-2 text-[10px] text-crimson" title="${esc(h.error || 'ключ отозван')} · ${esc(ageStr(h.checkedAt))}">🔴 dead</span>`
             : `<span class="ml-2 text-[10px] text-amber" title="${esc(h.error || 'ошибка')} · ${esc(ageStr(h.checkedAt))}">🟠 ?</span>`)
       : `<span class="ml-2 text-[10px] text-dim" title="health-чек не запускался">—</span>`;
+    // На каких сервисах зареган этот ТГ (из e.services бэкенда).
+    const sv = e.services || {};
+    const svcChips = [
+      sv.freemodel ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-amber/15 border border-amber/40 text-amber" title="Зареган на FreeModel">🆓 FM</span>` : '',
+      sv.conduit   ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-violet/15 border border-violet/40 text-violet" title="Зареган на Conduit">🚇 CDT</span>` : '',
+    ].filter(Boolean).join(' ');
+    const svcBadges = svcChips || `<span class="text-[9px] text-faint" title="Нигде не зареган (свободен для любого сервиса)">—</span>`;
     const animCls = (justExpanded && i >= TG_PREVIEW) ? 'row-anim' : '';
     const animStyle = (justExpanded && i >= TG_PREVIEW) ? ` style="animation-delay:${Math.min((i - TG_PREVIEW) * 35, 420)}ms"` : '';
     return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim} ${animCls}"${animStyle}>
@@ -2318,6 +2570,7 @@ function renderTgPool() {
         <td class="px-3 py-1.5 font-mono text-[11px] text-azure">DC${e.dc_id}</td>
         <td class="px-3 py-1.5 font-mono text-[10px] text-faint">${esc(e.auth_key_mask)}</td>
         <td class="px-3 py-1.5 text-[11px]">${statusCell(e.status)}${healthBadge}${usedInfo}</td>
+        <td class="px-3 py-1.5 whitespace-nowrap">${svcBadges}</td>
         <td class="px-3 py-1.5 text-right whitespace-nowrap">
           <button onclick="tgHealthOne('${esc(e.phone)}', this)" title="Health-чек этого аккаунта" class="text-[10px] px-2 py-0.5 bg-azure/10 border border-azure/40 text-azure rounded hover:bg-azure/20">🩺</button>
           ${(e.status === 'used' || e.status === 'banned')
@@ -2327,13 +2580,14 @@ function renderTgPool() {
         </td>
       </tr>`;
   }).join('');
-  list.innerHTML = `<table class="w-full">
+  paintTgLists(`<table class="w-full">
     <thead class="bg-elevated/60 text-[10px] uppercase tracking-wider text-muted">
       <tr>
         <th class="px-3 py-2 text-left">TG / номер</th>
         <th class="px-3 py-2 text-left">DC</th>
         <th class="px-3 py-2 text-left">Auth Key</th>
         <th class="px-3 py-2 text-left">Status</th>
+        <th class="px-3 py-2 text-left">Сервисы</th>
         <th class="px-3 py-2 text-right">—</th>
       </tr>
     </thead>
@@ -2344,13 +2598,14 @@ function renderTgPool() {
       ${collapsed
         ? `▾ показать все ${sorted.length} <span class="text-faint">(скрыто ${sorted.length - TG_PREVIEW})</span>`
         : `▴ свернуть`}
-    </button>` : ''}`;
+    </button>` : ''}`);
 }
 
-async function addTgBulk() {
-  const text = $('tg-bulk-input').value;
+async function addTgBulk(inputId = 'tg-bulk-input') {
+  const input = $(inputId);
+  const hint = $(inputId.replace('input', 'hint'));   // tg-bulk-input → tg-bulk-hint (и -cdt)
+  const text = input.value;
   if (!text || !text.trim()) return toast('Вставь список аккаунтов', 'warn');
-  const hint = $('tg-bulk-hint');
   hint.textContent = '⏳ парсинг…';
   hint.className = 'text-[10px] text-azure font-mono ml-2';
   try {
@@ -2374,7 +2629,7 @@ async function addTgBulk() {
 
     if (added) {
       toast(`✓ Импортировано: ${added}`, 'success');
-      $('tg-bulk-input').value = '';
+      input.value = '';
     }
     if (errs.length) {
       const summary = errs.slice(0, 3).map(e => `строка ${e.line || '?'}: ${e.error}`).join('\n') +

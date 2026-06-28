@@ -22,6 +22,7 @@ freemodel/accounts/
 freemodel/sessions/
 freemodel/keys.txt
 freemodel/tg_pool.json
+freemodel/tg_pool.json.bak-*
 freemodel/.tg_health_cache.json
 freemodel/.email_blocklist.json
 freemodel/manual_email.txt
@@ -29,6 +30,13 @@ freemodel/lib/camoufox_tmailor_profile_*/
 freemodel/lib/camoufox_recordings/
 freemodel/logs/
 freemodel/.last_invite
+
+# Conduit приватные данные (сессии, sk-cdt- ключи, профили браузера, дампы).
+# Коммитим только КОД (conduit/*.js, conduit/lib/*.js).
+conduit/accounts/
+conduit/logs/
+conduit/.tg_used.json
+conduit/.last_ref
 freemodel/emailnator_debug_*.png
 freemodel/inbox_debug_*.png
 freemodel/probe_email_out/

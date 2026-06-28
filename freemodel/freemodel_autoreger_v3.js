@@ -513,6 +513,12 @@ async function registerOne(index, inviteCode) {
     ]);
     const allowedDomains = config.EMAIL_ALLOWED_DOMAINS || [];
 
+    // Молчаливая недоставка OTP: FreeModel не говорит "signup limit", но письмо
+    // не приходит. Считаем таймауты по домену; на пороге — постоянный blacklist,
+    // иначе мёртвый домен жжёт по 2-5 мин на каждой реге.
+    const otpTimeoutsByDomain = new Map();
+    const OTP_TIMEOUT_BLACKLIST_THRESHOLD = config.OTP_TIMEOUT_BLACKLIST_THRESHOLD || 2;
+
     for (let attempt = 0; attempt < MAX_EMAIL_RETRIES; attempt++) {
       // Перегенерируем адрес, если это не первая попытка.
       if (attempt > 0) {
@@ -639,6 +645,17 @@ async function registerOne(index, inviteCode) {
       log(
         `[#${index}] ⚠️ OTP не пришёл за ${Math.round(otpWaitMs / 1000)}с, новый email (${attempt + 2}/${MAX_EMAIL_RETRIES})`,
       );
+
+      // Молчаливая недоставка: копим таймауты по домену. На пороге — в blacklist,
+      // чтобы переген и следующие прогоны больше не трогали этот домен.
+      const tCount = (otpTimeoutsByDomain.get(domain) || 0) + 1;
+      otpTimeoutsByDomain.set(domain, tCount);
+      rejectedDomains.add(domain);
+      if (tCount >= OTP_TIMEOUT_BLACKLIST_THRESHOLD) {
+        addEmailBlocklist(domain);
+        log(`[#${index}] 🚫 @${domain} → постоянный blacklist (OTP timeout ×${tCount})`);
+      }
+
       await page.close().catch(() => {});
       page = null;
     }

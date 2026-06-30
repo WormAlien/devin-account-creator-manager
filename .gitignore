@@ -106,6 +106,7 @@ routing/.env
 
 # Telegram bot secrets (token). tgbot/.env.example IS committed.
 tgbot/.env
+tgbot/bot.log
 
 # Aerolink ручной пул ключей (содержит реальные aero_live_*). al-sessions.example.json IS committed.
 routing/al-sessions.json

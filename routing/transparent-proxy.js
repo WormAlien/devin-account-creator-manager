@@ -205,7 +205,11 @@ async function applyTarget(target) {
     }
 
     settings.env.ANTHROPIC_API_KEY = apiKey;
-    if (backend.model) settings.model = backend.model;
+    // model: строка → задать; null → удалить (бэкенд не знает чужую модель —
+    // иначе ComboWombo от OmniRoute залипает на FreeModel/Aerolink/Conduit);
+    // undefined → не трогать.
+    if (backend.model === null) delete settings.model;
+    else if (backend.model) settings.model = backend.model;
     writeSettings(settings);
     saveState(target);
     logLine(`switched to ${target} (${backend.label})`);
@@ -235,6 +239,8 @@ async function handleSettingsApply(req, res) {
                     if (ev === null) delete next.env[ek];   // null = drop key (e.g. clear shadowing ANTHROPIC_API_KEY)
                     else next.env[ek] = ev;
                 }
+            } else if (v === null) {
+                delete next[k];   // top-level null = drop field (e.g. clear stuck `model`)
             } else {
                 next[k] = v;
             }
@@ -1144,6 +1150,7 @@ async function handleFreemodelActivate(req, res) {
             fs.copyFileSync(settingsFile, bakPath);
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = 'https://cc.freemodel.dev';
+            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute не работает на FreeModel)
             if (helperMode) {
                 settings.apiKeyHelper = 'cat ~/.claude/fm-active-key.txt';
                 settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
@@ -1295,6 +1302,7 @@ async function handleAlActivate(req, res) {
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = AL_BASE_URL + '/';
             settings.apiKeyHelper = 'cat ~/.claude/al-active-key.txt';
+            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
@@ -1304,6 +1312,199 @@ async function handleAlActivate(req, res) {
         }
         logLine(`aerolink activate: ${target.email} → ***${key.slice(-6)} (helper)`);
         jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Video API (vid) — хранилище ключей видео-провайдеров (fal/Replicate/Veo/…) ─────
+// Чисто хранилище: add/delete/list. Никакой активации в settings.json — эти ключи
+// не для Claude, а под будущие авторегеры/пайплайны генерации видео.
+const VIDEO_KEYS_FILE = path.join(__dirname, 'video-keys.json');
+
+function vidLoad() {
+    try {
+        const raw = fs.readFileSync(VIDEO_KEYS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function vidSave(arr) {
+    fs.writeFileSync(VIDEO_KEYS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function vidToday() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+async function handleVideoKeys(req, res) {
+    try { jsonRes(res, 200, { keys: vidLoad() }); }
+    catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleVideoAdd(req, res) {
+    try {
+        const { provider, label, api_key, note } = await readJsonBody(req);
+        const prov = String(provider || '').trim().toLowerCase();
+        const key = String(api_key || '').trim();
+        if (!prov || !key) return jsonRes(res, 400, { error: 'provider и api_key обязательны' });
+        const keys = vidLoad();
+        if (keys.some(k => k.provider === prov && k.api_key === key))
+            return jsonRes(res, 400, { error: 'такой ключ у этого провайдера уже есть' });
+        keys.push({
+            provider: prov,
+            label: String(label || '').trim() || 'main',
+            api_key: key,
+            note: String(note || '').trim(),
+            added: vidToday(),
+        });
+        vidSave(keys);
+        logLine(`video add: ${prov}/${label || 'main'} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleVideoDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const keys = vidLoad().filter(k => k.api_key !== key);
+        vidSave(keys);
+        logLine(`video delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Video trial-сайты — каталог + статусы (working/dead/?) ─────
+// Seed-список зашит в код; пользовательские статусы/заметки в video-trials.json (gitignored).
+const VIDEO_TRIALS_FILE = path.join(__dirname, 'video-trials.json');
+const VIDEO_TRIALS_SEED = [
+    { id: 'runway',      name: 'Runway',        url: 'https://runwayml.com',              kind: 'free credits',  note: 'Gen-4, стартовые кредиты' },
+    { id: 'hailuo',      name: 'Hailuo / MiniMax', url: 'https://hailuoai.video',         kind: 'daily free',    note: 'ежедневные бесплатные генерации' },
+    { id: 'kling',       name: 'Kling AI',      url: 'https://klingai.com',               kind: 'daily free',    note: 'дневные кредиты, мощный движок' },
+    { id: 'pixverse',    name: 'PixVerse',      url: 'https://pixverse.ai',               kind: 'daily free',    note: 'дневные кредиты' },
+    { id: 'seedance',    name: 'Seedance (ByteDance)', url: 'https://seed.bytedance.com', kind: 'free credits',  note: 'через fal/replicate тоже' },
+    { id: 'pika',        name: 'Pika',          url: 'https://pika.art',                  kind: 'free credits',  note: 'стартовые кредиты' },
+    { id: 'luma',        name: 'Luma Dream Machine', url: 'https://lumalabs.ai/dream-machine', kind: 'free tier', note: 'бесплатный тариф' },
+    { id: 'fal',         name: 'fal.ai',        url: 'https://fal.ai',                    kind: 'aggregator',    note: 'API-агрегатор, $ кредиты' },
+    { id: 'replicate',   name: 'Replicate',     url: 'https://replicate.com',             kind: 'aggregator',    note: 'API-агрегатор, $ кредиты' },
+    { id: 'imagineart',  name: 'ImagineArt',    url: 'https://www.imagine.art',           kind: 'free tier',     note: 'free tier видео' },
+    { id: 'pollo',       name: 'Pollo.ai',      url: 'https://pollo.ai',                  kind: 'free credits',  note: 'агрегатор моделей' },
+    { id: 'krea',        name: 'Krea',          url: 'https://krea.ai',                   kind: 'free tier',     note: 'realtime + видео' },
+    { id: 'higgsfield',  name: 'Higgsfield',    url: 'https://higgsfield.ai',             kind: 'free credits',  note: 'motion/камера' },
+    { id: 'openart',     name: 'OpenArt',       url: 'https://openart.ai',                kind: 'free credits',  note: 'видео + картинки' },
+    { id: 'wavespeed',   name: 'WaveSpeedAI',   url: 'https://wavespeed.ai',              kind: 'aggregator',    note: 'быстрый инференс API' },
+    { id: 'genspark',    name: 'Genspark',      url: 'https://www.genspark.ai',           kind: 'free tier',     note: 'AI-агент, видео' },
+    { id: 'leonardo',    name: 'Leonardo.ai',   url: 'https://leonardo.ai',               kind: 'daily free',    note: 'дневные токены, motion' },
+];
+function trialsLoad() { try { const raw = fs.readFileSync(VIDEO_TRIALS_FILE,'utf8'); const o = JSON.parse(raw.charCodeAt(0)===0xFEFF?raw.slice(1):raw); return (o && typeof o==='object') ? o : {}; } catch { return {}; } }
+function trialsSave(o) { fs.writeFileSync(VIDEO_TRIALS_FILE, JSON.stringify(o,null,2)+'\n','utf8'); }
+
+async function handleVideoTrials(req, res) {
+    try {
+        const st = trialsLoad();
+        const list = VIDEO_TRIALS_SEED.map(t => ({ ...t, status: (st[t.id]?.status) || '?', userNote: (st[t.id]?.note) || '' }));
+        jsonRes(res, 200, { trials: list });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleVideoTrialStatus(req, res) {
+    try {
+        const { id, status, note } = await readJsonBody(req);
+        const tid = String(id || '').trim();
+        if (!tid) return jsonRes(res, 400, { error: 'id required' });
+        const st = trialsLoad();
+        st[tid] = { status: String(status || '?'), note: String(note || '') };
+        trialsSave(st);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Image API (img) — хранилище ключей картинко-провайдеров (nanobanana/fal/replicate/imagen/…) ─────
+// Зеркало Video API: чисто хранилище add/delete/list + менеджер аккаунтов (email+ключ).
+// Никакой активации в settings.json — ключи под будущие обёртки/пайплайны генерации картинок.
+const IMAGE_KEYS_FILE = path.join(__dirname, 'image-keys.json');
+
+function imgLoad() {
+    try {
+        const raw = fs.readFileSync(IMAGE_KEYS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function imgSave(arr) {
+    fs.writeFileSync(IMAGE_KEYS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+async function handleImageKeys(req, res) {
+    try { jsonRes(res, 200, { keys: imgLoad() }); }
+    catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleImageAdd(req, res) {
+    try {
+        const { provider, label, api_key, note } = await readJsonBody(req);
+        const prov = String(provider || '').trim().toLowerCase();
+        const key = String(api_key || '').trim();
+        if (!prov || !key) return jsonRes(res, 400, { error: 'provider и api_key обязательны' });
+        const keys = imgLoad();
+        if (keys.some(k => k.provider === prov && k.api_key === key))
+            return jsonRes(res, 400, { error: 'такой ключ у этого провайдера уже есть' });
+        keys.push({
+            provider: prov,
+            label: String(label || '').trim() || 'main',
+            api_key: key,
+            note: String(note || '').trim(),
+            added: vidToday(),
+        });
+        imgSave(keys);
+        logLine(`image add: ${prov}/${label || 'main'} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleImageDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const keys = imgLoad().filter(k => k.api_key !== key);
+        imgSave(keys);
+        logLine(`image delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Image trial-сайты — каталог + статусы (working/dead/?) ─────
+const IMAGE_TRIALS_FILE = path.join(__dirname, 'image-trials.json');
+const IMAGE_TRIALS_SEED = [
+    { id: 'nanobanana',  name: 'NanoBanana API', url: 'https://nanobananaapi.ai',          kind: 'free credits',  note: 'Gemini Nano Banana 2 / Pro, ~$0.02/img, free на старте' },
+    { id: 'kie',         name: 'Kie.ai',         url: 'https://kie.ai/nano-banana-2',      kind: 'aggregator',    note: 'Nano Banana 2 / Pro дешевле Google' },
+    { id: 'gemini',      name: 'Google AI Studio', url: 'https://aistudio.google.com',     kind: 'free tier',     note: 'Nano Banana / Imagen напрямую, free лимит' },
+    { id: 'fal',         name: 'fal.ai',         url: 'https://fal.ai',                    kind: 'aggregator',    note: 'API-агрегатор, $ кредиты' },
+    { id: 'replicate',   name: 'Replicate',      url: 'https://replicate.com',             kind: 'aggregator',    note: 'API-агрегатор, $ кредиты' },
+    { id: 'leonardo',    name: 'Leonardo.ai',    url: 'https://leonardo.ai',               kind: 'daily free',    note: 'дневные токены' },
+    { id: 'ideogram',    name: 'Ideogram',       url: 'https://ideogram.ai',               kind: 'daily free',    note: 'текст на картинках, дневные кредиты' },
+    { id: 'flux',        name: 'FLUX (BFL)',     url: 'https://blackforestlabs.io',        kind: 'free credits',  note: 'FLUX.1, через fal/replicate тоже' },
+    { id: 'openart',     name: 'OpenArt',        url: 'https://openart.ai',                kind: 'free credits',  note: 'картинки + видео' },
+    { id: 'krea',        name: 'Krea',           url: 'https://krea.ai',                   kind: 'free tier',     note: 'realtime генерация' },
+    { id: 'imagineart',  name: 'ImagineArt',     url: 'https://www.imagine.art',           kind: 'free tier',     note: 'free tier картинки' },
+    { id: 'recraft',     name: 'Recraft',        url: 'https://recraft.ai',                kind: 'free credits',  note: 'вектор/растр, бренд-дизайн' },
+];
+function imgTrialsLoad() { try { const raw = fs.readFileSync(IMAGE_TRIALS_FILE,'utf8'); const o = JSON.parse(raw.charCodeAt(0)===0xFEFF?raw.slice(1):raw); return (o && typeof o==='object') ? o : {}; } catch { return {}; } }
+function imgTrialsSave(o) { fs.writeFileSync(IMAGE_TRIALS_FILE, JSON.stringify(o,null,2)+'\n','utf8'); }
+
+async function handleImageTrials(req, res) {
+    try {
+        const st = imgTrialsLoad();
+        const list = IMAGE_TRIALS_SEED.map(t => ({ ...t, status: (st[t.id]?.status) || '?', userNote: (st[t.id]?.note) || '' }));
+        jsonRes(res, 200, { trials: list });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleImageTrialStatus(req, res) {
+    try {
+        const { id, status, note } = await readJsonBody(req);
+        const tid = String(id || '').trim();
+        if (!tid) return jsonRes(res, 400, { error: 'id required' });
+        const st = imgTrialsLoad();
+        st[tid] = { status: String(status || '?'), note: String(note || '') };
+        imgTrialsSave(st);
+        jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -1358,6 +1559,7 @@ async function handleConduitActivate(req, res) {
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = CDT_BASE_URL;
             settings.apiKeyHelper = 'cat ~/.claude/cdt-active-key.txt';
+            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
@@ -1615,6 +1817,20 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/al/add')       return handleAlAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/delete')    return handleAlDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/activate')  return handleAlActivate(req, res);
+
+    // ---- Video API (vid) — хранилище ключей видео-провайдеров ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/video/keys')) return handleVideoKeys(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/video/add')          return handleVideoAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/video/delete')       return handleVideoDelete(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/video/trials')) return handleVideoTrials(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/video/trial-status')  return handleVideoTrialStatus(req, res);
+
+    // ---- Image API (img) — хранилище ключей картинко-провайдеров ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/image/keys')) return handleImageKeys(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/image/add')          return handleImageAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/image/delete')       return handleImageDelete(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/image/trials')) return handleImageTrials(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/image/trial-status')  return handleImageTrialStatus(req, res);
 
     // ---- Conduit (cdt) — пул ТГ-аккаунтов, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/conduit/sessions'))  return handleConduitSessions(req, res);

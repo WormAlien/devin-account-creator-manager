@@ -200,6 +200,16 @@
         <span class="flex-1">Conduit</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-conduit">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="video">
+        <span class="text-base">🎬</span>
+        <span class="flex-1">Video API</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-video">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="image">
+        <span class="text-base">🖼</span>
+        <span class="flex-1">Картинки API</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-image">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="plugins">
         <span class="text-base">🧩</span>
         <span class="flex-1">Плагины</span>
@@ -469,6 +479,148 @@
 
         <div id="al-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
           <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: VIDEO API ═════════ -->
+    <div data-tab-content="video">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-rose">🎬</span> Video API
+            </h1>
+            <p class="text-sm text-muted mt-1">хранилище ключей видео-провайдеров — <code class="font-mono text-rose text-xs">routing/video-keys.json</code> · фильтр по вкладкам провайдера · 👁 показать / 📋 копировать</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadVideoKeys()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="vidShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить ключ</button>
+          </div>
+        </header>
+
+        <!-- Провайдер-табы -->
+        <div id="vid-provtabs" class="flex gap-1.5 flex-wrap"></div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="vid-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">провайдер</span>
+              <select id="vid-add-prov" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-emerald/60">
+                <option value="fal">fal</option>
+                <option value="replicate">Replicate</option>
+                <option value="veo">Veo (Google)</option>
+                <option value="kling">Kling</option>
+                <option value="runway">Runway</option>
+                <option value="pika">Pika</option>
+                <option value="luma">Luma</option>
+                <option value="other">other</option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">метка (email/аккаунт)</span>
+              <input id="vid-add-label" placeholder="main" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key</span>
+              <input id="vid-add-key" placeholder="ключ…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">заметка</span>
+              <input id="vid-add-note" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="vidAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="vidShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="vid-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <!-- триал-сайты -->
+        <header class="flex items-end justify-between gap-4 flex-wrap pt-6 border-t border-line-soft">
+          <div>
+            <h2 class="text-lg font-semibold tracking-tight flex items-center gap-2">🔎 Триал-сайты</h2>
+            <p class="text-sm text-muted mt-1">где взять бесплатные кредиты — кликни статус, чтобы отметить рабочий/дохлый</p>
+          </div>
+          <button onclick="loadVideoTrials()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+        </header>
+        <div id="vid-trials" class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="p-6 text-center text-faint text-xs col-span-full">загрузка…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: IMAGE API (Картинки) ═════════ -->
+    <div data-tab-content="image">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-azure">🖼</span> Картинки API
+            </h1>
+            <p class="text-sm text-muted mt-1">менеджер аккаунтов картинко-провайдеров (NanoBanana / fal / Replicate / Imagen…) — <code class="font-mono text-azure text-xs">routing/image-keys.json</code> · email-метка + ключ · 👁 показать / 📋 копировать. Обёртки под провайдеров — потом.</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadImageKeys()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="imgShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить аккаунт</button>
+          </div>
+        </header>
+
+        <!-- Провайдер-табы -->
+        <div id="img-provtabs" class="flex gap-1.5 flex-wrap"></div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="img-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">провайдер</span>
+              <select id="img-add-prov" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+                <option value="nanobanana">NanoBanana</option>
+                <option value="kie">Kie.ai</option>
+                <option value="gemini">Gemini / Imagen</option>
+                <option value="fal">fal</option>
+                <option value="replicate">Replicate</option>
+                <option value="leonardo">Leonardo</option>
+                <option value="ideogram">Ideogram</option>
+                <option value="flux">FLUX</option>
+                <option value="recraft">Recraft</option>
+                <option value="other">other</option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">метка (email/аккаунт)</span>
+              <input id="img-add-label" placeholder="main" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key</span>
+              <input id="img-add-key" placeholder="ключ…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">заметка</span>
+              <input id="img-add-note" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="imgAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="imgShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="img-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <!-- триал-сайты -->
+        <header class="flex items-end justify-between gap-4 flex-wrap pt-6 border-t border-line-soft">
+          <div>
+            <h2 class="text-lg font-semibold tracking-tight flex items-center gap-2">🔎 Триал-сайты</h2>
+            <p class="text-sm text-muted mt-1">где взять бесплатные кредиты на картинки — кликни статус, чтобы отметить рабочий/дохлый</p>
+          </div>
+          <button onclick="loadImageTrials()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+        </header>
+        <div id="img-trials" class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="p-6 text-center text-faint text-xs col-span-full">загрузка…</div>
         </div>
       </div>
     </div>
@@ -938,6 +1090,8 @@ function showTab(name) {
     loadNotionCards();
   }
   if (name === 'aerolink' && !state.loaded.aerolink) { state.loaded.aerolink = true; loadAlSessions(false); }
+  if (name === 'video' && !state.loaded.video) { state.loaded.video = true; loadVideoKeys(); }
+  if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'tokenrouter' && !state.loaded.tokenrouter) {
     state.loaded.tokenrouter = true;
@@ -1039,6 +1193,7 @@ function getDefaultPresets() {
       color: 'emerald',
       settings: {
         apiKeyHelper: 'cat ~/.claude/fm-active-key.txt',
+        model: null,  // сбросить залипшую model (напр. ComboWombo от OmniRoute)
         env: {
           ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev',
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
@@ -1053,6 +1208,7 @@ function getDefaultPresets() {
       color: 'azure',
       settings: {
         apiKeyHelper: 'cat ~/.claude/al-active-key.txt',
+        model: null,
         env: {
           ANTHROPIC_BASE_URL: 'https://capi.aerolink.lat/',
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
@@ -1067,6 +1223,7 @@ function getDefaultPresets() {
       color: 'violet',
       settings: {
         apiKeyHelper: 'cat ~/.claude/cdt-active-key.txt',
+        model: null,
         env: {
           ANTHROPIC_BASE_URL: 'https://conduit.ozdoev.net/api/v1',
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
@@ -1081,6 +1238,7 @@ function getDefaultPresets() {
       color: 'azure',
       settings: {
         apiKeyHelper: '',
+        model: 'ComboWombo',  // OmniRoute знает эту модель — задаём явно
         env: {
           ANTHROPIC_BASE_URL: 'http://localhost:20128/v1',
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0'
@@ -1521,6 +1679,383 @@ async function alActivate(api_key) {
       loadAlSessions(false);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ VIDEO API ═══════════════════════════════════════
+// Хранилище ключей видео-провайдеров. Чисто CRUD: фильтр по провайдеру,
+// add/delete, маска ключа с 👁 показать / 📋 копировать. Без активации.
+const VID_PROVIDERS = [
+  { id: 'all',       name: '🎬 Все' },
+  { id: 'fal',       name: 'fal' },
+  { id: 'replicate', name: 'Replicate' },
+  { id: 'veo',       name: 'Veo' },
+  { id: 'kling',     name: 'Kling' },
+  { id: 'runway',    name: 'Runway' },
+  { id: 'pika',      name: 'Pika' },
+  { id: 'luma',      name: 'Luma' },
+  { id: 'other',     name: 'other' },
+];
+state.video = state.video || [];
+state.videoFilter = state.videoFilter || 'all';
+state.videoReveal = state.videoReveal || {};   // api_key -> bool (показан ли полностью)
+state.videoTrials = state.videoTrials || [];   // каталог триал-сайтов
+
+async function loadVideoKeys() {
+  try {
+    const res = await fetch('/__switch/api/video/keys');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.video = data.keys || [];
+    $('nav-count-video').textContent = state.video.length;
+    renderVideoTabs();
+    renderVideo();
+    loadVideoTrials();
+  } catch (e) {
+    $('vid-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function vidSetFilter(id) { state.videoFilter = id; renderVideoTabs(); renderVideo(); }
+
+function renderVideoTabs() {
+  const counts = {};
+  state.video.forEach(k => { counts[k.provider] = (counts[k.provider] || 0) + 1; });
+  $('vid-provtabs').innerHTML = VID_PROVIDERS.map(p => {
+    const on = state.videoFilter === p.id;
+    const n = p.id === 'all' ? state.video.length : (counts[p.id] || 0);
+    return `<button onclick="vidSetFilter('${p.id}')"
+      class="text-xs px-3 py-1.5 rounded-lg border transition ${on ? 'bg-rose/10 border-rose/50 text-rose font-medium' : 'bg-surface border-line-soft text-muted hover:border-line'}">
+      ${esc(p.name)} <span class="text-faint font-mono">${n}</span></button>`;
+  }).join('');
+}
+
+function vidToggleReveal(api_key) {
+  state.videoReveal[api_key] = !state.videoReveal[api_key];
+  renderVideo();
+}
+
+async function vidCopy(api_key) {
+  try { await navigator.clipboard.writeText(api_key); toast('📋 ключ скопирован', 'info'); }
+  catch { toast('clipboard недоступен', 'warn'); }
+}
+
+function renderVideo() {
+  const rows = state.video.filter(k => state.videoFilter === 'all' || k.provider === state.videoFilter);
+  if (!rows.length) {
+    $('vid-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить ключ</div>`;
+    return;
+  }
+  const body = rows.map(s => {
+    const revealed = !!state.videoReveal[s.api_key];
+    const mask = s.api_key.length > 18 ? s.api_key.slice(0, 10) + '…' + s.api_key.slice(-6) : '***' + s.api_key.slice(-4);
+    const shown = revealed ? esc(s.api_key) : esc(mask);
+    const kJ = JSON.stringify(s.api_key);
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30">
+      <td class="px-4 py-2.5 text-xs"><span class="text-rose font-medium">${esc(s.provider)}</span></td>
+      <td class="px-4 py-2.5 text-xs">${esc(s.label || '—')}</td>
+      <td class="px-4 py-2.5">
+        <span class="font-mono text-[11px] ${revealed ? 'text-ink' : 'text-azure'} select-all">${shown}</span>
+        <button onclick='vidToggleReveal(${kJ})' title="${revealed ? 'скрыть' : 'показать'}" class="ml-1.5 text-faint hover:text-ink">${revealed ? '🙈' : '👁'}</button>
+        <button onclick='vidCopy(${kJ})' title="копировать" class="ml-1 text-faint hover:text-ink">📋</button>
+      </td>
+      <td class="px-4 py-2.5 text-xs text-faint">${esc(s.note || '')}</td>
+      <td class="px-4 py-2.5 text-xs text-faint whitespace-nowrap">${esc(s.added || '')}</td>
+      <td class="px-4 py-2.5 text-right">
+        <button onclick='vidDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('vid-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">провайдер</th>
+      <th class="px-4 py-2 font-medium">метка</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">заметка</th>
+      <th class="px-4 py-2 font-medium">добавлен</th>
+      <th class="px-4 py-2"></th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function vidShowAdd(show = true) {
+  $('vid-add-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('vid-add-label').value = ''; $('vid-add-key').value = ''; $('vid-add-note').value = '';
+    if (state.videoFilter !== 'all') $('vid-add-prov').value = state.videoFilter;
+    $('vid-add-key').focus();
+  }
+}
+
+async function vidAdd() {
+  const provider = $('vid-add-prov').value;
+  const label = $('vid-add-label').value.trim();
+  const api_key = $('vid-add-key').value.trim();
+  const note = $('vid-add-note').value.trim();
+  if (!api_key) return toast('api_key обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/video/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, label, api_key, note }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ ключ добавлен', 'success'); vidShowAdd(false); loadVideoKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function vidDelete(api_key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    const res = await fetch('/__switch/api/video/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadVideoKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// ───── триал-сайты (где взять бесплатные кредиты) ─────
+const VID_TRIAL_STATUS = {
+  'working': { label: '✅ работает', cls: 'bg-emerald/15 border-emerald/40 text-emerald' },
+  'dead':    { label: '💀 дохлый',   cls: 'bg-crimson/15 border-crimson/40 text-crimson' },
+  '?':       { label: '❔ не проверял', cls: 'bg-surface border-line-soft text-faint' },
+};
+const VID_TRIAL_CYCLE = ['?', 'working', 'dead'];
+
+async function loadVideoTrials() {
+  try {
+    const res = await fetch('/__switch/api/video/trials');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.videoTrials = data.trials || [];
+    renderVideoTrials();
+  } catch (e) {
+    $('vid-trials').innerHTML = `<div class="p-6 text-crimson text-xs col-span-full">${esc(e.message)}</div>`;
+  }
+}
+
+function renderVideoTrials() {
+  const rows = state.videoTrials || [];
+  if (!rows.length) {
+    $('vid-trials').innerHTML = `<div class="p-6 text-center text-faint text-xs col-span-full">пусто</div>`;
+    return;
+  }
+  $('vid-trials').innerHTML = rows.map(t => {
+    const st = VID_TRIAL_STATUS[t.status] || VID_TRIAL_STATUS['?'];
+    const idJ = JSON.stringify(t.id);
+    return `<div class="rounded-xl bg-surface border border-line-soft p-3 flex flex-col gap-2">
+      <div class="flex items-start justify-between gap-2">
+        <a href="${esc(t.url)}" target="_blank" rel="noopener" class="text-sm font-medium text-ink hover:text-rose">${esc(t.name)} ↗</a>
+        <span class="text-[10px] px-2 py-0.5 rounded bg-elevated text-faint whitespace-nowrap">${esc(t.kind)}</span>
+      </div>
+      <p class="text-xs text-muted leading-snug">${esc(t.note || '')}</p>
+      <button onclick='vidTrialCycle(${idJ})' class="text-xs px-2.5 py-1.5 rounded-lg border transition ${st.cls}">${st.label}</button>
+    </div>`;
+  }).join('');
+}
+
+async function vidTrialCycle(id) {
+  const t = (state.videoTrials || []).find(x => x.id === id);
+  if (!t) return;
+  const i = VID_TRIAL_CYCLE.indexOf(t.status);
+  const next = VID_TRIAL_CYCLE[(i + 1) % VID_TRIAL_CYCLE.length];
+  t.status = next;
+  renderVideoTrials();
+  try {
+    const res = await fetch('/__switch/api/video/trial-status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: next, note: t.userNote || '' }),
+    });
+    const data = await res.json();
+    if (!data.ok) toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Status: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ IMAGE API (Картинки) ════════════════════════════
+// Зеркало Video API: менеджер аккаунтов картинко-провайдеров. Чисто CRUD:
+// фильтр по провайдеру, add/delete, маска ключа с 👁/📋. Без активации.
+const IMG_PROVIDERS = [
+  { id: 'all',        name: '🖼 Все' },
+  { id: 'nanobanana', name: 'NanoBanana' },
+  { id: 'kie',        name: 'Kie.ai' },
+  { id: 'gemini',     name: 'Gemini' },
+  { id: 'fal',        name: 'fal' },
+  { id: 'replicate',  name: 'Replicate' },
+  { id: 'leonardo',   name: 'Leonardo' },
+  { id: 'ideogram',   name: 'Ideogram' },
+  { id: 'flux',       name: 'FLUX' },
+  { id: 'recraft',    name: 'Recraft' },
+  { id: 'other',      name: 'other' },
+];
+state.image = state.image || [];
+state.imageFilter = state.imageFilter || 'all';
+state.imageReveal = state.imageReveal || {};   // api_key -> bool (показан ли полностью)
+state.imageTrials = state.imageTrials || [];   // каталог триал-сайтов
+
+async function loadImageKeys() {
+  try {
+    const res = await fetch('/__switch/api/image/keys');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.image = data.keys || [];
+    $('nav-count-image').textContent = state.image.length;
+    renderImageTabs();
+    renderImage();
+    loadImageTrials();
+  } catch (e) {
+    $('img-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function imgSetFilter(id) { state.imageFilter = id; renderImageTabs(); renderImage(); }
+
+function renderImageTabs() {
+  const counts = {};
+  state.image.forEach(k => { counts[k.provider] = (counts[k.provider] || 0) + 1; });
+  $('img-provtabs').innerHTML = IMG_PROVIDERS.map(p => {
+    const on = state.imageFilter === p.id;
+    const n = p.id === 'all' ? state.image.length : (counts[p.id] || 0);
+    return `<button onclick="imgSetFilter('${p.id}')"
+      class="text-xs px-3 py-1.5 rounded-lg border transition ${on ? 'bg-azure/10 border-azure/50 text-azure font-medium' : 'bg-surface border-line-soft text-muted hover:border-line'}">
+      ${esc(p.name)} <span class="text-faint font-mono">${n}</span></button>`;
+  }).join('');
+}
+
+function imgToggleReveal(api_key) {
+  state.imageReveal[api_key] = !state.imageReveal[api_key];
+  renderImage();
+}
+
+async function imgCopy(api_key) {
+  try { await navigator.clipboard.writeText(api_key); toast('📋 ключ скопирован', 'info'); }
+  catch { toast('clipboard недоступен', 'warn'); }
+}
+
+function renderImage() {
+  const rows = state.image.filter(k => state.imageFilter === 'all' || k.provider === state.imageFilter);
+  if (!rows.length) {
+    $('img-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить аккаунт</div>`;
+    return;
+  }
+  const body = rows.map(s => {
+    const revealed = !!state.imageReveal[s.api_key];
+    const mask = s.api_key.length > 18 ? s.api_key.slice(0, 10) + '…' + s.api_key.slice(-6) : '***' + s.api_key.slice(-4);
+    const shown = revealed ? esc(s.api_key) : esc(mask);
+    const kJ = JSON.stringify(s.api_key);
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30">
+      <td class="px-4 py-2.5 text-xs"><span class="text-azure font-medium">${esc(s.provider)}</span></td>
+      <td class="px-4 py-2.5 text-xs">${esc(s.label || '—')}</td>
+      <td class="px-4 py-2.5">
+        <span class="font-mono text-[11px] ${revealed ? 'text-ink' : 'text-azure'} select-all">${shown}</span>
+        <button onclick='imgToggleReveal(${kJ})' title="${revealed ? 'скрыть' : 'показать'}" class="ml-1.5 text-faint hover:text-ink">${revealed ? '🙈' : '👁'}</button>
+        <button onclick='imgCopy(${kJ})' title="копировать" class="ml-1 text-faint hover:text-ink">📋</button>
+      </td>
+      <td class="px-4 py-2.5 text-xs text-faint">${esc(s.note || '')}</td>
+      <td class="px-4 py-2.5 text-xs text-faint whitespace-nowrap">${esc(s.added || '')}</td>
+      <td class="px-4 py-2.5 text-right">
+        <button onclick='imgDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('img-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">провайдер</th>
+      <th class="px-4 py-2 font-medium">метка</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">заметка</th>
+      <th class="px-4 py-2 font-medium">добавлен</th>
+      <th class="px-4 py-2"></th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function imgShowAdd(show = true) {
+  $('img-add-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('img-add-label').value = ''; $('img-add-key').value = ''; $('img-add-note').value = '';
+    if (state.imageFilter !== 'all') $('img-add-prov').value = state.imageFilter;
+    $('img-add-key').focus();
+  }
+}
+
+async function imgAdd() {
+  const provider = $('img-add-prov').value;
+  const label = $('img-add-label').value.trim();
+  const api_key = $('img-add-key').value.trim();
+  const note = $('img-add-note').value.trim();
+  if (!api_key) return toast('api_key обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/image/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, label, api_key, note }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ аккаунт добавлен', 'success'); imgShowAdd(false); loadImageKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function imgDelete(api_key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    const res = await fetch('/__switch/api/image/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadImageKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// ───── триал-сайты картинок (где взять бесплатные кредиты) ─────
+async function loadImageTrials() {
+  try {
+    const res = await fetch('/__switch/api/image/trials');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.imageTrials = data.trials || [];
+    renderImageTrials();
+  } catch (e) {
+    $('img-trials').innerHTML = `<div class="p-6 text-crimson text-xs col-span-full">${esc(e.message)}</div>`;
+  }
+}
+
+function renderImageTrials() {
+  const rows = state.imageTrials || [];
+  if (!rows.length) {
+    $('img-trials').innerHTML = `<div class="p-6 text-center text-faint text-xs col-span-full">пусто</div>`;
+    return;
+  }
+  $('img-trials').innerHTML = rows.map(t => {
+    const st = VID_TRIAL_STATUS[t.status] || VID_TRIAL_STATUS['?'];
+    const idJ = JSON.stringify(t.id);
+    return `<div class="rounded-xl bg-surface border border-line-soft p-3 flex flex-col gap-2">
+      <div class="flex items-start justify-between gap-2">
+        <a href="${esc(t.url)}" target="_blank" rel="noopener" class="text-sm font-medium text-ink hover:text-azure">${esc(t.name)} ↗</a>
+        <span class="text-[10px] px-2 py-0.5 rounded bg-elevated text-faint whitespace-nowrap">${esc(t.kind)}</span>
+      </div>
+      <p class="text-xs text-muted leading-snug">${esc(t.note || '')}</p>
+      <button onclick='imgTrialCycle(${idJ})' class="text-xs px-2.5 py-1.5 rounded-lg border transition ${st.cls}">${st.label}</button>
+    </div>`;
+  }).join('');
+}
+
+async function imgTrialCycle(id) {
+  const t = (state.imageTrials || []).find(x => x.id === id);
+  if (!t) return;
+  const i = VID_TRIAL_CYCLE.indexOf(t.status);
+  const next = VID_TRIAL_CYCLE[(i + 1) % VID_TRIAL_CYCLE.length];
+  t.status = next;
+  renderImageTrials();
+  try {
+    const res = await fetch('/__switch/api/image/trial-status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: next, note: t.userNote || '' }),
+    });
+    const data = await res.json();
+    if (!data.ok) toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Status: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ CONDUIT ═════════════════════════════════════════

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node autoreger.js",
     "menu": "node menu.js",
-    "dashboard": "node routing/transparent-proxy.js"
+    "dashboard": "node routing/transparent-proxy.js",
+    "tgbot": "node tgbot/bot.js"
   },
   "keywords": [
     "vibe-code",
@@ -24,9 +25,16 @@
   "type": "commonjs",
   "dependencies": {
     "archiver": "^8.0.0",
+    "better-sqlite3": "^12.11.1",
+    "bufferutil": "^4.1.0",
+    "dotenv": "^17.4.2",
     "inquirer": "^8.2.7",
     "node-pty": "^1.1.0",
-    "playwright": "^1.60.0"
+    "playwright": "^1.60.0",
+    "rebrowser-playwright": "^1.52.0",
+    "telegraf": "^4.16.3",
+    "telegram": "^2.26.22",
+    "utf-8-validate": "^6.0.6"
   },
   "devDependencies": {
     "interactive-cli-tester": "^0.3.0"

@@ -107,7 +107,67 @@ Claude Code читает `~/.claude/settings.json`, берёт оттуда `ANT
 
 </div>
 
-## Установка
+## Установка с нуля — один блок
+
+Голый Windows, ничего не стоит. Копируй весь блок в **git-bash** и прогоняй сверху вниз.
+
+```bash
+# ── 0. СИСТЕМНЫЕ ЗАВИСИМОСТИ (winget) ───────────────────────────────────
+winget install OpenJS.NodeJS.LTS          # Node.js LTS (>=18) + npm
+winget install Git.Git                     # Git for Windows (git-bash)
+winget install Docker.DockerDesktop        # только под backend OmniRoute
+winget install Python.Python.3.12          # опц.: TokenRouter / ✈ Открыть TG
+node -v && npm -v && git --version         # проверка
+
+# ── 1. РЕПОЗИТОРИЙ + NODE-ЗАВИСИМОСТИ ───────────────────────────────────
+git clone <repo-url> Autoreger_Clean
+cd Autoreger_Clean
+npm install                                # все deps (telegraf, playwright, telegram, …)
+npx playwright install chromium            # headless Chrome для квот/регистраций
+
+# ── 2. CLAUDE CODE — РОВНО 2.1.179 (новее ломает apiKeyHelper) ──────────
+npm config delete prefix
+npm uninstall -g @anthropic-ai/claude-code
+npm install -g @anthropic-ai/claude-code@2.1.179
+claude --version                           # должно быть 2.1.179
+
+# ── 3. БАЗОВЫЙ settings.json (TTL=0, выкл апдейтер, model) ──────────────
+cp claude-settings.example.json ~/.claude/settings.json
+#   ↑ открой и поправь под себя. autoUpdates:false и DISABLE_AUTOUPDATER:1 ОБЯЗАТЕЛЬНЫ.
+
+# ── 4. ЛОКАЛЬНЫЕ КОНФИГИ/СЕКРЕТЫ (gitignored, из *.example) ─────────────
+cp routing/.env.example             routing/.env             # OMNIROUTE_API_KEY (+NOTION_API_KEY)
+cp routing/al-sessions.example.json routing/al-sessions.json # пул Aerolink (можно пустой)
+cp routing/video-keys.example.json  routing/video-keys.json  # видео-ключи
+cp routing/image-keys.example.json  routing/image-keys.json  # картинко-ключи
+cp tgbot/.env.example               tgbot/.env               # BOT_TOKEN + ALLOWED_USERS (ТГ-пульт)
+#   tgbot/.env: BOT_TOKEN у @BotFather (/newbot), ALLOWED_USERS — свой ID у @userinfobot
+
+# ── 5. OMNIROUTE (Docker) — нужен только под backend OmniRoute :20128 ───
+MSYS_NO_PATHCONV=1 docker run -d --name omniroute \
+  -p 20128:20128 -v omniroute-data:/app/data --restart unless-stopped \
+  -e PORT=20128 -e HOSTNAME=0.0.0.0 \
+  ghcr.io/diegosouzapw/omniroute:latest
+curl -s http://localhost:20128/v1/models   # 200 = прокси жив
+#   потом в дашборде ⚙ Настройки впиши OMNIROUTE_API_KEY (scope manage) → пишется в routing/.env
+
+# ── 6. ОПЦ. ЗАВИСИМОСТИ: TokenRouter (Camoufox) + ✈ Открыть TG ──────────
+pip install camoufox requests && python -m camoufox fetch
+python3.12 -m venv tools/tg-venv
+tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt
+#   + портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe
+
+# ── 7. ЗАПУСК ──────────────────────────────────────────────────────────
+routing/restart-dashboard.bat              # rotator :20126 + switcher/дашборд :8200 + откроет UI
+npm run tgbot                              # опц.: ТГ-пульт (дашборд должен быть поднят)
+#   вручную вместо .bat:  node routing/freemodel-rotator.js  &  node routing/transparent-proxy.js
+```
+
+**Дашборд:** <http://localhost:8200/__switch> · откат при поломке ключа: `routing/PANIC-restore-omniroute.bat`
+
+---
+
+## Установка (кратко)
 
 Нужно: **Node.js + npm** и запущенный **OmniRoute** на `:20128` (если используешь бэкенд OmniRoute).
 
@@ -120,11 +180,11 @@ cp routing/.env.example routing/.env
 ```
 
 > [!IMPORTANT]
-> **Для FreeModel / Aerolink нужен Claude Code `2.1.146`.** На свежих версиях ломается `apiKeyHelper`-флоу (ротация ключей на лету) — обязательно зафиксируй версию:
+> **Для FreeModel / Aerolink нужен Claude Code `2.1.179`.** На свежих версиях ломается `apiKeyHelper`-флоу (ротация ключей на лету) — обязательно зафиксируй версию:
 > ```bash
 > npm config delete prefix
 > npm uninstall -g @anthropic-ai/claude-code
-> npm install -g @anthropic-ai/claude-code@2.1.146
+> npm install -g @anthropic-ai/claude-code@2.1.179
 > ```
 > **И сразу отключи авто-обновление**, иначе CC молча обновится и всё сломается. В `~/.claude/settings.json`:
 > ```json

@@ -11,7 +11,7 @@
     "_pitfall_TTL": "0 = читать ключ из apiKeyHelper на КАЖДОМ запросе. Без этого ротация ключей на лету не работает.",
     "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "0",
 
-    "_pitfall_autoupdate": "Claude Code обязан остаться на 2.1.146 — новее ломает apiKeyHelper. Обе строки ниже + autoUpdates:false выключают авто-обновление.",
+    "_pitfall_autoupdate": "Claude Code обязан остаться на 2.1.179 — новее ломает apiKeyHelper. Обе строки ниже + autoUpdates:false выключают авто-обновление.",
     "DISABLE_AUTOUPDATER": "1",
 
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

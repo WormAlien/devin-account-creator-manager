@@ -48,7 +48,16 @@
 
 ## Установка с нуля
 
-Голый Windows, ничего не стоит. Открой **git-bash**, склонируй и запусти установщик — он спросит, что ставить (OmniRoute? ТГ-бот? Python-зависимости?), сам соберёт секреты (`BOT_TOKEN`, `ALLOWED_USERS`, `OMNIROUTE_API_KEY`) и поднимет дашборд.
+Голый Windows, где **нет ни git, ни node** — открой **PowerShell** (есть в любой Windows) и вставь одну строку. Bootstrap сам поставит Git + Node.js через winget, склонирует репо и запустит интерактивный установщик.
+
+```powershell
+irm https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install.ps1 | iex
+```
+
+> [!NOTE]
+> Если после установки Git появилась ошибка про `bash` — закрой это окно PowerShell, **открой новое** и вставь строку ещё раз (PATH обновляется только в новой сессии). Со второго запуска git/node уже на месте, дойдёт до конца.
+
+Если **git и node уже стоят** — можно сразу через git-bash:
 
 ```bash
 git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git
@@ -56,7 +65,7 @@ cd vibe-code-account-creator-manager
 bash install.sh
 ```
 
-Что делает `install.sh` (всё интерактивно, Enter = дефолт):
+Что делает установщик (всё интерактивно, Enter = дефолт):
 
 1. Проверяет `node`/`npm`/`git`, при нехватке предлагает поставить через `winget`.
 2. `npm install` + (опц.) `npx playwright install chromium`.

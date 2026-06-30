@@ -107,63 +107,74 @@ Claude Code читает `~/.claude/settings.json`, берёт оттуда `ANT
 
 </div>
 
-## Установка с нуля — один блок
+## Установка с нуля
 
-Голый Windows, ничего не стоит. Копируй весь блок в **git-bash** и прогоняй сверху вниз.
+Голый Windows, ничего не стоит. Открой **git-bash**, склонируй и запусти установщик — он спросит, что ставить (OmniRoute? ТГ-бот? Python-зависимости?), сам соберёт секреты (`BOT_TOKEN`, `ALLOWED_USERS`, `OMNIROUTE_API_KEY`) и поднимет дашборд.
 
 ```bash
-# ── 0. СИСТЕМНЫЕ ЗАВИСИМОСТИ (winget) ───────────────────────────────────
+git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git
+cd vibe-code-account-creator-manager
+bash install.sh
+```
+
+Что делает `install.sh` (всё интерактивно, Enter = дефолт):
+
+1. Проверяет `node`/`npm`/`git`, при нехватке предлагает поставить через `winget`.
+2. `npm install` + (опц.) `npx playwright install chromium`.
+3. Ставит **Claude Code ровно `2.1.179`** (новее ломает `apiKeyHelper`) — если стоит другая.
+4. Создаёт `~/.claude/settings.json` из шаблона (если ещё нет).
+5. Копирует все локальные конфиги из `*.example` (`routing/.env`, `al-sessions`, `video-keys`, `image-keys`).
+6. **OmniRoute** в Docker (по желанию) на `:20128`.
+7. **ТГ-бот** (по желанию) — спросит токен и whitelist, запишет в `tgbot/.env`.
+8. Python-зависимости (по желанию) — Camoufox + venv для ✈ Открыть TG.
+9. Запускает дашборд.
+
+**Дашборд:** <http://localhost:8200/__switch> · откат при поломке ключа: `routing/PANIC-restore-omniroute.bat`
+
+<details>
+<summary><b>Вручную, без установщика</b> — те же шаги командами</summary>
+
+```bash
+# 0. системные зависимости (winget)
 winget install OpenJS.NodeJS.LTS          # Node.js LTS (>=18) + npm
 winget install Git.Git                     # Git for Windows (git-bash)
 winget install Docker.DockerDesktop        # только под backend OmniRoute
 winget install Python.Python.3.12          # опц.: TokenRouter / ✈ Открыть TG
-node -v && npm -v && git --version         # проверка
 
-# ── 1. РЕПОЗИТОРИЙ + NODE-ЗАВИСИМОСТИ ───────────────────────────────────
-git clone <repo-url> Autoreger_Clean
-cd Autoreger_Clean
-npm install                                # все deps (telegraf, playwright, telegram, …)
-npx playwright install chromium            # headless Chrome для квот/регистраций
+# 1. зависимости
+npm install
+npx playwright install chromium
 
-# ── 2. CLAUDE CODE — РОВНО 2.1.179 (новее ломает apiKeyHelper) ──────────
+# 2. Claude Code РОВНО 2.1.179
 npm config delete prefix
 npm uninstall -g @anthropic-ai/claude-code
 npm install -g @anthropic-ai/claude-code@2.1.179
-claude --version                           # должно быть 2.1.179
 
-# ── 3. БАЗОВЫЙ settings.json (TTL=0, выкл апдейтер, model) ──────────────
+# 3. базовый settings.json (autoUpdates:false + DISABLE_AUTOUPDATER:1 ОБЯЗАТЕЛЬНЫ)
 cp claude-settings.example.json ~/.claude/settings.json
-#   ↑ открой и поправь под себя. autoUpdates:false и DISABLE_AUTOUPDATER:1 ОБЯЗАТЕЛЬНЫ.
 
-# ── 4. ЛОКАЛЬНЫЕ КОНФИГИ/СЕКРЕТЫ (gitignored, из *.example) ─────────────
-cp routing/.env.example             routing/.env             # OMNIROUTE_API_KEY (+NOTION_API_KEY)
-cp routing/al-sessions.example.json routing/al-sessions.json # пул Aerolink (можно пустой)
-cp routing/video-keys.example.json  routing/video-keys.json  # видео-ключи
-cp routing/image-keys.example.json  routing/image-keys.json  # картинко-ключи
-cp tgbot/.env.example               tgbot/.env               # BOT_TOKEN + ALLOWED_USERS (ТГ-пульт)
-#   tgbot/.env: BOT_TOKEN у @BotFather (/newbot), ALLOWED_USERS — свой ID у @userinfobot
+# 4. локальные конфиги/секреты (gitignored)
+cp routing/.env.example             routing/.env
+cp routing/al-sessions.example.json routing/al-sessions.json
+cp routing/video-keys.example.json  routing/video-keys.json
+cp routing/image-keys.example.json  routing/image-keys.json
+cp tgbot/.env.example               tgbot/.env   # впиши BOT_TOKEN + ALLOWED_USERS
 
-# ── 5. OMNIROUTE (Docker) — нужен только под backend OmniRoute :20128 ───
+# 5. OmniRoute (Docker) — нужен только под backend OmniRoute
 MSYS_NO_PATHCONV=1 docker run -d --name omniroute \
   -p 20128:20128 -v omniroute-data:/app/data --restart unless-stopped \
-  -e PORT=20128 -e HOSTNAME=0.0.0.0 \
-  ghcr.io/diegosouzapw/omniroute:latest
-curl -s http://localhost:20128/v1/models   # 200 = прокси жив
-#   потом в дашборде ⚙ Настройки впиши OMNIROUTE_API_KEY (scope manage) → пишется в routing/.env
+  -e PORT=20128 -e HOSTNAME=0.0.0.0 ghcr.io/diegosouzapw/omniroute:latest
 
-# ── 6. ОПЦ. ЗАВИСИМОСТИ: TokenRouter (Camoufox) + ✈ Открыть TG ──────────
+# 6. опц. Python-зависимости
 pip install camoufox requests && python -m camoufox fetch
 python3.12 -m venv tools/tg-venv
 tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt
-#   + портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe
 
-# ── 7. ЗАПУСК ──────────────────────────────────────────────────────────
-routing/restart-dashboard.bat              # rotator :20126 + switcher/дашборд :8200 + откроет UI
-npm run tgbot                              # опц.: ТГ-пульт (дашборд должен быть поднят)
-#   вручную вместо .bat:  node routing/freemodel-rotator.js  &  node routing/transparent-proxy.js
+# 7. запуск
+routing/restart-dashboard.bat              # rotator :20126 + дашборд :8200 + откроет UI
+npm run tgbot                              # опц.: ТГ-пульт
 ```
-
-**Дашборд:** <http://localhost:8200/__switch> · откат при поломке ключа: `routing/PANIC-restore-omniroute.bat`
+</details>
 
 ---
 

@@ -91,9 +91,10 @@ PROJECT_INFO.md
 QUICK_START.md
 SESSIONS_STATUS.md
 
-# Батники (локальные) — но routing/ батники мы пушим
+# Батники (локальные) — но routing/ батники и START.bat мы пушим
 *.bat
 !routing/*.bat
+!START.bat
 
 # Routing dir runtime artefacts
 routing/*.log

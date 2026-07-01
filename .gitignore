@@ -150,7 +150,7 @@ autoreger_data/
 
 # Root configs with secrets
 /config.js
-/freemodel/config.js
+# freemodel/config.js — нужен прокси на старте (require '../config'), секретов нет → в репо
 
 # Python environments
 .venv/

@@ -195,6 +195,11 @@
         <span class="flex-1">Aerolink</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-aerolink">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="evomap">
+        <span class="text-base">🧭</span>
+        <span class="flex-1">Evomap</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-evomap">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="conduit">
         <span class="text-base">🚇</span>
         <span class="flex-1">Conduit</span>
@@ -349,6 +354,21 @@
         </header>
 
         <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-sm font-semibold">Обновление дашборда</h2>
+              <p class="text-xs text-muted mt-0.5">Тянет свежий код из <code class="font-mono text-emerald text-xs">origin/master</code> (<code class="font-mono text-emerald text-xs">git pull --ff-only</code>). После обновления перезапусти прокси — <code class="font-mono text-emerald text-xs">restart-dashboard.bat</code>.</p>
+            </div>
+            <span id="dash-update-badge" class="shrink-0 text-xs text-faint">—</span>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="checkDashboardUpdate()" class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔍 Проверить</button>
+            <button id="dash-update-btn" onclick="pullDashboardUpdate()" disabled
+              class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">⬇ Обновить дашборд</button>
+          </div>
+        </div>
+
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
           <h2 class="text-sm font-semibold">OmniRoute — импорт TokenRouter</h2>
           <p class="text-sm text-muted">URL и manage-ключ твоего OmniRoute (по этому API добавляются email + ключ TokenRouter). Сохраняется в <code class="font-mono text-emerald text-xs">routing/.env</code>, применяется сразу.</p>
           <div class="space-y-3">
@@ -478,6 +498,45 @@
         </div>
 
         <div id="al-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: EVOMAP ═════════ -->
+    <div data-tab-content="evomap">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-amber">🧭</span> Evomap
+            </h1>
+            <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-amber text-xs">routing/evomap-sessions.json</code> · клик по ключу = активный (API Helper)</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadEvomapSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadEvomapSessions(true)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">📡 Пинг статусов</button>
+            <button onclick="evomapShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          </div>
+        </header>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="ev-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="ev-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key</span>
+              <input id="ev-add-key" placeholder="sk-evomap-…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="evomapAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="evomapShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="ev-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
           <div class="p-12 text-center text-faint text-xs">загрузка…</div>
         </div>
       </div>
@@ -962,9 +1021,10 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, plugins: false, conduit: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, evomap: false, plugins: false, conduit: false },
   tg: [],
   aerolink: [],
+  evomap: [],
   conduit: [],
 };
 
@@ -1090,6 +1150,7 @@ function showTab(name) {
     loadNotionCards();
   }
   if (name === 'aerolink' && !state.loaded.aerolink) { state.loaded.aerolink = true; loadAlSessions(false); }
+  if (name === 'evomap' && !state.loaded.evomap) { state.loaded.evomap = true; loadEvomapSessions(false); }
   if (name === 'video' && !state.loaded.video) { state.loaded.video = true; loadVideoKeys(); }
   if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
@@ -1119,8 +1180,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', conduit: 'Conduit', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', evomap: 'Evomap', conduit: 'Conduit', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', evomap: 'text-amber bg-amber', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -1140,7 +1201,7 @@ function paintStatus() {
 
   $('side-current').textContent = label;
   const modeEl = $('side-mode');
-  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
+  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
   else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
   else modeEl.className = 'hidden';
   $('side-url').textContent     = state.urls[t] || '';
@@ -1231,6 +1292,21 @@ function getDefaultPresets() {
         }
       }
     },
+    'evHelper': {
+      label: 'Evomap · API Helper',
+      desc: 'apiKeyHelper → cat ~/.claude/ev-active-key.txt',
+      icon: '🧭',
+      color: 'amber',
+      settings: {
+        apiKeyHelper: 'cat ~/.claude/ev-active-key.txt',
+        model: null,
+        env: {
+          ANTHROPIC_BASE_URL: 'https://api.evomap.ai/v1',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_API_KEY: null
+        }
+      }
+    },
     'omniroute': {
       label: 'OmniRoute',
       desc: 'localhost:20128/v1',
@@ -1275,6 +1351,7 @@ function renderPresets() {
     const h = p.settings?.apiKeyHelper || '';
     if (h.includes('al-active-key')) return 'aerolink';
     if (h.includes('cdt-active-key')) return 'conduit';
+    if (h.includes('ev-active-key')) return 'evomap';
     if (h.includes('fm-active-key')) return 'apihelper';
     const url = p.settings?.env?.ANTHROPIC_BASE_URL || '';
     if (url.includes('20128')) return 'omniroute';
@@ -1677,6 +1754,111 @@ async function alActivate(api_key) {
       state.urls.aerolink = 'https://capi.aerolink.lat/';
       paintStatus();
       loadAlSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ EVOMAP ════════════════════════════════════════
+async function loadEvomapSessions(probe) {
+  if (probe) $('ev-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/ev/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.evomap = data.sessions || [];
+    $('nav-count-evomap').textContent = state.evomap.length;
+    renderEvomap();
+    if (probe) toast('✓ Evomap: статусы обновлены', 'success');
+  } catch (e) {
+    $('ev-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function evomapStatusBadge(st) {
+  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
+  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
+  return '<span class="text-faint">⚪ —</span>';
+}
+
+function renderEvomap() {
+  const rows = state.evomap;
+  if (!rows.length) {
+    $('ev-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить</div>`;
+    return;
+  }
+  const body = rows.map(s => {
+    const active = !!s.active;
+    const keyMask = s.api_key.length > 18 ? s.api_key.slice(0, 14) + '…' + s.api_key.slice(-6) : s.api_key;
+    const kJ = JSON.stringify(s.api_key);
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
+      <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(s.email)}</td>
+      <td class="px-4 py-2.5">
+        <button onclick='evomapActivate(${kJ})' title="Сделать активным (API Helper)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-amber hover:border-amber/50'} transition">${esc(keyMask)}</button>
+      </td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${evomapStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs text-faint">—</td>
+      <td class="px-4 py-2.5 text-right">
+        <button onclick='evomapDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('ev-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">email</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">статус</th>
+      <th class="px-4 py-2 font-medium">daily usage</th>
+      <th class="px-4 py-2"></th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function evomapShowAdd(show = true) {
+  $('ev-add-form').classList.toggle('hidden', !show);
+  if (show) { $('ev-add-email').value = ''; $('ev-add-key').value = ''; $('ev-add-email').focus(); }
+}
+
+async function evomapAdd() {
+  const email = $('ev-add-email').value.trim();
+  const api_key = $('ev-add-key').value.trim();
+  if (!email || !api_key) return toast('email и api_key обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ev/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ добавлен', 'success'); evomapShowAdd(false); loadEvomapSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function evomapDelete(api_key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    const res = await fetch('/__switch/api/ev/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadEvomapSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function evomapActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/ev/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      state.current = 'evomap';
+      state.urls.evomap = 'https://api.evomap.ai/v1';
+      paintStatus();
+      loadEvomapSessions(false);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Activate: ' + e.message, 'error'); }
 }
@@ -4236,6 +4418,45 @@ async function togglePlugin(id, enable) {
 }
 
 // ═══════════════════ SETTINGS TAB ═════════════════════════════════════
+async function checkDashboardUpdate() {
+  const badge = $('dash-update-badge'), btn = $('dash-update-btn');
+  badge.textContent = 'проверяю…'; badge.className = 'shrink-0 text-xs text-faint';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/__switch/api/dashboard/update-check');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    if (d.upToDate) {
+      badge.textContent = `✓ актуально · ${d.local}`;
+      badge.className = 'shrink-0 text-xs text-emerald';
+    } else {
+      badge.textContent = `⬇ доступно ${d.behind} коммит(ов) · ${d.local} → ${d.remote}`;
+      badge.className = 'shrink-0 text-xs text-amber font-medium';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    badge.textContent = '✗ ' + e.message; badge.className = 'shrink-0 text-xs text-crimson';
+  }
+}
+
+async function pullDashboardUpdate() {
+  const badge = $('dash-update-badge'), btn = $('dash-update-btn');
+  if (!confirm('git pull --ff-only свежий код дашборда?\n\nПосле — перезапусти прокси (restart-dashboard.bat).')) return;
+  btn.disabled = true; badge.textContent = 'обновляю…'; badge.className = 'shrink-0 text-xs text-faint';
+  try {
+    const res = await fetch('/__switch/api/dashboard/update-pull', { method: 'POST' });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    badge.textContent = '✓ обновлено — перезапусти прокси';
+    badge.className = 'shrink-0 text-xs text-emerald';
+    toast('✓ Код обновлён. Перезапусти прокси: restart-dashboard.bat', 'success', 8000);
+  } catch (e) {
+    badge.textContent = '✗ ' + e.message; badge.className = 'shrink-0 text-xs text-crimson';
+    btn.disabled = false;
+    toast('Обновление: ' + e.message, 'error');
+  }
+}
+
 async function loadSettingsJson() {
   const ta = $('settings-json'), st = $('settings-json-status');
   try {

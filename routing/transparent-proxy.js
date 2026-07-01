@@ -153,6 +153,12 @@ function currentTarget() {
         if (helper.includes('cdt-active-key.txt')) {
             return 'conduit';
         }
+        if (helper.includes('ev-active-key.txt')) {
+            return 'evomap';
+        }
+        if (helper.includes('ot-active-key.txt')) {
+            return 'ourtoken';
+        }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
         }
@@ -1315,6 +1321,209 @@ async function handleAlActivate(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── Evomap (ev) — ручной пул email+ключ (evomap.ai), активация через API Helper ─────
+// По аналогии с Aerolink. Endpoint https://api.evomap.ai/v1 — OpenAI-совместимый, но
+// Claude Code гоняем как обычно через ANTHROPIC_BASE_URL + apiKeyHelper. Ключи sk-evomap-*.
+const EV_SESSIONS_FILE = path.join(__dirname, 'evomap-sessions.json');
+const EV_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ev-active-key.txt');
+const EV_BASE_URL = 'https://api.evomap.ai/v1';
+
+function evLoad() {
+    try {
+        const raw = fs.readFileSync(EV_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function evSave(arr) {
+    fs.writeFileSync(EV_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+// Пинг ключа: GET /v1/models → 401 = DEAD, 200 = LIVE. /models публично доступен
+// с валидным Bearer, отдаёт список моделей (evomap-claude-opus-4-7, evomap-gpt-5.5 …).
+async function evProbe(apiKey) {
+    try {
+        const r = await fetch(`${EV_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(12000),
+        });
+        return r.status === 401 ? 'dead' : (r.ok ? 'live' : 'unknown');
+    } catch { return 'unknown'; }
+}
+
+async function handleEvSessions(req, res) {
+    try {
+        const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
+        const sessions = evLoad();
+        if (probe) {
+            await Promise.all(sessions.map(async s => { s.status = await evProbe(s.api_key); }));
+        }
+        jsonRes(res, 200, { sessions });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleEvAdd(req, res) {
+    try {
+        const { email, api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = evLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({ email: mail, api_key: key, active: false });
+        evSave(sessions);
+        logLine(`evomap add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleEvDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const sessions = evLoad().filter(s => s.api_key !== key);
+        evSave(sessions);
+        logLine(`evomap delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Клик по ключу → активный: пишем ключ в ev-active-key.txt + apiKeyHelper в settings.json.
+async function handleEvActivate(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = evLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(EV_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        evSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ev');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = EV_BASE_URL;
+            settings.apiKeyHelper = 'cat ~/.claude/ev-active-key.txt';
+            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`evomap activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`evomap activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Ourtoken (ot) — ручной пул email+ключ (ourtoken.ai), активация через API Helper ─────
+// По аналогии с Aerolink/Evomap. Endpoint https://api.ourtoken.ai/v1 — OpenAI-совместимый.
+// Ключи usTHAz8-* (формат — длинная base58-строка). Probe: GET /v1/models → 401 = DEAD.
+const OT_SESSIONS_FILE = path.join(__dirname, 'ourtoken-sessions.json');
+const OT_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ot-active-key.txt');
+const OT_BASE_URL = 'https://api.ourtoken.ai/v1';
+
+function otLoad() {
+    try {
+        const raw = fs.readFileSync(OT_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function otSave(arr) {
+    fs.writeFileSync(OT_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+async function otProbe(apiKey) {
+    try {
+        const r = await fetch(`${OT_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(12000),
+        });
+        return r.status === 401 ? 'dead' : (r.ok ? 'live' : 'unknown');
+    } catch { return 'unknown'; }
+}
+
+async function handleOtSessions(req, res) {
+    try {
+        const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
+        const sessions = otLoad();
+        if (probe) {
+            await Promise.all(sessions.map(async s => { s.status = await otProbe(s.api_key); }));
+        }
+        jsonRes(res, 200, { sessions });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleOtAdd(req, res) {
+    try {
+        const { email, api_key, name } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = otLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({ email: mail, name: String(name || '').trim() || mail.split('@')[0], api_key: key, active: false });
+        otSave(sessions);
+        logLine(`ourtoken add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleOtDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const sessions = otLoad().filter(s => s.api_key !== key);
+        otSave(sessions);
+        logLine(`ourtoken delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleOtActivate(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = otLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(OT_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        otSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ot');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = OT_BASE_URL;
+            settings.apiKeyHelper = 'cat ~/.claude/ot-active-key.txt';
+            delete settings.model;
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`ourtoken activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`ourtoken activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // ───── Video API (vid) — хранилище ключей видео-провайдеров (fal/Replicate/Veo/…) ─────
 // Чисто хранилище: add/delete/list. Никакой активации в settings.json — эти ключи
 // не для Claude, а под будущие авторегеры/пайплайны генерации видео.
@@ -1600,6 +1809,33 @@ const server = http.createServer((req, res) => {
         return jsonRes(res, 200, { lines: LOG_BUFFER.slice(-Math.max(1, limit)) });
     }
 
+    // Проверка обновлений кода дашборда: git fetch + сколько коммитов отстаём от origin.
+    if (req.method === 'GET' && req.url === '/__switch/api/dashboard/update-check') {
+        try {
+            const repo = path.join(__dirname, '..');
+            const git = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+            const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
+            git('fetch', '--quiet', 'origin', branch);
+            const behind = parseInt(git('rev-list', '--count', `HEAD..origin/${branch}`) || '0', 10);
+            const local = git('rev-parse', '--short', 'HEAD');
+            const remote = git('rev-parse', '--short', `origin/${branch}`);
+            return jsonRes(res, 200, { branch, behind, local, remote, upToDate: behind === 0 });
+        } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+    }
+
+    // Подтянуть свежий код дашборда (git pull --ff-only). Требует ручного рестарта прокси.
+    if (req.method === 'POST' && req.url === '/__switch/api/dashboard/update-pull') {
+        try {
+            const repo = path.join(__dirname, '..');
+            const out = execFileSync('git', ['pull', '--ff-only', '--no-edit'], { cwd: repo, encoding: 'utf8' }).trim();
+            logLine(`dashboard git pull:\n${out}`);
+            return jsonRes(res, 200, { ok: true, output: out, restart_required: true });
+        } catch (e) {
+            const msg = (e.stderr || e.stdout || e.message || '').toString().trim();
+            return jsonRes(res, 500, { error: msg || 'git pull failed' });
+        }
+    }
+
     if (req.method === 'POST' && req.url === '/__switch/api/switch') {
         let body = '';
         req.on('data', c => body += c);
@@ -1817,6 +2053,18 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/al/add')       return handleAlAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/delete')    return handleAlDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/activate')  return handleAlActivate(req, res);
+
+    // ---- Evomap (ev) — ручной пул, активация через API Helper (api.evomap.ai/v1) ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ev/sessions')) return handleEvSessions(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ev/add')       return handleEvAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ev/delete')    return handleEvDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ev/activate')  return handleEvActivate(req, res);
+
+    // ---- Ourtoken (ot) — ручной пул, активация через API Helper (api.ourtoken.ai/v1) ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ot/sessions')) return handleOtSessions(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ot/add')       return handleOtAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ot/delete')    return handleOtDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ot/activate')  return handleOtActivate(req, res);
 
     // ---- Video API (vid) — хранилище ключей видео-провайдеров ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/video/keys')) return handleVideoKeys(req, res);

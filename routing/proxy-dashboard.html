@@ -200,6 +200,11 @@
         <span class="flex-1">Evomap</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-evomap">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="ourtoken">
+        <span class="text-base">🪙</span>
+        <span class="flex-1">Ourtoken</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-ourtoken">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="conduit">
         <span class="text-base">🚇</span>
         <span class="flex-1">Conduit</span>
@@ -404,9 +409,10 @@
           <textarea id="settings-json" spellcheck="false"
             class="w-full h-80 bg-elevated text-ink border border-line-soft rounded-lg px-3 py-2 text-xs font-mono leading-relaxed focus:outline-none focus:border-emerald/60 resize-y"
             placeholder="{ ... }"></textarea>
-          <div class="flex gap-2">
+          <div class="flex gap-2 flex-wrap">
             <button onclick="saveSettingsJson()" class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition">💾 Сохранить</button>
-            <button onclick="loadSettingsJson()" class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄 Сбросить</button>
+            <button onclick="resetToCleanConfig()" title="Залить чистый рабочий шаблон (ключ сохранится). Затем нажми «Сохранить»." class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">♻️ Сбросить на рабочий</button>
+            <button onclick="loadSettingsJson()" title="Перечитать текущий settings.json с диска (отменить правки)." class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">↺ Перечитать</button>
           </div>
         </div>
 
@@ -537,6 +543,61 @@
         </div>
 
         <div id="ev-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: OURTOKEN ═════════ -->
+    <div data-tab-content="ourtoken">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-cyan">🪙</span> Ourtoken
+            </h1>
+            <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-cyan text-xs">routing/ourtoken-sessions.json</code> · клик по ключу = активный (API Helper)</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadOurtokenSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadOurtokenSessions(true)" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">📡 Пинг статусов</button>
+            <button onclick="launchScript('ourtoken-create','🤖 Ourtoken авторег запущен')" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🤖 Авторег</button>
+            <button onclick="ourtokenShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          </div>
+        </header>
+
+        <!-- Models list -->
+        <div id="ot-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">🤖 Available models</h2>
+            <button onclick="loadOtModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="ot-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="ot-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="ot-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">имя</span>
+              <input id="ot-add-name" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key</span>
+              <input id="ot-add-key" placeholder="usTHAz8-…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="ourtokenAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="ourtokenShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="ot-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
           <div class="p-12 text-center text-faint text-xs">загрузка…</div>
         </div>
       </div>
@@ -1021,10 +1082,11 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, evomap: false, plugins: false, conduit: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, evomap: false, ourtoken: false, plugins: false, conduit: false },
   tg: [],
   aerolink: [],
   evomap: [],
+  ourtoken: [],
   conduit: [],
 };
 
@@ -1151,6 +1213,7 @@ function showTab(name) {
   }
   if (name === 'aerolink' && !state.loaded.aerolink) { state.loaded.aerolink = true; loadAlSessions(false); }
   if (name === 'evomap' && !state.loaded.evomap) { state.loaded.evomap = true; loadEvomapSessions(false); }
+  if (name === 'ourtoken' && !state.loaded.ourtoken) { state.loaded.ourtoken = true; loadOurtokenSessions(false); }
   if (name === 'video' && !state.loaded.video) { state.loaded.video = true; loadVideoKeys(); }
   if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
@@ -1180,8 +1243,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', evomap: 'Evomap', conduit: 'Conduit', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', evomap: 'text-amber bg-amber', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -1201,7 +1264,7 @@ function paintStatus() {
 
   $('side-current').textContent = label;
   const modeEl = $('side-mode');
-  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
+  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap' || t === 'ourtoken') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
   else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
   else modeEl.className = 'hidden';
   $('side-url').textContent     = state.urls[t] || '';
@@ -1995,6 +2058,133 @@ async function vidDelete(api_key) {
     if (data.ok) { toast('удалён', 'info'); loadVideoKeys(); }
     else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// ───── Ourtoken (🪙) ─────
+async function loadOurtokenSessions(probe) {
+  if (probe) $('ot-list').innerHTML = `<div class="p-12 text-center text-cyan text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/ot/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.ourtoken = data.sessions || [];
+    $('nav-count-ourtoken').textContent = state.ourtoken.length;
+    renderOurtoken();
+    loadOtModels();
+    if (probe) toast('✓ Ourtoken: статусы обновлены', 'success');
+  } catch (e) {
+    $('ot-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadOtModels(force) {
+  const key = state.ourtoken.find(s => s.active)?.api_key;
+  if (!key) return $('ot-models-list').innerHTML = '<span class="text-[10px] text-faint">нет активного ключа</span>';
+  $('ot-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  try {
+    const res = await fetch('/__switch/api/ot/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+    const data = await res.json();
+    if (!data.ok || !data.models?.length) {
+      $('ot-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(data.note || 'нет данных')}</span>`;
+      return;
+    }
+    $('ot-models-list').innerHTML = data.models.map(m =>
+      `<span class="px-2 py-1 rounded text-[11px] font-mono bg-cyan/10 border border-cyan/30 text-cyan">${esc(m.id)}</span>`
+    ).join('');
+  } catch (e) {
+    $('ot-models-list').innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
+  }
+}
+
+function ourtokenStatusBadge(st) {
+  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
+  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
+  return '<span class="text-faint">⚪ —</span>';
+}
+
+function renderOurtoken() {
+  const rows = state.ourtoken;
+  if (!rows.length) {
+    $('ot-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить</div>`;
+    return;
+  }
+  const body = rows.map(s => {
+    const active = !!s.active;
+    const keyMask = s.api_key.length > 18 ? s.api_key.slice(0, 14) + '…' + s.api_key.slice(-6) : s.api_key;
+    const kJ = JSON.stringify(s.api_key);
+    const displayName = s.name || s.email;
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
+      <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(displayName)}</td>
+      <td class="px-4 py-2.5">
+        <button onclick='ourtokenActivate(${kJ})' title="Сделать активным (API Helper)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-cyan hover:border-cyan/50'} transition">${esc(keyMask)}</button>
+      </td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${ourtokenStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs text-faint">—</td>
+      <td class="px-4 py-2.5 text-right">
+        <button onclick='ourtokenDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('ot-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">name/email</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">статус</th>
+      <th class="px-4 py-2 font-medium">daily usage</th>
+      <th class="px-4 py-2"></th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function ourtokenShowAdd(show = true) {
+  $('ot-add-form').classList.toggle('hidden', !show);
+  if (show) { $('ot-add-email').value = ''; $('ot-add-key').value = ''; $('ot-add-name').value = ''; $('ot-add-email').focus(); }
+}
+
+async function ourtokenAdd() {
+  const email = $('ot-add-email').value.trim();
+  const api_key = $('ot-add-key').value.trim();
+  const name = $('ot-add-name').value.trim();
+  if (!email || !api_key) return toast('email и api_key обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ot/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, name }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ добавлен', 'success'); ourtokenShowAdd(false); loadOurtokenSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function ourtokenDelete(api_key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    const res = await fetch('/__switch/api/ot/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadOurtokenSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function ourtokenActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/ot/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      state.current = 'ourtoken';
+      state.urls.ourtoken = 'https://api.ourtoken.ai/v1';
+      paintStatus();
+      loadOurtokenSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
 }
 
 // ───── триал-сайты (где взять бесплатные кредиты) ─────
@@ -4466,6 +4656,21 @@ async function loadSettingsJson() {
     ta.value = JSON.stringify(d.settings, null, 2);
     $('settings-cur-target').textContent = LABELS[state.current] || state.current || '—';
     st.textContent = 'загружено'; st.className = 'shrink-0 text-xs text-faint';
+  } catch (e) { st.textContent = '✗ ' + e.message; st.className = 'shrink-0 text-xs text-crimson'; }
+}
+
+// Кнопка «Сбросить»: заливает в редактор ЧИСТЫЙ рабочий шаблон (активный ключ/URL
+// сохраняются). На диск ничего не пишет — жми «Сохранить», чтобы применить.
+async function resetToCleanConfig() {
+  const ta = $('settings-json'), st = $('settings-json-status');
+  try {
+    const res = await fetch('/__switch/api/settings/clean-template');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    ta.value = JSON.stringify(d.settings, null, 2);
+    st.textContent = '↩ чистый шаблон загружен — жми «Сохранить»';
+    st.className = 'shrink-0 text-xs text-amber font-medium';
+    toast('↩ Чистый рабочий конфиг в редакторе. Нажми «Сохранить», чтобы применить.', 'info', 6000);
   } catch (e) { st.textContent = '✗ ' + e.message; st.className = 'shrink-0 text-xs text-crimson'; }
 }
 

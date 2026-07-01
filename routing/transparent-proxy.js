@@ -1430,6 +1430,7 @@ async function handleEvActivate(req, res) {
 const OT_SESSIONS_FILE = path.join(__dirname, 'ourtoken-sessions.json');
 const OT_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ot-active-key.txt');
 const OT_BASE_URL = 'https://api.ourtoken.ai/v1';
+const OT_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 function otLoad() {
     try {
@@ -1522,6 +1523,41 @@ async function handleOtActivate(req, res) {
         logLine(`ourtoken activate: ${target.email} → ***${key.slice(-6)} (helper)`);
         jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleOtModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (OT_MODELS_CACHE.data && Date.now() - OT_MODELS_CACHE.ts < OT_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: OT_MODELS_CACHE.data, cached: true });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const resp = await fetch(OT_BASE_URL + '/models', {
+            signal: controller.signal,
+            headers: { 'Authorization': `Bearer ${api_key}` }
+        });
+        clearTimeout(timeout);
+
+        if (!resp.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({ id: m.id, owned_by: m.owned_by }));
+        OT_MODELS_CACHE.data = models;
+        OT_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (OT_MODELS_CACHE.data) {
+            jsonRes(res, 200, { ok: true, models: OT_MODELS_CACHE.data, cached: true, note: e.message });
+        } else {
+            jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        }
+    }
 }
 
 // ───── Video API (vid) — хранилище ключей видео-провайдеров (fal/Replicate/Veo/…) ─────
@@ -1856,6 +1892,27 @@ const server = http.createServer((req, res) => {
         return handleSettingsCurrent(res);
     }
 
+    // Чистый рабочий шаблон для кнопки «Сбросить»: claude-settings.example.json
+    // с перенесённым активным ключом/URL из текущего settings.json (чтобы сброс
+    // не сбил бэкенд друга). НИЧЕГО не пишет — только отдаёт JSON в редактор.
+    if (req.method === 'GET' && req.url === '/__switch/api/settings/clean-template') {
+        try {
+            const tplPath = path.join(__dirname, '..', 'claude-settings.example.json');
+            const raw = fs.readFileSync(tplPath, 'utf8');
+            const tpl = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            // подставить живой ключ/URL из текущего конфига, если он есть
+            try {
+                const cur = readSettings();
+                if (cur.apiKeyHelper) tpl.apiKeyHelper = cur.apiKeyHelper;
+                if (cur.env && cur.env.ANTHROPIC_BASE_URL) {
+                    tpl.env = tpl.env || {};
+                    tpl.env.ANTHROPIC_BASE_URL = cur.env.ANTHROPIC_BASE_URL;
+                }
+            } catch {}
+            return jsonRes(res, 200, { settings: tpl });
+        } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+    }
+
     if (req.method === 'POST' && req.url === '/__switch/api/settings/apply') {
         return handleSettingsApply(req, res);
     }
@@ -2065,6 +2122,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ot/add')       return handleOtAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/delete')    return handleOtDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/activate')  return handleOtActivate(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ot/models')) return handleOtModels(req, res);
 
     // ---- Video API (vid) — хранилище ключей видео-провайдеров ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/video/keys')) return handleVideoKeys(req, res);

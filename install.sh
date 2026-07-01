@@ -95,7 +95,20 @@ CLAUDE_DIR="$HOME/.claude"; mkdir -p "$CLAUDE_DIR"
 if [ -f "$CLAUDE_DIR/settings.json" ]; then
   warn "settings.json уже есть — не трогаю (переключатель сам его правит)."
 elif ask "Создать из шаблона claude-settings.example.json?" Y; then
-  cp claude-settings.example.json "$CLAUDE_DIR/settings.json" && ok "settings.json создан (поправь model под себя)"
+  cp claude-settings.example.json "$CLAUDE_DIR/settings.json" && ok "settings.json создан"
+fi
+
+# Ключ Aerolink: settings.json берёт его через apiKeyHelper (cat al-active-key.txt).
+# Без этого файла Claude Code получит пустой ключ и упадёт. Дашборд потом сам его перезапишет.
+if [ -f "$CLAUDE_DIR/al-active-key.txt" ]; then
+  warn "al-active-key.txt уже есть — не трогаю."
+elif ask "Вписать Aerolink API-ключ сейчас? (без него Claude Code не заведётся)" Y; then
+  AK=$(prompt "Aerolink API-ключ")
+  if [ -n "$AK" ]; then
+    printf '%s' "$AK" > "$CLAUDE_DIR/al-active-key.txt" && ok "ключ записан в ~/.claude/al-active-key.txt"
+  else
+    warn "ключ пустой — впиши позже через дашборд (вкладка ключей → Активировать)."
+  fi
 fi
 
 # ── 4. Локальные конфиги + секреты ──────────────────────────────────────────

@@ -70,6 +70,8 @@ function backendKeyboard(status) {
   rows.push([
     Markup.button.callback('🆓 FreeModel', 'poollist:fm'),
     Markup.button.callback('🟣 Aerolink', 'poollist:al'),
+    Markup.button.callback('🧭 Evomap', 'poollist:ev'),
+    Markup.button.callback('🪙 Ourtoken', 'poollist:ot'),
     Markup.button.callback('🔵 Conduit', 'poollist:cdt'),
   ]);
   rows.push([Markup.button.callback('🔄 авто-ротация FM', 'auto:toggle')]);
@@ -110,6 +112,26 @@ const POOLS = {
     },
     activate: (id) => dash.alActivate(id),
     refresh: null, // у Aerolink квот в /sessions нет
+  },
+  ev: {
+    title: '🧭 Evomap',
+    list: async () => {
+      const r = await dash.evSessions();
+      const arr = Array.isArray(r) ? r : (r.sessions || []);
+      return arr.map(s => ({ id: s.api_key, title: s.email || s.api_key.slice(0, 16), badge: '', health: '', active: !!s.active }));
+    },
+    activate: (id) => dash.evActivate(id),
+    refresh: null,
+  },
+  ot: {
+    title: '🪙 Ourtoken',
+    list: async () => {
+      const r = await dash.otSessions();
+      const arr = Array.isArray(r) ? r : (r.sessions || []);
+      return arr.map(s => ({ id: s.api_key, title: s.name || s.email || s.api_key.slice(0, 16), badge: '', health: '', active: !!s.active }));
+    },
+    activate: (id) => dash.otActivate(id),
+    refresh: null,
   },
   cdt: {
     title: '🔵 Conduit',
@@ -232,6 +254,8 @@ async function statusText() {
 const BACKEND_LABEL = {
   apihelper: '🆓 FreeModel (helper)',
   aerolink: '🟣 Aerolink',
+  evomap: '🧭 Evomap',
+  ourtoken: '🪙 Ourtoken',
   conduit: '🔵 Conduit',
   freemodel_rotator: '🆓 FreeModel (rotator)',
   omniroute: '🟠 OmniRoute',
@@ -349,13 +373,13 @@ bot.action(/^sw:(.+)$/, async ctx => {
 // --- Пулы: интерактивный список аккаунтов (как вкладка на дашборде) -------
 
 // Открыть список аккаунтов пула (со страницы 0).
-bot.action(/^poollist:(fm|al|cdt)$/, async ctx => {
+bot.action(/^poollist:(fm|al|ev|ot|cdt)$/, async ctx => {
   await ctx.answerCbQuery();
   await showPool(ctx, ctx.match[1], { page: 0 });
 });
 
 // Листать страницы списка.
-bot.action(/^page:(fm|al|cdt):(-?\d+)$/, async ctx => {
+bot.action(/^page:(fm|al|ev|ot|cdt):(-?\d+)$/, async ctx => {
   await ctx.answerCbQuery();
   const pool = ctx.match[1];
   const cached = poolCache.get(`${ctx.chat.id}:${pool}`);
@@ -371,7 +395,7 @@ bot.action(/^page:(fm|al|cdt):(-?\d+)$/, async ctx => {
 bot.action('noop', ctx => ctx.answerCbQuery());
 
 // Выбрать конкретный аккаунт по индексу из показанного списка → активировать.
-bot.action(/^pick:(fm|al|cdt):(\d+)$/, async ctx => {
+bot.action(/^pick:(fm|al|ev|ot|cdt):(\d+)$/, async ctx => {
   const pool = ctx.match[1], idx = Number(ctx.match[2]);
   const cached = poolCache.get(`${ctx.chat.id}:${pool}`);
   const acc = cached && cached.accounts[idx];
@@ -385,7 +409,7 @@ bot.action(/^pick:(fm|al|cdt):(\d+)$/, async ctx => {
 
 // Следующий аккаунт по кругу: от активного активируем следующего за ним.
 // Берём порядок из кэша (тот, что видит юзер); если кэша нет — тянем список.
-bot.action(/^next:(fm|al|cdt)$/, async ctx => {
+bot.action(/^next:(fm|al|ev|ot|cdt)$/, async ctx => {
   const pool = ctx.match[1];
   await ctx.answerCbQuery('следующий…');
   try {

@@ -112,6 +112,12 @@ tgbot/bot.log
 # Aerolink ручной пул ключей (содержит реальные aero_live_*). al-sessions.example.json IS committed.
 routing/al-sessions.json
 
+# Evomap ручной пул ключей (sk-evomap-*). evomap-sessions.example.json IS committed.
+routing/evomap-sessions.json
+
+# Ourtoken ручной пул ключей (usTHAz8-*). ourtoken-sessions.example.json IS committed.
+routing/ourtoken-sessions.json
+
 # Video API ключи (fal/Replicate/Veo/Kling/…). video-keys.example.json IS committed.
 routing/video-keys.json
 

@@ -48,6 +48,12 @@ const freemodelRefreshQuota = (name) => req('POST', '/session/refresh-quota', { 
 const alSessions = () => req('GET', '/al/sessions');
 const alActivate = (api_key) => req('POST', '/al/activate', { api_key });
 
+const evSessions = () => req('GET', '/ev/sessions');
+const evActivate = (api_key) => req('POST', '/ev/activate', { api_key });
+
+const otSessions = () => req('GET', '/ot/sessions');
+const otActivate = (api_key) => req('POST', '/ot/activate', { api_key });
+
 const conduitSessions = () => req('GET', '/conduit/sessions');
 const conduitActivate = (name) => req('POST', '/conduit/activate', { name });
 const conduitActiveKey = () => req('GET', '/conduit/active-key');
@@ -64,6 +70,8 @@ module.exports = {
   status, switchBackend,
   freemodelSessions, freemodelActivate, freemodelActiveKey, freemodelRefreshQuota,
   alSessions, alActivate,
+  evSessions, evActivate,
+  otSessions, otActivate,
   conduitSessions, conduitActivate, conduitActiveKey, conduitRefreshQuota,
   autoStart, autoStop, autoStatus,
 };

@@ -1,0 +1,73 @@
+[02:29:36] [main] ourToken.ai reg via CamoFox: 1 аккаунт(ов)
+[02:29:43] [main] --- 1/1 ---
+[02:29:46] [main] email: vwpb2mf9e3@fpklm.com
+[02:29:46] [reg] Eden1922 <vwpb2mf9e3@fpklm.com>
+[02:29:57] [reg] поля заполнены (реальный ввод)
+[02:29:57] [turnstile] жму Turnstile...
+[02:30:07] [turnstile] iframe err: Frame.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("body")
+    - locator resolved to <body></body>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+    - element is visible, enabled and stable
+    - scrolling into view if needed
+    - done scrolling
+    - <img width="36" height="36" data-nimg="1" decoding="async" alt="Our Token logo" class="size-8 rounded-sm object-contain" src="/_next/image?url=%2Flogo.png&w=96&q=75&dpl=dpl_9hdebVrfYc6VdAgHZakLPw4gt8N7" srcset="/_next/image?url=%2Flogo.png&w=48&q=75&dpl=dpl_9hdebVrfYc6VdAgHZakLPw4gt8N7 1x, /_next/image?url=%2Flogo.png&w=96&q=75&dpl=dpl_9hdebVrfYc6VdAgHZakLPw4gt8N7 2x"/> from <header class="fixed inset-x-0 top-0 z-50">…</header> subtree intercepts pointer events
+  - retrying click action
+    - waiting for element to be visible, enabled and stable
+
+[02:30:15] [turnstile] iframe err: Frame.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("body")
+    - locator resolved to <body></body>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+
+[02:30:23] [turnstile] iframe err: Frame.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("body")
+    - locator resolved to <body></body>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+
+[02:30:30] [turnstile] iframe err: Frame.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("body")
+    - locator resolved to <body></body>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+
+[02:30:38] [turnstile] iframe err: Frame.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("body")
+    - locator resolved to <body></body>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+
+[02:30:45] [turnstile] iframe err: Frame.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("body")
+    - locator resolved to <body></body>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+
+[02:30:53] [turnstile] iframe err: Frame.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for locator("body")
+    - locator resolved to <body></body>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+
+[02:30:54] [turnstile] токен не получен — продолжаю
+[02:30:54] [reg] сабмит (1-й, шлёт код): найдено кнопок=1, disabled=False
+[02:30:57] [reg] сабмит (1-й, шлёт код): ✗ клик не прошёл: TimeoutError: Locator.scroll_into_view_if_needed: Timeout 2987ms exceeded.
+Call log:
+  - attempting scroll into view action
+    - wait
+[02:31:00] [reg] сабмит (1-й, шлёт код): ✗ force тоже не прошёл: Locator.click: Timeout 3000ms exceeded.
+Call log:
+  - waiting for get_by_role("button", name=re.compile(r"create account
+[02:31:00] [reg] жду код с почты…
+[02:31:06] [mail] inbox: 0 писем
+[02:32:37] [reg] ✗ код с почты не пришёл за 90с

@@ -536,6 +536,7 @@ function launchScript(kind, extraArgs = []) {
         'conduit-create':  { title: 'Conduit Autoreg',        args: [path.join(PROJECT_ROOT, 'conduit', 'conduit_autoreger.js')] },
         'conduit-login':   { title: 'Conduit: Save Session',  args: [path.join(PROJECT_ROOT, 'conduit', 'record_conduit.js')] },
         'tokenrouter-create': { title: 'TokenRouter Autoreg', cmd: 'python', args: [path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'camoufox_autoreg.py')] },
+        'ourtoken-create':   { title: 'Ourtoken Autoreg',     cmd: 'python', args: [path.join(PROJECT_ROOT, 'ourtoken', 'camoufox_autoreg.py')] },
     };
     const t = TARGETS[kind];
     if (!t) throw new Error(`unknown launch kind: ${kind}`);

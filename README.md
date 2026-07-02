@@ -133,11 +133,11 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 ## Дашборд
 
-`http://localhost:8200/__switch`. Сайдбар: **Switcher · FreeModel · Aerolink · Conduit · Video · Картинки · Плагины · Настройки** (+ архив «Чтим память»).
+`http://localhost:8200/__switch`. Сайдбар: **Switcher · FreeModel · Aerolink · Evomap · Ourtoken · Conduit · Video · Картинки · Плагины · Настройки** (+ архив «Чтим память»).
 
 ### Switcher
 
-Переключает Claude Code между бэкендами одним кликом — переписывает `~/.claude/settings.json` (с `.bak-<timestamp>`). После прямого свича — **перезапустить Claude Code**; в режимах API Helper (FM/Aerolink/Conduit) перезапуск не нужен. Сверху — **глобальная шкала запаса** (считает FreeModel-пул).
+Переключает Claude Code между бэкендами одним кликом — переписывает `~/.claude/settings.json` (с `.bak-<timestamp>`). После прямого свича — **перезапустить Claude Code**; в режимах API Helper (FM/Aerolink/Evomap/Ourtoken/Conduit) перезапуск не нужен. Сверху — **глобальная шкала запаса** (считает FreeModel-пул).
 
 ### FreeModel
 
@@ -150,6 +150,14 @@ npm run tgbot                              # опц.: ТГ-пульт
 ### Aerolink
 
 Ручной пул `email + ключ` (`capi.aerolink.lat`). Пинг `/v1/me` → статус, активация через API Helper (`al-active-key.txt`). Данные — `routing/al-sessions.json` (gitignored).
+
+### Evomap
+
+Ручной пул `email + ключ` (`api.evomap.ai/v1`, ключи `sk-evomap-*`). Пинг `/v1/models` → статус (`Bearer`-токен), активация через API Helper (`ev-active-key.txt`). Данные — `routing/evomap-sessions.json` (gitignored).
+
+### Ourtoken
+
+Ручной пул `email + ключ` (`api.ourtoken.ai/v1`, ключи `usTHAz8-*`). Пинг `/v1/models` → статус (`Bearer`-токен), активация через API Helper (`ot-active-key.txt`). Данные — `routing/ourtoken-sessions.json` (gitignored). Автореги через Playwright + instanttempemail — `ourtoken/ourtoken_autoreg.js`.
 
 ### Conduit
 
@@ -259,6 +267,8 @@ node routing/transparent-proxy.js        # switcher вручную
 | `routing/freemodel-rotator.js` | Ротатор FreeModel-ключей :20126 |
 | `routing/{video,image}-keys.json` | Хранилища ключей провайдеров (gitignored, есть `*.example`) |
 | `routing/al-sessions.json` | Пул Aerolink (gitignored, есть `*.example`) |
+| `routing/evomap-sessions.json` | Пул Evomap (gitignored, есть `*.example`) |
+| `routing/ourtoken-sessions.json` | Пул Ourtoken (gitignored, есть `*.example`) |
 | `routing/.env` | **Секреты** (gitignored) — `OMNIROUTE_API_KEY` |
 | `internal/dashboard-api.js` | Прослойка CLI ↔ HTTP (FreeModel + Conduit) |
 | `internal/freemodel-manager.js` | FreeModel-сессии + квоты + TG-пул |

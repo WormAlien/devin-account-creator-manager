@@ -1087,6 +1087,8 @@ const state = {
   aerolink: [],
   evomap: [],
   ourtoken: [],
+  otModels: [],
+  otActiveModel: null,
   conduit: [],
 };
 
@@ -2068,6 +2070,7 @@ async function loadOurtokenSessions(probe) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.ourtoken = data.sessions || [];
+    state.otActiveModel = data.activeModel || null;
     $('nav-count-ourtoken').textContent = state.ourtoken.length;
     renderOurtoken();
     loadOtModels();
@@ -2088,12 +2091,38 @@ async function loadOtModels(force) {
       $('ot-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(data.note || 'нет данных')}</span>`;
       return;
     }
-    $('ot-models-list').innerHTML = data.models.map(m =>
-      `<span class="px-2 py-1 rounded text-[11px] font-mono bg-cyan/10 border border-cyan/30 text-cyan">${esc(m.id)}</span>`
-    ).join('');
+    renderOtModels(data.models);
   } catch (e) {
     $('ot-models-list').innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
   }
+}
+
+function renderOtModels(models) {
+  if (models) state.otModels = models;
+  const list = state.otModels || [];
+  const sel = state.otActiveModel;
+  $('ot-models-list').innerHTML = list.map(m => {
+    const active = m.id === sel;
+    const cls = active
+      ? 'bg-cyan/25 border-cyan text-cyan ring-1 ring-cyan/60'
+      : 'bg-cyan/10 border-cyan/30 text-cyan hover:bg-cyan/20';
+    return `<button onclick='otSetModel(${JSON.stringify(m.id)})' title="Сделать активной моделью"
+      class="px-2 py-1 rounded text-[11px] font-mono border ${cls} transition">${active ? '★ ' : ''}${esc(m.id)}</button>`;
+  }).join('');
+}
+
+async function otSetModel(model) {
+  try {
+    const res = await fetch('/__switch/api/ot/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Ошибка: ' + (data.error || '?'), 'error');
+    state.otActiveModel = model;
+    renderOtModels();
+    toast(data.settingsUpdated ? `✓ модель: ${model} (в settings)` : `модель сохранена: ${model}`, 'success');
+  } catch (e) { toast('set-model: ' + e.message, 'error'); }
 }
 
 function ourtokenStatusBadge(st) {
@@ -2174,11 +2203,13 @@ async function ourtokenActivate(api_key) {
   try {
     const res = await fetch('/__switch/api/ot/activate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
+      // отдаём выбранную модель — иначе ourtoken не примет дефолтную claude-opus-4-8[1m]
+      body: JSON.stringify({ api_key, model: state.otActiveModel || undefined }),
     });
     const data = await res.json();
     if (data.ok) {
-      toast(`🌟 Активен: ${data.email} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      const mm = data.model ? ` · model ${data.model}` : ' · ⚠ модель не выбрана';
+      toast(`🌟 Активен: ${data.email} (${data.mask})${mm} — на следующем запросе`, 'success', 5000);
       state.current = 'ourtoken';
       state.urls.ourtoken = 'https://api.ourtoken.ai/v1';
       paintStatus();

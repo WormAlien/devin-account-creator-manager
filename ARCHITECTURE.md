@@ -37,12 +37,18 @@
 - **aerolink** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/al-active-key.txt`,
   `ANTHROPIC_BASE_URL=capi.aerolink.lat/`, TTL=0. То же, что apihelper, но для пула
   Aerolink. Ключ читается на каждый запрос → смена на лету, без перезапуска.
+- **evomap** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/ev-active-key.txt`,
+  `ANTHROPIC_BASE_URL=api.evomap.ai/v1`, TTL=0. То же, что apihelper, но для пула
+  Evomap. Ключ читается на каждый запрос → смена на лету, без перезапуска.
+- **ourtoken** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/ot-active-key.txt`,
+  `ANTHROPIC_BASE_URL=api.ourtoken.ai/v1`, TTL=0. То же, что apihelper, но для пула
+  Ourtoken. Ключ читается на каждый запрос → смена на лету, без перезапуска.
 - **conduit** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/cdt-active-key.txt`,
   `ANTHROPIC_BASE_URL=https://conduit.ozdoev.net/api/v1`, TTL=0. Anthropic-совместимый
   endpoint (ключи `sk-cdt-`), реги из Telegram. То же, что aerolink, но для пула Conduit.
 
 Режим определяется по `settings.json` (`currentTarget`): apiKeyHelper с `fm-active-key.txt`
-→ `apihelper`; с `al-active-key.txt` → `aerolink`; с `cdt-active-key.txt` → `conduit`;
+→ `apihelper`; с `al-active-key.txt` → `aerolink`; с `ev-active-key.txt` → `evomap`; с `ot-active-key.txt` → `ourtoken`; с `cdt-active-key.txt` → `conduit`;
 прямой ключ → backend по URL.
 
 > ⚠️ Для `apiKeyHelper`-режимов нужен Claude Code **2.1.179** + отключённый авто-апдейт
@@ -58,6 +64,8 @@
 | **Switcher**  | активна (главная) | пресеты, hero, **глобальная шкала запаса** | `/api/status`, `/api/switch`, `/api/settings/*` |
 | **FreeModel** | активна   | сессии + квоты (5h/7d, $), TG-пул, авто-ротация, **шкала запаса** | `/api/freemodel/*` |
 | **Aerolink**  | активна   | ручной пул email+ключ, статус (пинг `/v1/me`), активация через API Helper | `/api/al/*` |
+| **Evomap**    | активна   | ручной пул email+ключ (evomap.ai), статус (пинг `/v1/models`), активация через API Helper | `/api/ev/*` |
+| **Ourtoken**  | активна   | ручной пул email+ключ (ourtoken.ai), статус (пинг `/v1/models`), активация через API Helper | `/api/ot/*` |
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |

@@ -1,0 +1,94 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - navigation [ref=e4]:
+      - generic [ref=e5]:
+        - link "Our Token logo Our Token" [ref=e6] [cursor=pointer]:
+          - /url: /
+          - img "Our Token logo" [ref=e8]
+          - paragraph [ref=e10]: Our Token
+        - navigation [ref=e11]:
+          - link "Models" [ref=e12] [cursor=pointer]:
+            - /url: /#gallery
+          - link "Configuration Docs" [ref=e13] [cursor=pointer]:
+            - /url: /docs
+          - link "Blog" [ref=e14] [cursor=pointer]:
+            - /url: /blog
+          - link "Dashboard" [ref=e15] [cursor=pointer]:
+            - /url: /dashboard
+        - generic [ref=e17]:
+          - button "Toggle color theme" [ref=e18] [cursor=pointer]:
+            - img
+          - button "English" [ref=e19] [cursor=pointer]:
+            - img
+            - generic [ref=e20]: English
+            - img
+          - button "Sign In" [ref=e21] [cursor=pointer]
+    - generic [ref=e23]:
+      - generic [ref=e25]:
+        - img "ourtoken.ai" [ref=e26]
+        - generic [ref=e27]:
+          - heading "Create your account" [level=1] [ref=e28]
+          - generic [ref=e29]:
+            - button "Google Continue with Google" [ref=e30] [cursor=pointer]:
+              - img "Google"
+              - text: Continue with Google
+            - generic [ref=e31]:
+              - separator [ref=e32]
+              - generic [ref=e33]: OR
+              - separator [ref=e34]
+            - generic [ref=e35]:
+              - generic [ref=e36]:
+                - group [ref=e37]:
+                  - generic [ref=e38]: Name
+                  - textbox "Name" [ref=e39]:
+                    - /placeholder: Ava Chen
+                - group [ref=e40]:
+                  - generic [ref=e41]: Email
+                  - textbox "Email" [ref=e42]:
+                    - /placeholder: m@example.com
+                - group [ref=e43]:
+                  - generic [ref=e44]: Password
+                  - generic [ref=e45]:
+                    - textbox "Password" [ref=e46]:
+                      - /placeholder: Enter your password
+                    - button "Show password" [ref=e47] [cursor=pointer]:
+                      - img
+                  - paragraph [ref=e48]: Use at least 8 characters.
+              - button "Continue with Email" [ref=e49] [cursor=pointer]:
+                - img
+                - text: Continue with Email
+            - paragraph [ref=e50]:
+              - text: Already have an account?
+              - link "Sign in" [ref=e51] [cursor=pointer]:
+                - /url: /login
+      - generic [ref=e52]:
+        - img "Create your account" [ref=e53]
+        - generic [ref=e54]:
+          - heading "Friends on ourtoken.ai" [level=2] [ref=e55]
+          - region [ref=e57]:
+            - generic [ref=e59]:
+              - group [ref=e60]:
+                - generic [ref=e62]:
+                  - paragraph [ref=e63]: A friend recommended ourtoken.ai, and I now use Claude through it for coding. The model access has been remarkably stable, while the pricing stays among the lowest in the market.
+                  - generic [ref=e65]:
+                    - paragraph [ref=e66]: Claude coding user
+                    - paragraph [ref=e67]: Developer workflow
+              - group [ref=e73]:
+                - generic [ref=e75]:
+                  - paragraph [ref=e76]: We run our role chat system on models from ourtoken.ai. Stability matches what we had with OpenRouter, but ourtoken.ai gives us the same reliability at a lower price.
+                  - generic [ref=e78]:
+                    - paragraph [ref=e79]: Role chat builder
+                    - paragraph [ref=e80]: Production AI app
+              - group [ref=e86]:
+                - generic [ref=e88]:
+                  - paragraph [ref=e89]: The ourtoken.ai support team has been quick and practical. Their Discord and email responses helped us resolve usage issues fast, without long back-and-forth or waiting days for an answer.
+                  - generic [ref=e91]:
+                    - paragraph [ref=e92]: Support-first team
+                    - paragraph [ref=e93]: Fast customer help
+              - group [ref=e99]:
+                - generic [ref=e101]:
+                  - paragraph [ref=e102]: We care about both stability and unit cost. ourtoken.ai gives us predictable model access while keeping token spend lower, which matters when traffic grows beyond experiments.
+                  - generic [ref=e104]:
+                    - paragraph [ref=e105]: AI tools operator
+                    - paragraph [ref=e106]: Cost-sensitive workload
+  - alert [ref=e112]

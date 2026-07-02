@@ -159,6 +159,10 @@ function currentTarget() {
         if (helper.includes('ot-active-key.txt')) {
             return 'ourtoken';
         }
+        // ourtoken использует ANTHROPIC_AUTH_TOKEN (без helper) → детектим по base_url
+        if (url === 'https://api.ourtoken.ai' || url.startsWith('https://api.ourtoken.ai')) {
+            return 'ourtoken';
+        }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
         }
@@ -211,6 +215,7 @@ async function applyTarget(target) {
     }
 
     settings.env.ANTHROPIC_API_KEY = apiKey;
+    clearOtEnv(settings);   // убрать ourtoken AUTH_TOKEN/маппинги, иначе перебьют API_KEY
     // model: строка → задать; null → удалить (бэкенд не знает чужую модель —
     // иначе ComboWombo от OmniRoute залипает на FreeModel/Aerolink/Conduit);
     // undefined → не трогать.
@@ -1157,6 +1162,7 @@ async function handleFreemodelActivate(req, res) {
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = 'https://cc.freemodel.dev';
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute не работает на FreeModel)
+            clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги, иначе перебьют freemodel
             if (helperMode) {
                 settings.apiKeyHelper = 'cat ~/.claude/fm-active-key.txt';
                 settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
@@ -1311,6 +1317,7 @@ async function handleAlActivate(req, res) {
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
+            clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
@@ -1414,6 +1421,7 @@ async function handleEvActivate(req, res) {
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
+            clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
@@ -1429,7 +1437,26 @@ async function handleEvActivate(req, res) {
 // Ключи usTHAz8-* (формат — длинная base58-строка). Probe: GET /v1/models → 401 = DEAD.
 const OT_SESSIONS_FILE = path.join(__dirname, 'ourtoken-sessions.json');
 const OT_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ot-active-key.txt');
+const OT_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'ot-active-model.txt');
 const OT_BASE_URL = 'https://api.ourtoken.ai/v1';
+
+function otReadActiveModel() {
+    try { return fs.readFileSync(OT_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// Ourtoken-специфика (AUTH_TOKEN + маппинги моделей) должна существовать ТОЛЬКО
+// когда активен ourtoken. Любая другая активация обязана её вычистить —
+// иначе ANTHROPIC_AUTH_TOKEN перебивает apiKeyHelper и ломает freemodel/aerolink/итд.
+function clearOtEnv(settings) {
+    if (!settings || !settings.env) return;
+    for (const k of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+        'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME',
+        'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME',
+        'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME']) {
+        delete settings.env[k];
+    }
+}
 const OT_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 function otLoad() {
@@ -1461,7 +1488,43 @@ async function handleOtSessions(req, res) {
         if (probe) {
             await Promise.all(sessions.map(async s => { s.status = await otProbe(s.api_key); }));
         }
-        jsonRes(res, 200, { sessions });
+        jsonRes(res, 200, { sessions, activeModel: otReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить активную модель ourtoken (без смены ключа). Пишет ot-active-model.txt
+// и settings.model, если ourtoken сейчас активный бэкенд.
+async function handleOtSetModel(req, res) {
+    try {
+        const { model } = await readJsonBody(req);
+        const m = String(model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        fs.writeFileSync(OT_ACTIVE_MODEL_FILE, m, { encoding: 'utf-8', flag: 'w' });
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            // применяем в settings только если ourtoken сейчас активный бэкенд
+            const otUrl = (settings.env && settings.env.ANTHROPIC_BASE_URL || '').startsWith('https://api.ourtoken.ai');
+            if (otUrl) {
+                makeSettingsBackup('settings-ot-model');
+                settings.env = settings.env || {};
+                settings.env.ANTHROPIC_MODEL = m;
+                settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = m;
+                settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME = m;
+                settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL = m;
+                settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = m;
+                settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = m;
+                settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME = m;
+                fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            }
+            settingsOk = otUrl;
+        } catch (e) {
+            logLine(`ourtoken set-model: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`ourtoken set-model: ${m} (settingsApplied=${settingsOk})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -1493,12 +1556,16 @@ async function handleOtDelete(req, res) {
 
 async function handleOtActivate(req, res) {
     try {
-        const { api_key } = await readJsonBody(req);
-        const key = String(api_key || '').trim();
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
         if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
         const sessions = otLoad();
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        // модель: из тела запроса, иначе — ранее выбранная
+        let model = body.model != null ? String(body.model).trim() : otReadActiveModel();
+        if (model) fs.writeFileSync(OT_ACTIVE_MODEL_FILE, model, { encoding: 'utf-8', flag: 'w' });
 
         fs.writeFileSync(OT_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
         sessions.forEach(s => { s.active = s.api_key === key; });
@@ -1510,18 +1577,32 @@ async function handleOtActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-ot');
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = OT_BASE_URL;
-            settings.apiKeyHelper = 'cat ~/.claude/ot-active-key.txt';
-            delete settings.model;
-            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            // Официальный формат ourtoken (docs/claude-code-custom-api-guide):
+            //  • BASE_URL БЕЗ /v1 — Claude Code сам добавляет путь
+            //  • ключ через ANTHROPIC_AUTH_TOKEN (Bearer), НЕ apiKeyHelper/x-api-key
+            //  • модель через ANTHROPIC_MODEL + маппинги opus/sonnet/haiku
+            settings.env.ANTHROPIC_BASE_URL = 'https://api.ourtoken.ai';
+            settings.env.ANTHROPIC_AUTH_TOKEN = key;
+            delete settings.apiKeyHelper;
             delete settings.env.ANTHROPIC_API_KEY;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            const m = model || 'claude-opus-4-8';
+            settings.env.ANTHROPIC_MODEL = m;
+            settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = m;
+            settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME = m;
+            settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL = m;
+            settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = m;
+            settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = m;
+            settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME = m;
+            // top-level model должен быть alias (opus/sonnet/haiku), а не полный id
+            settings.model = 'opus';
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`ourtoken activate: settings.json FAILED: ${e.message}`);
         }
-        logLine(`ourtoken activate: ${target.email} → ***${key.slice(-6)} (helper)`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+        logLine(`ourtoken activate: ${target.email} → ***${key.slice(-6)} model=${model || 'claude-opus-4-8'} (auth_token)`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), model: model || null, settingsUpdated: settingsOk });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -1807,6 +1888,7 @@ async function handleConduitActivate(req, res) {
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
+            clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
@@ -2122,6 +2204,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ot/add')       return handleOtAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/delete')    return handleOtDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/activate')  return handleOtActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ot/set-model') return handleOtSetModel(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ot/models')) return handleOtModels(req, res);
 
     // ---- Video API (vid) — хранилище ключей видео-провайдеров ----

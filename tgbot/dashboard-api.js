@@ -51,6 +51,9 @@ const alActivate = (api_key) => req('POST', '/al/activate', { api_key });
 const evSessions = () => req('GET', '/ev/sessions');
 const evActivate = (api_key) => req('POST', '/ev/activate', { api_key });
 
+const omSessions = () => req('GET', '/om/sessions');
+const omActivate = (api_key) => req('POST', '/om/activate', { api_key });
+
 const otSessions = () => req('GET', '/ot/sessions');
 const otActivate = (api_key) => req('POST', '/ot/activate', { api_key });
 
@@ -71,6 +74,7 @@ module.exports = {
   freemodelSessions, freemodelActivate, freemodelActiveKey, freemodelRefreshQuota,
   alSessions, alActivate,
   evSessions, evActivate,
+  omSessions, omActivate,
   otSessions, otActivate,
   conduitSessions, conduitActivate, conduitActiveKey, conduitRefreshQuota,
   autoStart, autoStop, autoStatus,

@@ -65,6 +65,46 @@ def load_sessions():
     try: return json.loads(SESSIONS_FILE.read_text())
     except: return []
 
+def add_to_omniroute(email, api_key):
+    """Добавить ourtoken-аккаунт в OmniRoute через прямой INSERT в БД контейнера
+    (docker exec omniroute node - <email> <apiKey> <omniApiKey>)."""
+    if not api_key:
+        log("omniroute", "skip: нет api_key"); return
+    import subprocess
+    script = BASE_DIR.parent / "routing" / "add-to-omniroute.js"
+    if not script.exists():
+        script = BASE_DIR / "add-to-omniroute.js"
+    if not script.exists():
+        log("omniroute", f"скрипт не найден: {script}"); return
+    # читаем OmniRoute API-ключ из .env (нужен для auto-test внутри контейнера)
+    omni_key = ""
+    env_file = BASE_DIR.parent / "routing" / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("OMNIROUTE_API_KEY="):
+                omni_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                break
+    try:
+        code = script.read_text(encoding="utf-8")
+        r = subprocess.run(
+            ["docker", "exec", "-i", "omniroute", "node", "-", email, api_key, omni_key],
+            input=code, text=True, capture_output=True, timeout=30,
+            encoding="utf-8", errors="replace",
+        )
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        if r.returncode == 0:
+            try:
+                data = json.loads(out.splitlines()[-1]) if out else {}
+                action = data.get("action", "ok")
+            except Exception:
+                action = "ok"
+            log("omniroute", f"{email} → {action}")
+        else:
+            log("omniroute", f"FAIL: {err or out}")
+    except Exception as e:
+        log("omniroute", f"error: {e}")
+
 def save_session(entry):
     all_s = load_sessions()
     all_s.append(entry)
@@ -80,15 +120,29 @@ def _ite_headers():
     return {"user-agent": UA, "accept": "application/json",
             "referer": f"{ITE_BASE}/", "origin": ITE_BASE}
 
-def ite_create():
-    r = requests.post(f"{ITE_BASE}/api/create", headers=_ite_headers(), timeout=20)
-    d = r.json()
-    return {"address": d["address"], "token": d["token"]}
+def ite_create(retries=3):
+    for attempt in range(retries):
+        try:
+            r = requests.post(f"{ITE_BASE}/api/create", headers=_ite_headers(), timeout=20)
+            d = r.json()
+            return {"address": d["address"], "token": d["token"]}
+        except Exception as e:
+            log("mail", f"ite_create attempt {attempt+1}/{retries}: {e}")
+            if attempt < retries - 1:
+                time.sleep(3)
+    raise RuntimeError("instanttempemail.com недоступен после 3 попыток")
 
-def ite_inbox(token):
-    r = requests.get(f"{ITE_BASE}/api/inbox/{token}", headers=_ite_headers(), timeout=20)
-    d = r.json()
-    return d.get("emails", []) if isinstance(d, dict) else []
+def ite_inbox(token, retries=2):
+    for attempt in range(retries):
+        try:
+            r = requests.get(f"{ITE_BASE}/api/inbox/{token}", headers=_ite_headers(), timeout=20)
+            d = r.json()
+            return d.get("emails", []) if isinstance(d, dict) else []
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(2)
+            else:
+                raise e
 
 def _flatten(obj, acc):
     if obj is None: return
@@ -108,60 +162,48 @@ def _email_text(em):
     return re.sub(r"\s+", " ", s).strip()
 
 def extract_otp6(text):
+    """Extract 6-digit OTP from email text. Prefer code near 'verification' keyword."""
     if not text: return None
+    # 1) "verification code ... 123456" — ищем код после этой фразы
+    m = re.search(r'verification\s*code[\s\S]{0,120}?(\d{6})', text, re.I)
+    if m: return m.group(1)
+    # 2) Фолбэк: любое 6-значное рядом с ключевыми словами
     cands = []
     for m in re.findall(r"(?<!\d)\d{6}(?!\d)", text):
         n = int(m)
         if n < 100000: continue
-        if m.startswith("20") and 200000 <= n <= 209999: continue  # похоже на год
+        if m.startswith("20") and 200000 <= n <= 209999: continue
         cands.append(m)
     if not cands: return None
     kw = re.compile(r"(?:code|verification|otp|verify|код)", re.I)
     for c in cands:
         idx = text.find(c)
         if idx < 0: continue
-        window = text[max(0, idx-80):idx+86]
-        if kw.search(window): return c
+        if kw.search(text[max(0, idx-80):idx+86]):
+            return c
     return cands[0]
 
-def wait_for_otp(token, from_hint="ourtoken", timeout=90, poll=4, since_ts=None):
-    """Опросить inbox до OTP. since_ts = unix-ts начала регистрации: письма старше
-    since_ts игнорируются (иначе можем схватить кэшированный OTP от прошлого
-    использования этого email-адреса в пуле instanttempemail)."""
-    if since_ts is None: since_ts = time.time()
-    # первый опрос ПОСЛЕ отправки формы — сначала запомним "стартовые" ID,
-    # чтобы отсекать всё, что уже лежало в inbox на момент регистрации
-    initial_ids = set()
-    try:
-        for em in ite_inbox(token):
-            eid = em.get("id") or em.get("uid") or em.get("messageId") or json.dumps(em, sort_keys=True)[:80]
-            initial_ids.add(str(eid))
-        if initial_ids:
-            log("mail", f"игнорирую {len(initial_ids)} прошлых письм(о/а) в inbox")
-    except Exception:
-        pass
-
+def wait_for_otp(token, timeout=90, poll=4):
+    """Ждём OTP в inbox. Берём код из САМОГО ПОСЛЕДНЕГО письма.
+    baseline-счётчики ненадёжны — порядок писем в API непредсказуем."""
     deadline = time.time() + timeout
-    last = -1
+    last_count = -1
     while time.time() < deadline:
         try:
             emails = ite_inbox(token)
         except Exception as e:
             log("mail", f"inbox error: {e}")
             time.sleep(poll); continue
-        if len(emails) != last:
+        if len(emails) != last_count:
             log("mail", f"inbox: {len(emails)} писем")
-            last = len(emails)
-        for em in emails:
-            eid = em.get("id") or em.get("uid") or em.get("messageId") or json.dumps(em, sort_keys=True)[:80]
-            if str(eid) in initial_ids:
-                continue   # это письмо было ещё ДО регистрации — не наше
-            text = _email_text(em)
-            if from_hint and from_hint.lower() not in text.lower():
-                continue
-            code = extract_otp6(text)
-            if code:
-                return code
+            last_count = len(emails)
+        if not emails:
+            time.sleep(poll); continue
+        # самое свежее письмо — всегда последнее в ответе API
+        text = _email_text(emails[-1])
+        code = extract_otp6(text)
+        if code:
+            return code
         time.sleep(poll)
     return None
 
@@ -173,7 +215,7 @@ async def _token(page):
     except: return None
 
 async def handle_turnstile(page):
-    focus_browser_window()   # Turnstile не рендерится в фоне — держим окно впереди
+    # ponytail: focus_browser_window() сворачивал активное окно пользователя — убрали   # Turnstile не рендерится в фоне — держим окно впереди
     log("turnstile", "жму Turnstile...")
     for attempt in range(8):
         try:
@@ -205,7 +247,7 @@ async def register_one(browser, email_address, email_token):
         await page.bring_to_front()
     except Exception:
         pass
-    focus_browser_window()
+    # ponytail: focus_browser_window() сворачивал активное окно пользователя — убрали
 
     # Свежее состояние: чистим куки прошлой почты/сессии (иначе "verification code is invalid")
     try:
@@ -229,8 +271,10 @@ async def register_one(browser, email_address, email_token):
     async def real_fill(sel, val):
         loc = page.locator(sel)
         await loc.wait_for(state="visible", timeout=8000)
-        await loc.fill(val)             # fill сам ждёт редактируемости + шлёт input-события
-        await loc.press("Tab")          # blur → триггерит валидацию поля
+        await loc.click()
+        await loc.clear()
+        await page.keyboard.type(val, delay=random.randint(30, 80))
+        await loc.press("Tab")
         await asyncio.sleep(0.15)
 
     await real_fill("#signup-name", name)
@@ -287,9 +331,9 @@ async def register_one(browser, email_address, email_token):
     # 4. Click "Create Account" — на почту уходит код
     await click_create_account("сабмит (1-й, шлёт код)")
 
-    # 5. Ждём 6-значный код с почты и вписываем
+    # 5. Ждём OTP — берём из последнего письма в inbox
     log("reg", "жду код с почты…")
-    code = wait_for_otp(email_token, from_hint="ourtoken", timeout=90)
+    code = wait_for_otp(email_token, timeout=90)
     if code:
         log("reg", f"код получен: {code}")
         one = page.locator("#signup-verification-code")
@@ -302,25 +346,20 @@ async def register_one(browser, email_address, email_token):
         await one.press("Tab")   # blur → React валидирует
         typed = await one.input_value()
         log("reg", f"код вписан: '{typed}'")
-        # Turnstile-токен ОДНОРАЗОВЫЙ: 1-й сабмит его потратил. Чистим старый и пересолвим.
-        try:
-            await page.eval_on_selector('input[name="cf-turnstile-response"]', "el => el.value = ''")
-        except Exception:
-            pass
-        await handle_turnstile(page)
-        # 6. Сабмит: кнопка "Create Account" внизу за краем вьюпорта и часто не докликивается.
-        #    Скроллим её в вид, кликаем; если не сработало — Enter в поле кода (нативный submit формы).
+        # НЕ пересолвиваем Turnstile — токен ещё живой от 1-го шага.
+        # Пересолв занимает 12+ секунд → OTP протухает → "Verification code is invalid".
+        # Сразу жмём "Create account".
+        await asyncio.sleep(0.3)
         btn = page.get_by_role("button", name=re.compile(r"create account", re.I)).first
         if await btn.count() == 0:
             btn = page.locator('button[type="submit"]').first
         try:
             await btn.scroll_into_view_if_needed(timeout=3000)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.2)
             await btn.click(timeout=6000)
             log("reg", "сабмит (2-й): ✓ клик по Create account")
         except Exception as e:
             log("reg", f"сабмит (2-й): клик не прошёл ({str(e)[:60]})")
-        # проверяем — ушли ли со страницы; если нет, дожимаем Enter в поле кода
         await asyncio.sleep(1.5)
         if "/login" in page.url:
             log("reg", "сабмит (2-й): нет ухода → Enter в поле кода")
@@ -343,78 +382,80 @@ async def register_one(browser, email_address, email_token):
     else:
         log("reg", f"редиректа нет, текущий URL: {page.url}")
 
-    # 7. Navigate to API keys
-    cur = page.url
-    if "/api-keys" not in cur:
-        await page.goto(f"{BASE_URL}/api-keys", wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(2)
-    log("reg", f"на странице API-keys")
+    # 7. Navigate to API keys page
+    log("reg", f"после регистрации URL: {page.url}")
+    await page.goto(f"{BASE_URL}/api-keys", wait_until="domcontentloaded", timeout=30000)
+    log("reg", "перешёл на /api-keys")
 
-    # 7. Click "Create" (реальный клик — откроет модалку или сразу выдаст ключ)
-    async def click_by_text(pat):
-        btn = page.get_by_role("button", name=re.compile(pat, re.I))
-        if await btn.count() == 0:
-            btn = page.locator("button, a").filter(has_text=re.compile(pat, re.I))
-        if await btn.count() == 0:
-            return False
+    # Ждём пока появится кнопка Create (страница рендерится через JS)
+    create_btn = page.locator("button, a").filter(has_text=re.compile(r"create", re.I)).first
+    try:
+        await create_btn.wait_for(state="visible", timeout=15000)
+    except Exception:
+        log("reg", "кнопка Create не появилась за 15с — dump:")
         try:
-            await btn.first.click(timeout=5000)
-            return True
-        except Exception:
-            try: await btn.first.click(timeout=3000, force=True); return True
-            except Exception: return False
+            btns = await page.evaluate("() => [...document.querySelectorAll('button,a')].map(b=>b.textContent.trim()).filter(Boolean).slice(0,20)")
+            log("reg", f"  кнопки на странице: {btns}")
+        except Exception: pass
 
-    await click_by_text(r"create")
+    # 8. Click "Create" → модалка
+    try:
+        await create_btn.click(timeout=5000)
+        log("reg", "кликнул Create")
+    except Exception as e:
+        log("reg", f"Create клик не прошёл: {str(e)[:80]}")
     await asyncio.sleep(1.5)
 
-    # Если открылась модалка с полем имени + своей кнопкой Create — заполнить и подтвердить
+    # 9. Если открылась модалка с полем имени — заполнить и подтвердить
     try:
-        name_inp = page.locator('[role="dialog"] input[type="text"], [role="dialog"] input:not([type])')
-        if await name_inp.count() > 0:
-            await name_inp.first.fill(f"key-{random.randint(1000,9999)}")
-            await asyncio.sleep(0.3)
-            # submit внутри диалога
-            dbtn = page.locator('[role="dialog"] button[type="submit"]')
+        dlg = page.locator('[role="dialog"]')
+        if await dlg.count() > 0:
+            log("reg", "модалка открылась")
+            name_inp = dlg.locator('input[type="text"], input:not([type])')
+            if await name_inp.count() > 0:
+                await name_inp.first.fill(f"key-{random.randint(1000,9999)}")
+                await asyncio.sleep(0.3)
+            dbtn = dlg.locator('button[type="submit"]')
             if await dbtn.count() == 0:
-                dbtn = page.locator('[role="dialog"] button').filter(has_text=re.compile(r"create|generate|confirm", re.I))
+                dbtn = dlg.locator('button').filter(has_text=re.compile(r"create|generate|confirm|submit", re.I))
             if await dbtn.count() > 0:
                 await dbtn.first.click(timeout=5000)
-                await asyncio.sleep(1.5)
+                log("reg", "подтвердил модалку")
+                await asyncio.sleep(2)
+        else:
+            log("reg", "модалки нет — ключ может появиться сразу")
     except Exception as e:
         log("reg", f"модалка: {e}")
 
-    # 8. Extract API key — сначала из input/code (чистое значение), потом из текста
+    # 10. Extract API key
     api_key = None
-    try:
-        api_key = await page.evaluate("""() => {
-            const dlg = document.querySelector('[role="dialog"]') || document.body;
-            // 1) значение поля/кода — там ключ без мусора вроде "Copy"
-            for (const el of dlg.querySelectorAll('input, textarea')) {
-                const v = (el.value || '').trim();
-                if (/^(sk-)?[A-Za-z0-9_-]{20,}$/.test(v)) return v;
-            }
-            for (const el of dlg.querySelectorAll('code, pre')) {
-                const v = (el.textContent || '').trim();
-                if (/^(sk-)?[A-Za-z0-9_-]{20,}$/.test(v)) return v;
-            }
-            return null;
-        }""")
-        if not api_key:
-            # фолбэк: regex по тексту, но обрезаем прилипший "Copy"
-            dialog_text = await page.evaluate("""() => {
-                const dlg = document.querySelector('[role="dialog"]');
-                return dlg ? dlg.textContent : document.body.textContent;
+    for attempt in range(5):
+        try:
+            api_key = await page.evaluate("""() => {
+                const scope = document.querySelector('[role="dialog"]') || document.body;
+                for (const el of scope.querySelectorAll('input, textarea')) {
+                    const v = (el.value || '').trim();
+                    if (/^[A-Za-z0-9_-]{20,}$/.test(v)) return v;
+                }
+                for (const el of scope.querySelectorAll('code, pre, [class*="key"], [class*="mono"]')) {
+                    const v = (el.textContent || '').trim();
+                    if (/^[A-Za-z0-9_-]{20,}$/.test(v)) return v;
+                }
+                const text = scope.textContent || '';
+                const m = text.match(/[A-Za-z0-9_-]{40,}/);
+                return m ? m[0].replace(/Copy.*$/, '') : null;
             }""")
-            m = re.search(r'sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{40,}', dialog_text or '')
-            if m:
-                api_key = re.sub(r'Copy.*$', '', m.group(0))
-        if api_key:
-            log("reg", f"ключ: ***{api_key[-6:]} (len={len(api_key)})")
-    except Exception as e:
-        log("reg", f"ошибка извлечения ключа: {e}")
+        except Exception: pass
+        if api_key and len(api_key) >= 20:
+            break
+        await asyncio.sleep(1)
+
+    if api_key:
+        log("reg", f"ключ: ***{api_key[-6:]} (len={len(api_key)})")
+    else:
+        log("reg", "ключ не найден")
 
     if not api_key:
-        # диагностика: что реально на странице
         try:
             dump = await page.evaluate("""() => {
                 const btns = [...document.querySelectorAll('button')].map(b => b.textContent.trim()).filter(Boolean).slice(0, 20);
@@ -432,6 +473,7 @@ async def register_one(browser, email_address, email_token):
             "active": False,
             "created": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         })
+        add_to_omniroute(email_address, api_key)
     else:
         log("reg", "✗ ключ не получен")
 
@@ -469,6 +511,7 @@ async def main():
         for i in range(count):
             log("main", f"--- {i+1}/{count} ---")
             try:
+                log("main", "создаю temp-email…")
                 email = ite_create()
                 log("main", f"email: {email['address']}")
                 key = await register_one(browser, email["address"], email["token"])

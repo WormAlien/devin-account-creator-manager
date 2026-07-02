@@ -159,6 +159,9 @@ function currentTarget() {
         if (helper.includes('ot-active-key.txt')) {
             return 'ourtoken';
         }
+        if (helper.includes('om-active-key.txt')) {
+            return 'omniroute';
+        }
         // ourtoken использует ANTHROPIC_AUTH_TOKEN (без helper) → детектим по base_url
         if (url === 'https://api.ourtoken.ai' || url.startsWith('https://api.ourtoken.ai')) {
             return 'ourtoken';
@@ -1486,9 +1489,29 @@ async function handleOtSessions(req, res) {
         const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
         const sessions = otLoad();
         if (probe) {
-            await Promise.all(sessions.map(async s => { s.status = await otProbe(s.api_key); }));
+            // троттлинг: макс 3 одновременных, иначе ourtoken.ai дропает
+            for (let i = 0; i < sessions.length; i += 3) {
+                const batch = sessions.slice(i, i + 3);
+                await Promise.all(batch.map(async s => { s.status = await otProbe(s.api_key); }));
+            }
+            otSave(sessions);
         }
         jsonRes(res, 200, { sessions, activeModel: otReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/ot/ping?api_key=... → проверяет ОДИН ключ и сохраняет статус в sessions.json
+async function handleOtPing(req, res) {
+    try {
+        const q = new URL(req.url, 'http://localhost');
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await otProbe(api_key);
+        // сохраняем статус в sessions.json (кэш)
+        const sessions = otLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; otSave(sessions); }
+        jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -1525,6 +1548,36 @@ async function handleOtSetModel(req, res) {
         }
         logLine(`ourtoken set-model: ${m} (settingsApplied=${settingsOk})`);
         jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ot/to-omni { email, api_key } → добавляет ключ в OmniRoute
+// (docker exec omniroute node - <email> <api_key> < ourtoken/add-to-omniroute.js)
+async function handleOtToOmni(req, res) {
+    try {
+        const { email, api_key } = await readJsonBody(req);
+        const em = String(email || '').trim();
+        const key = String(api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const script = path.join(__dirname, '..', 'ourtoken', 'add-to-omniroute.js');
+        if (!fs.existsSync(script)) return jsonRes(res, 500, { error: 'add-to-omniroute.js не найден' });
+        const code = fs.readFileSync(script, 'utf-8');
+        const { spawn } = require('child_process');
+        const child = spawn('docker', ['exec', '-i', 'omniroute', 'node', '-', em || key.slice(-8), key],
+            { stdio: ['pipe', 'pipe', 'pipe'] });
+        let out = '', err = '';
+        child.stdout.on('data', d => out += d.toString());
+        child.stderr.on('data', d => err += d.toString());
+        child.stdin.write(code); child.stdin.end();
+        const rc = await new Promise(r => child.on('close', r));
+        if (rc !== 0) {
+            logLine(`ot to-omni FAIL: ${err || out}`);
+            return jsonRes(res, 500, { error: (err || out || 'docker exec failed').slice(0, 300) });
+        }
+        let data = {};
+        try { data = JSON.parse(out.trim().split('\n').pop()); } catch {}
+        logLine(`ot to-omni: ${em} → ${data.action || 'ok'}`);
+        jsonRes(res, 200, { ok: true, action: data.action, id: data.id, email: em });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -1586,7 +1639,7 @@ async function handleOtActivate(req, res) {
             delete settings.apiKeyHelper;
             delete settings.env.ANTHROPIC_API_KEY;
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
-            const m = model || 'claude-opus-4-8';
+            const m = model || 'claude-opus-4-7';   // 4-7 в ~2.3× дешевле 4-8 при близком качестве
             settings.env.ANTHROPIC_MODEL = m;
             settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = m;
             settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME = m;
@@ -1639,6 +1692,106 @@ async function handleOtModels(req, res) {
             jsonRes(res, 200, { ok: true, models: [], note: e.message });
         }
     }
+}
+
+// ───── OmniRoute (om) — ручной пул ключей, активация через API Helper ─────
+// По аналогии с Aerolink/Evomap. OmniRoute на localhost:20128/v1.
+const OM_SESSIONS_FILE = path.join(__dirname, 'omniroute-sessions.json');
+const OM_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'om-active-key.txt');
+const OM_BASE_URL = 'http://localhost:20128/v1';
+
+function omLoad() {
+    try {
+        const raw = fs.readFileSync(OM_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function omSave(arr) {
+    fs.writeFileSync(OM_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+async function omProbe(apiKey) {
+    try {
+        const r = await fetch(`${OM_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(12000),
+        });
+        return r.status === 401 ? 'dead' : (r.ok ? 'live' : 'unknown');
+    } catch { return 'unknown'; }
+}
+
+async function handleOmSessions(req, res) {
+    try {
+        const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
+        const sessions = omLoad();
+        if (probe) {
+            await Promise.all(sessions.map(async s => { s.status = await omProbe(s.api_key); }));
+        }
+        jsonRes(res, 200, { sessions });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleOmAdd(req, res) {
+    try {
+        const { email, api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = omLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({ email: mail, api_key: key, active: false });
+        omSave(sessions);
+        logLine(`omniroute add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleOmDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const sessions = omLoad().filter(s => s.api_key !== key);
+        omSave(sessions);
+        logLine(`omniroute delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleOmActivate(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = omLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(OM_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        omSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-om');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = OM_BASE_URL;
+            settings.apiKeyHelper = 'cat ~/.claude/om-active-key.txt';
+            delete settings.model;
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`omniroute activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`omniroute activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 // ───── Video API (vid) — хранилище ключей видео-провайдеров (fal/Replicate/Veo/…) ─────
@@ -2201,11 +2354,19 @@ const server = http.createServer((req, res) => {
 
     // ---- Ourtoken (ot) — ручной пул, активация через API Helper (api.ourtoken.ai/v1) ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ot/sessions')) return handleOtSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ot/ping'))     return handleOtPing(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/add')       return handleOtAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/delete')    return handleOtDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/activate')  return handleOtActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ot/set-model') return handleOtSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ot/to-omni')   return handleOtToOmni(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ot/models')) return handleOtModels(req, res);
+
+    // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/om/add')       return handleOmAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/om/delete')    return handleOmDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/om/activate')  return handleOmActivate(req, res);
 
     // ---- Video API (vid) — хранилище ключей видео-провайдеров ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/video/keys')) return handleVideoKeys(req, res);

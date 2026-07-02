@@ -556,20 +556,31 @@
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-cyan">🪙</span> Ourtoken
             </h1>
-            <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-cyan text-xs">routing/ourtoken-sessions.json</code> · клик по ключу = активный (API Helper)</p>
+            <p class="text-sm text-muted mt-1">OmniRoute импорт — <code class="font-mono text-cyan text-xs">routing/ourtoken-sessions.json</code> · клик по ключу = активный (API Helper) · 🚀 = в OmniRoute</p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
             <button onclick="loadOurtokenSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadOurtokenSessions(true)" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">📡 Пинг статусов</button>
-            <button onclick="launchScript('ourtoken-create','🤖 Ourtoken авторег запущен')" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🤖 Авторег</button>
+            <div class="flex items-center gap-1">
+              <label class="text-[10px] text-faint">кол-во</label>
+              <input id="ot-create-count" type="number" min="1" max="20" value="1"
+                     class="text-xs w-14 px-2 py-2 bg-surface border border-line-soft rounded-lg text-ink text-center" />
+              <button onclick="launchOurtokenCreate()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🤖 Авторег</button>
+            </div>
             <button onclick="ourtokenShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
           </div>
         </header>
 
+        <!-- Ourtoken pool energy gauge (как FreeModel) -->
+        <div id="ot-energy" class="rounded-xl bg-surface border border-line-soft p-5 relative overflow-hidden">
+          <div class="absolute -top-20 -right-20 size-52 rounded-full bg-cyan/10 blur-3xl pointer-events-none"></div>
+          <div id="ot-energy-inner" class="relative"></div>
+        </div>
+
         <!-- Models list -->
         <div id="ot-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold tracking-tight">🤖 Available models</h2>
+            <h2 class="text-sm font-semibold tracking-tight">Models (копировать /model для терминала)</h2>
             <button onclick="loadOtModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
           <div id="ot-models-list" class="flex flex-wrap gap-1.5">
@@ -603,6 +614,7 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: OmniRoute Pool ═════════ -->
     <!-- ═════════ TAB: VIDEO API ═════════ -->
     <div data-tab-content="video">
       <div class="px-6 py-8 space-y-4">
@@ -1082,13 +1094,13 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, evomap: false, ourtoken: false, plugins: false, conduit: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false },
   tg: [],
   aerolink: [],
   evomap: [],
   ourtoken: [],
   otModels: [],
-  otActiveModel: null,
+  omniroutePool: [],
   conduit: [],
 };
 
@@ -1216,6 +1228,7 @@ function showTab(name) {
   if (name === 'aerolink' && !state.loaded.aerolink) { state.loaded.aerolink = true; loadAlSessions(false); }
   if (name === 'evomap' && !state.loaded.evomap) { state.loaded.evomap = true; loadEvomapSessions(false); }
   if (name === 'ourtoken' && !state.loaded.ourtoken) { state.loaded.ourtoken = true; loadOurtokenSessions(false); }
+  if (name === 'omniroute-pool' && !state.loaded['omniroute-pool']) { state.loaded['omniroute-pool'] = true; loadOmSessions(false); }
   if (name === 'video' && !state.loaded.video) { state.loaded.video = true; loadVideoKeys(); }
   if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
@@ -1266,7 +1279,7 @@ function paintStatus() {
 
   $('side-current').textContent = label;
   const modeEl = $('side-mode');
-  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap' || t === 'ourtoken') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
+  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap' || t === 'ourtoken' || t === 'omniroute') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
   else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
   else modeEl.className = 'hidden';
   $('side-url').textContent     = state.urls[t] || '';
@@ -1385,6 +1398,21 @@ function getDefaultPresets() {
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0'
         }
       }
+    },
+    'omHelper': {
+      label: 'OmniRoute · API Helper',
+      desc: 'apiKeyHelper → cat ~/.claude/om-active-key.txt',
+      icon: '🔀',
+      color: 'azure',
+      settings: {
+        apiKeyHelper: 'cat ~/.claude/om-active-key.txt',
+        model: null,
+        env: {
+          ANTHROPIC_BASE_URL: 'http://localhost:20128/v1',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_API_KEY: null
+        }
+      }
     }
   };
 }
@@ -1417,6 +1445,7 @@ function renderPresets() {
     if (h.includes('al-active-key')) return 'aerolink';
     if (h.includes('cdt-active-key')) return 'conduit';
     if (h.includes('ev-active-key')) return 'evomap';
+    if (h.includes('om-active-key')) return 'omniroute';
     if (h.includes('fm-active-key')) return 'apihelper';
     const url = p.settings?.env?.ANTHROPIC_BASE_URL || '';
     if (url.includes('20128')) return 'omniroute';
@@ -1928,6 +1957,111 @@ async function evomapActivate(api_key) {
   } catch (e) { toast('Activate: ' + e.message, 'error'); }
 }
 
+// ═══════════════════ OMNIRoute POOL ═══════════════════════════════════════
+async function loadOmSessions(probe) {
+  if (probe) $('om-list').innerHTML = `<div class="p-12 text-center text-azure text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/om/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.omniroutePool = data.sessions || [];
+    $('nav-count-omniroute-pool').textContent = state.omniroutePool.length;
+    renderOmniRoute();
+    if (probe) toast('✓ OmniRoute: статусы обновлены', 'success');
+  } catch (e) {
+    $('om-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function omStatusBadge(st) {
+  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
+  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
+  return '<span class="text-faint">⚪ —</span>';
+}
+
+function renderOmniRoute() {
+  const rows = state.omniroutePool;
+  if (!rows.length) {
+    $('om-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить</div>`;
+    return;
+  }
+  const body = rows.map(s => {
+    const active = !!s.active;
+    const keyMask = s.api_key.length > 18 ? s.api_key.slice(0, 14) + '…' + s.api_key.slice(-6) : s.api_key;
+    const kJ = JSON.stringify(s.api_key);
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
+      <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(s.email)}</td>
+      <td class="px-4 py-2.5">
+        <button onclick='omActivate(${kJ})' title="Сделать активным (API Helper)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-azure hover:border-azure/50'} transition">${esc(keyMask)}</button>
+      </td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${omStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs text-faint">—</td>
+      <td class="px-4 py-2.5 text-right">
+        <button onclick='omDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('om-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">email</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">статус</th>
+      <th class="px-4 py-2 font-medium">daily usage</th>
+      <th class="px-4 py-2"></th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function omShowAdd(show = true) {
+  $('om-add-form').classList.toggle('hidden', !show);
+  if (show) { $('om-add-email').value = ''; $('om-add-key').value = ''; $('om-add-email').focus(); }
+}
+
+async function omAdd() {
+  const email = $('om-add-email').value.trim();
+  const api_key = $('om-add-key').value.trim();
+  if (!email || !api_key) return toast('email и api_key обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/om/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ добавлен', 'success'); omShowAdd(false); loadOmSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function omDelete(api_key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    const res = await fetch('/__switch/api/om/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadOmSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function omActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/om/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      state.current = 'omniroute';
+      state.urls.omniroute = 'http://localhost:20128/v1';
+      paintStatus();
+      loadOmSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
 // ═══════════════════ VIDEO API ═══════════════════════════════════════
 // Хранилище ключей видео-провайдеров. Чисто CRUD: фильтр по провайдеру,
 // add/delete, маска ключа с 👁 показать / 📋 копировать. Без активации.
@@ -2063,6 +2197,33 @@ async function vidDelete(api_key) {
 }
 
 // ───── Ourtoken (🪙) ─────
+function otPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+  }
+  const balanceSum = live * 1.00;    // каждый живой ключ = $1
+  const remPct = total ? Math.round((live / total) * 100) : 0;
+  return { live, dead, total, balanceSum, remPct };
+}
+
+function renderOtGauge() {
+  const st = otPoolStats(state.ourtoken);
+  renderEnergyGauge($('ot-energy-inner'), {
+    title: 'Ourtoken · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      `<span class="text-cyan">$${st.balanceSum.toFixed(2)} баланс</span>`,
+    ].filter(Boolean).join(''),
+    note: 'Каждый LIVE ключ = $1.00. Здоровье проверяется кнопкой «📡 Пинг статусов».',
+  });
+}
+
 async function loadOurtokenSessions(probe) {
   if (probe) $('ot-list').innerHTML = `<div class="p-12 text-center text-cyan text-xs">📡 пингую ключи…</div>`;
   try {
@@ -2070,9 +2231,9 @@ async function loadOurtokenSessions(probe) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.ourtoken = data.sessions || [];
-    state.otActiveModel = data.activeModel || null;
     $('nav-count-ourtoken').textContent = state.ourtoken.length;
     renderOurtoken();
+    renderOtGauge();
     loadOtModels();
     if (probe) toast('✓ Ourtoken: статусы обновлены', 'success');
   } catch (e) {
@@ -2081,48 +2242,45 @@ async function loadOurtokenSessions(probe) {
 }
 
 async function loadOtModels(force) {
-  const key = state.ourtoken.find(s => s.active)?.api_key;
-  if (!key) return $('ot-models-list').innerHTML = '<span class="text-[10px] text-faint">нет активного ключа</span>';
+  // Пробуем все ключи по очереди (активный первым) — вдруг активный сдох,
+  // а модели можно вытащить любым живым ключом (каталог общий).
+  const keys = state.ourtoken
+    .slice()
+    .sort((a,b) => (b.active?1:0) - (a.active?1:0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('ot-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
   $('ot-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
-  try {
-    const res = await fetch('/__switch/api/ot/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
-    const data = await res.json();
-    if (!data.ok || !data.models?.length) {
-      $('ot-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(data.note || 'нет данных')}</span>`;
-      return;
-    }
-    renderOtModels(data.models);
-  } catch (e) {
-    $('ot-models-list').innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/ot/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderOtModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
   }
+  $('ot-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
 }
 
 function renderOtModels(models) {
   if (models) state.otModels = models;
   const list = state.otModels || [];
-  const sel = state.otActiveModel;
   $('ot-models-list').innerHTML = list.map(m => {
-    const active = m.id === sel;
-    const cls = active
-      ? 'bg-cyan/25 border-cyan text-cyan ring-1 ring-cyan/60'
-      : 'bg-cyan/10 border-cyan/30 text-cyan hover:bg-cyan/20';
-    return `<button onclick='otSetModel(${JSON.stringify(m.id)})' title="Сделать активной моделью"
-      class="px-2 py-1 rounded text-[11px] font-mono border ${cls} transition">${active ? '★ ' : ''}${esc(m.id)}</button>`;
+    const full = 'ourtoken/' + m.id;
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono bg-cyan/10 border border-cyan/30 text-cyan">
+      ${esc(full)}
+      <button onclick='otCopyModel(${JSON.stringify(full)})' title="Копировать /model ourtoken/…"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
   }).join('');
 }
 
-async function otSetModel(model) {
+async function otCopyModel(full) {
   try {
-    const res = await fetch('/__switch/api/ot/set-model', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
-    });
-    const data = await res.json();
-    if (!data.ok) return toast('Ошибка: ' + (data.error || '?'), 'error');
-    state.otActiveModel = model;
-    renderOtModels();
-    toast(data.settingsUpdated ? `✓ модель: ${model} (в settings)` : `модель сохранена: ${model}`, 'success');
-  } catch (e) { toast('set-model: ' + e.message, 'error'); }
+    await navigator.clipboard.writeText('/model ' + full);
+    toast('📋 /model ' + full, 'success', 2500);
+  } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 
 function ourtokenStatusBadge(st) {
@@ -2132,37 +2290,65 @@ function ourtokenStatusBadge(st) {
 }
 
 function renderOurtoken() {
-  const rows = state.ourtoken;
-  if (!rows.length) {
+  const all = state.ourtoken.slice().sort((a, b) => {
+    // живые сверху, мёртвые вниз; внутри — новые сверху
+    const sa = a.status === 'dead' ? 1 : 0;
+    const sb = b.status === 'dead' ? 1 : 0;
+    if (sa !== sb) return sa - sb;
+    return (b.created || '').localeCompare(a.created || '');
+  });
+  if (!all.length) {
     $('ot-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить</div>`;
     return;
   }
-  const body = rows.map(s => {
+  const rows = all.map(s => {
     const active = !!s.active;
-    const keyMask = s.api_key.length > 18 ? s.api_key.slice(0, 14) + '…' + s.api_key.slice(-6) : s.api_key;
+    const email = s.email || s.name || '';
+    const emailJ = JSON.stringify(email);
     const kJ = JSON.stringify(s.api_key);
-    const displayName = s.name || s.email;
-    return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
-      <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(displayName)}</td>
-      <td class="px-4 py-2.5">
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const keyBadge = `<span class="font-mono text-cyan text-[11px]">🔑 ${esc(keyMask)}</span>`;
+
+    // статус пинга
+    const st = s.status;
+    const statusCell = st === 'live'
+      ? '<span class="text-emerald text-[11px] font-medium">🟢 LIVE</span>'
+      : st === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
+    const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
+
+    return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
         <button onclick='ourtokenActivate(${kJ})' title="Сделать активным (API Helper)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-cyan hover:border-cyan/50'} transition">${esc(keyMask)}</button>
       </td>
-      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${ourtokenStatusBadge(s.status)}</td>
-      <td class="px-4 py-2.5 text-xs text-faint">—</td>
-      <td class="px-4 py-2.5 text-right">
-        <button onclick='ourtokenDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${actBtn(`ourtokenCopyKey(${kJ})`,                 'Скопировать API-ключ',   '📋', 'cyan')}
+        ${actBtn(`ourtokenToOmni(${emailJ}, ${kJ})`,       'Добавить в OmniRoute',   '🚀', 'emerald')}
+        ${actBtn(`ourtokenActivate(${kJ})`,                'Сделать активным',       '🤝', 'amber')}
+        ${actBtn(`ourtokenPing(${kJ})`,                    'Проверить ключ',         '🩺', 'violet')}
+        ${actBtn(`ourtokenDelete(${kJ})`,                  'Удалить',                '🗑', 'crimson')}
       </td>
     </tr>`;
   }).join('');
-  $('ot-list').innerHTML = `<table class="w-full text-left">
-    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
-      <th class="px-4 py-2 font-medium">name/email</th>
-      <th class="px-4 py-2 font-medium">ключ</th>
-      <th class="px-4 py-2 font-medium">статус</th>
-      <th class="px-4 py-2 font-medium">daily usage</th>
-      <th class="px-4 py-2"></th>
-    </tr></thead><tbody>${body}</tbody></table>`;
+
+  $('ot-list').innerHTML = table(
+    [
+      { label: 'Email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${all.length} ключей`
+  );
 }
 
 function ourtokenShowAdd(show = true) {
@@ -2199,17 +2385,58 @@ async function ourtokenDelete(api_key) {
   } catch (e) { toast('Delete: ' + e.message, 'error'); }
 }
 
+function launchOurtokenCreate() {
+  const input = document.getElementById('ot-create-count');
+  const count = Math.max(1, Math.min(20, parseInt(input?.value || '1', 10) || 1));
+  launchScript('ourtoken-create',
+    `🤖 Ourtoken: создание ${count} аккаунт${count === 1 ? 'а' : 'ов'} запущено`,
+    [String(count)]);
+}
+
+async function ourtokenPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/ot/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    // обновляем только этот ключ в state.ourtoken, не трогая остальные
+    const idx = state.ourtoken.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.ourtoken[idx].status = data.status;
+    renderOurtoken();
+    renderOtGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function ourtokenCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+async function ourtokenToOmni(email, api_key) {
+  try {
+    const res = await fetch('/__switch/api/ot/to-omni', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) toast(`🚀 OmniRoute: ${email} → ${data.action || 'ok'}`, 'success', 4000);
+    else toast('OmniRoute: ' + (data.error || '?'), 'error', 5000);
+  } catch (e) { toast('to-omni: ' + e.message, 'error'); }
+}
+
 async function ourtokenActivate(api_key) {
   try {
     const res = await fetch('/__switch/api/ot/activate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       // отдаём выбранную модель — иначе ourtoken не примет дефолтную claude-opus-4-8[1m]
-      body: JSON.stringify({ api_key, model: state.otActiveModel || undefined }),
+      body: JSON.stringify({ api_key }),
     });
     const data = await res.json();
     if (data.ok) {
-      const mm = data.model ? ` · model ${data.model}` : ' · ⚠ модель не выбрана';
-      toast(`🌟 Активен: ${data.email} (${data.mask})${mm} — на следующем запросе`, 'success', 5000);
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
       state.current = 'ourtoken';
       state.urls.ourtoken = 'https://api.ourtoken.ai/v1';
       paintStatus();
@@ -2800,13 +3027,29 @@ async function renderGlobalGauge() {
     </div>`;
   }
 
+  // Ourtoken живые ключи (отдельная строка, $1 за LIVE ключ).
+  let otLine = '';
+  try {
+    const otSessions = state.ourtoken && state.ourtoken.length ? state.ourtoken
+      : await fetch('/__switch/api/ot/sessions').then(r => r.json()).then(j => j.sessions || []).catch(() => []);
+    if (otSessions.length) {
+      const otSt = otPoolStats(otSessions);
+      otLine = `<div class="mt-2 pt-2 border-t border-line-soft/50 flex items-center gap-x-4 gap-y-1 text-xs font-mono flex-wrap">
+        <span class="text-cyan">🪙 Ourtoken</span>
+        <span><span class="text-ink font-semibold">${otSt.live}</span> 🟢 LIVE</span>
+        ${otSt.dead > 0 ? `<span class="text-crimson/80">${otSt.dead} 🔴 DEAD</span>` : ''}
+        <span class="text-emerald">$${otSt.balanceSum.toFixed(2)} баланс</span>
+      </div>`;
+    }
+  } catch {}
+
   renderEnergyGauge($('global-energy'), {
     title: 'Общий запас free-tier',
     pct: st.remPct,
     auto,
     sub: fmSubLine(st),
-    extra: trLine,
-    note: 'Полоса — запас квоты FreeModel (5h/7d). TokenRouter: живые ключи ≤24ч от регистрации (старше — мертвы). Notion и Devin — архив.',
+    extra: trLine + otLine,
+    note: 'Полоса — запас квоты FreeModel (5h/7d). TokenRouter: живые ключи ≤24ч. Ourtoken: $1 за LIVE ключ. Notion/Devin — архив.',
   });
 }
 

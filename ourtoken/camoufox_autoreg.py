@@ -362,6 +362,21 @@ async def register_one(browser, email_address, email_token):
             log("reg", f"сабмит (2-й): клик не прошёл ({str(e)[:60]})")
         await asyncio.sleep(1.5)
         if "/login" in page.url:
+            # Проверяем есть ли ошибка на форме
+            try:
+                err = await page.evaluate("""() => {
+                    // ищем элементы с ошибками (красные текст, alert)
+                    for (const el of document.querySelectorAll('[role="alert"], [class*="error"], [class*="Error"], [class*="invalid"], .text-red-500, .text-red-600, [class*="danger"]')) {
+                        const txt = el.textContent.trim();
+                        if (txt && txt.length > 3 && txt.length < 200) return txt;
+                    }
+                    return null;
+                }""")
+                if err:
+                    log("reg", f"сабмит (2-й): ОШИБКА НА ФОРМЕ: {err}")
+                    return None  # выходим — регистрация не прошла
+            except Exception:
+                pass
             log("reg", "сабмит (2-й): нет ухода → Enter в поле кода")
             try:
                 await one.click()
@@ -372,39 +387,87 @@ async def register_one(browser, email_address, email_token):
     else:
         log("reg", "✗ код с почты не пришёл за 90с")
 
-    # 7. Wait for redirect from /login
-    for _ in range(30):
+    # 7. Wait for redirect from /login (таймаут 15с — не 30)
+    log("reg", "жду редирект из /login...")
+    redirected = False
+    for i in range(15):
         await asyncio.sleep(1)
         cur = page.url
-        if "/dashboard" in cur or "/api-keys" in cur or ("ourtoken.ai" in cur and "/login" not in cur):
-            log("reg", f"редирект на {cur}")
+        # Успех: ушли с /login
+        if "/login" not in cur and "ourtoken.ai" in cur:
+            log("reg", f"✓ редирект на {cur}")
+            redirected = True
             break
-    else:
-        log("reg", f"редиректа нет, текущий URL: {page.url}")
 
-    # 7. Navigate to API keys page
-    log("reg", f"после регистрации URL: {page.url}")
-    await page.goto(f"{BASE_URL}/api-keys", wait_until="domcontentloaded", timeout=30000)
-    log("reg", "перешёл на /api-keys")
+    if not redirected:
+        log("reg", f"✗ редиректа нет — текущий URL: {page.url}")
+        # Проверяем ошибку на форме (если ещё на /login)
+        if "/login" in page.url:
+            try:
+                err = await page.evaluate("""() => {
+                    for (const el of document.querySelectorAll('[role="alert"], [class*="error"], [class*="Error"], [class*="invalid"], .text-red-500, .text-red-600, [class*="danger"]')) {
+                        const txt = el.textContent.trim();
+                        if (txt && txt.length > 3 && txt.length < 200) return txt;
+                    }
+                    return null;
+                }""")
+                if err:
+                    log("reg", f"ОШИБКА НА ФОРМЕ: {err}")
+            except Exception:
+                pass
+        return None  # не регистрировался — выходим
+
+    # 7.1. Переход на /api-keys
+    if "/api-keys" not in page.url:
+        log("reg", f"переход на /api-keys...")
+        await page.goto(f"{BASE_URL}/api-keys", wait_until="domcontentloaded", timeout=30000)
+        log("reg", f"URL после перехода: {page.url}")
+        # Если снова кинуло на /login — сессия не создалась
+        if "/login" in page.url:
+            log("reg", "✗ кинуло на /login — сессия не создалась")
+            return None
+
+    await asyncio.sleep(2)  # ждём рендер страницы
+
+    # Диагностика: какие кнопки/ссылки есть на странице
+    try:
+        all_btns = await page.evaluate("""() => {
+            return [...document.querySelectorAll('button, a')]
+                .map(b => ({tag: b.tagName, text: b.textContent.trim().slice(0, 50), visible: b.offsetParent !== null}))
+                .filter(b => b.text)
+                .slice(0, 30);
+        }""")
+        log("reg", f"кнопки на /api-keys: {[(b['tag'], b['text']) for b in all_btns[:15]]}")
+    except Exception as e:
+        log("reg", f"не удалось получить список кнопок: {e}")
 
     # Ждём пока появится кнопка Create (страница рендерится через JS)
-    create_btn = page.locator("button, a").filter(has_text=re.compile(r"create", re.I)).first
-    try:
-        await create_btn.wait_for(state="visible", timeout=15000)
-    except Exception:
-        log("reg", "кнопка Create не появилась за 15с — dump:")
+    # Пробуем несколько вариантов локатора
+    create_btn = None
+    for pattern in [r"create", r"generate", r"new.*key", r"add.*key"]:
+        btn = page.locator("button, a").filter(has_text=re.compile(pattern, re.I)).first
         try:
-            btns = await page.evaluate("() => [...document.querySelectorAll('button,a')].map(b=>b.textContent.trim()).filter(Boolean).slice(0,20)")
-            log("reg", f"  кнопки на странице: {btns}")
-        except Exception: pass
+            await btn.wait_for(state="visible", timeout=3000)
+            create_btn = btn
+            log("reg", f"нашёл кнопку по паттерну '{pattern}'")
+            break
+        except Exception:
+            continue
 
-    # 8. Click "Create" → модалка
-    try:
-        await create_btn.click(timeout=5000)
-        log("reg", "кликнул Create")
-    except Exception as e:
-        log("reg", f"Create клик не прошёл: {str(e)[:80]}")
-    await asyncio.sleep(1.5)
+    if not create_btn:
+        log("reg", "кнопка Create/Generate не найдена — возможно ключ уже есть")
+
+    # 8. Click "Create" → модалка (если кнопка найдена)
+    if create_btn:
+        try:
+            await create_btn.scroll_into_view_if_needed(timeout=2000)
+            await create_btn.click(timeout=5000)
+            log("reg", "кликнул Create")
+            await asyncio.sleep(1.5)
+        except Exception as e:
+            log("reg", f"Create клик не прошёл: {str(e)[:80]}")
+    else:
+        await asyncio.sleep(1)
 
     # 9. Если открылась модалка с полем имени — заполнить и подтвердить
     try:
@@ -429,25 +492,47 @@ async def register_one(browser, email_address, email_token):
 
     # 10. Extract API key
     api_key = None
+
+    def is_valid_key(v):
+        """Проверка что это реальный API-ключ, а не мусор со страницы."""
+        if not v or len(v) < 30:
+            return False
+        # не должен содержать названия моделей/сервисов
+        bad_words = ["anthropic", "claude", "openai", "gpt", "gemini", "glm", "llama", "mistral"]
+        if any(bw in v.lower() for bw in bad_words):
+            return False
+        # должен быть base64-подобной строкой (буквы+цифры+_-)
+        if not re.match(r'^[A-Za-z0-9_-]{30,}$', v):
+            return False
+        return True
+
     for attempt in range(5):
         try:
             api_key = await page.evaluate("""() => {
                 const scope = document.querySelector('[role="dialog"]') || document.body;
-                for (const el of scope.querySelectorAll('input, textarea')) {
+                // Приоритет: input/textarea в модалке
+                const dlg = document.querySelector('[role="dialog"]');
+                if (dlg) {
+                    for (const el of dlg.querySelectorAll('input, textarea')) {
+                        const v = (el.value || '').trim();
+                        if (v.length >= 30 && /^[A-Za-z0-9_-]+$/.test(v)) return v;
+                    }
+                    for (const el of dlg.querySelectorAll('code, pre, [class*="key"], [class*="mono"]')) {
+                        const v = (el.textContent || '').trim();
+                        if (v.length >= 30 && /^[A-Za-z0-9_-]+$/.test(v)) return v;
+                    }
+                }
+                // Фолбэк: весь документ, но только короткие строки (не абзацы)
+                for (const el of document.querySelectorAll('input[readonly], textarea[readonly]')) {
                     const v = (el.value || '').trim();
-                    if (/^[A-Za-z0-9_-]{20,}$/.test(v)) return v;
+                    if (v.length >= 30 && v.length <= 100 && /^[A-Za-z0-9_-]+$/.test(v)) return v;
                 }
-                for (const el of scope.querySelectorAll('code, pre, [class*="key"], [class*="mono"]')) {
-                    const v = (el.textContent || '').trim();
-                    if (/^[A-Za-z0-9_-]{20,}$/.test(v)) return v;
-                }
-                const text = scope.textContent || '';
-                const m = text.match(/[A-Za-z0-9_-]{40,}/);
-                return m ? m[0].replace(/Copy.*$/, '') : null;
+                return null;
             }""")
         except Exception: pass
-        if api_key and len(api_key) >= 20:
+        if api_key and is_valid_key(api_key):
             break
+        api_key = None  # сбрасываем невалидный
         await asyncio.sleep(1)
 
     if api_key:

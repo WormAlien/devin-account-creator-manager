@@ -365,10 +365,12 @@ async def register_one(browser, email_address, email_token):
             # Проверяем есть ли ошибка на форме
             try:
                 err = await page.evaluate("""() => {
-                    const IGNORE = new Set(['EnglishEN', 'English', 'EN']);
+                    // Only texts that look like actual form validation errors
+                    const ERROR_LIKE = /(invalid|incorrect|already|taken|exist|wrong|expired|try again|required|must|should|failed|denied|blocked|limit|verify|confirm|check|enter|provide|valid)/i;
+                    const NOT_ERROR = /(google|github|apple|facebook|microsoft|twitter|discord|continue with|sign in with|log in with|or continue|english|language|EN\b|ru\b|something went wrong)/i;
                     for (const el of document.querySelectorAll('[role="alert"], [class*="error"], [class*="Error"], [class*="invalid"], .text-red-500, .text-red-600, [class*="danger"]')) {
                         const txt = el.textContent.trim();
-                        if (txt && txt.length > 3 && txt.length < 200 && !IGNORE.has(txt)) return txt;
+                        if (txt && txt.length > 3 && txt.length < 200 && ERROR_LIKE.test(txt) && !NOT_ERROR.test(txt)) return txt;
                     }
                     return null;
                 }""")
@@ -405,10 +407,11 @@ async def register_one(browser, email_address, email_token):
         if "/login" in page.url:
             try:
                 err = await page.evaluate("""() => {
-                    const IGNORE = new Set(['EnglishEN', 'English', 'EN']);
+                    const ERROR_LIKE = /(invalid|incorrect|already|taken|exist|wrong|expired|try again|required|must|should|failed|denied|blocked|limit|verify|confirm|check|enter|provide|valid)/i;
+                    const NOT_ERROR = /(google|github|apple|facebook|microsoft|twitter|discord|continue with|sign in with|log in with|or continue|english|language|EN\b|ru\b|something went wrong)/i;
                     for (const el of document.querySelectorAll('[role="alert"], [class*="error"], [class*="Error"], [class*="invalid"], .text-red-500, .text-red-600, [class*="danger"]')) {
                         const txt = el.textContent.trim();
-                        if (txt && txt.length > 3 && txt.length < 200 && !IGNORE.has(txt)) return txt;
+                        if (txt && txt.length > 3 && txt.length < 200 && ERROR_LIKE.test(txt) && !NOT_ERROR.test(txt)) return txt;
                     }
                     return null;
                 }""")

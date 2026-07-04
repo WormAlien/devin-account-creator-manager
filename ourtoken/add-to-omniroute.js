@@ -11,7 +11,7 @@
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 
-const DB_PATH = '/app/data/storage.sqlite';
+const DB_PATH = process.env.DB_PATH || '/app/data/storage.sqlite';
 const NODE_ID = process.env.OMNI_OURTOKEN_NODE || 'anthropic-compatible-bfe8d930-e4ee-4f61-9101-fc660fbd42da';
 const STATIC_SALT = 'omniroute-field-encryption-v1';
 const PREFIX = 'enc:v1:';

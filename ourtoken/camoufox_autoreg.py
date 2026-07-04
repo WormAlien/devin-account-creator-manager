@@ -365,10 +365,10 @@ async def register_one(browser, email_address, email_token):
             # Проверяем есть ли ошибка на форме
             try:
                 err = await page.evaluate("""() => {
-                    // ищем элементы с ошибками (красные текст, alert)
+                    const IGNORE = new Set(['EnglishEN', 'English', 'EN']);
                     for (const el of document.querySelectorAll('[role="alert"], [class*="error"], [class*="Error"], [class*="invalid"], .text-red-500, .text-red-600, [class*="danger"]')) {
                         const txt = el.textContent.trim();
-                        if (txt && txt.length > 3 && txt.length < 200) return txt;
+                        if (txt && txt.length > 3 && txt.length < 200 && !IGNORE.has(txt)) return txt;
                     }
                     return null;
                 }""")
@@ -405,9 +405,10 @@ async def register_one(browser, email_address, email_token):
         if "/login" in page.url:
             try:
                 err = await page.evaluate("""() => {
+                    const IGNORE = new Set(['EnglishEN', 'English', 'EN']);
                     for (const el of document.querySelectorAll('[role="alert"], [class*="error"], [class*="Error"], [class*="invalid"], .text-red-500, .text-red-600, [class*="danger"]')) {
                         const txt = el.textContent.trim();
-                        if (txt && txt.length > 3 && txt.length < 200) return txt;
+                        if (txt && txt.length > 3 && txt.length < 200 && !IGNORE.has(txt)) return txt;
                     }
                     return null;
                 }""")

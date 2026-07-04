@@ -510,7 +510,7 @@ function launchBatFile(batName) {
     const batPath = path.join(PROJECT_ROOT, 'routing', batName);
     if (!fs.existsSync(batPath)) throw new Error(`bat not found: ${batName}`);
     if (process.platform === 'win32') {
-        spawn('cmd.exe', ['/c', 'start', batName.replace(/\.bat$/i, ''), 'cmd.exe', '/k', batPath], {
+        spawn('cmd.exe', ['/c', 'start', `"${batName.replace(/\.bat$/i, '')}"`, 'cmd.exe', '/k', batPath], {
             cwd: PROJECT_ROOT,
             detached: true,
             stdio: 'ignore',

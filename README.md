@@ -72,10 +72,12 @@ bash install.sh
 3. Ставит **Claude Code ровно `2.1.179`** (новее ломает `apiKeyHelper`) — если стоит другая.
 4. Создаёт `~/.claude/settings.json` из шаблона (если ещё нет).
 5. Копирует локальные конфиги из `*.example` (`routing/.env`, `al-sessions`, `video-keys`, `image-keys`).
-6. **OmniRoute** в Docker (по желанию) на `:20128`.
+6. **OmniRoute** в Docker (по желанию) на `:20128`; без Docker можно жить на API Helper-бэкендах.
 7. **ТГ-бот** (по желанию) — спросит токен и whitelist, запишет в `tgbot/.env`.
-8. Python-зависимости (по желанию) — Camoufox + venv для ✈ Открыть TG.
+8. Python-зависимости (по желанию) — Camoufox + venv для ✈ Открыть TG. Установщик предпочитает Python 3.11; на 3.12 предупредит про Visual C++ Build Tools.
 9. Запускает дашборд.
+
+Установщик дополнительно ловит частую ошибку `vibe-code-account-creator-manager/vibe-code-account-creator-manager`: такую двойную вложенность надо исправить **до** создания `tools/tg-venv`, иначе venv запомнит старый путь и сломается после переноса папки.
 
 **Дашборд:** <http://localhost:8200/__switch> · откат при поломке ключа: `routing/PANIC-restore-omniroute.bat`
 
@@ -92,8 +94,10 @@ bash install.sh
 # 0. системные зависимости (winget)
 winget install OpenJS.NodeJS.LTS          # Node.js LTS (>=18) + npm
 winget install Git.Git                     # Git for Windows (git-bash)
-winget install Docker.DockerDesktop        # только под backend OmniRoute
-winget install Python.Python.3.12          # опц.: Conduit-автореги / ✈ Открыть TG
+winget install Docker.DockerDesktop        # опц.: только под backend OmniRoute
+winget install Python.Python.3.11          # опц.: стабильнее для opentele/tgcrypto
+# Если остаёшься на Python 3.12 и tgcrypto собирается из исходников:
+winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 
 # 1. зависимости
 npm install
@@ -114,13 +118,13 @@ cp routing/video-keys.example.json  routing/video-keys.json
 cp routing/image-keys.example.json  routing/image-keys.json
 cp tgbot/.env.example               tgbot/.env   # впиши BOT_TOKEN + ALLOWED_USERS
 
-# 5. OmniRoute (Docker) — нужен только под backend OmniRoute
+# 5. OmniRoute (Docker) — опционально, нужен только если хочешь backend OmniRoute
 MSYS_NO_PATHCONV=1 docker run -d --name omniroute \
   -p 20128:20128 -v omniroute-data:/app/data --restart unless-stopped \
   -e PORT=20128 -e HOSTNAME=0.0.0.0 ghcr.io/diegosouzapw/omniroute:latest
 
 # 6. опц. Python-зависимости (✈ Открыть TG)
-python3.12 -m venv tools/tg-venv
+py -3.11 -m venv tools/tg-venv
 tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt
 
 # 7. запуск

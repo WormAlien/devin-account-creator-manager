@@ -62,12 +62,24 @@ if (-not $bash) {
 
 # ── клон репо (если ещё нет) ──────────────────────────────────────────────────
 $repo = 'https://github.com/WormAlien/vibe-code-account-creator-manager.git'
-$dir  = Join-Path (Get-Location) 'vibe-code-account-creator-manager'
-if (Test-Path (Join-Path $dir '.git')) {
-  Ok "репо уже склонировано → $dir"
+$repoName = 'vibe-code-account-creator-manager'
+$cwd = (Get-Location).Path
+
+if ((Split-Path $cwd -Leaf) -eq $repoName -and (Test-Path (Join-Path $cwd '.git'))) {
+  $dir = $cwd
+  Ok "уже внутри репо → $dir"
 } else {
-  Info "Клонирую репозиторий ..."
-  git clone $repo $dir
+  $dir = Join-Path $cwd $repoName
+  $nested = Join-Path $dir $repoName
+  if (Test-Path (Join-Path $nested '.git')) {
+    Die "найдена двойная вложенность: $nested. Перейди в нормальную папку или удали внешний дубль до установки venv."
+  }
+  if (Test-Path (Join-Path $dir '.git')) {
+    Ok "репо уже склонировано → $dir"
+  } else {
+    Info "Клонирую репозиторий ..."
+    git clone $repo $dir
+  }
 }
 
 # ── запуск install.sh в git-bash ─────────────────────────────────────────────

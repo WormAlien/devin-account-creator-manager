@@ -1552,51 +1552,28 @@ async function handleOtSetModel(req, res) {
 }
 
 // POST /__switch/api/ot/to-omni { email, api_key } → добавляет ключ в OmniRoute
-// Docker-первый, fallback на локальный запуск (npm-версия OmniRoute)
+// Через OmniRoute HTTP Management API, без Docker/direct SQLite.
 async function handleOtToOmni(req, res) {
     try {
         const { email, api_key } = await readJsonBody(req);
         const em = String(email || '').trim();
         const key = String(api_key || '').trim();
         if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        if (!process.env.OMNIROUTE_API_KEY) {
+            return jsonRes(res, 400, { error: 'OMNIROUTE_API_KEY manage не задан. Впиши его в Settings → OmniRoute или routing/.env' });
+        }
+
         const script = path.join(__dirname, '..', 'ourtoken', 'add-to-omniroute.js');
         if (!fs.existsSync(script)) return jsonRes(res, 500, { error: 'add-to-omniroute.js не найден' });
+
         const { spawn } = require('child_process');
-
-        // Проверить доступен ли Docker
-        const dockerAvailable = await new Promise(resolve => {
-            const probe = spawn('docker', ['info'], { stdio: 'ignore' });
-            probe.on('close', code => resolve(code === 0));
-            probe.on('error', () => resolve(false));
+        const child = spawn(process.execPath, [script, em || key.slice(-8), key], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: process.env,
         });
-
-        let child, out = '', err = '';
-        if (dockerAvailable) {
-            // Docker-путь: exec внутри контейнера
-            const code = fs.readFileSync(script, 'utf-8');
-            child = spawn('docker', ['exec', '-i', 'omniroute', 'node', '-', em || key.slice(-8), key],
-                { stdio: ['pipe', 'pipe', 'pipe'] });
-            child.stdout.on('data', d => out += d.toString());
-            child.stderr.on('data', d => err += d.toString());
-            child.stdin.write(code); child.stdin.end();
-        } else {
-            // npm-путь: запуск локально с путём к БД из ~/.omniroute
-            const dbPath = path.join(os.homedir(), '.omniroute', 'storage.sqlite');
-            const envFile = path.join(os.homedir(), '.omniroute', '.env');
-            let encKey = process.env.STORAGE_ENCRYPTION_KEY || '';
-            if (!encKey && fs.existsSync(envFile)) {
-                const line = fs.readFileSync(envFile, 'utf-8').split('\n')
-                    .find(l => l.startsWith('STORAGE_ENCRYPTION_KEY='));
-                if (line) encKey = line.split('=')[1].trim();
-            }
-            if (!encKey) return jsonRes(res, 500, { error: 'STORAGE_ENCRYPTION_KEY не найден в ~/.omniroute/.env' });
-            if (!fs.existsSync(dbPath)) return jsonRes(res, 500, { error: `БД не найдена: ${dbPath}` });
-            const env = { ...process.env, STORAGE_ENCRYPTION_KEY: encKey, DB_PATH: dbPath };
-            child = spawn(process.execPath, [script, em || key.slice(-8), key],
-                { stdio: ['ignore', 'pipe', 'pipe'], env });
-            child.stdout.on('data', d => out += d.toString());
-            child.stderr.on('data', d => err += d.toString());
-        }
+        let out = '', err = '';
+        child.stdout.on('data', d => out += d.toString());
+        child.stderr.on('data', d => err += d.toString());
 
         const rc = await new Promise(r => child.on('close', r));
         if (rc !== 0) {

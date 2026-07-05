@@ -66,30 +66,19 @@ def load_sessions():
     except: return []
 
 def add_to_omniroute(email, api_key):
-    """Добавить ourtoken-аккаунт в OmniRoute через прямой INSERT в БД контейнера
-    (docker exec omniroute node - <email> <apiKey> <omniApiKey>)."""
+    """Добавить ourtoken-аккаунт в OmniRoute через HTTP Management API."""
     if not api_key:
         log("omniroute", "skip: нет api_key"); return
     import subprocess
-    script = BASE_DIR.parent / "routing" / "add-to-omniroute.js"
-    if not script.exists():
-        script = BASE_DIR / "add-to-omniroute.js"
+    script = BASE_DIR / "add-to-omniroute.js"
     if not script.exists():
         log("omniroute", f"скрипт не найден: {script}"); return
-    # читаем OmniRoute API-ключ из .env (нужен для auto-test внутри контейнера)
-    omni_key = ""
-    env_file = BASE_DIR.parent / "routing" / ".env"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("OMNIROUTE_API_KEY="):
-                omni_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                break
     try:
-        code = script.read_text(encoding="utf-8")
         r = subprocess.run(
-            ["docker", "exec", "-i", "omniroute", "node", "-", email, api_key, omni_key],
-            input=code, text=True, capture_output=True, timeout=30,
+            ["node", str(script), email, api_key],
+            text=True, capture_output=True, timeout=45,
             encoding="utf-8", errors="replace",
+            cwd=str(BASE_DIR.parent),
         )
         out = (r.stdout or "").strip()
         err = (r.stderr or "").strip()

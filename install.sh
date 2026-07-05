@@ -45,6 +45,50 @@ set_env() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+if [ -d "vibe-code-account-creator-manager/.git" ]; then
+  err "похоже, репо склонировано внутрь самого себя: $(pwd)/vibe-code-account-creator-manager"
+  warn "Остановись и перенеси/удали внешний дубль до создания venv, иначе Python запомнит старые пути."
+  exit 1
+fi
+
+if [ -f tools/tg-venv/pyvenv.cfg ]; then
+  VENV_HOME=$(grep -E '^home = ' tools/tg-venv/pyvenv.cfg | sed 's/^home = //')
+  VENV_EXE=$(grep -E '^executable = ' tools/tg-venv/pyvenv.cfg | sed 's/^executable = //')
+  if [ -n "$VENV_HOME" ] && [ ! -e "$VENV_HOME" ]; then
+    warn "tools/tg-venv ссылается на несуществующий Python: $VENV_HOME"
+    warn "Если папку переносили — удали tools/tg-venv и пересоздай через установщик."
+  elif [ -n "$VENV_EXE" ] && [ ! -e "$VENV_EXE" ]; then
+    warn "tools/tg-venv ссылается на несуществующий Python: $VENV_EXE"
+    warn "Если папку переносили — удали tools/tg-venv и пересоздай через установщик."
+  fi
+fi
+
+choose_python() {
+  local cmd ver best=""
+  for cmd in py python python3; do
+    have "$cmd" || continue
+    if [ "$cmd" = "py" ]; then
+      if py -3.11 -c 'import sys' >/dev/null 2>&1; then echo "py -3.11"; return 0; fi
+      if py -3.12 -c 'import sys' >/dev/null 2>&1; then best="py -3.12"; fi
+    else
+      ver=$($cmd -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)
+      [ "$ver" = "3.11" ] && { echo "$cmd"; return 0; }
+      [ "$ver" = "3.12" ] && best="$cmd"
+      [ -z "$best" ] && [ -n "$ver" ] && best="$cmd"
+    fi
+  done
+  [ -n "$best" ] && echo "$best"
+}
+
+python_version() {
+  "$@" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null
+}
+
+has_cpp_build_tools() {
+  [ -d "/c/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC" ] || \
+    [ -d "/c/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC" ]
+}
+
 clear
 b "════════════════════════════════════════════════════════"
 b "  Vibe-Code Account Creator Manager — установщик"
@@ -160,16 +204,44 @@ fi
 # ── 7. Опциональные зависимости (Python) ────────────────────────────────────
 step "7. Опц. зависимости: TokenRouter (Camoufox) + ✈ Открыть TG"
 if ask "Поставить Python-зависимости (Camoufox + opentele venv)?" N; then
-  if ! have python && ! have python3; then
-    err "python не найден — пропускаю."
+  PY=$(choose_python)
+  if [ -z "$PY" ]; then
+    err "python не найден — пропускаю. Лучше поставить Python 3.11: winget install -e --id Python.Python.3.11"
   else
-    PY=$(have python && echo python || echo python3)
-    if ask "  Camoufox (TokenRouter автореги)?" Y; then
-      pip install camoufox requests && "$PY" -m camoufox fetch && ok "camoufox готов"
+    PYVER=$(python_version "$PY")
+    ok "Python $PYVER → $PY"
+    if [ "$PYVER" = "3.12" ]; then
+      warn "Python 3.12 часто ломает tgcrypto/opentele без сборки. Надёжнее: winget install -e --id Python.Python.3.11"
     fi
+
+    if ask "  Camoufox (TokenRouter автореги)?" Y; then
+      $PY -m pip install --upgrade pip
+      $PY -m pip install camoufox==0.4.11 requests playwright==1.61.0 && $PY -m camoufox fetch && ok "camoufox готов"
+    fi
+
     if ask "  venv для ✈ Открыть TG (opentele)?" Y; then
-      "$PY" -m venv tools/tg-venv && tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt && ok "tg-venv готов"
-      warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"
+      SKIP_TG_VENV=0
+      if [ "$PYVER" = "3.12" ] && ! has_cpp_build_tools; then
+        warn "Для tgcrypto на Python 3.12 нужны Visual C++ Build Tools. Поставить можно так:"
+        warn "winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override \"--wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\""
+        if ! ask "  Продолжить попытку установки venv на Python 3.12?" N; then
+          warn "Пропускаю tg-venv. Поставь Python 3.11 или Build Tools и запусти install.sh снова."
+          SKIP_TG_VENV=1
+        fi
+      fi
+
+      if [ "$SKIP_TG_VENV" = "0" ]; then
+        rm -rf tools/tg-venv
+        $PY -m venv tools/tg-venv && \
+          tools/tg-venv/Scripts/python -m pip install --upgrade pip && \
+          tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt && \
+          tools/tg-venv/Scripts/python -c 'import opentele; import tgcrypto' && \
+          ok "tg-venv готов"
+        if [ $? -ne 0 ]; then
+          err "tg-venv не собрался. Чаще всего помогает Python 3.11: winget install -e --id Python.Python.3.11"
+        fi
+        warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"
+      fi
     fi
   fi
 fi

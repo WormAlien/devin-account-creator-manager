@@ -1,20 +1,40 @@
 // ourtoken/add-to-omniroute.js
-// Запускается ВНУТРИ Docker-контейнера OmniRoute.
-// Добавляет один ourtoken-аккаунт в БД OmniRoute как anthropic-compatible connection.
+// Добавляет ourtoken-аккаунт в OmniRoute через HTTP Management API.
 //
-// Запуск снаружи контейнера (авторег делает это автоматически):
-//   Get-Content ourtoken/add-to-omniroute.js | docker exec -i omniroute node - <email> <apiKey>
+// Требует routing/.env или env:
+//   OMNIROUTE_API_KEY  — ключ со scope manage
+//   OMNIROUTE_BASE_URL — http://localhost:20128 по умолчанию
 //
-// Внутри контейнера:
-//   node /path/to/add-to-omniroute.js <email> <apiKey>
+// Запуск: node ourtoken/add-to-omniroute.js <email> <apiKey>
 
-const crypto = require('crypto');
-const Database = require('better-sqlite3');
+const fs = require('fs');
+const path = require('path');
 
-const DB_PATH = process.env.DB_PATH || '/app/data/storage.sqlite';
-const NODE_ID = process.env.OMNI_OURTOKEN_NODE || 'anthropic-compatible-bfe8d930-e4ee-4f61-9101-fc660fbd42da';
-const STATIC_SALT = 'omniroute-field-encryption-v1';
-const PREFIX = 'enc:v1:';
+const BASE_DIR = __dirname;
+const ENV_FILE = path.join(BASE_DIR, '..', 'routing', '.env');
+const OURTOKEN_BASE_URL = 'https://api.ourtoken.ai/v1';
+const DEFAULT_NODE_ID = 'anthropic-compatible-bfe8d930-e4ee-4f61-9101-fc660fbd42da';
+
+function loadEnvFile(filePath) {
+    try {
+        if (!fs.existsSync(filePath)) return;
+        const text = fs.readFileSync(filePath, 'utf-8');
+        for (const line of text.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eq = trimmed.indexOf('=');
+            if (eq === -1) continue;
+            const key = trimmed.substring(0, eq).trim();
+            const val = trimmed.substring(eq + 1).trim().replace(/^["']|["']$/g, '');
+            if (key && process.env[key] === undefined) process.env[key] = val;
+        }
+    } catch {}
+}
+loadEnvFile(ENV_FILE);
+
+const OMNI_BASE_URL = (process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128').replace(/\/$/, '');
+const OMNI_API_KEY = process.env.OMNIROUTE_API_KEY || '';
+const OURTOKEN_NODE = process.env.OMNI_OURTOKEN_NODE || DEFAULT_NODE_ID;
 
 function log(tag, msg) {
     const t = new Date().toISOString().substring(11, 23);
@@ -26,130 +46,128 @@ function maskKey(k) {
     return k.substring(0, 8) + '***' + k.slice(-4);
 }
 
-function getStaticKey(secret) {
-    return crypto.scryptSync(secret, STATIC_SALT, 32);
+async function apiRequest(method, endpoint, payload) {
+    const url = new URL(endpoint, OMNI_BASE_URL);
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OMNI_API_KEY}`,
+    };
+    const body = payload ? JSON.stringify(payload) : undefined;
+    const res = await fetch(url, { method, headers, body });
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+    return { ok: res.ok, status: res.status, data, text };
 }
 
-function encrypt(plaintext, secret) {
-    if (!plaintext || typeof plaintext !== 'string') return plaintext;
-    const key = getStaticKey(secret);
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const authTag = cipher.getAuthTag().toString('hex');
-    return `${PREFIX}${iv.toString('hex')}:${encrypted}:${authTag}`;
+function nodeMatchesOurtoken(n) {
+    const name = String(n.name || n.nodeName || n.id || '').toLowerCase();
+    const base = String(n.baseUrl || n.base_url || n.apiBaseUrl || '').replace(/\/$/, '');
+    return n.id === OURTOKEN_NODE || name.includes('ourtoken') || base === OURTOKEN_BASE_URL;
 }
 
-function decrypt(ciphertext, secret) {
-    if (!ciphertext || typeof ciphertext !== 'string' || !ciphertext.startsWith(PREFIX)) return null;
+async function findOurtokenNode() {
+    const res = await apiRequest('GET', '/api/provider-nodes');
+    if (!res.ok) {
+        throw new Error(`failed to list provider nodes: ${res.status} ${res.text.substring(0, 200)}`);
+    }
+    const nodes = res.data?.nodes || [];
+    return nodes.find(n => n.id === OURTOKEN_NODE) || nodes.find(nodeMatchesOurtoken) || { id: OURTOKEN_NODE };
+}
+
+async function listExistingConnections() {
+    const res = await apiRequest('GET', '/api/providers');
+    if (!res.ok) {
+        throw new Error(`failed to list providers: ${res.status} ${res.text.substring(0, 200)}`);
+    }
+    return res.data?.connections || [];
+}
+
+async function testProvider(id) {
+    const res = await apiRequest('POST', `/api/providers/${id}/test`, {
+        validationModelId: process.env.OMNI_OURTOKEN_TEST_MODEL || 'claude-sonnet-4-6',
+    });
+    return res.ok && res.data?.valid === true;
+}
+
+async function forceActivateProvider(id) {
+    const res = await apiRequest('PUT', `/api/providers/${id}`, {
+        testStatus: 'active',
+        lastError: null,
+        lastErrorAt: null,
+        lastErrorType: null,
+        lastErrorSource: null,
+        errorCode: null,
+        lastTested: new Date().toISOString(),
+    });
+    if (!res.ok) throw new Error(`activate failed: ${res.status} ${res.text.substring(0, 200)}`);
+}
+
+async function activateCreatedConnection(c) {
+    let valid = false;
     try {
-        const key = getStaticKey(secret);
-        const body = ciphertext.slice(PREFIX.length);
-        const [ivHex, encryptedHex, authTagHex] = body.split(':');
-        const iv = Buffer.from(ivHex, 'hex');
-        const authTag = Buffer.from(authTagHex, 'hex');
-        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
-        decipher.setAuthTag(authTag);
-        let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        return decrypted;
-    } catch (err) {
-        return null;
+        valid = await testProvider(c.id);
+    } catch {}
+    log('test', `${c.name || c.id} -> ${valid ? 'active' : 'test failed'}`);
+    if (!valid) {
+        try {
+            await forceActivateProvider(c.id);
+            log('activate', `${c.name || c.id} -> forced active`);
+        } catch (err) {
+            log('warn', `${c.name || c.id} -> force activate failed: ${err.message}`);
+        }
     }
 }
 
 async function main() {
-    const [email, apiKey, omniApiKey] = process.argv.slice(2);
+    const [emailArg, apiKey] = process.argv.slice(2);
+    const email = String(emailArg || '').trim();
     if (!email || !apiKey) {
-        console.error(JSON.stringify({ ok: false, error: 'usage: node add-to-omniroute.js <email> <apiKey> [omniApiKey]' }));
+        console.error(JSON.stringify({ ok: false, error: 'usage: node add-to-omniroute.js <email> <apiKey>' }));
+        process.exit(1);
+    }
+    if (!OMNI_API_KEY) {
+        console.error(JSON.stringify({ ok: false, error: 'OMNIROUTE_API_KEY with manage scope is required in routing/.env' }));
         process.exit(1);
     }
 
-    const authHeaders = omniApiKey
-        ? { 'Content-Type': 'application/json', 'authorization': 'Bearer ' + omniApiKey }
-        : { 'Content-Type': 'application/json' };
-
-    const secret = process.env.STORAGE_ENCRYPTION_KEY;
-    if (!secret) {
-        console.error(JSON.stringify({ ok: false, error: 'STORAGE_ENCRYPTION_KEY not set' }));
-        process.exit(1);
+    const node = await findOurtokenNode();
+    const existing = await listExistingConnections();
+    const already = existing.find(c =>
+        c.provider === node.id && (c.email === email || c.name === email || c.apiKey?.startsWith(apiKey.substring(0, 8)))
+    );
+    if (already) {
+        log('exists', `${email} already in OmniRoute as ${already.id}`);
+        console.log(JSON.stringify({ ok: true, id: already.id, action: 'exists', email }));
+        return;
     }
 
-    try {
-        const db = new Database(DB_PATH);
-
-        // Проверка дубля: по email, затем по расшифрованному ключу
-        const existingByEmail = db.prepare(`SELECT id, name FROM provider_connections WHERE provider = ? AND (name = ? OR email = ?)`).get(NODE_ID, email, email);
-        if (existingByEmail) {
-            console.log(JSON.stringify({ ok: true, id: existingByEmail.id, action: 'exists', email }));
-            db.close();
-            return;
-        }
-
-        const rows = db.prepare(`SELECT id, api_key FROM provider_connections WHERE provider = ? AND api_key IS NOT NULL`).all(NODE_ID);
-        for (const row of rows) {
-            const dec = decrypt(row.api_key, secret);
-            if (dec === apiKey) {
-                console.log(JSON.stringify({ ok: true, id: row.id, action: 'exists', email }));
-                db.close();
-                return;
-            }
-        }
-
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        const encryptedKey = encrypt(apiKey, secret);
-        const providerData = JSON.stringify({
-            prefix: 'ourtoken',
-            baseUrl: 'https://api.ourtoken.ai/v1',
-            nodeName: 'ourtoken.ai',
-            apiKeyHealth: {},
-        });
-
-        db.prepare(`INSERT INTO provider_connections
-            (id, provider, auth_type, name, email, priority, is_active, test_status, backoff_level, api_key,
-             provider_specific_data, consecutive_use_count, rate_limit_protection, created_at, updated_at,
-             proxy_enabled, per_key_proxy_enabled, max_concurrent, quota_window_thresholds_json, rate_limit_overrides_json)
-            VALUES
-            (?, ?, 'apikey', ?, ?, 1, 1, 'unknown', 0, ?,
-             ?, 0, 0, ?, ?, 1, 0, NULL, NULL, NULL)`)
-            .run(id, NODE_ID, email, email, encryptedKey, providerData, now, now);
-
-        db.close();
-
-        // Auto-test + активация через прямой UPDATE (PUT API непредсказуем с полями)
-        try {
-            const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), 15000);
-            let passed = false;
-            try {
-                const res = await fetch(`http://localhost:20128/api/providers/${id}/test`, {
-                    method: 'POST', signal: ctrl.signal, headers: authHeaders,
-                    body: JSON.stringify({ validationModelId: 'deepseek-v4-flash' }),
-                });
-                clearTimeout(t);
-                if (res.ok) {
-                    const testData = await res.json().catch(() => ({}));
-                    passed = testData.valid === true;
-                }
-            } finally { clearTimeout(t); }
-            // прямой UPDATE — PUT API нестабилен с названиями полей
-            const db2 = new Database(DB_PATH);
-            db2.prepare(`UPDATE provider_connections SET test_status = ?, is_active = 1, last_tested = ? WHERE id = ?`)
-                .run(passed ? 'active' : 'active', new Date().toISOString(), id);
-            db2.close();
-            log(passed ? 'test' : 'activate', `${email} -> ${passed ? 'connected' : 'forced active'}`);
-        } catch (err) {
-            log('warn', `${email} -> test/activate failed: ${err.message} (ключ останется unknown)`);
-        }
-
-        log('ok', `${email} -> ${maskKey(apiKey)} added as ${id}`);
-        console.log(JSON.stringify({ ok: true, id, email, action: 'added' }));
-    } catch (err) {
-        console.error(JSON.stringify({ ok: false, error: err.message }));
-        process.exit(1);
+    const res = await apiRequest('POST', '/api/providers/bulk', {
+        provider: node.id,
+        entries: [{ name: email, apiKey }],
+        priority: 1,
+        validateKeys: false,
+    });
+    if (!res.ok) {
+        throw new Error(`bulk add failed: ${res.status} ${res.text.substring(0, 300)}`);
     }
+
+    const created = res.data?.created || [];
+    const errors = res.data?.errors || [];
+    if (errors.length) {
+        throw new Error(`add failed: ${errors.map(e => e.message || JSON.stringify(e)).join('; ')}`);
+    }
+    const connection = created[0];
+    if (!connection?.id) {
+        throw new Error('OmniRoute did not return created connection id');
+    }
+
+    log('added', `${email} -> ${maskKey(apiKey)} as ${connection.id}`);
+    await activateCreatedConnection(connection);
+    console.log(JSON.stringify({ ok: true, id: connection.id, email, action: 'added' }));
 }
 
-main();
+main().catch(err => {
+    console.error(JSON.stringify({ ok: false, error: err.message }));
+    process.exit(1);
+});

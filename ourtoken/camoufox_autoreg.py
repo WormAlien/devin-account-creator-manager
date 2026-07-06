@@ -557,12 +557,28 @@ async def register_one(browser, email_address, email_token):
 
     return api_key
 
+async def browser_alive(browser):
+    """Проверка: браузер+контекст ещё живы (юзер не закрыл окно)."""
+    try:
+        # У persistent_context нет .is_connected(), но есть .pages — если окно
+        # убито, обращение к pages/new_page падает с ошибкой закрытого контекста.
+        _ = browser.pages
+        # Пустой список pages = все окна закрыты вручную.
+        if len(browser.pages) == 0:
+            return False
+        for p in browser.pages:
+            if not p.is_closed():
+                return True
+        return False
+    except Exception:
+        return False
+
+
 async def main():
     count = max(1, int(sys.argv[1])) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
     log("main", f"ourToken.ai reg via CamoFox: {count} аккаунт(ов)")
 
     import tempfile, uuid
-    profile_dir = Path(tempfile.gettempdir()) / f"camoufox-our-{uuid.uuid4().hex[:8]}"
 
     # Prefs против троттлинга фонового окна — чтобы Turnstile рендерился даже не в фокусе
     bg_prefs = {
@@ -573,32 +589,62 @@ async def main():
         "browser.tabs.unloadOnLowMemory": False,
     }
 
-    async with AsyncCamoufox(
-        headless=False,
-        os="windows",
-        window=(1280, 900),
-        persistent_context=True,
-        user_data_dir=str(profile_dir),
-        disable_coop=True,
-        humanize=8.0,
-        main_world_eval=True,
-        i_know_what_im_doing=True,
-        firefox_user_prefs=bg_prefs,
-    ) as browser:
-        success = 0
-        for i in range(count):
-            log("main", f"--- {i+1}/{count} ---")
+    def launch():
+        profile_dir = Path(tempfile.gettempdir()) / f"camoufox-our-{uuid.uuid4().hex[:8]}"
+        return AsyncCamoufox(
+            headless=False,
+            os="windows",
+            window=(1280, 900),
+            persistent_context=True,
+            user_data_dir=str(profile_dir),
+            disable_coop=True,
+            humanize=8.0,
+            main_world_eval=True,
+            i_know_what_im_doing=True,
+            firefox_user_prefs=bg_prefs,
+        )
+
+    success = 0
+    i = 0
+    while i < count:
+        cm = launch()
+        browser = await cm.__aenter__()
+        log("main", f"браузер запущен (сессия {i+1}+)")
+        try:
+            while i < count:
+                # Пере-проверка ПЕРЕД созданием почты: если юзер закрыл окно —
+                # рвём внутренний цикл и пересоздаём браузер БЕЗ жжения ящика.
+                if not await browser_alive(browser):
+                    log("main", "браузер закрыт — перезапускаю (почту ещё не создавал)")
+                    break
+
+                log("main", f"--- {i+1}/{count} ---")
+                try:
+                    log("main", "создаю temp-email…")
+                    email = ite_create()
+                    log("main", f"email: {email['address']}")
+                    key = await register_one(browser, email["address"], email["token"])
+                    if key:
+                        success += 1
+                    i += 1
+                except Exception as e:
+                    msg = str(e)
+                    log("err", msg)
+                    import traceback; traceback.print_exc()
+                    # Если ошибка от закрытого браузера — не считаем аккаунт
+                    # проваленным, рвём цикл и пересоздаём окно.
+                    if not await browser_alive(browser):
+                        log("main", "браузер умер посреди регистрации — перезапуск")
+                        break
+                    # Прочие ошибки: аккаунт считаем проваленным, идём дальше.
+                    i += 1
+                if i < count:
+                    await asyncio.sleep(2)
+        finally:
             try:
-                log("main", "создаю temp-email…")
-                email = ite_create()
-                log("main", f"email: {email['address']}")
-                key = await register_one(browser, email["address"], email["token"])
-                if key: success += 1
-            except Exception as e:
-                log("err", str(e))
-                import traceback; traceback.print_exc()
-            if i < count - 1:
-                await asyncio.sleep(2)
+                await cm.__aexit__(None, None, None)
+            except Exception:
+                pass
 
     log("main", f"Готово: {success}/{count} успешно")
 

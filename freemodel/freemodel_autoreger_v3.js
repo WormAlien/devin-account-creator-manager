@@ -19,6 +19,7 @@ const fs = require("fs");
 const path = require("path");
 const config = require("./config");
 const { CamoufoxTmailor } = require("./lib/camoufox-tmailor-client");
+const { MailProvider } = require("./lib/mail-provider");
 const fmTgBind = require("./lib/fm-tg-bind");
 const tgPool = require("./lib/tg-pool");
 const dashApi = require("../internal/dashboard-api");
@@ -491,15 +492,16 @@ async function registerOne(index, inviteCode) {
       Object.defineProperty(navigator, "webdriver", { get: () => false });
     });
 
-    // Стартуем Camoufox-демон для tmailor.
+    // Стартуем универсальный mail-провайдер: tmailor (Camoufox) с автопереключением
+    // на instanttempemail.com при Cloudflare-капче.
     try {
-      tmailorClient = new CamoufoxTmailor({ headless: config.HEADLESS !== false, log });
+      tmailorClient = new MailProvider({ headless: config.HEADLESS !== false, log });
       await tmailorClient.start();
       const initialMailbox = await tmailorClient.create();
       email = initialMailbox.email;
       accesstoken = initialMailbox.accesstoken;
     } catch (e) {
-      throw new Error(`tmailor (Camoufox) не отвечает: ${e.message}`);
+      throw new Error(`mail-provider не отвечает: ${e.message}`);
     }
 
     // Домены, на которые FreeModel молча НЕ доставляет OTP (форма принимается,

@@ -973,6 +973,8 @@ async function handleTgDelete(req, res) {
         if (!phone) return jsonRes(res, 400, { error: 'phone обязателен' });
         const ok = tgPool.remove(phone);
         if (!ok) return jsonRes(res, 404, { error: 'не найден' });
+        // Чистим health-запись, иначе перезалив под тем же phone покажет старый dead.
+        try { tgHealth.forgetPhone(phone); } catch {}
         logLine(`tg pool: − ${phone}`);
         jsonRes(res, 200, { ok: true });
     } catch (e) {
@@ -1064,7 +1066,7 @@ async function handleFreemodelSetTg(req, res) {
         const { name, tgPhone } = await readJsonBody(req);
         if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
         const cleanPhone = tgPhone ? String(tgPhone).replace(/^\+/, '').replace(/\s+/g, '') : null;
-        if (cleanPhone && !/^(?:\d{6,18}|tg_[0-9a-f]+)$/.test(cleanPhone)) {
+        if (cleanPhone && !/^(?:\d{6,18}|tg_[0-9a-f]+|manual)$/.test(cleanPhone)) {
             return jsonRes(res, 400, { error: 'bad phone' });
         }
         const m = dashApi.setFreemodelTgPhone(name, cleanPhone);
@@ -1622,7 +1624,12 @@ async function handleOtActivate(req, res) {
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
 
-        // модель: из тела запроса, иначе — ранее выбранная
+        // Ourtoken импортирован в OmniRoute как provider — Claude Code ходит
+        // через OmniRoute (localhost:20128), а не напрямую на api.ourtoken.ai.
+        // Кликом здесь мы просто отмечаем выбранный ключ в пуле и переключаем
+        // settings.json на OmniRoute (тот же конфиг, что и главный switcher).
+        // Модель хранится для UI, но НЕ пишется в settings — иначе ComboWombo от
+        // OmniRoute залипнет на claude-opus-* и уронит фолбэки.
         let model = body.model != null ? String(body.model).trim() : otReadActiveModel();
         if (model) fs.writeFileSync(OT_ACTIVE_MODEL_FILE, model, { encoding: 'utf-8', flag: 'w' });
 
@@ -1636,32 +1643,26 @@ async function handleOtActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-ot');
             settings.env = settings.env || {};
-            // Официальный формат ourtoken (docs/claude-code-custom-api-guide):
-            //  • BASE_URL БЕЗ /v1 — Claude Code сам добавляет путь
-            //  • ключ через ANTHROPIC_AUTH_TOKEN (Bearer), НЕ apiKeyHelper/x-api-key
-            //  • модель через ANTHROPIC_MODEL + маппинги opus/sonnet/haiku
-            settings.env.ANTHROPIC_BASE_URL = 'https://api.ourtoken.ai';
-            settings.env.ANTHROPIC_AUTH_TOKEN = key;
+            settings.env.ANTHROPIC_BASE_URL = OM_BASE_URL;
+            settings.env.ANTHROPIC_API_KEY = omniKey();
             delete settings.apiKeyHelper;
-            delete settings.env.ANTHROPIC_API_KEY;
+            delete settings.env.ANTHROPIC_AUTH_TOKEN;
+            delete settings.env.ANTHROPIC_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME;
+            delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME;
+            delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME;
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
-            const m = model || 'claude-opus-4-7';   // 4-7 в ~2.3× дешевле 4-8 при близком качестве
-            settings.env.ANTHROPIC_MODEL = m;
-            settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL = m;
-            settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME = m;
-            settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL = m;
-            settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = m;
-            settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = m;
-            settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME = m;
-            // top-level model должен быть alias (opus/sonnet/haiku), а не полный id
-            settings.model = 'opus';
+            delete settings.model;
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`ourtoken activate: settings.json FAILED: ${e.message}`);
         }
-        logLine(`ourtoken activate: ${target.email} → ***${key.slice(-6)} model=${model || 'claude-opus-4-8'} (auth_token)`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), model: model || null, settingsUpdated: settingsOk });
+        logLine(`ourtoken activate: ${target.email} → ***${key.slice(-6)} via OmniRoute${model ? ' (ui model=' + model + ')' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), model: model || null, settingsUpdated: settingsOk, via: 'omniroute' });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -2730,6 +2731,205 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Статус launcher.py для UI. GET = отчёт, POST = принудительный рестарт.
+    if (req.url === '/__switch/api/grok/health') {
+        if (req.method === 'GET') {
+            return (async () => {
+                const alive = await grokLauncherIsAlive();
+                if (alive && grokLauncherState !== 'running') grokLauncherState = 'running';
+                jsonRes(res, 200, {
+                    state: grokLauncherState,
+                    alive,
+                    port: GROK_LAUNCHER_PORT,
+                    path: GROK_LAUNCHER_PATH,
+                    exists: fs.existsSync(GROK_LAUNCHER_PATH),
+                    lastErr: grokLauncherLastErr || '',
+                });
+            })();
+        }
+        if (req.method === 'POST') {
+            return (async () => {
+                grokLauncherStop();
+                await new Promise(r => setTimeout(r, 300));
+                await grokLauncherStart();
+                jsonRes(res, 200, { ok: true, state: grokLauncherState });
+            })();
+        }
+        return jsonRes(res, 405, { error: 'method not allowed' });
+    }
+
+    // ---- Grok cookie sessions on disk (backing store for dashboard tab) ------
+    if (req.url.startsWith('/__switch/api/grok/sessions')) {
+        // Куки живут в grok-launcher/cookies в самой репе. Fallback на legacy-путь,
+        // если новый пуст и старый существует (не терять сохранённые сессии
+        // Anatol/basavaraj/malGtok1 у пользователя после апгрейда).
+        const grokDir = grokCookiesDir();
+        const sanitize = (name) => String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+        const ensureDir = () => { try { fs.mkdirSync(grokDir, { recursive: true }); } catch {} };
+        // Мета (cooldown и прочее) отдельным файлом рядом с cookies:
+        //   1acc.json      — сами куки
+        //   1acc.meta.json — { cooldownUntil: 1720000000000, ... }
+        // Это позволяет не трогать формат кук и не смешивать данные.
+        const metaPathFor = (safe) => path.join(grokDir, `${safe}.meta.json`);
+        const loadMeta = (safe) => {
+            try { return JSON.parse(fs.readFileSync(metaPathFor(safe), 'utf8')) || {}; } catch { return {}; }
+        };
+        const saveMeta = (safe, meta) => {
+            ensureDir();
+            const cleaned = {};
+            for (const [k, v] of Object.entries(meta || {})) {
+                if (v !== null && v !== undefined) cleaned[k] = v;
+            }
+            if (!Object.keys(cleaned).length) {
+                try { fs.unlinkSync(metaPathFor(safe)); } catch {}
+            } else {
+                fs.writeFileSync(metaPathFor(safe), JSON.stringify(cleaned, null, 2));
+            }
+        };
+        const listSessions = () => {
+            ensureDir();
+            let files = [];
+            try { files = fs.readdirSync(grokDir).filter(f => f.endsWith('.json') && !f.endsWith('.meta.json')); } catch { return []; }
+            return files.map(f => {
+                const full = path.join(grokDir, f);
+                const safe = f.replace(/\.json$/, '');
+                try {
+                    const stat = fs.statSync(full);
+                    const cookies = JSON.parse(fs.readFileSync(full, 'utf8'));
+                    return {
+                        name: safe,
+                        cookies,
+                        savedAt: stat.mtime.toISOString(),
+                        cookieCount: Array.isArray(cookies) ? cookies.length : Object.keys(cookies || {}).length,
+                        meta: loadMeta(safe),
+                    };
+                } catch (e) {
+                    return { name: safe, error: e.message };
+                }
+            });
+        };
+
+        if (req.method === 'GET' && req.url === '/__switch/api/grok/sessions') {
+            return jsonRes(res, 200, { sessions: listSessions() });
+        }
+
+        if (req.method === 'POST' && req.url === '/__switch/api/grok/sessions') {
+            let b = '';
+            req.on('data', c => b += c);
+            req.on('end', () => {
+                try {
+                    const { name, cookies } = JSON.parse(b);
+                    const safe = sanitize(name);
+                    if (!safe) return jsonRes(res, 400, { error: 'name required' });
+                    if (!cookies) return jsonRes(res, 400, { error: 'cookies required' });
+                    ensureDir();
+                    fs.writeFileSync(path.join(grokDir, `${safe}.json`), JSON.stringify(cookies, null, 2));
+                    return jsonRes(res, 200, { ok: true, name: safe, sessions: listSessions() });
+                } catch (e) { return jsonRes(res, 400, { error: e.message }); }
+            });
+            return;
+        }
+
+        // POST /__switch/api/grok/sessions/<name>/meta
+        //   body: { cooldownHours: 4 }  → cooldownUntil = now + 4h
+        //   body: { cooldownUntil: null } → снять cooldown
+        //   body: { cooldownUntil: <ms> } → задать явное время
+        //   body: { note: "reason..." } → произвольная заметка
+        // Мета сохраняется рядом (<name>.meta.json). Файл с куками не трогается.
+        const metaMatch = req.url.match(/^\/__switch\/api\/grok\/sessions\/([^/]+)\/meta$/);
+        if (req.method === 'POST' && metaMatch) {
+            const safe = sanitize(decodeURIComponent(metaMatch[1]));
+            if (!safe) return jsonRes(res, 400, { error: 'name required' });
+            let b = '';
+            req.on('data', c => b += c);
+            req.on('end', () => {
+                try {
+                    const patch = JSON.parse(b || '{}');
+                    const cur = loadMeta(safe);
+                    if ('cooldownHours' in patch) {
+                        const h = Number(patch.cooldownHours);
+                        if (!isFinite(h) || h < 0) return jsonRes(res, 400, { error: 'bad cooldownHours' });
+                        cur.cooldownUntil = h > 0 ? Date.now() + h * 3600 * 1000 : null;
+                        cur.cooldownHours = h > 0 ? h : null;
+                        cur.cooldownStartedAt = h > 0 ? Date.now() : null;
+                    } else if ('cooldownUntil' in patch) {
+                        cur.cooldownUntil = patch.cooldownUntil === null ? null : Number(patch.cooldownUntil);
+                        if (patch.cooldownUntil === null) { cur.cooldownStartedAt = null; cur.cooldownHours = null; }
+                    }
+                    if ('note' in patch) cur.note = patch.note ? String(patch.note).slice(0, 500) : null;
+                    saveMeta(safe, cur);
+                    return jsonRes(res, 200, { ok: true, name: safe, meta: cur, sessions: listSessions() });
+                } catch (e) { return jsonRes(res, 400, { error: e.message }); }
+            });
+            return;
+        }
+
+        // POST /__switch/api/grok/sessions/<name>/refresh-quota
+        // Дёргает launcher :8765/quota с куками сессии, сохраняет ответ в мету
+        // под ключом `quota`. Возвращает свежий { sessions } чтобы UI сразу
+        // перерисовался. Синхронно ждём завершения probe (~10-15с).
+        const quotaMatch = req.url.match(/^\/__switch\/api\/grok\/sessions\/([^/]+)\/refresh-quota$/);
+        if (req.method === 'POST' && quotaMatch) {
+            const safe = sanitize(decodeURIComponent(quotaMatch[1]));
+            if (!safe) return jsonRes(res, 400, { error: 'name required' });
+            const cookiesPath = path.join(grokDir, `${safe}.json`);
+            if (!fs.existsSync(cookiesPath)) return jsonRes(res, 404, { error: 'session not found' });
+            let cookies;
+            try {
+                cookies = JSON.parse(fs.readFileSync(cookiesPath, 'utf8'));
+            } catch (e) {
+                return jsonRes(res, 500, { error: 'bad cookies file: ' + e.message });
+            }
+            // POST на launcher — если не отвечает, возвращаем ошибку с подсказкой.
+            const body = JSON.stringify({ cookies });
+            const opts = {
+                host: '127.0.0.1', port: GROK_LAUNCHER_PORT,
+                path: '/quota', method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+                timeout: 60000,
+            };
+            const proxyReq = http.request(opts, (proxyRes) => {
+                let chunks = '';
+                proxyRes.setEncoding('utf8');
+                proxyRes.on('data', (c) => chunks += c);
+                proxyRes.on('end', () => {
+                    try {
+                        const data = JSON.parse(chunks || '{}');
+                        if (proxyRes.statusCode >= 400 || data.detail) {
+                            return jsonRes(res, proxyRes.statusCode || 500, { error: data.detail || 'quota probe failed', raw: data });
+                        }
+                        const cur = loadMeta(safe);
+                        cur.quota = data;
+                        cur.quotaFetchedAt = Date.now();
+                        saveMeta(safe, cur);
+                        return jsonRes(res, 200, { ok: true, quota: data, sessions: listSessions() });
+                    } catch (e) {
+                        return jsonRes(res, 500, { error: 'bad launcher response: ' + e.message });
+                    }
+                });
+            });
+            proxyReq.on('error', (e) => jsonRes(res, 502, {
+                error: `launcher unreachable: ${e.message} — проверь что python launcher.py запущен`,
+            }));
+            proxyReq.on('timeout', () => { proxyReq.destroy(); jsonRes(res, 504, { error: 'quota probe timeout (60s)' }); });
+            proxyReq.write(body);
+            proxyReq.end();
+            return;
+        }
+
+        if (req.method === 'DELETE' && req.url.startsWith('/__switch/api/grok/sessions/')) {
+            const safe = sanitize(decodeURIComponent(req.url.split('/').pop()));
+            if (!safe) return jsonRes(res, 400, { error: 'name required' });
+            const full = path.join(grokDir, `${safe}.json`);
+            try { fs.unlinkSync(full); } catch (e) { if (e.code !== 'ENOENT') return jsonRes(res, 500, { error: e.message }); }
+            // Мету тоже сносим — сессии больше нет.
+            try { fs.unlinkSync(metaPathFor(safe)); } catch {}
+            return jsonRes(res, 200, { ok: true, sessions: listSessions() });
+        }
+
+        return jsonRes(res, 405, { error: 'method not allowed' });
+    }
+
     if (req.method === 'GET' && (req.url === '/' || req.url === '/__switch' || req.url === '/__switch/')) {
         try {
             const html = fs.readFileSync(path.join(__dirname, 'proxy-dashboard.html'), 'utf8');
@@ -2749,16 +2949,164 @@ const server = http.createServer((req, res) => {
     res.end('Not found. UI: /__switch  API: /__switch/api/{status,switch}');
 });
 
+// ---- Grok Cookie Launcher supervisor -----------------------------------------
+// launcher.py (grok-launcher/launcher.py в репе) слушает :8765 и инжектит
+// куки через CDP в новый изолированный Chrome. Дашборд бьёт напрямую в
+// http://localhost:8765/launch, поэтому если процесс не запущен — UI показывает
+// "Connection failed: NetworkError". Раньше нужно было руками запускать python
+// launcher.py; теперь этот блок делает это сам при старте transparent-proxy.
+const GROK_LAUNCHER_PATH_REPO = path.join(__dirname, '..', 'grok-launcher', 'launcher.py');
+// Legacy: старая локация до переноса launcher.py в репу. Если репный файл
+// отсутствует, а legacy есть — используем его, чтобы не сломать существующие установки.
+const GROK_LAUNCHER_PATH_LEGACY = 'D:\\WORMALIENAIGIGANT\\app\\grok-cookie-mcp\\launcher.py';
+const GROK_LAUNCHER_PATH = fs.existsSync(GROK_LAUNCHER_PATH_REPO)
+    ? GROK_LAUNCHER_PATH_REPO
+    : GROK_LAUNCHER_PATH_LEGACY;
+const GROK_LAUNCHER_PORT = 8765;
+
+// Резолвер папки cookies. Всегда возвращает репный путь. При первом старте,
+// если репная папка пуста, а legacy `D:\WORMALIENAIGIGANT\app\grok-cookie-mcp\cookies`
+// не пустая — одноразово копируем оттуда всё (авто-миграция). Ничего не удаляем.
+// Учитывает env GROK_COOKIE_DIR для явного override.
+function grokCookiesDir() {
+    if (process.env.GROK_COOKIE_DIR) return process.env.GROK_COOKIE_DIR;
+    const repoDir = path.join(__dirname, '..', 'grok-launcher', 'cookies');
+    const legacyDir = 'D:\\WORMALIENAIGIGANT\\app\\grok-cookie-mcp\\cookies';
+    try { fs.mkdirSync(repoDir, { recursive: true }); } catch {}
+    const listJson = (d) => { try { return fs.readdirSync(d).filter(f => f.endsWith('.json')); } catch { return []; } };
+    const repoFiles = listJson(repoDir);
+    if (repoFiles.length === 0) {
+        const legacyFiles = listJson(legacyDir);
+        if (legacyFiles.length) {
+            let n = 0;
+            for (const f of legacyFiles) {
+                try { fs.copyFileSync(path.join(legacyDir, f), path.join(repoDir, f)); n++; } catch {}
+            }
+            if (n) console.log(`  Grok cookies: авто-миграция ${n} файлов из ${legacyDir} → ${repoDir}`);
+        }
+    }
+    return repoDir;
+}
+let grokLauncherProc = null;
+let grokLauncherState = 'idle'; // idle | starting | running | failed | disabled
+let grokLauncherLastErr = '';   // последние ~800 байт stderr — для UI-диагностики
+
+async function grokLauncherIsAlive() {
+    return new Promise((resolve) => {
+        const req = http.request({
+            host: '127.0.0.1', port: GROK_LAUNCHER_PORT, path: '/', method: 'GET', timeout: 800,
+        }, (r) => { r.resume(); resolve(r.statusCode ? true : false); });
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.end();
+    });
+}
+
+async function grokLauncherStart() {
+    if (!fs.existsSync(GROK_LAUNCHER_PATH)) {
+        grokLauncherState = 'disabled';
+        console.log(`  Grok launcher: ${GROK_LAUNCHER_PATH} не найден — пропуск`);
+        return;
+    }
+    if (await grokLauncherIsAlive()) {
+        grokLauncherState = 'running';
+        console.log(`  Grok launcher: уже слушает :${GROK_LAUNCHER_PORT} — не трогаю`);
+        return;
+    }
+    grokLauncherState = 'starting';
+    const cwd = path.dirname(GROK_LAUNCHER_PATH);
+    // detached, не унаследовать stdio, чтобы supervisor не блокировал прокси при
+    // рестарте лаунчера и чтобы Ctrl+C по прокси не убивал Chrome через него.
+    const proc = spawn(process.env.PYTHON || 'python', [GROK_LAUNCHER_PATH], {
+        cwd,
+        env: {
+            ...process.env,
+            PORT: String(GROK_LAUNCHER_PORT),
+            // Явно указываем launcher-у ту же папку cookies, что читает proxy
+            // (важно если сработал legacy-fallback).
+            GROK_COOKIE_DIR: grokCookiesDir(),
+        },
+        windowsHide: true,
+        detached: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    grokLauncherProc = proc;
+    grokLauncherLastErr = '';
+    // ВАЖНО: 'error' обязателен. Без него ENOENT/EACCES от spawn крашит весь
+    // процесс proxy как unhandled EventEmitter error — дашборд молча падает,
+    // пользователь видит "NetworkError" на всех endpoint'ах.
+    proc.on('error', (err) => {
+        const msg = `[grok-launcher] spawn error: ${err.code || ''} ${err.message}\n`;
+        process.stderr.write(msg);
+        grokLauncherLastErr = (grokLauncherLastErr + msg).slice(-800);
+        grokLauncherState = 'failed';
+    });
+    try { proc.stdout.on('data', (b) => process.stdout.write(`[grok-launcher] ${b}`)); } catch {}
+    try {
+        proc.stderr.on('data', (b) => {
+            process.stderr.write(`[grok-launcher!] ${b}`);
+            grokLauncherLastErr = (grokLauncherLastErr + b.toString()).slice(-800);
+        });
+    } catch {}
+    proc.on('exit', (code) => {
+        console.log(`  Grok launcher exited: code=${code}`);
+        grokLauncherProc = null;
+        grokLauncherState = code === 0 ? 'idle' : 'failed';
+    });
+    // Poll до 10с; если поднялся — running, иначе failed (но процесс оставляем — может ещё догрузится).
+    for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (await grokLauncherIsAlive()) {
+            grokLauncherState = 'running';
+            console.log(`  Grok launcher: OK на http://localhost:${GROK_LAUNCHER_PORT}/`);
+            return;
+        }
+    }
+    grokLauncherState = 'failed';
+    console.log(`  Grok launcher: НЕ поднялся за 10с (проверь python + fastapi/uvicorn)`);
+}
+
+// Аккуратно валим лаунчер при остановке прокси, иначе останется висеть на :8765.
+function grokLauncherStop() {
+    if (grokLauncherProc && !grokLauncherProc.killed) {
+        try { grokLauncherProc.kill(); } catch {}
+    }
+}
+process.on('SIGINT',  () => { grokLauncherStop(); process.exit(0); });
+process.on('SIGTERM', () => { grokLauncherStop(); process.exit(0); });
+process.on('SIGBREAK', () => { grokLauncherStop(); process.exit(0); });
+process.on('exit',    () => { grokLauncherStop(); });
+
+// Ловим любую утекшую ошибку — иначе процесс тихо помрёт, а UI начнёт возвращать
+// NetworkError на всех запросах. Логируем громко и продолжаем работать.
+process.on('uncaughtException', (err) => {
+    console.error('[proxy] uncaughtException:', err && (err.stack || err.message || err));
+});
+process.on('unhandledRejection', (err) => {
+    console.error('[proxy] unhandledRejection:', err && (err.stack || err.message || err));
+});
+
 server.listen(LISTEN_PORT, () => {
     console.log(`Switcher panel on http://localhost:${LISTEN_PORT}/`);
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);
 
+    // Одноразовая очистка health-кэша от phone'ов, которых уже нет в пуле —
+    // иначе кэш растёт бесконтрольно и путает UI после массовых переимпортов.
+    try {
+        const orphans = tgHealth.pruneOrphans();
+        if (orphans) console.log(`  tg-health: очистил ${orphans} осиротевших записей`);
+    } catch (e) { console.log(`  tg-health prune skip: ${e.message}`); }
+
     // Возобновляем авто-ротацию FreeModel, если она была включена до рестарта.
     if (fmAutoLoadPersist()) {
         console.log('  FreeModel auto-rotation: resuming (was enabled)');
         fmAutoStart();
     }
+
+    // Автостарт Grok launcher — чтобы UI-вкладка «Grok Cookie Sessions» работала
+    // сразу после запуска дашборда, без ручного `python launcher.py`.
+    grokLauncherStart().catch(e => console.log('  Grok launcher start error:', e.message));
 });
 

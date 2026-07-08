@@ -25,6 +25,8 @@ class CamoufoxTmailor {
     this.pending = new Map(); // id -> { resolve, reject }
     this.ready = null;
     this.msgId = 0;
+    this.onCaptcha = opts.onCaptcha || null; // колбэк при обнаружении капчи (вызовется 1 раз)
+    this._captchaNotified = false;
   }
 
   async start() {
@@ -43,6 +45,12 @@ class CamoufoxTmailor {
       for (const line of lines) {
         if (!line) continue;
         this.log(`[camoufox-tmailor/py] ${line}`);
+        // Первое появление [captcha] → зовём внешний колбэк (уведомить пользователя).
+        // Дальнейшие [captcha] игнорируем — Python сам поллит и вернёт email.
+        if (!this._captchaNotified && line.includes("[captcha]") && this.onCaptcha) {
+          this._captchaNotified = true;
+          try { this.onCaptcha(); } catch (e) { this.log(`[camoufox-tmailor] onCaptcha err: ${e.message}`); }
+        }
       }
     });
 

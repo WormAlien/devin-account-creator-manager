@@ -20,6 +20,19 @@ const fs = require('fs');
 const path = require('path');
 
 const POOL_FILE = path.join(__dirname, '..', 'tg_pool.json');
+// Health-cache: `{ [phone]: { status: 'alive'|'dead'|'error', ... } }`.
+// Читаем чтобы reserve()/stats() исключали dead-номера (SESSION_REVOKED и т.п.).
+// Файл может отсутствовать (health-чек ещё не запускали) — тогда всё считается alive.
+const HEALTH_CACHE_FILE = path.join(__dirname, '..', '.tg_health_cache.json');
+
+function loadHealthCache() {
+    try { return JSON.parse(fs.readFileSync(HEALTH_CACHE_FILE, 'utf8')) || {}; }
+    catch { return {}; }
+}
+function isDead(phone, health) {
+    const h = health[String(phone)];
+    return h && h.status === 'dead';
+}
 
 function load() {
     if (!fs.existsSync(POOL_FILE)) return [];
@@ -92,8 +105,10 @@ function addHex({ phone, dc_id, user_id, auth_key_hex, source }) {
 // Финализация — markUsed/markBanned/markFree.
 function reserve(usedBy) {
     const arr = load();
-    // Берём самый старый free (FIFO).
-    const idx = arr.findIndex(e => e.status === 'free');
+    const health = loadHealthCache();
+    // Берём самый старый free, пропуская dead (SESSION_REVOKED etc). Error/unknown
+    // не пропускаем — там ключ может быть жив, просто сеть/таймаут был.
+    const idx = arr.findIndex(e => e.status === 'free' && !isDead(e.phone, health));
     if (idx === -1) return null;
     arr[idx].status = 'reserved';
     arr[idx].usedBy = usedBy || null;
@@ -178,9 +193,14 @@ function maskAuthKey(hex) {
 
 function stats() {
     const arr = load();
+    const health = loadHealthCache();
+    const deadFree = arr.filter(e => e.status === 'free' && isDead(e.phone, health)).length;
     return {
         total:    arr.length,
         free:     arr.filter(e => e.status === 'free').length,
+        // usable = свободных МИНУС мёртвых (то что реально возьмёт reserve).
+        usable:   arr.filter(e => e.status === 'free' && !isDead(e.phone, health)).length,
+        deadFree,
         reserved: arr.filter(e => e.status === 'reserved').length,
         used:     arr.filter(e => e.status === 'used').length,
         banned:   arr.filter(e => e.status === 'banned').length,

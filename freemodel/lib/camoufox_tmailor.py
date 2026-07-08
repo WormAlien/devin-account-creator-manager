@@ -152,7 +152,8 @@ async def create_email(page):
     async def on_response(res):
         try:
             url = res.url
-            if url.rstrip("/") != API_URL.rstrip("/"):
+            # Не требуем exact match: tmailor может использовать /api, /api/, /api/newemail и т.п.
+            if not url.startswith(API_URL.rstrip("/")):
                 return
             method = res.request.method if res.request else "GET"
             if method.upper() != "POST":
@@ -161,7 +162,7 @@ async def create_email(page):
             if body and body.get("msg") == "ok" and body.get("email") and body.get("accesstoken"):
                 captured["email"] = body["email"]
                 captured["accesstoken"] = body["accesstoken"]
-                log("email", f"перехвачен из API response: {body['email']}")
+                log("email", f"перехвачен из API response ({url}): {body['email']}")
         except Exception:
             pass
 
@@ -195,7 +196,118 @@ async def create_email(page):
         log("email", f"получен вручную: {result['email']}")
         return {"email": result["email"], "accesstoken": result["accesstoken"]}
 
+    # Логируем полный API-ответ — чтобы понимать какие msg-варианты возвращает tmailor.
+    log("email", f"api result: {json.dumps(result, ensure_ascii=False) if result else 'None'}")
+
+    # ВАЖНО: страница могла УЖЕ получить email сама (через свой встроенный fetch,
+    # который наш on_response пропустил — URL mismatch и т.п.). Проверяем window.currentEmail
+    # ПЕРЕД показом MessageBox — иначе задалбываем пользователя когда email уже готов.
+    try:
+        current = await page.evaluate("() => window.currentEmail || null")
+        if current and current.get("email") and current.get("accesstoken"):
+            log("email", f"взял из window.currentEmail: {current['email']} (fallback ушёл во второй запрос → errorcaptcha, но email на UI есть)")
+            return {"email": current["email"], "accesstoken": current["accesstoken"]}
+    except Exception as e:
+        log("email", f"window.currentEmail probe err: {e}")
+
+    # Детектим блокировку двумя способами:
+    #   1) API msg (errorcaptcha / client-block / verify / etc.)
+    #   2) UI-баннер на странице ("Please verify that you are not a robot" — самый надёжный)
+    is_captcha_api = bool(
+        result
+        and (
+            result.get("msg") == "errorcaptcha"
+            or result.get("captcha") == 1
+            or result.get("client-block") == 1
+            or "verify" in str(result.get("msg", "")).lower()
+            or "block" in str(result.get("msg", "")).lower()
+        )
+    )
+    is_captcha_ui = False
+    try:
+        body_text = await page.evaluate("() => document.body.innerText || ''")
+        if body_text and any(
+            marker in body_text.lower()
+            for marker in ("verify that you are not a robot", "not a robot", "please verify", "cloudflare")
+        ):
+            is_captcha_ui = True
+            log("captcha", f"UI-баннер обнаружен на странице")
+    except Exception:
+        pass
+    is_captcha = is_captcha_api or is_captcha_ui
+    if is_captcha:
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            # Проверяем что окно ещё живо (пользователь мог закрыть).
+            if page.is_closed():
+                raise Exception("окно Camoufox закрыто — прервано пользователем")
+            log("captcha", f"tmailor заблокировал IP (попытка {attempt}/{max_retries}) — жду смены VPN")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _prompt_change_ip_and_wait, attempt)
+            if page.is_closed():
+                raise Exception("окно Camoufox закрыто — прервано пользователем")
+            log("captcha", "OK нажат, перезагружаю tmailor.com...")
+            # Полная перезагрузка страницы: после смены VPN старые запросы могут
+            # висеть в failed-state, sw/cookies тоже нужно освежить.
+            try:
+                await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+                await asyncio.sleep(2)  # дать странице подхватить cookies/CF
+            except Exception as e:
+                log("captcha", f"reload err: {e}")
+                continue
+            try:
+                r = await page.evaluate(
+                    """async (apiUrl) => {
+                        const currentToken = (window.currentEmail && window.currentEmail.accesstoken) || "";
+                        const res = await fetch(apiUrl, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            credentials: "include",
+                            body: JSON.stringify({ action: "newemail", curentToken: currentToken }),
+                        });
+                        return res.json();
+                    }""",
+                    API_URL,
+                )
+            except Exception as e:
+                log("captcha", f"retry err: {e}")
+                continue
+            if r and r.get("msg") == "ok" and r.get("email") and r.get("accesstoken"):
+                log("captcha", f"разблокировано, email получен: {r['email']}")
+                return {"email": r["email"], "accesstoken": r["accesstoken"]}
+            log("captcha", f"всё ещё блок: {r}")
+        raise Exception(f"captcha: {max_retries} попыток исчерпаны")
+
     raise Exception(f"failed to create email: {result}")
+
+
+def _prompt_change_ip_and_wait(attempt: int):
+    """Нативный Windows MessageBox: блокирует поток пока пользователь не нажмёт OK.
+    Плюс winsound.MessageBeep для звонка. Ловит ошибку — просто ждёт 30с если не Windows."""
+    title = "tmailor: смени VPN"
+    body = (
+        f"tmailor заблокировал IP (попытка {attempt}).\n\n"
+        f"Переключи VPN / смени IP.\n"
+        f"Затем нажми OK — реги продолжатся."
+    )
+    try:
+        import ctypes
+        # звук предупреждения
+        try:
+            import winsound
+            winsound.MessageBeep(0x30)  # MB_ICONWARNING
+        except Exception:
+            pass
+        MB_OK = 0x00
+        MB_ICONWARNING = 0x30
+        MB_SETFOREGROUND = 0x10000
+        MB_TOPMOST = 0x40000
+        MB_SYSTEMMODAL = 0x1000
+        flags = MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST | MB_SYSTEMMODAL
+        ctypes.windll.user32.MessageBoxW(0, body, title, flags)
+    except Exception as e:
+        log("captcha", f"MessageBox недоступен ({e}), fallback: пауза 30с")
+        time.sleep(30)
 
 
 async def regenerate_email(page):
@@ -215,7 +327,72 @@ async def regenerate_email(page):
     if result and result.get("msg") == "ok" and result.get("email") and result.get("accesstoken"):
         log("email", f"перегенерирован: {result['email']}")
         return {"email": result["email"], "accesstoken": result["accesstoken"]}
-    raise Exception(f"regenerate failed: {result.get('msg') or result}")
+
+    log("email", f"regenerate api result: {json.dumps(result, ensure_ascii=False) if result else 'None'}")
+
+    # Тот же captcha-handler что в create_email: MessageBox → OK → reload → retry.
+    is_captcha_api = bool(
+        result
+        and (
+            result.get("msg") == "errorcaptcha"
+            or result.get("captcha") == 1
+            or result.get("client-block") == 1
+            or "verify" in str(result.get("msg", "")).lower()
+            or "block" in str(result.get("msg", "")).lower()
+        )
+    )
+    is_captcha_ui = False
+    try:
+        body_text = await page.evaluate("() => document.body.innerText || ''")
+        if body_text and any(
+            marker in body_text.lower()
+            for marker in ("verify that you are not a robot", "not a robot", "please verify", "cloudflare")
+        ):
+            is_captcha_ui = True
+    except Exception:
+        pass
+
+    if is_captcha_api or is_captcha_ui:
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            if page.is_closed():
+                raise Exception("окно Camoufox закрыто — прервано пользователем")
+            log("captcha", f"regenerate: блок IP (попытка {attempt}/{max_retries}) — жду смены VPN")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _prompt_change_ip_and_wait, attempt)
+            if page.is_closed():
+                raise Exception("окно Camoufox закрыто — прервано пользователем")
+            log("captcha", "OK нажат, перезагружаю tmailor.com...")
+            try:
+                await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+                await asyncio.sleep(2)
+            except Exception as e:
+                log("captcha", f"reload err: {e}")
+                continue
+            try:
+                r = await page.evaluate(
+                    """async (apiUrl) => {
+                        const currentToken = (window.currentEmail && window.currentEmail.accesstoken) || "";
+                        const res = await fetch(apiUrl, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            credentials: "include",
+                            body: JSON.stringify({ action: "newemail", curentToken: currentToken }),
+                        });
+                        return res.json();
+                    }""",
+                    API_URL,
+                )
+            except Exception as e:
+                log("captcha", f"retry err: {e}")
+                continue
+            if r and r.get("msg") == "ok" and r.get("email") and r.get("accesstoken"):
+                log("captcha", f"регенерация после разблока: {r['email']}")
+                return {"email": r["email"], "accesstoken": r["accesstoken"]}
+            log("captcha", f"всё ещё блок: {r}")
+        raise Exception(f"regenerate captcha: {max_retries} попыток исчерпаны")
+
+    raise Exception(f"regenerate failed: {result.get('msg') if result else 'no result'}")
 
 
 async def fetch_inbox(page, email, accesstoken):

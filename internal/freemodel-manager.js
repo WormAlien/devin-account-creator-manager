@@ -174,11 +174,91 @@ async function checkFreemodelQuota(session) {
         let planInfo = { plan: '', renews: '' };
         try {
             await page.goto('https://freemodel.dev/dashboard', { waitUntil: 'domcontentloaded', timeout: 20000 });
-            await page.waitForTimeout(1500);
+            // Ждём пока React дорендерит хоть что-то узнаваемое: явные маркеры плана
+            // ИЛИ структура /dashboard (Sidebar-нав, "Usage"-таб и т.п.), чтобы не
+            // возвращать пустой план при медленном рендере.
+            await page.waitForFunction(
+                () => {
+                    const t = document.body?.innerText || '';
+                    return /CURRENT\s+PLAN|Upgrade to Pro|Manage subscription|Free plan|Pro plan|Billing|Subscription/i.test(t);
+                },
+                { timeout: 12000 }
+            ).catch(() => {});
+            await page.waitForTimeout(700);
         const homeText = await page.evaluate(() => (document.body?.innerText || '').replace(/\r/g, ''));
         const lines = homeText.split('\n').map(s => s.trim()).filter(Boolean);
+        // Известные названия — всё остальное (плейсхолдер "—", "…", "Loading")
+        // игнорируем, чтобы не залетало в кеш и не показывалось потом чипом-прочерком.
+        const KNOWN_PLAN = /^(Free|Pro|Max|Team|Enterprise|Ultimate|Plus|Business|Trial|Beta)$/i;
         const planIdx = lines.findIndex(l => /^CURRENT\s+PLAN$/i.test(l));
-        if (planIdx >= 0 && lines[planIdx + 1]) planInfo.plan = lines[planIdx + 1];
+        if (planIdx >= 0 && lines[planIdx + 1] && KNOWN_PLAN.test(lines[planIdx + 1].trim())) {
+            planInfo.plan = lines[planIdx + 1].trim();
+        }
+        // Fallback: если "CURRENT PLAN" не нашли — определяем по маркерам upgrade-CTA.
+        // "Upgrade to Pro"/"Get Pro" → Free. "Manage subscription"/"Cancel subscription" → Pro.
+        // Совпадение слова "Pro" в шапке без "Upgrade" рядом — Pro.
+        if (!planInfo.plan) {
+            if (/Manage subscription|Cancel subscription|Pro plan\b|You're on Pro|Pro member/i.test(homeText)) {
+                planInfo.plan = 'Pro';
+            } else if (/Upgrade to Pro|Get Pro|Free plan|You're on Free/i.test(homeText)) {
+                planInfo.plan = 'Free';
+            }
+        }
+        // Ещё один fallback: явные бэйджи в DOM. freemodel.dev рендерит "Pro" chip
+        // в шапке, но текст может не попасть в innerText из-за scoped CSS. Ищем
+        // изолированный текст-узел "Pro"/"Free"/"Max" на кнопке/бэйдже.
+        if (!planInfo.plan) {
+            try {
+                const badgePlan = await page.evaluate(() => {
+                    const nodes = Array.from(document.querySelectorAll('span,div,button,a'));
+                    const CLEAN = /^(Free|Pro|Max|Team|Enterprise)$/;
+                    for (const n of nodes) {
+                        const t = (n.textContent || '').trim();
+                        if (!CLEAN.test(t)) continue;
+                        // маленький элемент, стилизованный под бэйдж — короткий текст, ограниченная ширина
+                        const r = n.getBoundingClientRect();
+                        if (r.width > 0 && r.width < 120 && r.height > 0 && r.height < 44) return t;
+                    }
+                    return '';
+                });
+                if (badgePlan) planInfo.plan = badgePlan;
+            } catch {}
+        }
+        // Последний fallback: /billing — там канонично.
+        if (!planInfo.plan) {
+            try {
+                await page.goto('https://freemodel.dev/dashboard/billing', { waitUntil: 'domcontentloaded', timeout: 12000 });
+                await page.waitForTimeout(1500);
+                const bt = await page.evaluate(() => (document.body?.innerText || ''));
+                if (/Manage subscription|Cancel subscription|Pro plan|You're on Pro|Pro member|Current plan.*Pro/i.test(bt)) planInfo.plan = 'Pro';
+                else if (/Upgrade to Pro|Get Pro|Free plan|You're on Free|Current plan.*Free/i.test(bt)) planInfo.plan = 'Free';
+                // Ещё один пас: ищем "CURRENT PLAN" + строку под ним.
+                if (!planInfo.plan) {
+                    const btLines = bt.split('\n').map(s => s.trim()).filter(Boolean);
+                    const idx = btLines.findIndex(l => /^CURRENT\s+PLAN$/i.test(l));
+                    if (idx >= 0) {
+                        for (let k = idx + 1; k < Math.min(btLines.length, idx + 5); k++) {
+                            if (/^(Free|Pro|Max|Team|Enterprise|Ultimate|Plus|Business|Trial|Beta)$/i.test(btLines[k])) {
+                                planInfo.plan = btLines[k];
+                                break;
+                            }
+                        }
+                    }
+                }
+                // DEBUG: если план так и не нашли — дампим кусочек текста в log-файл,
+                // чтобы понять, чем эта страница отличается от «нормальных».
+                if (!planInfo.plan) {
+                    try {
+                        const dbgDir = path.join(process.cwd(), 'logs');
+                        if (!fs.existsSync(dbgDir)) fs.mkdirSync(dbgDir, { recursive: true });
+                        const dumpFile = path.join(dbgDir, '.freemodel_plan_miss.log');
+                        const snippet = bt.slice(0, 2000).replace(/\s+\n/g, '\n');
+                        fs.appendFileSync(dumpFile,
+                          `\n===== ${new Date().toISOString()} · ${session.name} · /billing =====\n${snippet}\n`);
+                    } catch {}
+                }
+            } catch {}
+        }
         const renewsMatch = homeText.match(/Renews(?:\s+on)?\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
         if (renewsMatch) planInfo.renews = new Date(renewsMatch[1]).toISOString();
         // Detect Telegram binding: phone near "Telegram" or "connected" text.
@@ -235,12 +315,14 @@ async function checkFreemodelQuota(session) {
                     if (m) { out.available = m[0]; break; }
                 }
             }
-            // "Plan (this week) $X.XX · Bonus credits $Y.YY"
+            // "Plan (this week) $X.XX · Bonus credits $Y.YY" — это НЕДЕЛЬНЫЕ РАСХОДЫ,
+            // а НЕ название плана. Раньше здесь писали в out.plan долларовую сумму
+            // и она затирала настоящее "Free/Pro" из /dashboard, если тот не смог
+            // распарсить. В UI это отображалось как "—" (regex не матчил $12.34).
+            // Название плана заполняется только из planInfo.plan (см. ниже).
             const planLine = lines.find(l => /Plan\s*\(this week\)/i.test(l));
             if (planLine) {
-                const mp = planLine.match(/Plan\s*\(this week\)\s*\$?([\d.,]+)/i);
                 const mb = planLine.match(/Bonus credits\s*\$?([\d.,]+)/i);
-                if (mp) out.plan = `$${mp[1]}`;
                 if (mb) out.bonus = `$${mb[1]}`;
             }
             // "5-Hour window" → "Resets in 3h 7m", "$0.13 / $10.00", "1% used"

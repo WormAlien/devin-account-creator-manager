@@ -219,6 +219,12 @@ if ask "Поставить Python-зависимости (Camoufox + opentele ve
       $PY -m pip install camoufox==0.4.11 requests playwright==1.61.0 && $PY -m camoufox fetch && ok "camoufox готов"
     fi
 
+    # grok-launcher: FastAPI-сервис на :8765 для SuperGrok Sessions.
+    # Поднимается transparent-proxy.js автоматически, но зависимости надо один раз поставить.
+    if ask "  grok-launcher (SuperGrok Sessions — headless-квоты + Chrome-launcher)?" Y; then
+      $PY -m pip install -r grok-launcher/requirements.txt && ok "grok-launcher готов"
+    fi
+
     if ask "  venv для ✈ Открыть TG (opentele)?" Y; then
       SKIP_TG_VENV=0
       if [ "$PYVER" = "3.12" ] && ! has_cpp_build_tools; then

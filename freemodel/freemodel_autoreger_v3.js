@@ -23,6 +23,10 @@ const fmTgBind = require("./lib/fm-tg-bind");
 const tgPool = require("./lib/tg-pool");
 const dashApi = require("../internal/dashboard-api");
 
+// Уведомление о капче делает сам camoufox_tmailor.py через нативный Windows MessageBox
+// (ctypes.user32.MessageBoxW) — блокирующий диалог с кнопкой OK, ждёт пока пользователь
+// сменит VPN и нажмёт OK, затем ретраит create_email.
+
 // Постоянный блок-лист email-доменов, которые FreeModel отверг по signup-лимиту.
 // Растёт во время работы и переживает рестарты — следующие реги не тратят на них
 // время. Хардкод DEAD_EMAIL_DOMAINS — для тех, что вообще не доставляют письмо.
@@ -175,17 +179,23 @@ function appendKeysFile(email, apiKey, inviteCode) {
 async function fillSignupForm(page, email) {
   log(`[форма] ввожу email: ${email}`);
 
+  // Ждём появления поля email до 30с (React/Vue может рендериться долго,
+  // особенно на медленном VPN). Проверяем все фреймы в цикле.
   let emailLoc = null;
-  for (const frame of page.frames()) {
-    try {
-      const loc = frame.locator(SELECTORS.emailInput).first();
-      if ((await loc.count()) > 0 && (await loc.isVisible())) {
-        emailLoc = { frame, loc };
-        break;
-      }
-    } catch {}
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline && !emailLoc) {
+    for (const frame of page.frames()) {
+      try {
+        const loc = frame.locator(SELECTORS.emailInput).first();
+        if ((await loc.count()) > 0 && (await loc.isVisible())) {
+          emailLoc = { frame, loc };
+          break;
+        }
+      } catch {}
+    }
+    if (!emailLoc) await page.waitForTimeout(500);
   }
-  if (!emailLoc) throw new Error("поле email не найдено");
+  if (!emailLoc) throw new Error("поле email не найдено (30с ожидания)");
 
   const { loc } = emailLoc;
 
@@ -491,9 +501,31 @@ async function registerOne(index, inviteCode) {
       Object.defineProperty(navigator, "webdriver", { get: () => false });
     });
 
+    // Реф-привязка на freemodel.dev держится на HttpOnly cookie bm_referral.
+    // /invite/{CODE} → SPA шлёт POST /api/auth/set-referral, бэк ставит куку,
+    // send-otp читает её из headers (в теле POST send-otp только email).
+    // Если SPA-вызов подвисает / не проходит — рега уходит без реферала. Ставим
+    // куку сами до захода на страницу — эмулируем то же самое, что делает set-referral.
+    await context.addCookies([{
+      name: "bm_referral",
+      value: inviteCode,
+      domain: "freemodel.dev",
+      path: "/",
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+      expires: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+    }]);
+
     // Стартуем Camoufox-демон для tmailor.
     try {
-      tmailorClient = new CamoufoxTmailor({ headless: config.HEADLESS !== false, log });
+      tmailorClient = new CamoufoxTmailor({
+        headless: config.HEADLESS !== false,
+        log,
+        onCaptcha: () => {
+          log("🧩 tmailor заблокировал IP — python показал MessageBox, ждёт смены VPN + OK");
+        },
+      });
       await tmailorClient.start();
       const initialMailbox = await tmailorClient.create();
       email = initialMailbox.email;
@@ -537,6 +569,10 @@ async function registerOne(index, inviteCode) {
       let domainOk = false;
       let domainRegenAttempts = 0;
       while (!domainOk && domainRegenAttempts < 15) {
+        // Подсасываем свежие добавления от параллельных workers —
+        // иначе прямо сейчас можем жечь 5 мин на домене, который уже
+        // забанил соседний процесс.
+        for (const d of loadEmailBlocklist()) rejectedDomains.add(d);
         const domain = email.split("@")[1];
         const whitelisted = !allowedDomains.length || allowedDomains.includes(domain);
         if (whitelisted && !rejectedDomains.has(domain)) {
@@ -729,7 +765,12 @@ async function registerOne(index, inviteCode) {
         cookies = (await context.cookies()).filter((c) => c.domain.includes("freemodel"));
     } catch {}
   } finally {
-    if (email) {
+    // Не сохраняем неудачные реги (success=false) — это мусор, засоряет дашборд.
+    // Скриншот ошибки (`_error_*.png` из catch выше) остаётся для дебага.
+    if (email && !success) {
+      log(`[#${index}] 🗑 неудачная рега (${email}) — не сохраняю acc-dir`);
+    }
+    if (email && success) {
       const exportedDir = exportAccount({ index, email, apiKey, inviteCode: refCode, sessionFile, cookies, success });
       // Финализация TG: bind делался во временной папке _tmp_bind_N, поэтому
       // markUsed/setTgPhone вешаем на реальное имя аккаунта (папка exportAccount),

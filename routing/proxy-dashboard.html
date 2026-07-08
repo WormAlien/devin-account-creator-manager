@@ -953,7 +953,7 @@
               <option value="updated">🔄 свежесть кеша</option>
             </select>
             <button onclick="loadFreemodelSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
-            <button onclick="loadFreemodelSessions(true)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Квоты ~30s</button>
+            <button onclick="loadFreemodelSessions(true)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Квоты (~2 мин)</button>
             <div class="flex items-center gap-1 ml-2 pl-2 border-l border-line-soft">
               <label class="text-[10px] text-faint">старт-реф</label>
               <select id="fm-invite-select"
@@ -3344,7 +3344,11 @@ async function loadFreemodelSessions(refresh) {
   // Иначе получается «эпилепсия» при auto-refresh — список пропадает на секунду.
   const hasData = Array.isArray(state.freemodel) && state.freemodel.length > 0;
   if (refresh) {
-    $('freemodel-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">🔄 обновляю квоты FreeModel через headless Chrome… (~30s)</div>`;
+    // Оценка: N eligible × ~6 сек / 3 concurrency.
+    const eligible = (state.freemodel || []).filter(s => s.status === '✅' && !s.meta?.banned).length;
+    const etaSec = Math.max(15, Math.round(eligible * 6 / 3));
+    const etaStr = etaSec >= 60 ? `~${Math.round(etaSec / 60)} мин` : `~${etaSec} с`;
+    $('freemodel-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">🔄 обновляю квоты FreeModel через headless Chrome…<br><span class="text-[10px] text-faint mt-1 inline-block">${eligible} акк · ${etaStr}</span></div>`;
   } else if (!hasData) {
     $('freemodel-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
   }
@@ -3471,6 +3475,7 @@ function renderFreemodel(refreshed) {
     let ageCell   = '<span class="text-faint">нет в кеше</span>';
     if (q) {
       availCell = `<span class="text-emerald font-semibold font-mono">${esc(q.available || '—')}</span>`;
+      // 5h колонка: приоритет Pro-окно (если есть), иначе Trial credit (Free).
       if (q.h5 || q.h5pct != null) {
         let pct = q.h5pct;
         if (pct == null) {
@@ -3480,7 +3485,13 @@ function renderFreemodel(refreshed) {
         h5Cell = pct != null
           ? bar(pct, pct > 70 ? 'bg-crimson' : pct > 40 ? 'bg-amber' : 'bg-emerald')
           : `<span class="text-amber font-mono text-xs">${esc(q.h5 || '')}/${esc(q.h5max || '')}</span>`;
+      } else if (q.trialCredit) {
+        const dl = typeof q.trialDaysLeft === 'number' ? q.trialDaysLeft : null;
+        const clr = dl != null && dl <= 1 ? 'text-crimson' : dl != null && dl <= 2 ? 'text-amber' : 'text-emerald';
+        const dLabel = dl != null ? `${dl}д` : '';
+        h5Cell = `<span class="font-mono text-xs ${clr}" title="Trial credit${dl != null ? ` · ${dl} дн. осталось` : ''}">🎁 ${esc(q.trialCredit)}${dLabel ? ' · ' + dLabel : ''}</span>`;
       }
+      // 7d колонка: приоритет Pro-окно, иначе Referral bonus $USED/$CAP как bar.
       if (q.d7 || q.d7pct != null) {
         let pct = q.d7pct;
         if (pct == null) {
@@ -3490,6 +3501,17 @@ function renderFreemodel(refreshed) {
         d7Cell = pct != null
           ? bar(pct, pct > 70 ? 'bg-crimson' : pct > 40 ? 'bg-amber' : 'bg-azure')
           : `<span class="text-azure font-mono text-xs">${esc(q.d7 || '')}/${esc(q.d7max || '')}</span>`;
+      } else if (q.referralBonusMax) {
+        const used = q.referralBonusUsed || 0;
+        const max = q.referralBonusMax;
+        const pct = Math.min(100, Math.round((used / max) * 100));
+        d7Cell = `
+          <div class="flex items-center gap-2 min-w-24" title="Реф. бонус: использовано $${used.toFixed(2)} из $${max.toFixed(2)}">
+            <div class="flex-1 h-1.5 bg-line-soft rounded-full overflow-hidden">
+              <div class="h-full bg-violet rounded-full" style="width:${pct}%"></div>
+            </div>
+            <span class="text-violet text-xs font-mono w-16 text-right">$${used.toFixed(2)}/$${max.toFixed(0)}</span>
+          </div>`;
       }
       ageCell = `<span class="text-muted">${ageStr(q.updatedAt)}</span>`;
     }
@@ -3513,7 +3535,9 @@ function renderFreemodel(refreshed) {
       ok ? 1 : 0, email, s.date || '', banned ? 1 : 0, isActive ? 1 : 0,
       tgPhone || '', apiKey ? 1 : 0, planRaw, fmMode,
       q?.available || '', q?.h5 || '', q?.h5max || '', q?.h5pct ?? '',
-      q?.d7 || '', q?.d7max || '', q?.d7pct ?? '', q?.renews || ''
+      q?.d7 || '', q?.d7max || '', q?.d7pct ?? '', q?.renews || '',
+      q?.trialCredit || '', q?.trialDaysLeft ?? '',
+      q?.referralBonusUsed ?? '', q?.referralBonusMax ?? ''
     ];
     const sig = sigParts.join('|');
     const trHtml = `<tr data-fm-key="${esc(s.name)}" data-fm-sig="${esc(sig)}" class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
@@ -3578,8 +3602,8 @@ function renderFreemodel(refreshed) {
           <th class="px-3 py-2.5 text-left font-medium">Created</th>
           <th class="px-3 py-2.5 text-left font-medium">Timer</th>
           <th class="px-3 py-2.5 text-right font-medium">Available</th>
-          <th class="px-3 py-2.5 text-left font-medium">5h window</th>
-          <th class="px-3 py-2.5 text-left font-medium">7d window</th>
+          <th class="px-3 py-2.5 text-left font-medium" title="Pro: 5h window · Free: trial credit ($X · Nд)">Trial / 5h</th>
+          <th class="px-3 py-2.5 text-left font-medium" title="Pro: 7d window · Free: реф. бонус (используется на запросы)">Реф-бонус / 7d</th>
           <th class="px-3 py-2.5 text-right font-medium">Updated</th>
           <th class="px-3 py-2.5 text-right font-medium">Actions</th>
         </tr>

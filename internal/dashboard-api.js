@@ -234,7 +234,16 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
                 const q = await checkFreemodelQuota(eligible[i]);
                 if (q) {
                     const origIdx = sessions.indexOf(eligible[i]);
-                    if (origIdx >= 0) out[origIdx].quota = { ...q, updatedAt: Date.now() };
+                    // Сохраняем "липкие" поля из старого кэша, если новый скрап их не увидел.
+                    // freemodel.dev рендерит план/renews через React с задержкой — при неудачном
+                    // wait план приходит пустым, и раньше это стирало кэшированный "Pro"/"Free"
+                    // на UI, оставляя прочерк. Мержим: пусто в q → берём из cache.
+                    const prev = cache[eligible[i].name] || {};
+                    const merged = { ...q };
+                    if (!merged.plan && prev.plan) merged.plan = prev.plan;
+                    if (!merged.renews && prev.renews) merged.renews = prev.renews;
+                    if (!merged.tgPhone && prev.tgPhone) merged.tgPhone = prev.tgPhone;
+                    if (origIdx >= 0) out[origIdx].quota = { ...merged, updatedAt: Date.now() };
                     cache[eligible[i].name] = out[origIdx >= 0 ? origIdx : i].quota;
                     // TG-привязка — локальная мета (ставится при bind) авторитетна.
                     // Скан freemodel.dev может ДОБАВИТь номер, если локально пусто,
@@ -354,47 +363,72 @@ function toggleOmniAccount(id, active) {
     return rows[0];
 }
 
-// ───── Per-session actions (Notion / FreeModel) ───────────────────
+// ───── Per-session actions (Notion / FreeModel / Conduit / Devin) ─────
+// Dedup: до этого каждый клик на "Открыть в Chrome" запускал новый
+// Playwright-chromium (5-10 процессов). 15 кликов = 100+ chrome-процессов,
+// забивалась RAM. Теперь повторный клик фокусирует существующее окно.
+const openedBrowsers = new Map();  // key `${kind}:${name}` -> { browser, page }
+
+async function _openOrFocusSession({ kind, name, storageState, gotoUrl, replyUrl, contextOpts = {} }) {
+    const key = `${kind}:${name}`;
+    const existing = openedBrowsers.get(key);
+    if (existing && existing.browser.isConnected()) {
+        try {
+            await existing.page.bringToFront();
+            return { ok: true, kind, name, url: replyUrl || gotoUrl, focused: true };
+        } catch {
+            openedBrowsers.delete(key);
+            try { await existing.browser.close(); } catch {}
+        }
+    }
+    const { chromium } = require('playwright');
+    const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+    const context = await browser.newContext({ storageState, viewport: null, ...contextOpts });
+    const page = await context.newPage();
+    openedBrowsers.set(key, { browser, page });
+    browser.on('disconnected', () => {
+        if (openedBrowsers.get(key)?.browser === browser) openedBrowsers.delete(key);
+    });
+    await page.goto(gotoUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    return { ok: true, kind, name, url: replyUrl || gotoUrl };
+}
+
 async function openSessionInBrowser(kind, name) {
     if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
     if (kind === 'notion') {
         const dir = path.join(PROJECT_ROOT, 'notion', 'sessions', name);
         if (!fs.existsSync(dir)) throw new Error(`notion session not found: ${name}`);
-        const { chromium } = require('playwright');
-        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
-        const context = await browser.newContext({ storageState: path.join(dir, 'session.json'), viewport: null });
-        const page = await context.newPage();
-        await page.goto('https://www.notion.so/', { waitUntil: 'domcontentloaded' }).catch(() => {});
-        return { ok: true, kind, name, url: 'https://www.notion.so/' };
+        return _openOrFocusSession({
+            kind, name,
+            storageState: path.join(dir, 'session.json'),
+            gotoUrl: 'https://www.notion.so/',
+        });
     }
     if (kind === 'freemodel') {
         const session = freemodelMod().getFreemodelSessions().find(s => s.name === name);
         if (!session) throw new Error(`freemodel session not found: ${name}`);
-        const dir = session.path;
-        if (!fs.existsSync(dir)) throw new Error(`freemodel session dir gone: ${dir}`);
-        const { chromium } = require('playwright');
-        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
-        const context = await browser.newContext({
-            storageState: path.join(dir, 'session.json'),
-            viewport: null,  // заполнять окно (--start-maximized), не фикс 1280×720
-            // Форсим английский UI: иначе ru-системные акки откроются на русском
-            locale: 'en-US',
-            extraHTTPHeaders: { 'accept-language': 'en-US,en;q=0.9' },
+        if (!fs.existsSync(session.path)) throw new Error(`freemodel session dir gone: ${session.path}`);
+        return _openOrFocusSession({
+            kind, name,
+            storageState: path.join(session.path, 'session.json'),
+            gotoUrl: 'https://freemodel.dev/dashboard',
+            replyUrl: 'https://freemodel.dev/dashboard/usage',
+            contextOpts: {
+                // Форсим английский UI: иначе ru-системные акки откроются на русском
+                locale: 'en-US',
+                extraHTTPHeaders: { 'accept-language': 'en-US,en;q=0.9' },
+            },
         });
-        const page = await context.newPage();
-        await page.goto('https://freemodel.dev/dashboard', { waitUntil: 'domcontentloaded' }).catch(() => {});
-        return { ok: true, kind, name, url: 'https://freemodel.dev/dashboard/usage' };
     }
     if (kind === 'conduit') {
         const account = conduitMod().getConduitAccounts().find(s => s.name === name);
         if (!account) throw new Error(`conduit account not found: ${name}`);
         if (!account.sessionFile || !fs.existsSync(account.sessionFile)) throw new Error(`conduit session.json gone (key-only акк?): ${name}`);
-        const { chromium } = require('playwright');
-        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
-        const context = await browser.newContext({ storageState: account.sessionFile, viewport: null });
-        const page = await context.newPage();
-        await page.goto('https://conduit.ozdoev.net/#cabinet', { waitUntil: 'domcontentloaded' }).catch(() => {});
-        return { ok: true, kind, name, url: 'https://conduit.ozdoev.net/#cabinet' };
+        return _openOrFocusSession({
+            kind, name,
+            storageState: account.sessionFile,
+            gotoUrl: 'https://conduit.ozdoev.net/#cabinet',
+        });
     }
     if (kind === 'devin') {
         const session = devinMod().getDevinSessions().find(s => s.name === name);
@@ -404,12 +438,11 @@ async function openSessionInBrowser(kind, name) {
         const url = orgName
             ? `https://app.devin.ai/org/${orgName}/settings/usage`
             : 'https://app.devin.ai/';
-        const { chromium } = require('playwright');
-        const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
-        const context = await browser.newContext({ storageState: path.join(session.path, 'session.json'), viewport: null });
-        const page = await context.newPage();
-        await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
-        return { ok: true, kind, name, url };
+        return _openOrFocusSession({
+            kind, name,
+            storageState: path.join(session.path, 'session.json'),
+            gotoUrl: url,
+        });
     }
     throw new Error(`unknown kind: ${kind}`);
 }

@@ -141,6 +141,36 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
   API Helper» на главной. ТГ-пул — **зеркало** блока из FreeModel (общий пул:
   `renderTgPool` рисует во все `.tg-list`/`.tg-stats`).
 
+## Статуслайн Claude Code (`~/.claude/statusline-autoreger.sh`)
+
+Скрипт-строка снизу CLI: `[transport] provider/model │ $ ▰▰▰▰▱▱ 60% $9.26`.
+
+- **Провайдер**: сначала пробует `GET :8200/__switch/api/status` (1с timeout), при
+  недоступности — фолбэк по `apiKeyHelper`/`ANTHROPIC_BASE_URL` из `settings.json`.
+- **Квота для `freemodel` = только активный аккаунт** (не сумма пула):
+  ключ из `~/.claude/fm-active-key.txt` → dir через `.freemodel_meta.json`
+  (`apiKey`) → блок в `.freemodel_quota_cache.json`. Метрика — 5h окно:
+  `pct = (1 − h5/h5max)·100`, `$ = h5max − h5` (остаток до reset).
+- **Квота для `ourtoken`** — `live/total` из `ourtoken-sessions.json`.
+
+### Lazy refresh (пишет в общий кеш дашборда)
+
+Если `updatedAt` активного > **180с** — статуслайн шлёт fire-and-forget
+`POST /__switch/api/session/refresh-quota {kind:'freemodel', name:<dir>}` с
+`-m 0.5 &` → `refreshOneFreemodelQuota` в `internal/dashboard-api.js` пишет в
+`.freemodel_quota_cache.json` → **шкалы дашборда обновляются автоматически**
+(тот же файл). Пока свежие данные не пришли — цифры рисуются `DIM` + возраст
+`(10m)` в конце.
+
+### AFK
+
+Специальной AFK-паузы **нет и не нужно**: Claude Code рендерит статуслайн
+только по событиям (сообщение, ответ, свич). Простаиваешь → скрипт не тикает
+→ curl не летит. При возврате улетит один рефреш, следующий рендер уже свежий.
+Единственный независимый фон — `fmAuto` auto-rotator (~90с), если включён.
+
+---
+
 ## Energy-шкала (батарея «сколько осталось»)
 
 Компонент в `proxy-dashboard.html`: `renderEnergyGauge(el, opts)` + CSS-классы
@@ -205,6 +235,37 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
   → следующий запрос claude едет на новом ключе без перезапуска.
 - Секрет `tgbot/.env` (BOT_TOKEN, ALLOWED_USERS) — gitignored. Шаблон `.env.example`
   закоммичен. Запуск: `npm run tgbot`.
+
+---
+
+## VPS-режим («Экран VPS» для друга)
+
+Опциональный режим: дашборд крутится на арендованной VPS, друг заходит через
+HTTPS+пароль и видит рабочий стол VPS прямо во вкладке. Браузеры
+(Chrome/Playwright/Camoufox) запускаются **headed** в desktop-сессии, не headless.
+
+- **VPS:** Ubuntu 24.04, 2–4 CPU / 4–8 GB RAM. Графику ставим сами (XFCE +
+  tigervnc-standalone + novnc), не берём «VPS с GUI» как услугу.
+- **Порты:** наружу только `443` (дашборд) и `22` (по ключу, лучше allowlist).
+  VNC/noVNC/internal API слушают `127.0.0.1`/docker net и наружу не светятся.
+- **Reverse proxy:** один Caddy/Nginx терминирует HTTPS и проксирует:
+  `/` → дашборд `:8200`, `/vnc` → noVNC (только после auth дашборда, не отдельным портом).
+- **Auth:** вход на дашборд по паролю (basic-auth у reverse proxy ИЛИ своя
+  сессия в `transparent-proxy.js`). noVNC отдельного пароля не имеет — закрыт
+  за дашбордом. Админские `/__switch/api/*` наружу без auth не отдавать.
+- **Вкладка «Экран VPS»:** `<div data-tab-content="vps">` с noVNC-клиентом
+  (iframe на `/vnc/vnc.html?host=...&path=...` или JS-клиент в самой вкладке).
+  Кнопки: «Открыть Chrome», «Открыть Camoufox», «Перезапустить экран», «Стоп браузеры».
+- **Браузеры:** `headless:false`, запуск внутри XFCE-сессии VNC. Playwright
+  `launch({headless:false})`, Camoufox — обычный headed. Для CLI-запуска ставим
+  `DISPLAY=:1` (или через `xvfb-run`, если отдельная headless-сессия всё же нужна).
+- **Секреты:** токены/ключи в `~/.claude/` на VPS; бэкап `freemodel/`,
+  `conduit/accounts/`, `routing/*-keys.json` обязателен. VPS без бэкапа = потеря пула.
+
+> Ponytail: вместо отдельного VNC-сервиса в дашборде можно проксировать `/vnc`
+> прямо в Caddy и встроить iframe — меньше кода, чем тащить noVNC-клиент в HTML.
+> Добавлять свой VNC-клиент в `proxy-dashboard.html` только если reverse-proxy
+> вариант не заживёт.
 
 ---
 

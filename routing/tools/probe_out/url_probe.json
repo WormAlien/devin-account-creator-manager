@@ -1,0 +1,485 @@
+{
+  "https://grok.com/settings/usage": [
+    {
+      "url": "https://grok.com/settings/usage",
+      "status": 200,
+      "body": "<!DOCTYPE html><html lang=\"en\" translate=\"no\"><head><meta charSet=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_400.p.06he22w9ae9uz.woff2\" as=\"font\" crossorigin=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_400Italic.p.0t4u8oqlw5.9..woff2\" as=\"font\" crossorigin=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_550.p.0v0vvoupxwn1c.woff2\" as=\"font\" crossorigin=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_550Italic.p.1255s5ghf7uud.woff2\" as=\"font\" crossorigin=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" type=\"font/woff2\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0ha20356~d7dj.css\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0loevhtw4-06q.css\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/06_ck4k5y_rr_.css\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0kbi0h88lamtl.css\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" data-precedence=\"next\"/><link rel=\"preload\" as=\"script\" fetchPriority=\"low\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\" href=\"https://cdn.grok.com/_next/static/chunks/0-nt7.8hplhm5.js\"/><script src=\"https://cdn.grok.com/_next/static/chunks/08s9s235o20cm.js\" async=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/0ofqvo0zjbiqd.js\" async=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/06uvhxcp49097.js\" async=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/17nb2q2d2v3ub.js\" async=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/0-c6xk4ksvxwh.js\" async=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/turbopack-12aozcts5oquz.js\" async=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/158y3l2scgqqd.js\" async=\"\" nonce=\"Mzc1YjMyYjMtMmRjMS00MDUxLThjYjQtZTBiNGY3MTNhYTU1\"></script><script src=\"https://cdn.grok.com/_next/stati"
+    },
+    {
+      "url": "https://grok.com/rest/products?provider=SUBSCRIPTION_PROVIDER_STRIPE",
+      "status": 200,
+      "body": "{\"stripe\":{\"products\":[{\"id\":\"prod_S4qOT32nvkToDq\",\"name\":\"Grok Teams\",\"description\":\"1 Permitted User (Seat) of Grok Teams\",\"prices\":[],\"productTier\":\"PRODUCT_TIER_UNKNOWN\"},{\"id\":\"prod_RilhxLgoA7h5ri\",\"name\":\"SuperGrok\",\"description\":\"\",\"prices\":[{\"id\":\"price_1R6nQ9HJohyvID2ck7FNrVdw\",\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\"},{\"amount\":{\"val\":\"70000\"},\"currency\":\"inr\"}],\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1R6nPnHJohyvID2cJMCZO5zW\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"},{\"amount\":{\"val\":\"650000\"},\"currency\":\"inr\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_GROK_PRO\"},{\"id\":\"prod_Sdnv8D1IKHvyAs\",\"name\":\"SuperGrok Heavy\",\"description\":\"\",\"prices\":[{\"id\":\"price_1RiWLBHJohyvID2cZTcgz4DL\",\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1RiWJsHJohyvID2cWqHFA8xx\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"}],\"campaign\":{\"campaignId\":\"subcamp_B7nRq\",\"stripe\":{\"discount\":{\"promotionCode\":\"\",\"durationType\":\"ONCE\",\"numberOfMonths\":3,\"percentageOff\":67,\"couponId\":\"nNV12z8u\"},\"offerPurpose\":\"ACQUISITION\",\"minIosAppVersion\":\"1.3.95\"}},\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_SUPER_GROK_PRO\"}]}}"
+    },
+    {
+      "url": "https://grok.com/rest/suggestions/profile",
+      "status": 200,
+      "body": "{}"
+    },
+    {
+      "url": "https://grok.com/rest/modes",
+      "status": 200,
+      "body": "{\"modes\":[{\"id\":\"auto\",\"title\":\"Авто\",\"description\":\"Выбирает между Быстрым или Экспертным режимами\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"rocket\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"fast\",\"title\":\"Быстрый\",\"description\":\"Быстрые ответы\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightning\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"expert\",\"title\":\"Эксперт\",\"description\":\"Глубокое размышление\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightbulb\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"heavy\",\"title\":\"Тяжёлый\",\"description\":\"Группа экспертов\",\"badgeText\":\" \",\"availability\":{\"requiresUpgrade\":{\"message\":\"\",\"minimumSubscriptionTier\":\"TIER_SUPERGROK_HEAVY\"}},\"iconHint\":\"connected_apps\",\"tags\":[\"TAG_PRIMARY\"]}],\"defaultModeId\":\"auto\"}"
+    },
+    {
+      "url": "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig",
+      "status": 200,
+      "body": "\u0000\u0000\u0000\u0000h\nf\r\u0000\u0000�B\u0012\u0000\u001a\u0000\"\f\bθ��\u0006\u0010ؕ��\u0002*\f\bέ��\u0006\u0010ؕ��\u0002:\u0007\b\u0005\u0015\u0000\u0000\bB:\u0007\b\u0006\u0015\u0000\u0000�A:\u0007\b\u0004\u0015\u0000\u0000 AB\u001e\b\u0002\u0012\f\bθ��\u0006\u0010ؕ��\u0002\u001a\f\bέ��\u0006\u0010ؕ��\u0002X\u0001b\u0000h\u0001�\u0000\u0000\u0000\u000fgrpc-status:0\r\n"
+    },
+    {
+      "url": "https://grok.com/api/auth/session",
+      "status": 200,
+      "body": "{\"status\":\"authenticated\",\"session\":{\"userId\":\"d7c99270-d110-4eff-8b37-54ac6f8ccf4b\",\"email\":\"prussmed@googlemail.com\",\"emailDomain\":\"googlemail.com\",\"givenName\":\"Anatol\",\"familyName\":\"Pruss\",\"profileImage\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/JbiZzVipV1Lqr0zX-profile-picture.webp\",\"xUserId\":\"\",\"organizationId\":\"\",\"organizationRole\":0,\"organizationType\":0}}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60&filterIsStarred=true",
+      "status": 200,
+      "body": "{\"conversations\":[],\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces/shared?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=1",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null}],\"nextPageToken\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/system-prompt/list",
+      "status": 200,
+      "body": "{\"assets\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/user-settings",
+      "status": 200,
+      "body": "{\"excludeFromTraining\":true,\"preferences\":null,\"allowXPersonalization\":false,\"enableMemory\":true,\"allowShareIndexing\":true,\"allowCompanionNotifications\":true,\"allowAutoShare\":true,\"agentCustomizations\":[],\"allowGrokFinishedNotification\":true}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks/inactive",
+      "status": 200,
+      "body": "{\"tasks\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/notifications/list?pageSize=50",
+      "status": 200,
+      "body": "{\"notifications\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks",
+      "status": 200,
+      "body": "{\"tasks\":[],\"unreadResults\":[],\"unreadCounts\":[],\"taskUsage\":{\"frequentUsage\":0,\"frequentLimit\":10,\"occasionalUsage\":0,\"occasionalLimit\":30}}"
+    },
+    {
+      "url": "https://grok.com/rest/modes",
+      "status": 200,
+      "body": "{\"modes\":[{\"id\":\"auto\",\"title\":\"Авто\",\"description\":\"Выбирает между Быстрым или Экспертным режимами\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"rocket\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"fast\",\"title\":\"Быстрый\",\"description\":\"Быстрые ответы\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightning\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"expert\",\"title\":\"Эксперт\",\"description\":\"Глубокое размышление\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightbulb\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"heavy\",\"title\":\"Тяжёлый\",\"description\":\"Группа экспертов\",\"badgeText\":\" \",\"availability\":{\"requiresUpgrade\":{\"message\":\"\",\"minimumSubscriptionTier\":\"TIER_SUPERGROK_HEAVY\"}},\"iconHint\":\"connected_apps\",\"tags\":[\"TAG_PRIMARY\"]}],\"defaultModeId\":\"auto\"}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    },
+    {
+      "url": "https://grok.com/rest/rate-limits",
+      "status": 200,
+      "body": "{\"windowSizeSeconds\":7200,\"remainingQueries\":50,\"totalQueries\":50,\"lowEffortRateLimits\":null,\"highEffortRateLimits\":null}"
+    },
+    {
+      "url": "https://grok.com/rest/user-skills",
+      "status": 200,
+      "body": "{\"skills\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/skills",
+      "status": 200,
+      "body": "{\"skills\":[{\"index\":1,\"name\":\"docx\",\"description\":\"Create, read, and edit Word documents (.docx)\",\"icon\":\"file-text\",\"displayName\":\"Word Documents\"},{\"index\":3,\"name\":\"pdf\",\"description\":\"Create, merge, split, and extract from PDFs\",\"icon\":\"file-text\",\"displayName\":\"PDFs\"},{\"index\":4,\"name\":\"pptx\",\"description\":\"Create, read, and edit PowerPoint presentations (.pptx)\",\"icon\":\"presentation\",\"displayName\":\"Presentations\"},{\"index\":5,\"name\":\"skill-creator\",\"description\":\"Build new custom skills through conversation\",\"icon\":\"wand\",\"displayName\":\"Skill Creator\"},{\"index\":7,\"name\":\"xlsx\",\"description\":\"Create, read, and edit spreadsheet files (.xlsx, .csv)\",\"icon\":\"table\",\"displayName\":\"Spreadsheets\"}]}"
+    },
+    {
+      "url": "https://grok.com/rest/assets?pageSize=9&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"assets\":[{\"assetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"mimeType\":\"image/jpeg\",\"name\":\"eff33f41-58e7-4f48-b58f-d79d6f3d6333.jpg\",\"sizeBytes\":54489,\"createTime\":\"2026-07-07T21:55:13.556280Z\",\"lastUseTime\":\"2026-07-07T21:55:13.556280Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},{\"assetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"mimeType\":\"image/jpeg\",\"name\":\"02fa076a-4681-46ac-98bd-9e79de1731e5.jpg\",\"sizeBytes\":441533,\"createTime\":\"2026-07-07T21:55:12.539557Z\",\"lastUseTime\":\"2026-07-07T21:55:12.539557Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},{\"assetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"mimeType\":\"image/jpeg\",\"name\":\"grok-70c4b988-5b48-407b-9fa8-4c75fbc2587e.jpg\",\"sizeBytes\":715861,\"createTime\":\"2026-07-07T20:15:28.410568Z\",\"lastUseTime\":\"2026-07-07T20:15:28.410568Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"UCgGDAQ8SkVbBm2WlHnPTrOvJw==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreate"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    }
+  ],
+  "https://grok.com/?settings=usage": [
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "[bin]"
+    },
+    {
+      "url": "https://grok.com/?settings=usage",
+      "status": 200,
+      "body": "<!DOCTYPE html><html lang=\"en\" translate=\"no\"><head><meta charSet=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_400.p.06he22w9ae9uz.woff2\" as=\"font\" crossorigin=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_400Italic.p.0t4u8oqlw5.9..woff2\" as=\"font\" crossorigin=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_550.p.0v0vvoupxwn1c.woff2\" as=\"font\" crossorigin=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_550Italic.p.1255s5ghf7uud.woff2\" as=\"font\" crossorigin=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" type=\"font/woff2\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0ha20356~d7dj.css\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0loevhtw4-06q.css\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/06_ck4k5y_rr_.css\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0kbi0h88lamtl.css\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" data-precedence=\"next\"/><link rel=\"preload\" as=\"script\" fetchPriority=\"low\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\" href=\"https://cdn.grok.com/_next/static/chunks/0-nt7.8hplhm5.js\"/><script src=\"https://cdn.grok.com/_next/static/chunks/08s9s235o20cm.js\" async=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/0ofqvo0zjbiqd.js\" async=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/06uvhxcp49097.js\" async=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/17nb2q2d2v3ub.js\" async=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/0-c6xk4ksvxwh.js\" async=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/turbopack-12aozcts5oquz.js\" async=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/158y3l2scgqqd.js\" async=\"\" nonce=\"ZTg3ZWVkNjMtNWYyOS00NmY4LWEzYmQtZmZmYTE1NzgyNjAy\"></script><script src=\"https://cdn.grok.com/_next/stati"
+    },
+    {
+      "url": "https://grok.com/rest/products?provider=SUBSCRIPTION_PROVIDER_STRIPE",
+      "status": 200,
+      "body": "{\"stripe\":{\"products\":[{\"id\":\"prod_S4qOT32nvkToDq\",\"name\":\"Grok Teams\",\"description\":\"1 Permitted User (Seat) of Grok Teams\",\"prices\":[],\"productTier\":\"PRODUCT_TIER_UNKNOWN\"},{\"id\":\"prod_Sdnv8D1IKHvyAs\",\"name\":\"SuperGrok Heavy\",\"description\":\"\",\"prices\":[{\"id\":\"price_1RiWLBHJohyvID2cZTcgz4DL\",\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1RiWJsHJohyvID2cWqHFA8xx\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"}],\"campaign\":{\"campaignId\":\"subcamp_B7nRq\",\"stripe\":{\"discount\":{\"promotionCode\":\"\",\"durationType\":\"ONCE\",\"numberOfMonths\":3,\"percentageOff\":67,\"couponId\":\"nNV12z8u\"},\"offerPurpose\":\"ACQUISITION\",\"minIosAppVersion\":\"1.3.95\"}},\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_SUPER_GROK_PRO\"},{\"id\":\"prod_RilhxLgoA7h5ri\",\"name\":\"SuperGrok\",\"description\":\"\",\"prices\":[{\"id\":\"price_1R6nQ9HJohyvID2ck7FNrVdw\",\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"70000\"},\"currency\":\"inr\"},{\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\"}],\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1R6nPnHJohyvID2cJMCZO5zW\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"650000\"},\"currency\":\"inr\"},{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_GROK_PRO\"}]}}"
+    },
+    {
+      "url": "https://grok.com/rest/suggestions/profile",
+      "status": 200,
+      "body": "{}"
+    },
+    {
+      "url": "https://grok.com/rest/modes",
+      "status": 200,
+      "body": "{\"modes\":[{\"id\":\"auto\",\"title\":\"Авто\",\"description\":\"Выбирает между Быстрым или Экспертным режимами\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"rocket\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"fast\",\"title\":\"Быстрый\",\"description\":\"Быстрые ответы\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightning\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"expert\",\"title\":\"Эксперт\",\"description\":\"Глубокое размышление\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightbulb\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"heavy\",\"title\":\"Тяжёлый\",\"description\":\"Группа экспертов\",\"badgeText\":\" \",\"availability\":{\"requiresUpgrade\":{\"message\":\"\",\"minimumSubscriptionTier\":\"TIER_SUPERGROK_HEAVY\"}},\"iconHint\":\"connected_apps\",\"tags\":[\"TAG_PRIMARY\"]}],\"defaultModeId\":\"auto\"}"
+    },
+    {
+      "url": "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig",
+      "status": 200,
+      "body": "\u0000\u0000\u0000\u0000h\nf\r\u0000\u0000�B\u0012\u0000\u001a\u0000\"\f\bθ��\u0006\u0010ؕ��\u0002*\f\bέ��\u0006\u0010ؕ��\u0002:\u0007\b\u0005\u0015\u0000\u0000\bB:\u0007\b\u0006\u0015\u0000\u0000�A:\u0007\b\u0004\u0015\u0000\u0000 AB\u001e\b\u0002\u0012\f\bθ��\u0006\u0010ؕ��\u0002\u001a\f\bέ��\u0006\u0010ؕ��\u0002X\u0001b\u0000h\u0001�\u0000\u0000\u0000\u000fgrpc-status:0\r\n"
+    },
+    {
+      "url": "https://grok.com/api/auth/session",
+      "status": 200,
+      "body": "{\"status\":\"authenticated\",\"session\":{\"userId\":\"d7c99270-d110-4eff-8b37-54ac6f8ccf4b\",\"email\":\"prussmed@googlemail.com\",\"emailDomain\":\"googlemail.com\",\"givenName\":\"Anatol\",\"familyName\":\"Pruss\",\"profileImage\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/JbiZzVipV1Lqr0zX-profile-picture.webp\",\"xUserId\":\"\",\"organizationId\":\"\",\"organizationRole\":0,\"organizationType\":0}}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60&filterIsStarred=true",
+      "status": 200,
+      "body": "{\"conversations\":[],\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    },
+    {
+      "url": "https://grok.com/rest/user-settings",
+      "status": 200,
+      "body": "{\"excludeFromTraining\":true,\"preferences\":null,\"allowXPersonalization\":false,\"enableMemory\":true,\"allowShareIndexing\":true,\"allowCompanionNotifications\":true,\"allowAutoShare\":true,\"agentCustomizations\":[],\"allowGrokFinishedNotification\":true}"
+    },
+    {
+      "url": "https://grok.com/rest/notifications/list?pageSize=50",
+      "status": 200,
+      "body": "{\"notifications\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=1",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null}],\"nextPageToken\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/system-prompt/list",
+      "status": 200,
+      "body": "{\"assets\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks/inactive",
+      "status": 200,
+      "body": "{\"tasks\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces/shared?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/modes",
+      "status": 200,
+      "body": "{\"modes\":[{\"id\":\"auto\",\"title\":\"Авто\",\"description\":\"Выбирает между Быстрым или Экспертным режимами\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"rocket\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"fast\",\"title\":\"Быстрый\",\"description\":\"Быстрые ответы\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightning\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"expert\",\"title\":\"Эксперт\",\"description\":\"Глубокое размышление\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightbulb\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"heavy\",\"title\":\"Тяжёлый\",\"description\":\"Группа экспертов\",\"badgeText\":\" \",\"availability\":{\"requiresUpgrade\":{\"message\":\"\",\"minimumSubscriptionTier\":\"TIER_SUPERGROK_HEAVY\"}},\"iconHint\":\"connected_apps\",\"tags\":[\"TAG_PRIMARY\"]}],\"defaultModeId\":\"auto\"}"
+    },
+    {
+      "url": "https://grok.com/rest/rate-limits",
+      "status": 200,
+      "body": "{\"windowSizeSeconds\":7200,\"remainingQueries\":50,\"totalQueries\":50,\"lowEffortRateLimits\":null,\"highEffortRateLimits\":null}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks",
+      "status": 200,
+      "body": "{\"tasks\":[],\"unreadResults\":[],\"unreadCounts\":[],\"taskUsage\":{\"frequentUsage\":0,\"frequentLimit\":10,\"occasionalUsage\":0,\"occasionalLimit\":30}}"
+    },
+    {
+      "url": "https://grok.com/rest/user-skills",
+      "status": 200,
+      "body": "{\"skills\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/skills",
+      "status": 200,
+      "body": "{\"skills\":[{\"index\":1,\"name\":\"docx\",\"description\":\"Create, read, and edit Word documents (.docx)\",\"icon\":\"file-text\",\"displayName\":\"Word Documents\"},{\"index\":3,\"name\":\"pdf\",\"description\":\"Create, merge, split, and extract from PDFs\",\"icon\":\"file-text\",\"displayName\":\"PDFs\"},{\"index\":4,\"name\":\"pptx\",\"description\":\"Create, read, and edit PowerPoint presentations (.pptx)\",\"icon\":\"presentation\",\"displayName\":\"Presentations\"},{\"index\":5,\"name\":\"skill-creator\",\"description\":\"Build new custom skills through conversation\",\"icon\":\"wand\",\"displayName\":\"Skill Creator\"},{\"index\":7,\"name\":\"xlsx\",\"description\":\"Create, read, and edit spreadsheet files (.xlsx, .csv)\",\"icon\":\"table\",\"displayName\":\"Spreadsheets\"}]}"
+    },
+    {
+      "url": "https://grok.com/rest/assets?pageSize=9&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"assets\":[{\"assetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"mimeType\":\"image/jpeg\",\"name\":\"eff33f41-58e7-4f48-b58f-d79d6f3d6333.jpg\",\"sizeBytes\":54489,\"createTime\":\"2026-07-07T21:55:13.556280Z\",\"lastUseTime\":\"2026-07-07T21:55:13.556280Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},{\"assetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"mimeType\":\"image/jpeg\",\"name\":\"02fa076a-4681-46ac-98bd-9e79de1731e5.jpg\",\"sizeBytes\":441533,\"createTime\":\"2026-07-07T21:55:12.539557Z\",\"lastUseTime\":\"2026-07-07T21:55:12.539557Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},{\"assetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"mimeType\":\"image/jpeg\",\"name\":\"grok-70c4b988-5b48-407b-9fa8-4c75fbc2587e.jpg\",\"sizeBytes\":715861,\"createTime\":\"2026-07-07T20:15:28.410568Z\",\"lastUseTime\":\"2026-07-07T20:15:28.410568Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"UCgGDAQ8SkVbBm2WlHnPTrOvJw==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreate"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    }
+  ],
+  "https://grok.com/?dialog=settings.usage": [
+    {
+      "url": "https://grok.com/?dialog=settings.usage",
+      "status": 200,
+      "body": "<!DOCTYPE html><html lang=\"en\" translate=\"no\"><head><meta charSet=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_400.p.06he22w9ae9uz.woff2\" as=\"font\" crossorigin=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_400Italic.p.0t4u8oqlw5.9..woff2\" as=\"font\" crossorigin=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_550.p.0v0vvoupxwn1c.woff2\" as=\"font\" crossorigin=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" type=\"font/woff2\"/><link rel=\"preload\" href=\"https://cdn.grok.com/_next/static/media/UniversalSans_Text_550Italic.p.1255s5ghf7uud.woff2\" as=\"font\" crossorigin=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" type=\"font/woff2\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0ha20356~d7dj.css\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0loevhtw4-06q.css\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/06_ck4k5y_rr_.css\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" data-precedence=\"next\"/><link rel=\"stylesheet\" href=\"https://cdn.grok.com/_next/static/chunks/0kbi0h88lamtl.css\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" data-precedence=\"next\"/><link rel=\"preload\" as=\"script\" fetchPriority=\"low\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\" href=\"https://cdn.grok.com/_next/static/chunks/0-nt7.8hplhm5.js\"/><script src=\"https://cdn.grok.com/_next/static/chunks/08s9s235o20cm.js\" async=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/0ofqvo0zjbiqd.js\" async=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/06uvhxcp49097.js\" async=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/17nb2q2d2v3ub.js\" async=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/0-c6xk4ksvxwh.js\" async=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/turbopack-12aozcts5oquz.js\" async=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\"></script><script src=\"https://cdn.grok.com/_next/static/chunks/158y3l2scgqqd.js\" async=\"\" nonce=\"YjRjNDQ0MWUtYjFhNy00OGFhLWFlYzUtNjM0ZjMwNmYwYmIz\"></script><script src=\"https://cdn.grok.com/_next/stati"
+    },
+    {
+      "url": "https://grok.com/rest/products?provider=SUBSCRIPTION_PROVIDER_STRIPE",
+      "status": 200,
+      "body": "{\"stripe\":{\"products\":[{\"id\":\"prod_Sdnv8D1IKHvyAs\",\"name\":\"SuperGrok Heavy\",\"description\":\"\",\"prices\":[{\"id\":\"price_1RiWLBHJohyvID2cZTcgz4DL\",\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1RiWJsHJohyvID2cWqHFA8xx\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"}],\"campaign\":{\"campaignId\":\"subcamp_B7nRq\",\"stripe\":{\"discount\":{\"promotionCode\":\"\",\"durationType\":\"ONCE\",\"numberOfMonths\":3,\"percentageOff\":67,\"couponId\":\"nNV12z8u\"},\"offerPurpose\":\"ACQUISITION\",\"minIosAppVersion\":\"1.3.95\"}},\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_SUPER_GROK_PRO\"},{\"id\":\"prod_S4qOT32nvkToDq\",\"name\":\"Grok Teams\",\"description\":\"1 Permitted User (Seat) of Grok Teams\",\"prices\":[],\"productTier\":\"PRODUCT_TIER_UNKNOWN\"},{\"id\":\"prod_RilhxLgoA7h5ri\",\"name\":\"SuperGrok\",\"description\":\"\",\"prices\":[{\"id\":\"price_1R6nQ9HJohyvID2ck7FNrVdw\",\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\"},{\"amount\":{\"val\":\"70000\"},\"currency\":\"inr\"}],\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1R6nPnHJohyvID2cJMCZO5zW\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"},{\"amount\":{\"val\":\"650000\"},\"currency\":\"inr\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_GROK_PRO\"}]}}"
+    },
+    {
+      "url": "https://grok.com/rest/suggestions/profile",
+      "status": 200,
+      "body": "{}"
+    },
+    {
+      "url": "https://grok.com/rest/modes",
+      "status": 200,
+      "body": "{\"modes\":[{\"id\":\"auto\",\"title\":\"Авто\",\"description\":\"Выбирает между Быстрым или Экспертным режимами\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"rocket\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"fast\",\"title\":\"Быстрый\",\"description\":\"Быстрые ответы\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightning\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"expert\",\"title\":\"Эксперт\",\"description\":\"Глубокое размышление\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightbulb\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"heavy\",\"title\":\"Тяжёлый\",\"description\":\"Группа экспертов\",\"badgeText\":\" \",\"availability\":{\"requiresUpgrade\":{\"message\":\"\",\"minimumSubscriptionTier\":\"TIER_SUPERGROK_HEAVY\"}},\"iconHint\":\"connected_apps\",\"tags\":[\"TAG_PRIMARY\"]}],\"defaultModeId\":\"auto\"}"
+    },
+    {
+      "url": "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig",
+      "status": 200,
+      "body": "\u0000\u0000\u0000\u0000h\nf\r\u0000\u0000�B\u0012\u0000\u001a\u0000\"\f\bθ��\u0006\u0010ؕ��\u0002*\f\bέ��\u0006\u0010ؕ��\u0002:\u0007\b\u0005\u0015\u0000\u0000\bB:\u0007\b\u0006\u0015\u0000\u0000�A:\u0007\b\u0004\u0015\u0000\u0000 AB\u001e\b\u0002\u0012\f\bθ��\u0006\u0010ؕ��\u0002\u001a\f\bέ��\u0006\u0010ؕ��\u0002X\u0001b\u0000h\u0001�\u0000\u0000\u0000\u000fgrpc-status:0\r\n"
+    },
+    {
+      "url": "https://grok.com/api/auth/session",
+      "status": 200,
+      "body": "{\"status\":\"authenticated\",\"session\":{\"userId\":\"d7c99270-d110-4eff-8b37-54ac6f8ccf4b\",\"email\":\"prussmed@googlemail.com\",\"emailDomain\":\"googlemail.com\",\"givenName\":\"Anatol\",\"familyName\":\"Pruss\",\"profileImage\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/JbiZzVipV1Lqr0zX-profile-picture.webp\",\"xUserId\":\"\",\"organizationId\":\"\",\"organizationRole\":0,\"organizationType\":0}}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60&filterIsStarred=true",
+      "status": 200,
+      "body": "{\"conversations\":[],\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces/shared?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/user-skills",
+      "status": 200,
+      "body": "{\"skills\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/skills",
+      "status": 200,
+      "body": "{\"skills\":[{\"index\":1,\"name\":\"docx\",\"description\":\"Create, read, and edit Word documents (.docx)\",\"icon\":\"file-text\",\"displayName\":\"Word Documents\"},{\"index\":3,\"name\":\"pdf\",\"description\":\"Create, merge, split, and extract from PDFs\",\"icon\":\"file-text\",\"displayName\":\"PDFs\"},{\"index\":4,\"name\":\"pptx\",\"description\":\"Create, read, and edit PowerPoint presentations (.pptx)\",\"icon\":\"presentation\",\"displayName\":\"Presentations\"},{\"index\":5,\"name\":\"skill-creator\",\"description\":\"Build new custom skills through conversation\",\"icon\":\"wand\",\"displayName\":\"Skill Creator\"},{\"index\":7,\"name\":\"xlsx\",\"description\":\"Create, read, and edit spreadsheet files (.xlsx, .csv)\",\"icon\":\"table\",\"displayName\":\"Spreadsheets\"}]}"
+    },
+    {
+      "url": "https://grok.com/rest/assets?pageSize=9&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"assets\":[{\"assetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"mimeType\":\"image/jpeg\",\"name\":\"eff33f41-58e7-4f48-b58f-d79d6f3d6333.jpg\",\"sizeBytes\":54489,\"createTime\":\"2026-07-07T21:55:13.556280Z\",\"lastUseTime\":\"2026-07-07T21:55:13.556280Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},{\"assetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"mimeType\":\"image/jpeg\",\"name\":\"02fa076a-4681-46ac-98bd-9e79de1731e5.jpg\",\"sizeBytes\":441533,\"createTime\":\"2026-07-07T21:55:12.539557Z\",\"lastUseTime\":\"2026-07-07T21:55:12.539557Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},{\"assetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"mimeType\":\"image/jpeg\",\"name\":\"grok-70c4b988-5b48-407b-9fa8-4c75fbc2587e.jpg\",\"sizeBytes\":715861,\"createTime\":\"2026-07-07T20:15:28.410568Z\",\"lastUseTime\":\"2026-07-07T20:15:28.410568Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"UCgGDAQ8SkVbBm2WlHnPTrOvJw==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreate"
+    },
+    {
+      "url": "https://grok.com/rest/notifications/list?pageSize=50",
+      "status": 200,
+      "body": "{\"notifications\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/user-settings",
+      "status": 200,
+      "body": "{\"excludeFromTraining\":true,\"preferences\":null,\"allowXPersonalization\":false,\"enableMemory\":true,\"allowShareIndexing\":true,\"allowCompanionNotifications\":true,\"allowAutoShare\":true,\"agentCustomizations\":[],\"allowGrokFinishedNotification\":true}"
+    },
+    {
+      "url": "https://grok.com/rest/system-prompt/list",
+      "status": 200,
+      "body": "{\"assets\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks/inactive",
+      "status": 200,
+      "body": "{\"tasks\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/modes",
+      "status": 200,
+      "body": "{\"modes\":[{\"id\":\"auto\",\"title\":\"Авто\",\"description\":\"Выбирает между Быстрым или Экспертным режимами\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"rocket\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"fast\",\"title\":\"Быстрый\",\"description\":\"Быстрые ответы\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightning\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"expert\",\"title\":\"Эксперт\",\"description\":\"Глубокое размышление\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightbulb\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"heavy\",\"title\":\"Тяжёлый\",\"description\":\"Группа экспертов\",\"badgeText\":\" \",\"availability\":{\"requiresUpgrade\":{\"message\":\"\",\"minimumSubscriptionTier\":\"TIER_SUPERGROK_HEAVY\"}},\"iconHint\":\"connected_apps\",\"tags\":[\"TAG_PRIMARY\"]}],\"defaultModeId\":\"auto\"}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=1",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null}],\"nextPageToken\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks",
+      "status": 200,
+      "body": "{\"tasks\":[],\"unreadResults\":[],\"unreadCounts\":[],\"taskUsage\":{\"frequentUsage\":0,\"frequentLimit\":10,\"occasionalUsage\":0,\"occasionalLimit\":30}}"
+    },
+    {
+      "url": "https://grok.com/rest/rate-limits",
+      "status": 200,
+      "body": "{\"windowSizeSeconds\":7200,\"remainingQueries\":50,\"totalQueries\":50,\"lowEffortRateLimits\":null,\"highEffortRateLimits\":null}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    }
+  ],
+  "https://grok.com/settings": [
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "[bin]"
+    },
+    {
+      "url": "https://grok.com/rest/products?provider=SUBSCRIPTION_PROVIDER_STRIPE",
+      "status": 200,
+      "body": "{\"stripe\":{\"products\":[{\"id\":\"prod_Sdnv8D1IKHvyAs\",\"name\":\"SuperGrok Heavy\",\"description\":\"\",\"prices\":[{\"id\":\"price_1RiWLBHJohyvID2cZTcgz4DL\",\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"300000\"},\"currency\":\"usd\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1RiWJsHJohyvID2cWqHFA8xx\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"}],\"campaign\":{\"campaignId\":\"subcamp_B7nRq\",\"stripe\":{\"discount\":{\"promotionCode\":\"\",\"durationType\":\"ONCE\",\"numberOfMonths\":3,\"percentageOff\":67,\"couponId\":\"nNV12z8u\"},\"offerPurpose\":\"ACQUISITION\",\"minIosAppVersion\":\"1.3.95\"}},\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_SUPER_GROK_PRO\"},{\"id\":\"prod_RilhxLgoA7h5ri\",\"name\":\"SuperGrok\",\"description\":\"\",\"prices\":[{\"id\":\"price_1R6nQ9HJohyvID2ck7FNrVdw\",\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"70000\"},\"currency\":\"inr\"},{\"amount\":{\"val\":\"3000\"},\"currency\":\"usd\"}],\"recurringInterval\":\"RECURRING_INTERVAL_MONTH\",\"metadata\":{\"purchasable\":\"true\"}},{\"id\":\"price_1R6nPnHJohyvID2cJMCZO5zW\",\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\",\"currencies\":[{\"amount\":{\"val\":\"30000\"},\"currency\":\"usd\"},{\"amount\":{\"val\":\"650000\"},\"currency\":\"inr\"}],\"recurringInterval\":\"RECURRING_INTERVAL_YEAR\",\"metadata\":{\"purchasable\":\"true\"}}],\"productTier\":\"PRODUCT_TIER_GROK_PRO\"},{\"id\":\"prod_S4qOT32nvkToDq\",\"name\":\"Grok Teams\",\"description\":\"1 Permitted User (Seat) of Grok Teams\",\"prices\":[],\"productTier\":\"PRODUCT_TIER_UNKNOWN\"}]}}"
+    },
+    {
+      "url": "https://grok.com/rest/suggestions/profile",
+      "status": 200,
+      "body": "{}"
+    },
+    {
+      "url": "https://grok.com/rest/modes",
+      "status": 200,
+      "body": "{\"modes\":[{\"id\":\"auto\",\"title\":\"Авто\",\"description\":\"Выбирает между Быстрым или Экспертным режимами\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"rocket\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"fast\",\"title\":\"Быстрый\",\"description\":\"Быстрые ответы\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightning\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"expert\",\"title\":\"Эксперт\",\"description\":\"Глубокое размышление\",\"badgeText\":\" \",\"availability\":{\"available\":{}},\"iconHint\":\"lightbulb\",\"tags\":[\"TAG_COMPUTER\",\"TAG_PRIMARY\"]},{\"id\":\"heavy\",\"title\":\"Тяжёлый\",\"description\":\"Группа экспертов\",\"badgeText\":\" \",\"availability\":{\"requiresUpgrade\":{\"message\":\"\",\"minimumSubscriptionTier\":\"TIER_SUPERGROK_HEAVY\"}},\"iconHint\":\"connected_apps\",\"tags\":[\"TAG_PRIMARY\"]}],\"defaultModeId\":\"auto\"}"
+    },
+    {
+      "url": "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig",
+      "status": 200,
+      "body": "\u0000\u0000\u0000\u0000h\nf\r\u0000\u0000�B\u0012\u0000\u001a\u0000\"\f\bθ��\u0006\u0010ؕ��\u0002*\f\bέ��\u0006\u0010ؕ��\u0002:\u0007\b\u0005\u0015\u0000\u0000\bB:\u0007\b\u0006\u0015\u0000\u0000�A:\u0007\b\u0004\u0015\u0000\u0000 AB\u001e\b\u0002\u0012\f\bθ��\u0006\u0010ؕ��\u0002\u001a\f\bέ��\u0006\u0010ؕ��\u0002X\u0001b\u0000h\u0001�\u0000\u0000\u0000\u000fgrpc-status:0\r\n"
+    },
+    {
+      "url": "https://grok.com/api/auth/session",
+      "status": 200,
+      "body": "{\"status\":\"authenticated\",\"session\":{\"userId\":\"d7c99270-d110-4eff-8b37-54ac6f8ccf4b\",\"email\":\"prussmed@googlemail.com\",\"emailDomain\":\"googlemail.com\",\"givenName\":\"Anatol\",\"familyName\":\"Pruss\",\"profileImage\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/JbiZzVipV1Lqr0zX-profile-picture.webp\",\"xUserId\":\"\",\"organizationId\":\"\",\"organizationRole\":0,\"organizationType\":0}}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/user-settings",
+      "status": 200,
+      "body": "{\"excludeFromTraining\":true,\"preferences\":null,\"allowXPersonalization\":false,\"enableMemory\":true,\"allowShareIndexing\":true,\"allowCompanionNotifications\":true,\"allowAutoShare\":true,\"agentCustomizations\":[],\"allowGrokFinishedNotification\":true}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60&filterIsStarred=true",
+      "status": 200,
+      "body": "{\"conversations\":[],\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=1",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null}],\"nextPageToken\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"textSearchMatches\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces/shared?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/notifications/list?pageSize=50",
+      "status": 200,
+      "body": "{\"notifications\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/system-prompt/list",
+      "status": 200,
+      "body": "{\"assets\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks/inactive",
+      "status": 200,
+      "body": "{\"tasks\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/tasks",
+      "status": 200,
+      "body": "{\"tasks\":[],\"unreadResults\":[],\"unreadCounts\":[],\"taskUsage\":{\"frequentUsage\":0,\"frequentLimit\":10,\"occasionalUsage\":0,\"occasionalLimit\":30}}"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    },
+    {
+      "url": "https://grok.com/rest/skills",
+      "status": 200,
+      "body": "{\"skills\":[{\"index\":1,\"name\":\"docx\",\"description\":\"Create, read, and edit Word documents (.docx)\",\"icon\":\"file-text\",\"displayName\":\"Word Documents\"},{\"index\":3,\"name\":\"pdf\",\"description\":\"Create, merge, split, and extract from PDFs\",\"icon\":\"file-text\",\"displayName\":\"PDFs\"},{\"index\":4,\"name\":\"pptx\",\"description\":\"Create, read, and edit PowerPoint presentations (.pptx)\",\"icon\":\"presentation\",\"displayName\":\"Presentations\"},{\"index\":5,\"name\":\"skill-creator\",\"description\":\"Build new custom skills through conversation\",\"icon\":\"wand\",\"displayName\":\"Skill Creator\"},{\"index\":7,\"name\":\"xlsx\",\"description\":\"Create, read, and edit spreadsheet files (.xlsx, .csv)\",\"icon\":\"table\",\"displayName\":\"Spreadsheets\"}]}"
+    },
+    {
+      "url": "https://grok.com/rest/rate-limits",
+      "status": 200,
+      "body": "{\"windowSizeSeconds\":7200,\"remainingQueries\":50,\"totalQueries\":50,\"lowEffortRateLimits\":null,\"highEffortRateLimits\":null}"
+    },
+    {
+      "url": "https://grok.com/rest/user-skills",
+      "status": 200,
+      "body": "{\"skills\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/assets?pageSize=9&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"assets\":[{\"assetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"mimeType\":\"image/jpeg\",\"name\":\"eff33f41-58e7-4f48-b58f-d79d6f3d6333.jpg\",\"sizeBytes\":54489,\"createTime\":\"2026-07-07T21:55:13.556280Z\",\"lastUseTime\":\"2026-07-07T21:55:13.556280Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/9e4a9db4-5459-4c45-a970-a057a20710c4/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"9e4a9db4-5459-4c45-a970-a057a20710c4\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"yAcGCwKbrkeP1TRWknAGWic=\"},{\"assetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"mimeType\":\"image/jpeg\",\"name\":\"02fa076a-4681-46ac-98bd-9e79de1731e5.jpg\",\"sizeBytes\":441533,\"createTime\":\"2026-07-07T21:55:12.539557Z\",\"lastUseTime\":\"2026-07-07T21:55:12.539557Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/a01e3d17-245b-4d29-8452-6eea988e25ae/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"a01e3d17-245b-4d29-8452-6eea988e25ae\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreatedByModel\":false,\"sharedWithTeam\":false,\"sharedWithUserIds\":[],\"isPublic\":false,\"thumbhash\":\"2/cJBAD4GJbIKIe2N3dZa7D4Rg==\"},{\"assetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"mimeType\":\"image/jpeg\",\"name\":\"grok-70c4b988-5b48-407b-9fa8-4c75fbc2587e.jpg\",\"sizeBytes\":715861,\"createTime\":\"2026-07-07T20:15:28.410568Z\",\"lastUseTime\":\"2026-07-07T20:15:28.410568Z\",\"summary\":\"\",\"previewImageKey\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"key\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/content\",\"auxKeys\":{\"image_edit_is_root_user_uploaded\":\"true\",\"is_root_celebrity\":\"false\",\"preview-image\":\"users/d7c99270-d110-4eff-8b37-54ac6f8ccf4b/bb473511-bc85-4616-96fb-c316417764f2/preview-image\",\"r_rated\":\"false\",\"thumbhash\":\"UCgGDAQ8SkVbBm2WlHnPTrOvJw==\"},\"isDeleted\":false,\"fileSource\":\"SELF_UPLOAD_FILE_SOURCE\",\"rootAssetId\":\"bb473511-bc85-4616-96fb-c316417764f2\",\"isModelGenerated\":false,\"isLatest\":true,\"inlineStatus\":\"DEFAULT_ARTIFACT_INLINE_STATUS\",\"isRootAssetCreate"
+    },
+    {
+      "url": "https://grok.com/rest/app-chat/conversations?pageSize=60",
+      "status": 200,
+      "body": "{\"conversations\":[{\"conversationId\":\"e6a46a03-f79f-4c9c-87fa-2c152ac59597\",\"title\":\"Morning Slim Rural Beauty\",\"starred\":false,\"createTime\":\"2026-07-05T05:55:08.382455Z\",\"modifyTime\":\"2026-07-05T11:23:53.375498Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7277d017-9272-4f9a-ae79-765807035b73\",\"title\":\"AI Image Generation Examples\",\"starred\":false,\"createTime\":\"2026-07-04T21:49:10.701935Z\",\"modifyTime\":\"2026-07-04T21:49:23.160409Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"f1da9bd3-707c-4c4c-ba30-b31dd49cdd38\",\"title\":\"Ukrainian Thin Girl Greeting\",\"starred\":false,\"createTime\":\"2026-07-04T21:21:37.427453Z\",\"modifyTime\":\"2026-07-04T21:24:14.744887Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[\"audio\"],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"75fde80d-69db-4b90-b1ae-f7378b1792df\",\"title\":\"cafeteria.berlin Domain Value and Selling Price\",\"starred\":false,\"createTime\":\"2026-07-04T20:02:54.700579Z\",\"modifyTime\":\"2026-07-04T20:04:35.076454Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"3e505423-71ea-449b-bf8a-856ac24cd7d1\",\"title\":\"Russian Phrase Translation to German\",\"starred\":false,\"createTime\":\"2026-07-04T14:02:07.528357Z\",\"modifyTime\":\"2026-07-04T14:02:38.118639Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"440a54a5-3bd9-47d7-8098-a835a5f2c4bb\",\"title\":\"Перевод стиха: отложи папки, спи\",\"starred\":false,\"createTime\":\"2026-07-04T10:39:25.250386Z\",\"modifyTime\":\"2026-07-04T10:40:17.689829Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7c1c0ffc-6ba2-4dbd-bbf4-8049c5b21e40\",\"title\":\"Suno AI Voice Cloning Costs and Steps\",\"starred\":false,\"createTime\":\"2026-07-04T05:35:55.718894Z\",\"modifyTime\":\"2026-07-04T08:40:13.490Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"5ad418c4-5682-4b7e-af9e-1451a4e8d9fd\",\"title\":\"Hohlkreuz causes thigh muscle pain\",\"starred\":false,\"createTime\":\"2026-07-04T06:17:36.423650Z\",\"modifyTime\":\"2026-07-04T06:22:34.426541Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"7f8ef307-ad63-47b9-ac8c-b6220de97784\",\"title\":\"More Visual Consultation Schild\",\"starred\":false,\"createTime\":\"2026-07-02T18:35:57.103020Z\",\"modifyTime\":\"2026-07-02T18:40:33.432Z\",\"systemPromptName\":\"\",\"temporary\":false,\"mediaTypes\":[],\"workspaces\":[],\"taskResult\":{},\"latestAssetMetadata\":null},{\"conversationId\":\"259be528-8491-4bdf-bbbc-34d05c2d7aef\",\"title\":\"Friendly German Greeting\",\"starred\":"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    },
+    {
+      "url": "https://grok.com/rest/workspaces?pageSize=50&orderBy=ORDER_BY_LAST_USE_TIME",
+      "status": 200,
+      "body": "{\"workspaces\":[]}"
+    }
+  ]
+}

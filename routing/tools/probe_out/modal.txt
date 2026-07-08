@@ -1,0 +1,52 @@
+Grok Build
+Beta
+
+Новый агент для кодирования, запускаемый из терминала. Ранний доступ для подписчиков SuperGrok и X Premium+.
+
+Imagine
+
+Создавай или редактируй изображения и видео для твоих сайтов и приложений.
+
+Режим планирования
+
+Просматривай каждый шаг перед внесением изменений.
+
+Субагенты
+
+Запусти параллельных агентов в отдельных окнах контекста.
+
+PowerShell
+WSL
+irm https://x.ai/cli/install.ps1 | iex
+
+Скопируй и вставь в терминал, чтобы попробовать
+
+projects/main autopilot-feature
+❯
+/check-safety-thresholds
+◆
+Thought for 2.5s
+◆
+Edit
+src/control/autopilot.ts
+42
+export async function engageAutopilot(state: VehicleState) {
+43
+  const route = planRoute(state.destination);
+44
+  if (route.confidence < 0.9) {
+45
+    throw new SafetyError('Route confidence below threshold');
+46
+  }
+47
+ 
+48
+  const command = await control.dispatch({
+49
+    heading: route.heading,
+50
+    throttle: 'auto',
+◆
+Thought for 1.2s
+❯

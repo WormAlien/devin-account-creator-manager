@@ -5,6 +5,7 @@
 <title>Backend Switch</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2310b981'/><text x='50%25' y='54%25' dominant-baseline='middle' text-anchor='middle' font-size='20' fill='white'>⚡</text></svg>">
 <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -180,7 +181,7 @@
     </div>
 
     <!-- Nav -->
-    <nav class="px-2 space-y-0.5 flex-1">
+    <nav id="main-nav" class="px-2 space-y-0.5 flex-1">
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="switcher">
         <span class="text-base">🔀</span>
         <span class="flex-1">Switcher</span>
@@ -219,6 +220,11 @@
         <span class="text-base">🖼</span>
         <span class="flex-1">Картинки API</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-image">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="grok">
+        <span class="text-base">🤖</span>
+        <span class="flex-1">SuperGrok</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-grok">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="plugins">
         <span class="text-base">🧩</span>
@@ -271,12 +277,40 @@
     </nav>
 
     <!-- Sidebar footer: launchers -->
-    <div class="p-3 mx-2 mb-2 rounded-md bg-elevated/40 border border-line-soft">
+    <div class="p-3 mx-2 mb-2 rounded-md bg-elevated/40 border border-line-soft space-y-1.5">
+      <label id="autoref-toggle" class="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg bg-bg border border-line-soft hover:border-cyan/60 transition text-xs cursor-pointer select-none" title="Автообновление активной вкладки и TG-пула">
+        <input type="checkbox" id="autoref-checkbox" class="accent-cyan size-3.5 cursor-pointer">
+        <span class="text-cyan">⟳</span>
+        <span class="flex-1">Автообновление</span>
+        <span id="autoref-state" class="text-[10px] font-mono text-faint">off</span>
+      </label>
+      <button onclick="openTabsManager()" class="w-full text-left px-2.5 py-2 rounded-lg bg-bg border border-line-soft hover:border-violet/60 hover:text-violet transition text-xs flex items-center gap-2" title="Настроить порядок и видимость вкладок">
+        <span class="text-violet">⋮</span> Настроить вкладки
+      </button>
       <button onclick="launchBat('restart-dashboard.bat')" class="w-full text-left px-2.5 py-2 rounded-lg bg-bg border border-line-soft hover:border-emerald/60 hover:text-emerald transition text-xs flex items-center gap-2">
         <span class="text-emerald">🔄</span> Рестарт дешборда
       </button>
     </div>
+
   </aside>
+
+  <!-- Tabs Manager Modal (вынесено на уровень body, чтобы не наследовать sidebar-контекст) -->
+  <div id="tabs-manager" class="hidden fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm items-center justify-center p-4" style="display:none" onclick="if(event.target===this) closeTabsManager()">
+    <div class="bg-surface border border-line rounded-xl w-full max-w-md max-h-[80vh] flex flex-col shadow-2xl">
+      <div class="px-5 py-4 border-b border-line-soft flex items-center justify-between">
+        <div>
+          <div class="text-sm font-semibold text-ink">Настроить вкладки</div>
+          <div class="text-[11px] text-faint mt-0.5">Перетаскивай ≡ · клик по 👁 скрывает</div>
+        </div>
+        <button onclick="closeTabsManager()" class="text-faint hover:text-ink text-xl leading-none px-2">✕</button>
+      </div>
+      <ul id="tabs-manager-list" class="flex-1 overflow-y-auto p-2 space-y-1"></ul>
+      <div class="px-5 py-3 border-t border-line-soft flex items-center justify-between gap-2">
+        <button onclick="resetTabsConfig()" class="text-xs px-3 py-1.5 text-faint hover:text-crimson">Сбросить</button>
+        <button onclick="closeTabsManager()" class="text-xs px-4 py-1.5 bg-emerald/15 border border-emerald/50 text-emerald rounded-md hover:bg-emerald/25 font-medium">Готово</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══════════ MAIN ═══════════ -->
   <main class="min-w-0">
@@ -556,7 +590,7 @@
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-cyan">🪙</span> Ourtoken
             </h1>
-            <p class="text-sm text-muted mt-1">OmniRoute импорт — <code class="font-mono text-cyan text-xs">routing/ourtoken-sessions.json</code> · клик по ключу = активный (API Helper) · 🚀 = в OmniRoute</p>
+            <p class="text-sm text-muted mt-1">OmniRoute импорт — <code class="font-mono text-cyan text-xs">routing/ourtoken-sessions.json</code> · клик по ключу = settings.json → OmniRoute · 🚀 = в OmniRoute</p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
             <button onclick="loadOurtokenSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
@@ -757,6 +791,79 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: GROK ═════════ -->
+    <div data-tab-content="grok">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-amber">🤖</span> SuperGrok Sessions
+            </h1>
+            <p class="text-sm text-muted mt-1">
+              куки → <code class="font-mono text-amber text-xs">D:\WORMALIENAIGIGANT\app\grok-cookie-mcp\cookies\*.json</code>
+              · квоты — headless Chrome через <code class="font-mono text-amber text-xs">launcher.py</code>
+            </p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <span id="grok-launcher-state" class="px-2 py-1 rounded font-mono text-[10px] bg-elevated border border-line-soft text-faint">launcher: ?</span>
+            <button onclick="grokLauncherRestart()" title="Перезапустить launcher.py"
+                    class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-amber/60 hover:text-amber">↻ launcher</button>
+            <input id="grok-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-amber/60 focus:ring-2 focus:ring-amber/20">
+            <select id="grok-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-amber/60">
+              <option value="date-desc">📅 дата ↓ (новые)</option>
+              <option value="date-asc">📅 дата ↑ (старые)</option>
+              <option value="quota-asc">📊 квота: меньше осталось</option>
+              <option value="quota-desc">📊 квота: больше осталось</option>
+              <option value="plan">🎫 план</option>
+            </select>
+            <button onclick="grokRenderSaved()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="grokRefreshAllQuota()" title="Прогнать headless-пробу по каждой сессии (по 10-15с)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Квоты все</button>
+          </div>
+        </header>
+
+        <!-- Общая энергия пула -->
+        <div id="grok-sec-energy" class="rounded-xl bg-surface border border-line-soft p-5 relative overflow-hidden">
+          <div class="absolute -top-24 -right-24 size-56 rounded-full bg-emerald/10 blur-3xl pointer-events-none"></div>
+          <div id="grok-energy" class="relative"></div>
+        </div>
+
+        <!-- Paste & Launch -->
+        <div class="rounded-xl bg-surface border border-line-soft p-5">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold flex items-center gap-2">
+              <span class="text-amber">➕</span> Добавить сессию · Cookie-Editor JSON
+            </h3>
+            <button onclick="document.getElementById('grok-cookies').value = localStorage.getItem('grok-cookies-last') || ''; grokUpdateHint();"
+                    class="text-xs px-2 py-1 text-muted hover:text-ink">↻ Last</button>
+          </div>
+          <textarea id="grok-cookies" rows="5"
+            placeholder='[{"domain":".grok.com","name":"sso","value":"eyJ...","secure":true}]'
+            oninput="grokUpdateHint()"
+            class="w-full text-[11px] bg-elevated border border-line-soft rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-amber/60 resize-y"></textarea>
+          <div class="flex items-center justify-between mt-2">
+            <span id="grok-hint" class="text-[10px] text-faint font-mono">—</span>
+            <div class="flex gap-2">
+              <button onclick="grokSaveSession()" class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-amber/60 hover:text-amber">💾 Сохранить</button>
+              <button onclick="grokLaunch()" class="text-xs px-3 py-1.5 bg-amber/15 border border-amber/50 text-amber rounded-lg hover:bg-amber/25 font-medium">🚀 Launch</button>
+            </div>
+          </div>
+          <div id="grok-status" class="text-xs p-3 rounded-lg border hidden mt-3"></div>
+        </div>
+
+        <!-- Saved Sessions таблица -->
+        <div id="grok-saved-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-muted text-xs">—</div>
+        </div>
+
+        <!-- Info -->
+        <div class="text-[11px] text-faint leading-relaxed space-y-1">
+          <p><strong class="text-muted">How to get cookies:</strong> открой grok.com → Cookie-Editor → Export → JSON → вставь сюда → 💾</p>
+          <p>После сохранения — жми <span class="text-emerald">🔄</span> на строке чтобы вытащить план/email/квоту через headless Chrome.</p>
+        </div>
+      </div>
+    </div>
+    <script>window.__GROK_HIDDEN_STATE = { count: '(0)' };</script>
+
     <!-- ═════════ TAB: CONDUIT ═════════ -->
     <div data-tab-content="conduit">
       <div class="px-6 py-8 space-y-4">
@@ -881,6 +988,7 @@
         <div id="fm-sec-energy" class="rounded-xl bg-surface border border-line-soft p-5 relative overflow-hidden scroll-mt-6">
           <div class="absolute -top-24 -right-24 size-56 rounded-full bg-emerald/10 blur-3xl pointer-events-none"></div>
           <div id="fm-energy" class="relative"></div>
+          <div id="fm-energy-7d" class="relative mt-5"></div>
         </div>
 
         <!-- Active API key hero -->
@@ -1230,6 +1338,7 @@ function showTab(name) {
   if (name === 'ourtoken' && !state.loaded.ourtoken) { state.loaded.ourtoken = true; loadOurtokenSessions(false); }
   if (name === 'omniroute-pool' && !state.loaded['omniroute-pool']) { state.loaded['omniroute-pool'] = true; loadOmSessions(false); }
   if (name === 'video' && !state.loaded.video) { state.loaded.video = true; loadVideoKeys(); }
+  if (name === 'grok') { grokRenderSaved(); }
   if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'tokenrouter' && !state.loaded.tokenrouter) {
@@ -2325,7 +2434,7 @@ function renderOurtoken() {
         ${activeTag}${esc(email)}
       </td>
       <td class="px-3 py-2.5">
-        <button onclick='ourtokenActivate(${kJ})' title="Сделать активным (API Helper)"
+        <button onclick='ourtokenActivate(${kJ})' title="Отметить в пуле + settings.json → OmniRoute"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-cyan hover:border-cyan/50'} transition">${esc(keyMask)}</button>
       </td>
       <td class="px-3 py-2.5 text-center">${statusCell}</td>
@@ -2849,7 +2958,7 @@ async function conduitAutoreg() {
 }
 
 // ═══════════════════ FREEMODEL ═══════════════════════════════════════
-async function loadActiveFmKey() {
+async function loadActiveFmKey(skipRender) {
   try {
     const res = await fetch('/__switch/api/freemodel/active-key');
     const data = await res.json();
@@ -2869,7 +2978,9 @@ async function loadActiveFmKey() {
     } else {
       hero.classList.add('hidden');
     }
-    renderFreemodel(false);
+    // skipRender=true → вызывающий сам вызовет renderFreemodel сразу после.
+    // Это убирает двойной ререндер при loadFreemodelSessions → loadActiveFmKey → render → render.
+    if (!skipRender) renderFreemodel(false);
   } catch (e) { /* silent */ }
 }
 
@@ -2886,40 +2997,84 @@ function fmcParseDollars(s) {
   const n = parseFloat(m[0].replace(',', ''));
   return isFinite(n) ? n : null;
 }
-// used% аккаунта = среднее по окнам 5h/7d (0..1), null если нет данных
+// used% аккаунта = max по окнам 5h/7d (0..1), null если нет данных.
+// max, а не avg: акк упирается в самый узкий из лимитов и становится непригоден
+// целиком (5h=100% → мёртв до reset, даже если 7d ещё свободен).
 function fmcUsedFraction(q) {
   if (!q) return null;
+  const parts = [];
+  // 1) готовые проценты от бэкенда (freemodel отдаёт h5pct/d7pct — если есть, доверяем).
+  if (typeof q.h5pct === 'number') parts.push(q.h5pct / 100);
+  if (typeof q.d7pct === 'number') parts.push(q.d7pct / 100);
+  // 2) fallback — вручную из "$used/$max" строк.
   const u5 = fmcParseDollars(q.h5), m5 = fmcParseDollars(q.h5max);
   const u7 = fmcParseDollars(q.d7), m7 = fmcParseDollars(q.d7max);
-  const parts = [];
   if (u5 != null && m5 > 0) parts.push(u5 / m5);
   if (u7 != null && m7 > 0) parts.push(u7 / m7);
-  if (!parts.length) return null;
-  return parts.reduce((a, b) => a + b, 0) / parts.length;
+  if (parts.length) return Math.max(...parts);
+  // 3) окон нет вообще, но available=$0 на Free-плане — квота исчерпана.
+  // На Pro/Team $0 значит «нет топ-апа», не «мёртв» — не считаем used=100%.
+  const avail = fmcParseDollars(q.available);
+  const isFree = /free/i.test(String(q.plan || ''));
+  if (avail === 0 && isFree) return 1;
+  return null;
 }
 // Агрегат пула: средний остаток %, сумма доступного $, счётчики.
+// remPct — max(5h,7d) как раньше (для основной полосы), rem7dPct — только 7d
+// (для отдельной синей полосы «общий недельный»).
 function fmPoolStats(sessions) {
   let remSum = 0, withQ = 0, availSum = 0, ok = 0, total = 0, banned = 0;
+  let rem7dSum = 0, withQ7d = 0;
   for (const s of (sessions || [])) {
     if (s.meta?.banned) { banned++; continue; }
     total++;
     if (s.status === '✅') ok++;
     const used = fmcUsedFraction(s.quota);
     if (used != null) { remSum += (1 - used); withQ++; }
+    // 7d used%: сначала d7pct, затем "$used/$max", затем free+available=$0 → 100%.
+    let used7d = null;
+    if (typeof s.quota?.d7pct === 'number') used7d = s.quota.d7pct / 100;
+    else {
+      const u7 = fmcParseDollars(s.quota?.d7), m7 = fmcParseDollars(s.quota?.d7max);
+      if (u7 != null && m7 > 0) used7d = u7 / m7;
+      else if (fmcParseDollars(s.quota?.available) === 0 && /free/i.test(String(s.quota?.plan || ''))) used7d = 1;
+    }
+    if (used7d != null) { rem7dSum += (1 - used7d); withQ7d++; }
     const av = fmcParseDollars(s.quota?.available);
     if (av != null) availSum += av;
   }
   const remPct = withQ ? (remSum / withQ) * 100 : 100;  // нет данных → считаем пул свежим
-  return { remPct, availSum, ok, total, banned, withQ };
+  const rem7dPct = withQ7d ? (rem7dSum / withQ7d) * 100 : 100;
+  return { remPct, rem7dPct, availSum, ok, total, banned, withQ, withQ7d };
 }
 function renderEnergyGauge(el, opts) {
   if (!el) return;
   const pct = Math.max(0, Math.min(100, Math.round(opts.pct ?? 0)));
-  const c = energyColorName(pct);
+  const c = opts.color || energyColorName(pct);
   const cv = `var(--color-${c})`;
   let autoBadge = '';
   if (opts.auto === true)  autoBadge = `<span class="text-[10px] px-2 py-0.5 rounded-full border bg-azure/15 border-azure/50 text-azure font-medium whitespace-nowrap">🔁 авто вкл</span>`;
   else if (opts.auto === false) autoBadge = `<span class="text-[10px] px-2 py-0.5 rounded-full border bg-elevated border-line-soft text-dim font-medium whitespace-nowrap">🔁 авто выкл</span>`;
+
+  // Diff-путь: если каркас уже отрисован и цвет+auto+заголовок не сменились,
+  // не переписываем innerHTML — только width полосы, %-подпись и молнию.
+  // Это убирает мерцание при 30-секундном auto-refresh.
+  const signature = `${c}|${opts.auto}|${opts.title || ''}|${opts.sub || ''}|${opts.extra || ''}|${opts.note || ''}`;
+  if (el.dataset.egSig === signature) {
+    const fill = el.querySelector('.energy-fill');
+    const pctSpan = el.querySelector('[data-eg-pct]');
+    const bolt = el.querySelector('.energy-bolt');
+    if (fill && pctSpan) {
+      fill.style.width = pct + '%';
+      pctSpan.firstChild.nodeValue = pct + '%';
+      if (bolt) {
+        if (pct > 2 && pct < 99) { bolt.style.display = ''; bolt.style.left = pct + '%'; }
+        else { bolt.style.display = 'none'; }
+      }
+      return;
+    }
+  }
+  el.dataset.egSig = signature;
   el.innerHTML = `
     <div class="flex items-center justify-between gap-3 mb-2.5">
       <div class="text-xs uppercase tracking-[0.2em] text-dim flex items-center gap-2">
@@ -2931,7 +3086,7 @@ function renderEnergyGauge(el, opts) {
       <div class="energy-track relative h-6 rounded-full bg-elevated/80 border border-line-soft overflow-hidden">
         <div class="energy-fill h-full rounded-full" style="width:${pct}%; --glow:${cv}; background-image:linear-gradient(90deg, ${cv} 0%, color-mix(in oklch, ${cv}, white 32%) 50%, ${cv} 100%);"></div>
         <div class="absolute inset-0 flex items-center justify-end pr-3 pointer-events-none">
-          <span class="text-sm font-mono font-semibold text-ink" style="text-shadow:0 1px 3px rgba(0,0,0,0.65)">${pct}%<span class="text-[10px] text-ink/70 ml-1">запас</span></span>
+          <span data-eg-pct class="text-sm font-mono font-semibold text-ink" style="text-shadow:0 1px 3px rgba(0,0,0,0.65)">${pct}%<span class="text-[10px] text-ink/70 ml-1">запас</span></span>
         </div>
       </div>
       ${pct > 2 && pct < 99 ? `<svg class="energy-bolt" viewBox="0 0 32 32" style="left:${pct}%; --glow:${cv};" aria-hidden="true"><path d="M19 3 L8 18 H14 L13 29 L24 14 H18 Z"/></svg>` : ''}
@@ -2953,10 +3108,19 @@ function fmSubLine(st) {
 function renderFmGauge() {
   const st = fmPoolStats(state.freemodel);
   renderEnergyGauge($('fm-energy'), {
-    title: 'FreeModel · запас пула',
+    title: 'FreeModel · запас пула (5h)',
     pct: st.remPct,
     auto: (fmAutoLast && typeof fmAutoLast.enabled === 'boolean') ? fmAutoLast.enabled : null,
     sub: fmSubLine(st),
+  });
+  // Вторая полоса — недельный (7d) запас пула, всегда azure (это отдельная
+  // семантика, а не health: даже при 20% 7d показываем синей, чтобы отличать
+  // от главной).
+  renderEnergyGauge($('fm-energy-7d'), {
+    title: 'FreeModel · общий (7d)',
+    pct: st.rem7dPct,
+    color: 'azure',
+    sub: `<span><span class="text-ink font-semibold">${st.withQ7d}</span> акк с 7d-квотой</span>`,
   });
 }
 function updateSideAuto(enabled) {
@@ -3176,9 +3340,14 @@ function fmAutoStartPolling() {
 }
 
 async function loadFreemodelSessions(refresh) {
-  $('freemodel-list').innerHTML = refresh
-    ? `<div class="p-12 text-center text-amber text-xs">🔄 обновляю квоты FreeModel через headless Chrome… (~30s)</div>`
-    : `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
+  // Placeholder показываем только если ещё нет данных ИЛИ refresh=true (там реально ~30с).
+  // Иначе получается «эпилепсия» при auto-refresh — список пропадает на секунду.
+  const hasData = Array.isArray(state.freemodel) && state.freemodel.length > 0;
+  if (refresh) {
+    $('freemodel-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">🔄 обновляю квоты FreeModel через headless Chrome… (~30s)</div>`;
+  } else if (!hasData) {
+    $('freemodel-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
+  }
   try {
     const url = '/__switch/api/freemodel/sessions' + (refresh ? '?refresh=1' : '');
     const res = await fetch(url);
@@ -3186,11 +3355,12 @@ async function loadFreemodelSessions(refresh) {
     if (!res.ok) throw new Error(data.error);
     state.freemodel = data.sessions || [];
     $('nav-count-freemodel').textContent = state.freemodel.length;
-    await loadActiveFmKey();
+    await loadActiveFmKey(true);   // skip inner render — вызовем ниже одним махом
     renderFreemodel(data.refreshed);
     if (refresh) toast('✓ FreeModel: квоты обновлены', 'success');
   } catch (e) {
-    $('freemodel-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    if (!hasData) $('freemodel-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    else console.warn('[fm] silent refresh fail', e);
   }
 }
 
@@ -3249,7 +3419,7 @@ function renderFreemodel(refreshed) {
     return;
   }
 
-  const rows = list.map(s => {
+  const rowItems = list.map(s => {
     const ok      = s.status === '✅';
     const email   = s.email || s.name;
     const q       = s.quota || null;
@@ -3264,11 +3434,36 @@ function renderFreemodel(refreshed) {
     const nameJ   = JSON.stringify(s.name);
     const activeBadge = '';  // активность видно по зелёной кнопке 🌟 + подсветке строки; чип убран, чтобы не прятать TG-номер
     // TG-бэйдж: если привязан — клик отвязывает; если нет — клик запускает привязку из пула.
-    const tgBadge = tgPhone
+    // Отдельный вид для 'manual' — аккаунт помечен как имеющий TG, привязанный вручную (вне пула).
+    const tgBadge = tgPhone === 'manual'
+      ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-emerald/10 border border-emerald/30 text-emerald rounded font-mono hover:bg-emerald/20" title="TG привязан вручную (вне пула) · клик чтобы снять пометку">✅ TG вручную</button>`
+      : tgPhone
       ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/30 text-azure rounded font-mono hover:bg-azure/20" title="TG привязан · клик чтобы отвязать">📱 ${/^\+?\d+$/.test(String(tgPhone)) ? '+' + esc(tgPhone) : esc(tgPhone)}</button>`
       : `<button onclick='freemodelBindTelegram(${nameJ})' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-azure/60 hover:text-azure" title="TG не привязан · клик чтобы привязать из пула">📱 —</button>`;
 
     const keyBadge = '';
+
+    // План (Free/Pro/…) из quota-кеша — компактный чип рядом с email.
+    // Валидные значения — только известные названия. Всё остальное (плейсхолдеры
+    // "—"/"?", долларовые суммы, "Loading"/"…") считаем «план не определён»,
+    // иначе на UI получается чип с прочерком, который выглядит как «баг».
+    const planRawIn = String(q?.plan || '').trim();
+    const KNOWN_PLAN = /^(Free|Pro|Max|Team|Enterprise|Ultimate|Plus|Business|Trial|Beta)$/i;
+    const planRaw = KNOWN_PLAN.test(planRawIn) ? planRawIn : '';
+    const planCls = /pro|team|max|enterprise/i.test(planRaw)
+      ? 'bg-emerald/10 border-emerald/40 text-emerald'
+      : /free/i.test(planRaw)
+      ? 'bg-elevated border-line-soft text-faint'
+      : 'bg-elevated border-line-soft text-muted';
+    // Различаем: план не определён vs квота вообще не подтягивалась.
+    // «?» = quota есть, но /dashboard не отдал план (можно обновить квоту).
+    // «—» = quota не подтягивалась вообще.
+    const planFallback = q
+      ? '<span class="text-[10px] text-amber/60" title="план не определён — обнови квоту">?</span>'
+      : '<span class="text-[10px] text-faint/60" title="нет данных о квоте">—</span>';
+    const planBadge = `<span class="ml-2 inline-block w-14 text-center align-middle">${planRaw
+      ? `<span class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded border font-medium ${planCls}" title="Freemodel plan">${esc(planRaw)}</span>`
+      : planFallback}</span>`;
 
     let availCell = '<span class="text-faint">—</span>';
     let h5Cell    = '<span class="text-faint">—</span>';
@@ -3311,10 +3506,20 @@ function renderFreemodel(refreshed) {
         fmSeg('direct', '🔑', 'Ключ', 'bg-crimson/10 border border-crimson/50 text-crimson hover:bg-crimson/20', 'hover:border-crimson/60 hover:text-crimson')
       + fmSeg('helper', '🤝', 'Helper', 'bg-azure/10 border border-azure/50 text-azure hover:bg-azure/20', 'hover:border-azure/60 hover:text-azure');
 
-    return `<tr class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
+    // Хеш видимых полей — если не изменился, tr не перерисовываем.
+    // Ageцелла (updatedAt) вынесена из sig отдельно — иначе меняющаяся
+    // «14ч» задёргала бы всю строку раз в тик.
+    const sigParts = [
+      ok ? 1 : 0, email, s.date || '', banned ? 1 : 0, isActive ? 1 : 0,
+      tgPhone || '', apiKey ? 1 : 0, planRaw, fmMode,
+      q?.available || '', q?.h5 || '', q?.h5max || '', q?.h5pct ?? '',
+      q?.d7 || '', q?.d7max || '', q?.d7pct ?? '', q?.renews || ''
+    ];
+    const sig = sigParts.join('|');
+    const trHtml = `<tr data-fm-key="${esc(s.name)}" data-fm-sig="${esc(sig)}" class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
       <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
       <td class="px-3 py-2.5 text-sm text-ink whitespace-nowrap" title="${esc(email)}">
-        ${activateBtn}<span class="${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${activeBadge}${skull}${tgBadge}${keyBadge}
+        ${activateBtn}<span class="inline-block min-w-[22ch] ${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${planBadge}${activeBadge}${skull}${tgBadge}${keyBadge}
       </td>
       <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
       <td class="px-3 py-2.5">${s.quota?.renews ? timerHtml(s.date, s.quota.renews) : regAgeHtml(s.date, 'обнови квоту для renewal')}</td>
@@ -3326,6 +3531,7 @@ function renderFreemodel(refreshed) {
         ${actBtn(`copyEmail(${nameJ})`,       'Скопировать email',          '📋✉', 'azure')}
         ${actBtn(`copyKey(${nameJ})`,         'Скопировать API-ключ',       '📋🔑', 'emerald')}
         ${tgPhone ? '' : actBtn(`freemodelBindTelegram(${nameJ})`, 'Привязать TG из пула', '📱', 'azure')}
+        ${tgPhone ? '' : actBtn(`freemodelMarkTgManual(${nameJ})`, 'ТГ уже привязан вручную (пометить)', '✅', 'emerald')}
         ${actBtn(`extractKey(${nameJ})`,      'Извлечь API-ключ (Playwright)', '🔑', 'violet')}
         ${actBtn(`openSession('freemodel', ${nameJ})`,    'Открыть в Chrome (claude.ai/usage)', '🌐', 'azure')}
         ${actBtn(`refreshQuota(${nameJ}, 'freemodel')`,   'Обновить квоту',                     '🔄', 'amber')}
@@ -3333,26 +3539,55 @@ function renderFreemodel(refreshed) {
         ${actBtn(`deleteSession('freemodel', ${nameJ}, ${JSON.stringify(email)})`, 'Удалить сессию', '🗑', 'crimson')}
       </td>
     </tr>`;
-  }).join('');
+    return { key: s.name, sig, html: trHtml };
+  });
 
   const withQuota = state.freemodel.filter(s => s.quota).length;
   const refreshTag = refreshed ? ' · <span class="text-emerald">только что обновлено</span>' : '';
+  const footer = `${list.length} из ${state.freemodel.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой${refreshTag}`;
 
-  $('freemodel-list').innerHTML = table(
-    [
-      { label: '', w: 'w-8' },
-      { label: 'Email' },
-      { label: 'Created' },
-      { label: 'Timer' },
-      { label: 'Available', align: 'right' },
-      { label: '5h window' },
-      { label: '7d window' },
-      { label: 'Updated', align: 'right' },
-      { label: 'Actions', align: 'right' },
-    ],
-    rows,
-    `${list.length} из ${state.freemodel.length}${filter ? ' (отфильтр.)' : ''} · ${withQuota} с квотой${refreshTag}`
-  );
+  const listEl = $('freemodel-list');
+  const tbody = listEl.querySelector('tbody[data-fm-list]');
+  const orderKey = rowItems.map(r => r.key).join(',');
+  // Diff-путь: тот же порядок + tbody уже есть → только обновляем изменившиеся tr.
+  // Иначе — полный ререндер (первый показ, sort/filter/showBanned, add/delete).
+  if (tbody && listEl.dataset.fmOrder === orderKey) {
+    const trs = tbody.children;
+    for (let i = 0; i < rowItems.length; i++) {
+      const tr = trs[i];
+      const it = rowItems[i];
+      if (!tr || tr.dataset.fmKey !== it.key) {
+        // расхождение — фолбэк на полный ререндер
+        listEl.dataset.fmOrder = '';
+        return renderFreemodel(refreshed);
+      }
+      if (tr.dataset.fmSig !== it.sig) tr.outerHTML = it.html;
+    }
+    // Обновить только footer, thead не трогаем.
+    const foot = listEl.querySelector('[data-fm-footer]');
+    if (foot) foot.innerHTML = footer;
+    return;
+  }
+
+  listEl.innerHTML = `
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-[10px] uppercase tracking-wider text-faint bg-bg/40 border-b border-line-soft">
+          <th class="px-3 py-2.5 w-8 font-medium"></th>
+          <th class="px-3 py-2.5 text-left font-medium">Email</th>
+          <th class="px-3 py-2.5 text-left font-medium">Created</th>
+          <th class="px-3 py-2.5 text-left font-medium">Timer</th>
+          <th class="px-3 py-2.5 text-right font-medium">Available</th>
+          <th class="px-3 py-2.5 text-left font-medium">5h window</th>
+          <th class="px-3 py-2.5 text-left font-medium">7d window</th>
+          <th class="px-3 py-2.5 text-right font-medium">Updated</th>
+          <th class="px-3 py-2.5 text-right font-medium">Actions</th>
+        </tr>
+      </thead>
+      <tbody data-fm-list class="divide-y divide-line-soft/50">${rowItems.map(r => r.html).join('')}</tbody>
+    </table>
+    <div data-fm-footer class="px-4 py-2.5 text-[10px] text-faint border-t border-line-soft bg-bg/30 font-mono">${footer}</div>`;
+  listEl.dataset.fmOrder = orderKey;
 }
 
 $('freemodel-filter').addEventListener('input', () => renderFreemodel(false));
@@ -3980,7 +4215,25 @@ async function freemodelToggleTg(name, currentlyLinked) {
       if (tgPhone) s.meta.tgPhone = tgPhone;
       else delete s.meta.tgPhone;
     }
-    toast(tgPhone ? `📱 +${tgPhone} → ${name}` : `📱 отвязан: ${name}`, 'success');
+    const badgeMsg = tgPhone === 'manual' ? `✅ TG вручную → ${name}` : (tgPhone ? `📱 +${tgPhone} → ${name}` : `📱 отвязан: ${name}`);
+    toast(badgeMsg, 'success');
+    renderFreemodel(false);
+  } catch (e) { toast('TG: ' + e.message, 'error'); }
+}
+
+// Пометить аккаунт как имеющий вручную привязанный TG (без реального номера/пула).
+async function freemodelMarkTgManual(name) {
+  if (!confirm(`Пометить ${name} как\n«ТГ уже привязан вручную»?\n\n(не привязывает через бота, просто ставит галку в UI)`)) return;
+  try {
+    const res = await fetch('/__switch/api/freemodel/set-tg', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, tgPhone: 'manual' }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    const s = state.freemodel.find(x => x.name === name);
+    if (s) { s.meta = s.meta || {}; s.meta.tgPhone = 'manual'; }
+    toast(`✅ TG вручную → ${name}`, 'success');
     renderFreemodel(false);
   } catch (e) { toast('TG: ' + e.message, 'error'); }
 }
@@ -5126,9 +5379,183 @@ function onSettingsFm() {
   if (key) $('settings-key').value = key;
 }
 
+// ═══════════════════ Tabs Manager ═══════════════════════════════════
+// Порядок и видимость вкладок в главном nav. Хранится в localStorage.
+// { order: [tabName...], hidden: [tabName...] }. Применяется на init +
+// после каждого изменения в модалке. Вложенные "deprecated" табы (tokenrouter,
+// devin, notion) не трогаем — они внутри collapsible "Чтим память".
+const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
+
+function loadTabsConfig() {
+  try {
+    const raw = localStorage.getItem(TABS_CONFIG_KEY);
+    if (!raw) return { order: [], hidden: [] };
+    const p = JSON.parse(raw);
+    return { order: Array.isArray(p.order) ? p.order : [], hidden: Array.isArray(p.hidden) ? p.hidden : [] };
+  } catch { return { order: [], hidden: [] }; }
+}
+function saveTabsConfig(cfg) {
+  localStorage.setItem(TABS_CONFIG_KEY, JSON.stringify(cfg));
+}
+function getMainNavButtons() {
+  // Только прямые дети #main-nav — не трогаем nested (Whoami / Чтим память).
+  const nav = document.getElementById('main-nav');
+  if (!nav) return [];
+  return Array.from(nav.querySelectorAll(':scope > button.nav-btn[data-tab]'));
+}
+function applyTabsConfig() {
+  const nav = document.getElementById('main-nav');
+  if (!nav) return;
+  const cfg = loadTabsConfig();
+  const btns = getMainNavButtons();
+  const byTab = Object.fromEntries(btns.map(b => [b.dataset.tab, b]));
+  // Применяем порядок: сначала табы из cfg.order (в их порядке), потом новые (которых нет в cfg).
+  const ordered = [];
+  for (const name of cfg.order) if (byTab[name]) ordered.push(byTab[name]);
+  for (const b of btns) if (!cfg.order.includes(b.dataset.tab)) ordered.push(b);
+  // Переставляем в DOM (append сохраняет event listeners).
+  for (const b of ordered) nav.appendChild(b);
+  // Видимость.
+  const hidden = new Set(cfg.hidden);
+  for (const b of btns) b.classList.toggle('hidden', hidden.has(b.dataset.tab));
+  // Если активная вкладка скрыта — переключаемся на первую видимую.
+  const active = localStorage.getItem('opencode_active_tab');
+  if (active && hidden.has(active)) {
+    const first = ordered.find(b => !hidden.has(b.dataset.tab));
+    if (first) showTab(first.dataset.tab);
+  }
+}
+function renderTabsManagerList() {
+  const list = document.getElementById('tabs-manager-list');
+  if (!list) return;
+  const cfg = loadTabsConfig();
+  const hidden = new Set(cfg.hidden);
+  const btns = getMainNavButtons();
+  // Собираем label из живых DOM-кнопок (иконка + текст).
+  const items = btns.map(b => {
+    const icon = b.querySelector('span:first-child')?.textContent?.trim() || '•';
+    const label = b.querySelector('span.flex-1')?.textContent?.trim() || b.dataset.tab;
+    return { name: b.dataset.tab, icon, label, hidden: hidden.has(b.dataset.tab) };
+  });
+  list.innerHTML = items.map(it => `
+    <li data-tab="${it.name}" class="flex items-center gap-2 px-2.5 py-2 rounded-md bg-elevated/50 border border-line-soft ${it.hidden ? 'opacity-50' : ''}">
+      <span class="handle text-faint cursor-grab hover:text-ink px-1 select-none">≡</span>
+      <span class="text-base w-6 text-center">${it.icon}</span>
+      <span class="flex-1 text-sm text-ink">${it.label}</span>
+      <button onclick="toggleTabHidden('${it.name}')" class="text-lg leading-none px-2 py-1 rounded hover:bg-bg" title="${it.hidden ? 'Показать' : 'Скрыть'}">
+        ${it.hidden ? '🚫' : '👁'}
+      </button>
+    </li>
+  `).join('');
+  // SortableJS для drag-reorder (если загружен).
+  if (window.Sortable && !list._sortable) {
+    list._sortable = Sortable.create(list, {
+      handle: '.handle',
+      animation: 150,
+      ghostClass: 'opacity-30',
+      onEnd: () => {
+        const newOrder = Array.from(list.children).map(li => li.dataset.tab);
+        const cur = loadTabsConfig();
+        saveTabsConfig({ ...cur, order: newOrder });
+        applyTabsConfig();
+      },
+    });
+  }
+}
+function toggleTabHidden(name) {
+  const cfg = loadTabsConfig();
+  const set = new Set(cfg.hidden);
+  set.has(name) ? set.delete(name) : set.add(name);
+  saveTabsConfig({ ...cfg, hidden: Array.from(set) });
+  applyTabsConfig();
+  renderTabsManagerList();
+}
+function openTabsManager() {
+  const el = document.getElementById('tabs-manager');
+  el.classList.remove('hidden');
+  el.style.display = 'flex';
+  renderTabsManagerList();
+}
+function closeTabsManager() {
+  const el = document.getElementById('tabs-manager');
+  el.classList.add('hidden');
+  el.style.display = 'none';
+}
+function resetTabsConfig() {
+  if (!confirm('Сбросить порядок и видимость всех вкладок?')) return;
+  localStorage.removeItem(TABS_CONFIG_KEY);
+  applyTabsConfig();
+  renderTabsManagerList();
+}
+
+// ═══════════════════ Универсальный auto-refresh ══════════════════════
+// Раз в TAB_POLL_MS дёргаем refresh соответствующей активной вкладки.
+// TG-пул обновляется независимо (используется и в FreeModel, и в Conduit).
+// Skip если вкладка браузера свёрнута (document.hidden) — не жгём CPU/трафик.
+// Каждый load*(false) читает cache/JSON — Playwright/квоты НЕ запускаются.
+const TAB_POLL_MS = 30000;
+const TG_POLL_MS = 30000;
+let _lastTgPoll = 0;
+
+const AUTOREF_KEY = 'dashboard-auto-refresh-enabled';
+function autoRefreshEnabled() {
+  return localStorage.getItem(AUTOREF_KEY) === '1';
+}
+function setAutoRefresh(on) {
+  localStorage.setItem(AUTOREF_KEY, on ? '1' : '0');
+  const cb = document.getElementById('autoref-checkbox');
+  const st = document.getElementById('autoref-state');
+  const wrap = document.getElementById('autoref-toggle');
+  if (cb) cb.checked = on;
+  if (st) { st.textContent = on ? 'on' : 'off'; st.classList.toggle('text-cyan', on); st.classList.toggle('text-faint', !on); }
+  if (wrap) wrap.classList.toggle('border-cyan/40', on);
+}
+
+function autoRefreshTick() {
+  if (document.hidden) return;
+  if (!autoRefreshEnabled()) return;
+  const tab = localStorage.getItem('opencode_active_tab') || 'switcher';
+
+  // TG-пул: обновляем на любой TG-содержащей вкладке.
+  if ((tab === 'freemodel' || tab === 'conduit') && Date.now() - _lastTgPoll > TG_POLL_MS - 500) {
+    _lastTgPoll = Date.now();
+    try { loadTgPool(); } catch (e) { console.warn('[auto] tg-pool fail', e); }
+  }
+
+  try {
+    switch (tab) {
+      case 'freemodel':
+        // invites — статика (keys.txt), в тике не дёргаем, только руками ↻.
+        loadFreemodelSessions(false);
+        break;
+      case 'aerolink':      loadAlSessions(false); break;
+      case 'evomap':        loadEvomapSessions(false); break;
+      case 'ourtoken':      loadOurtokenSessions(false); break;
+      case 'conduit':       loadConduitSessions(false); break;
+      case 'video':         loadVideoKeys(); break;
+      case 'image':         loadImageKeys(); break;
+      case 'omniroute-pool': loadOmSessions(false); break;
+      // grok — свой autopoll (4s) уже отдельно
+      // switcher/settings/plugins — статичные, не трогаем
+      // tokenrouter/devin/notion — deprecated, не трогаем
+    }
+  } catch (e) { console.warn('[auto] tab-refresh fail', tab, e); }
+}
+
 // ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
+setInterval(autoRefreshTick, TAB_POLL_MS);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) autoRefreshTick();  // сразу после возврата в браузер
+});
+// Восстановить состояние тумблера + wire up change handler.
+setAutoRefresh(autoRefreshEnabled());
+document.getElementById('autoref-checkbox')?.addEventListener('change', (e) => {
+  setAutoRefresh(e.target.checked);
+  if (e.target.checked) autoRefreshTick();  // сразу дёрнуть, не ждать интервал
+});
+applyTabsConfig();
 showTab(localStorage.getItem('opencode_active_tab') || 'switcher');
 toggleLogPanel(); // log panel open by default
 </script>
@@ -5173,6 +5600,718 @@ toggleLogPanel(); // log panel open by default
         title="Логи">
   <span class="text-base">📜</span>
 </button>
+
+<script>
+// ═══════════════════ GROK COOKIE SESSION ══════════════════════════════
+const GROK_STORAGE_KEY = 'grok-saved-sessions';
+
+// Cooldown helpers: сессия "выдохлась" — Launch блокируется, показывается таймер
+// до `meta.cooldownUntil` (ms). SuperGrok default = 4h после rate-limit.
+function grokIsCoolingDown(s) {
+  const until = s && s.meta && Number(s.meta.cooldownUntil);
+  return isFinite(until) && until > Date.now();
+}
+
+function grokCooldownFmt(msLeft) {
+  if (!isFinite(msLeft) || msLeft <= 0) return '';
+  const totalSec = Math.floor(msLeft / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}ч ${String(m).padStart(2,'0')}м`;
+  if (m > 0) return `${m}м ${String(s).padStart(2,'0')}с`;
+  return `${s}с`;
+}
+
+async function grokMarkExhausted(name) {
+  const hoursStr = prompt('На сколько часов пометить сессию как "выдохлась"?\n\nSuperGrok обычно 4ч. Пусто = отмена.', '4');
+  if (hoursStr === null) return;
+  const hours = Number(hoursStr);
+  if (!isFinite(hours) || hours <= 0) return toast('Bad number of hours', 'warn');
+  try {
+    const res = await fetch(`/__switch/api/grok/sessions/${encodeURIComponent(name)}/meta`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cooldownHours: hours }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'meta save failed');
+    toast(`⏳ ${name}: cooldown ${hours}ч`, 'info');
+    await grokRenderSaved();
+  } catch (e) { toast('Cooldown failed: ' + e.message, 'error'); }
+}
+
+const _grokRefreshing = new Set();
+async function grokRefreshQuota(name) {
+  if (_grokRefreshing.has(name)) {
+    toast(`⏳ ${name}: probe уже идёт, подожди…`, 'info', 2000);
+    return;
+  }
+  _grokRefreshing.add(name);
+  toast(`🔄 ${name}: обновляю квоту (headless Chrome, ~15с)…`, 'info', 15000);
+  // Крутим спиннер на кнопке — чтобы визуально было понятно, что что-то происходит.
+  document.querySelectorAll(`[data-grok-refresh="${CSS.escape(name)}"]`).forEach(btn => {
+    btn.disabled = true;
+    btn.dataset.origHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="inline-block animate-spin">⟳</span>';
+  });
+  try {
+    const res = await fetch(`/__switch/api/grok/sessions/${encodeURIComponent(name)}/refresh-quota`, {
+      method: 'POST',
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'quota refresh failed');
+    const q = d.quota || {};
+    const parts = [];
+    if (q.plan) parts.push(q.plan);
+    if (q.identity?.email) parts.push(q.identity.email);
+    if (typeof q.credits?.weeklyUsedPct === 'number') parts.push(`weekly ${Math.round(q.credits.weeklyUsedPct)}%`);
+    else if (q.rateLimits) parts.push(`${q.rateLimits.remainingQueries}/${q.rateLimits.totalQueries}`);
+    toast(`✓ ${name}: ${parts.join(' · ') || 'обновлено'}`, 'success', 5000);
+    await grokRenderSaved();
+  } catch (e) {
+    toast(`Quota fail (${name}): ${e.message}`, 'error', 8000);
+  } finally {
+    _grokRefreshing.delete(name);
+    // Спиннер снимется автоматически после re-render в grokRenderSaved(),
+    // но на случай ошибки без re-render — восстановим вручную.
+    document.querySelectorAll(`[data-grok-refresh="${CSS.escape(name)}"]`).forEach(btn => {
+      btn.disabled = false;
+      if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
+    });
+  }
+}
+
+async function grokClearCooldown(name) {
+  try {
+    const res = await fetch(`/__switch/api/grok/sessions/${encodeURIComponent(name)}/meta`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cooldownUntil: null }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'meta clear failed');
+    toast(`✓ ${name}: снят cooldown`, 'success');
+    await grokRenderSaved();
+  } catch (e) { toast('Clear failed: ' + e.message, 'error'); }
+}
+
+// Отпечаток сессии = sso + grok_device_id. Даёт понять что залипло одно и то же
+// на разных сохранениях (реальная бага: Cookie-Editor часто копирует не активный аккаунт).
+function grokSessionFingerprint(cookies) {
+  if (!Array.isArray(cookies)) return null;
+  const pick = (name) => (cookies.find(c => c && c.name === name) || {}).value || '';
+  const sso = pick('sso');
+  const dev = pick('grok_device_id') || pick('x-anonuserid');
+  if (!sso && !dev) return null;
+  return { sso, dev, short: (sso || dev).slice(-10) };
+}
+
+function grokUpdateHint() {
+  const raw = $('grok-cookies').value.trim();
+  const hint = $('grok-hint');
+  if (!raw) { hint.textContent = '—'; return; }
+  try {
+    const cookies = JSON.parse(raw);
+    if (!Array.isArray(cookies)) throw new Error('not array');
+    const names = cookies.map(c => c.name).filter(Boolean);
+    const fp = grokSessionFingerprint(cookies);
+    const fpTag = fp ? ` · sso…${esc(fp.short)}` : '';
+    hint.textContent = `${cookies.length} cookie${cookies.length > 1 ? 's' : ''}: ${names.join(', ')}${fpTag}`;
+    hint.classList.remove('text-crimson');
+    hint.classList.add('text-faint');
+  } catch (e) {
+    hint.textContent = 'invalid JSON: ' + e.message;
+    hint.classList.remove('text-faint');
+    hint.classList.add('text-crimson');
+  }
+}
+
+async function grokLaunch() {
+  const raw = $('grok-cookies').value.trim();
+  const status = $('grok-status');
+
+  if (!raw) {
+    status.textContent = 'Paste cookie JSON first';
+    status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+    status.classList.remove('hidden');
+    return;
+  }
+
+  let cookies;
+  try {
+    cookies = JSON.parse(raw);
+    if (!Array.isArray(cookies)) throw new Error('JSON must be an array');
+  } catch (e) {
+    status.textContent = 'Invalid JSON: ' + e.message;
+    status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+    status.classList.remove('hidden');
+    return;
+  }
+
+  status.textContent = 'Launching Chrome...';
+  status.className = 'text-xs p-3 rounded-lg border border-azure/50 bg-azure/5 text-azure';
+  status.classList.remove('hidden');
+
+  try {
+    const res = await fetch('http://localhost:8765/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookies, target: 'grok.com' }),
+    });
+    const data = await res.json();
+
+    if (res.ok) {
+      status.textContent = '✓ ' + data.message + ' — Chrome window opened, work in it';
+      status.className = 'text-xs p-3 rounded-lg border border-emerald/50 bg-emerald/5 text-emerald';
+      localStorage.setItem('grok-cookies-last', raw);
+      toast('🤖 Grok session opened', 'success');
+    } else {
+      status.textContent = 'Launch failed: ' + (data.detail || 'unknown error');
+      status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+    }
+  } catch (e) {
+    status.textContent = 'Connection failed: ' + e.message + ' (is launcher.py running?)';
+    status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+  }
+}
+
+// Sessions live on disk at D:\WORMALIENAIGIGANT\app\grok-cookie-mcp\cookies via /__switch/api/grok/sessions
+let grokSessionsCache = [];
+
+async function grokFetchSessions() {
+  try {
+    const res = await fetch('/__switch/api/grok/sessions', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`http ${res.status}`);
+    const data = await res.json();
+    grokSessionsCache = Array.isArray(data.sessions) ? data.sessions : [];
+    console.log('[grok] fetched sessions:', grokSessionsCache.length, grokSessionsCache.map(s => s.name));
+  } catch (e) {
+    grokSessionsCache = [];
+    console.warn('[grok] fetch failed:', e);
+    toast('Failed to load sessions: ' + e.message, 'error');
+  }
+  return grokSessionsCache;
+}
+
+async function grokSaveSession() {
+  const raw = $('grok-cookies').value.trim();
+  if (!raw) { toast('Nothing to save', 'warn'); return; }
+
+  let cookies;
+  try {
+    cookies = JSON.parse(raw);
+  } catch (e) {
+    toast('Invalid JSON: ' + e.message, 'error');
+    return;
+  }
+
+  // Проверка дубликата по отпечатку sso+device_id. Если совпадает с уже сохранённой
+  // сессией — это ровно тот баг с "тремя одинаковыми": Cookie-Editor не переключил
+  // аккаунт. Требуем явного подтверждения.
+  const fp = grokSessionFingerprint(cookies);
+  if (fp) {
+    await grokFetchSessions();
+    const dup = grokSessionsCache.find(s => {
+      const other = grokSessionFingerprint(s.cookies);
+      return other && other.sso && other.sso === fp.sso;
+    });
+    if (dup) {
+      const ok = confirm(
+        `⚠ Эти куки идентичны уже сохранённой сессии «${dup.name}»\n` +
+        `(sso…${fp.short})\n\n` +
+        `Скорее всего Cookie-Editor не переключил активный аккаунт.\n` +
+        `Всё равно сохранить?`
+      );
+      if (!ok) return;
+    }
+  }
+
+  const name = prompt('Session name:', `grok-${new Date().toISOString().slice(0, 10)}`);
+  if (!name) return;
+
+  try {
+    const res = await fetch('/__switch/api/grok/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, cookies }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'save failed');
+    toast('💾 Session saved: ' + (data.name || name), 'success');
+    localStorage.setItem('grok-cookies-last', raw);
+    // Автоочистка textarea: следующее сохранение потребует явной вставки нового
+    // набора кук, иначе бы залипшее содержимое молча уходило под новым именем.
+    $('grok-cookies').value = '';
+    grokUpdateHint();
+    await grokRenderSaved();
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function grokRenderSaved() {
+  await grokFetchSessions();
+  const list = $('grok-saved-list');
+  const navCount = $('nav-count-grok');
+  const total = grokSessionsCache.length;
+  const active = grokSessionsCache.filter(s => !grokIsCoolingDown(s)).length;
+  if (navCount) navCount.textContent = active === total ? String(total) : `${active}/${total}`;
+  grokRenderEnergy();
+
+  const filter = ($('grok-filter')?.value || '').toLowerCase();
+  const sort = $('grok-sort')?.value || 'date-desc';
+
+  // Фильтр + сортировка (по email/имени + план + fingerprint)
+  let all = grokSessionsCache.slice();
+  if (filter) {
+    all = all.filter(s => {
+      const em = s.meta?.quota?.identity?.email || '';
+      const nm = s.meta?.quota?.identity?.displayName || '';
+      const pl = s.meta?.quota?.plan || '';
+      return (s.name + ' ' + em + ' ' + nm + ' ' + pl).toLowerCase().includes(filter);
+    });
+  }
+  all.sort((a, b) => {
+    // "usedPct" — предпочитаем недельный (100-used), fallback на rate-limits.
+    const remain = (s) => {
+      const wk = s.meta?.quota?.credits?.weeklyUsedPct;
+      if (typeof wk === 'number') return 100 - wk;
+      const r = s.meta?.quota?.rateLimits;
+      if (r && r.totalQueries > 0) return (r.remainingQueries / r.totalQueries) * 100;
+      return -1;
+    };
+    if (sort === 'date-asc')   return new Date(a.savedAt) - new Date(b.savedAt);
+    if (sort === 'date-desc')  return new Date(b.savedAt) - new Date(a.savedAt);
+    if (sort === 'quota-asc')  return remain(a) - remain(b);
+    if (sort === 'quota-desc') return remain(b) - remain(a);
+    if (sort === 'plan') return String(a.meta?.quota?.plan || '~').localeCompare(String(b.meta?.quota?.plan || '~'));
+    return 0;
+  });
+
+  if (!all.length) {
+    list.innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего не найдено' : 'нет сохранённых сессий · вставь Cookie-Editor JSON выше'}</div>`;
+    return;
+  }
+
+  // Групповая раскраска отпечатков: если у двух сессий одинаковый sso — красная метка.
+  const fps = all.map(s => grokSessionFingerprint(s.cookies));
+  const ssoCount = {};
+  for (const fp of fps) if (fp && fp.sso) ssoCount[fp.sso] = (ssoCount[fp.sso] || 0) + 1;
+
+  const rows = all.map((s, i) => {
+    const size = s.cookieCount ?? (Array.isArray(s.cookies) ? s.cookies.length : Object.keys(s.cookies || {}).length);
+    const fp = fps[i];
+    const isDup = fp && fp.sso && ssoCount[fp.sso] > 1;
+    const fpTag = fp
+      ? `<span class="ml-2 px-1.5 py-0.5 rounded font-mono text-[9px] ${isDup ? 'bg-crimson/10 text-crimson border border-crimson/40' : 'bg-emerald/5 text-emerald/70 border border-emerald/20'}" title="${isDup ? 'ДУБЛИКАТ · тот же sso что у другой сессии' : 'уникальная сессия'}">sso…${esc(fp.short)}${isDup ? ' ⚠' : ''}</span>`
+      : '';
+    const cooling = grokIsCoolingDown(s);
+    const cdLeft = cooling ? (Number(s.meta.cooldownUntil) - Date.now()) : 0;
+    const nameJ = JSON.stringify(s.name);
+    const idx = grokSessionsCache.indexOf(s);
+    const idxJ = String(idx);
+    const rowDim = cooling ? 'opacity-60' : '';
+
+    const q = s.meta && s.meta.quota;
+    const email = q?.identity?.email || '';
+    const displayName = q?.identity?.displayName || '';
+    const plan = q?.plan || '';
+
+    const planCell = plan
+      ? `<span class="text-[10px] px-1.5 py-0.5 rounded border font-medium ${plan.includes('SuperGrok') ? 'bg-emerald/10 border-emerald/40 text-emerald' : 'bg-elevated border-line-soft text-faint'}">${esc(plan)}</span>`
+      : `<span class="text-faint">—</span>`;
+
+    // Недельный лимит: главная колонка. Бар = weeklyUsedPct (0..100),
+    // + сплит по типам (Imagine / Голосовой / Разговор).
+    let quotaCell = '<span class="text-faint">—</span>';
+    let windowCell = '<span class="text-faint">—</span>';
+    // Фиксированный порядок: Imagine (violet), Голосовой (cyan), Разговор (amber).
+    const segColors = { 'Imagine': 'violet', 'Голосовой режим': 'cyan', 'Разговор': 'amber' };
+    const segOrder = ['Imagine', 'Голосовой режим', 'Разговор'];
+    if (q?.credits && typeof q.credits.weeklyUsedPct === 'number') {
+      const usedPct = Math.round(q.credits.weeklyUsedPct);
+      const totalCls = usedPct > 70 ? 'text-crimson' : usedPct > 40 ? 'text-amber' : 'text-emerald';
+      const byName = Object.fromEntries((q.credits.breakdown || []).map(b => [b.name, b]));
+      const ordered = segOrder.map(n => byName[n]).filter(Boolean);
+      const segments = ordered.map(b => {
+        const c = segColors[b.name] || 'faint';
+        const w = Math.max(0, Math.min(100, b.pct));
+        return `<div class="h-full bg-${c} border-r border-bg" style="width:${w}%" title="${esc(b.name)}: ${b.pct}%"></div>`;
+      }).join('');
+      const legend = ordered.map(b => {
+        const c = segColors[b.name] || 'faint';
+        const short = { 'Imagine': 'Imagine', 'Голосовой режим': 'Голос', 'Разговор': 'Чат' }[b.name] || b.name;
+        return `<span class="inline-flex items-center gap-1 mr-2"><span class="inline-block w-2 h-2 rounded-full bg-${c}"></span><span class="text-[10px] font-mono text-muted">${esc(short)}·${Math.round(b.pct)}%</span></span>`;
+      }).join('');
+      quotaCell = `
+        <div class="min-w-[220px] max-w-[320px]">
+          <div class="flex items-center gap-2">
+            <div class="flex-1 h-3 bg-line-soft rounded-full overflow-hidden flex" title="Использовано ${usedPct}% недельной квоты">
+              ${segments || `<div class="h-full bg-violet" style="width:${usedPct}%"></div>`}
+            </div>
+            <span class="text-sm font-mono font-semibold w-12 text-right ${totalCls}">${usedPct}%</span>
+          </div>
+          ${legend ? `<div class="mt-1.5 leading-none">${legend}</div>` : ''}
+        </div>`;
+      if (q.credits.periodEnd) {
+        const endDate = new Date(q.credits.periodEnd * 1000);
+        const daysLeft = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / 86400000));
+        windowCell = `<span class="text-xs font-mono text-muted" title="Сбрасывается ${esc(endDate.toLocaleString('ru'))}">через ${daysLeft}д</span>`;
+      }
+    } else if (q?.rateLimits && q.rateLimits.totalQueries > 0) {
+      // Fallback для новых/свежих аккаунтов без weekly-данных (например только что вошёл — ещё не тратил).
+      // Показываем rate-limits как основной бар: заполнение = used/total.
+      const r = q.rateLimits.remainingQueries;
+      const t = q.rateLimits.totalQueries;
+      const usedPct = Math.round(((t - r) / t) * 100);
+      const cls = usedPct > 70 ? 'crimson' : usedPct > 40 ? 'amber' : 'emerald';
+      const h = q.rateLimits.windowSizeSeconds ? Math.round(q.rateLimits.windowSizeSeconds / 3600) : '?';
+      quotaCell = `
+        <div class="min-w-[220px] max-w-[320px]">
+          <div class="flex items-center gap-2">
+            <div class="flex-1 h-3 bg-line-soft rounded-full overflow-hidden">
+              <div class="h-full bg-${cls}" style="width:${usedPct}%"></div>
+            </div>
+            <span class="text-sm font-mono font-semibold w-12 text-right text-${cls}">${usedPct}%</span>
+          </div>
+          <div class="mt-1.5 text-[10px] font-mono text-muted">⚡ ${r}/${t} · окно ${h}ч <span class="text-faint">(weekly ещё не заполнилось)</span></div>
+        </div>`;
+      if (q.credits?.periodEnd) {
+        const endDate = new Date(q.credits.periodEnd * 1000);
+        const daysLeft = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / 86400000));
+        windowCell = `<span class="text-xs font-mono text-muted" title="Сбрасывается ${esc(endDate.toLocaleString('ru'))}">через ${daysLeft}д</span>`;
+      }
+    }
+    // Rate-limits (короткое окно) — вспомогательно, тонкая строка под именем.
+    let rateLimitsHint = '';
+    if (q?.rateLimits) {
+      const r = q.rateLimits.remainingQueries, t = q.rateLimits.totalQueries;
+      const h = q.rateLimits.windowSizeSeconds ? Math.round(q.rateLimits.windowSizeSeconds / 3600) : '?';
+      const cls = t > 0 && r/t > 0.5 ? 'text-emerald' : t > 0 && r/t > 0.2 ? 'text-amber' : 'text-crimson';
+      rateLimitsHint = `<span class="ml-2 text-[9px] font-mono ${cls}" title="Короткое окно rate-limit">⚡${r}/${t}·${h}ч</span>`;
+    }
+
+    const emailCell = email
+      ? `<div class="text-xs text-ink truncate max-w-[220px]" title="${esc(displayName)} · ${esc(email)}">${esc(email)}</div>
+         ${displayName ? `<div class="text-[10px] text-faint truncate max-w-[220px]">${esc(displayName)}</div>` : ''}`
+      : `<span class="text-faint">—</span>`;
+
+    // Cooldown-инфа
+    const cooldownCell = cooling
+      ? `<span class="text-[10px] px-1.5 py-0.5 rounded font-mono bg-amber/10 text-amber border border-amber/40" data-grok-timer="${Number(s.meta.cooldownUntil)}" title="Cooldown до ${esc(new Date(Number(s.meta.cooldownUntil)).toLocaleString('ru'))}">⏳ ${esc(grokCooldownFmt(cdLeft))}</span>`
+      : (s.meta?.quotaFetchedAt
+          ? `<span class="text-[10px] text-faint" title="Обновлено ${esc(new Date(s.meta.quotaFetchedAt).toLocaleString('ru'))}">upd ${Math.round((Date.now()-s.meta.quotaFetchedAt)/60000)}м</span>`
+          : `<span class="text-faint text-[10px]">—</span>`);
+
+    const launchBtn = cooling
+      ? `<button disabled data-grok-timer="${Number(s.meta.cooldownUntil)}" title="Cooldown" class="text-xs px-2 py-1 bg-faint/10 border border-faint/40 text-faint rounded cursor-not-allowed">⏳ ${esc(grokCooldownFmt(cdLeft))}</button>`
+      : `<button onclick='grokLaunchSession(${idxJ})' title="Открыть Chrome с этой сессией" class="text-xs px-2 py-1 bg-amber/10 border border-amber/50 text-amber rounded hover:bg-amber/20">🚀 Launch</button>`;
+    const cooldownBtn = cooling
+      ? `<button onclick='grokClearCooldown(${nameJ})' title="Снять cooldown вручную" class="text-xs px-2 py-1 text-emerald hover:bg-emerald/10 rounded">✓</button>`
+      : `<button onclick='grokMarkExhausted(${nameJ})' title="Пометить как выдохшуюся · таймер" class="text-xs px-2 py-1 text-faint hover:text-amber rounded">⏳</button>`;
+
+    return `<tr class="hover:bg-elevated/40 transition ${rowDim}">
+      <td class="px-3 py-2.5 text-sm text-ink whitespace-nowrap" title="${esc(s.name)}">
+        <div class="flex items-center flex-wrap">
+          <span class="font-medium">${esc(s.name)}</span>${fpTag}${rateLimitsHint}
+        </div>
+        <div class="text-[10px] text-faint font-mono">${size} cookies</div>
+      </td>
+      <td class="px-3 py-2.5">${emailCell}</td>
+      <td class="px-3 py-2.5">${planCell}</td>
+      <td class="px-3 py-2.5">${quotaCell}</td>
+      <td class="px-3 py-2.5 text-center">${windowCell}</td>
+      <td class="px-3 py-2.5 text-[11px] text-muted font-mono whitespace-nowrap">${esc(new Date(s.savedAt).toLocaleString('ru'))}</td>
+      <td class="px-3 py-2.5 text-right">${cooldownCell}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${launchBtn}
+        <button onclick='grokRefreshQuota(${nameJ})' data-grok-refresh="${esc(s.name)}" title="Обновить квоту (headless Chrome, ~15с)" class="text-xs px-2 py-1 bg-emerald/10 border border-emerald/50 text-emerald rounded hover:bg-emerald/20 disabled:opacity-50 disabled:cursor-wait">🔄</button>
+        <button onclick='grokLoadSession(${idxJ})' title="Загрузить куки в редактор" class="text-xs px-2 py-1 text-faint hover:text-ink rounded">📋</button>
+        ${cooldownBtn}
+        <button onclick='grokDeleteSession(${idxJ})' title="Удалить сессию" class="text-xs px-2 py-1 text-faint hover:text-crimson rounded">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const withQuota = grokSessionsCache.filter(s => s.meta?.quota).length;
+  const filterTag = filter ? ` · <span class="text-amber">${esc(filter)}</span>` : '';
+  list.innerHTML = table(
+    [
+      { label: 'Session · ⚡rate' },
+      { label: 'Email · Имя' },
+      { label: 'План' },
+      { label: 'Недельный лимит' },
+      { label: 'Сброс', align: 'center' },
+      { label: 'Saved' },
+      { label: 'Cooldown / upd', align: 'right' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${all.length} из ${total}${filterTag} · ${withQuota} с квотой · ${active}/${total} активных`
+  );
+}
+
+// Общая "энергия пула" — среднее свободного места (100 - weeklyUsedPct) по всем
+// сессиям с квотой. Rate-limits в шапку не тянем — они per-session и короткие.
+function grokRenderEnergy() {
+  const el = $('grok-energy');
+  if (!el) return;
+  const withQuota = grokSessionsCache.filter(s => s.meta?.quota);
+  if (!withQuota.length) {
+    el.innerHTML = `<div class="text-xs text-faint">Нажми <span class="text-emerald">🔄</span> у сессии чтобы собрать квоту (headless Chrome, ~15с). Пока данных нет.</div>`;
+    return;
+  }
+  // Юзаж по сессии: weeklyUsedPct если есть, иначе rate-limits used% (для свежих аккаунтов).
+  const sessionUsedPct = (s) => {
+    const q = s.meta?.quota || {};
+    if (typeof q.credits?.weeklyUsedPct === 'number') return q.credits.weeklyUsedPct;
+    const r = q.rateLimits;
+    if (r && r.totalQueries > 0) return ((r.totalQueries - r.remainingQueries) / r.totalQueries) * 100;
+    return null;
+  };
+  const withUsage = withQuota.filter(s => sessionUsedPct(s) != null);
+  const withWeek = withQuota.filter(s => typeof s.meta.quota?.credits?.weeklyUsedPct === 'number');
+  const perPlan = {};
+  for (const s of withQuota) {
+    const plan = s.meta.quota.plan || '?';
+    perPlan[plan] = (perPlan[plan] || 0) + 1;
+  }
+  let avgFreePct = 0, avgUsedPct = 0;
+  if (withUsage.length) {
+    const sumUsed = withUsage.reduce((a, s) => a + sessionUsedPct(s), 0);
+    avgUsedPct = sumUsed / withUsage.length;
+    avgFreePct = 100 - avgUsedPct;
+  }
+  const pct = Math.round(avgFreePct);
+  const barColor = pct > 50 ? 'bg-emerald' : pct > 20 ? 'bg-amber' : 'bg-crimson';
+  const planChips = Object.entries(perPlan).map(([p, n]) =>
+    `<span class="text-[10px] px-2 py-0.5 rounded border ${p.includes('SuperGrok') ? 'bg-emerald/10 border-emerald/40 text-emerald' : 'bg-elevated border-line-soft text-faint'}">${esc(p)} · ${n}</span>`
+  ).join(' ');
+  // Sub-bars по типам (среднее)
+  let breakdownBar = '';
+  if (withWeek.length) {
+    const agg = {};
+    for (const s of withWeek) {
+      for (const b of (s.meta.quota.credits.breakdown || [])) {
+        agg[b.name] = (agg[b.name] || 0) + b.pct;
+      }
+    }
+    const segColors = { 'Imagine': 'bg-violet', 'Голосовой режим': 'bg-cyan', 'Разговор': 'bg-amber' };
+    const legend = Object.entries(agg).map(([name, sum]) => {
+      const avg = Math.round(sum / withWeek.length);
+      const cls = segColors[name] || 'bg-faint';
+      return `<span class="inline-flex items-center gap-1 mr-3">
+        <span class="inline-block size-1.5 rounded-full ${cls}"></span>
+        <span class="text-[10px] font-mono text-muted">${esc(name)} <span class="text-ink">${avg}%</span></span>
+      </span>`;
+    }).join('');
+    if (legend) breakdownBar = `<div class="mt-2">${legend}</div>`;
+  }
+  el.innerHTML = `
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <div class="text-[10px] uppercase tracking-[0.2em] text-emerald/80 mb-1">⚡ Свободно недельного лимита (среднее)</div>
+        <div class="text-3xl font-bold text-ink">${pct}% <span class="text-lg text-muted">свободно</span></div>
+        <div class="text-xs text-muted mt-1">${withUsage.length} из ${grokSessionsCache.length} с квотой${withWeek.length < withUsage.length ? ` <span class="text-faint">(${withUsage.length - withWeek.length} по rate-limits)</span>` : ''} · ${planChips}</div>
+        ${breakdownBar}
+      </div>
+      <div class="flex-1 max-w-md">
+        <div class="h-3 bg-line-soft rounded-full overflow-hidden">
+          <div class="h-full ${barColor} rounded-full transition-all" style="width:${pct}%"></div>
+        </div>
+        <div class="flex justify-between mt-1.5 text-[10px] font-mono text-faint">
+          <span>0% свободно</span><span class="text-ink">использовано ${Math.round(avgUsedPct)}%</span><span>100%</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function grokRefreshAllQuota() {
+  const list = grokSessionsCache.slice();
+  if (!list.length) return toast('Нет сессий', 'warn');
+  if (!confirm(`Обновить квоту для ${list.length} сессий?\nКаждая ~15с в headless Chrome.\n\nИтого ~${Math.ceil(list.length * 15 / 60)}м.`)) return;
+  toast(`🔄 обновляю ${list.length} сессий подряд…`, 'info', 4000);
+  let ok = 0;
+  for (const s of list) {
+    try {
+      const res = await fetch(`/__switch/api/grok/sessions/${encodeURIComponent(s.name)}/refresh-quota`, { method: 'POST' });
+      if (res.ok) { ok++; await grokRenderSaved(); }
+    } catch {}
+  }
+  toast(`✓ обновлено ${ok}/${list.length}`, 'success');
+}
+
+function grokLoadSession(index) {
+  const s = grokSessionsCache[index];
+  if (!s) { toast('Session not found', 'error'); return; }
+  $('grok-cookies').value = JSON.stringify(s.cookies, null, 2);
+  grokUpdateHint();
+  toast('Session loaded: ' + s.name, 'info');
+}
+
+async function grokLaunchSession(index) {
+  const session = grokSessionsCache[index];
+  if (!session) { toast('Session not found', 'error'); return; }
+  if (grokIsCoolingDown(session)) {
+    const left = Number(session.meta.cooldownUntil) - Date.now();
+    return toast(`⏳ ${session.name}: осталось ${grokCooldownFmt(left)} до сброса cooldown`, 'warn');
+  }
+  const status = $('grok-status');
+  status.textContent = `Launching ${session.name}...`;
+  status.className = 'text-xs p-3 rounded-lg border border-azure/50 bg-azure/5 text-azure';
+  status.classList.remove('hidden');
+
+  try {
+    const res = await fetch('http://localhost:8765/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookies: session.cookies, target: 'grok.com' }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      status.textContent = '✓ ' + session.name + ' — Chrome opened';
+      status.className = 'text-xs p-3 rounded-lg border border-emerald/50 bg-emerald/5 text-emerald';
+      toast('🤖 ' + session.name + ' opened', 'success');
+    } else {
+      status.textContent = 'Launch failed: ' + (data.detail || 'unknown error');
+      status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+    }
+  } catch (e) {
+    status.textContent = 'Connection failed: ' + e.message;
+    status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+  }
+}
+
+async function grokDeleteSession(index) {
+  const s = grokSessionsCache[index];
+  if (!s) return;
+  if (!confirm(`Delete session "${s.name}"?`)) return;
+  try {
+    const res = await fetch('/__switch/api/grok/sessions/' + encodeURIComponent(s.name), { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'delete failed');
+    toast('Session deleted', 'info');
+    await grokRenderSaved();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+// One-shot migrate legacy localStorage sessions to disk, then clear.
+(async function grokMigrateLocalStorage() {
+  const raw = localStorage.getItem(GROK_STORAGE_KEY);
+  if (!raw) return;
+  let arr;
+  try { arr = JSON.parse(raw); } catch { return; }
+  if (!Array.isArray(arr) || !arr.length) return;
+  try {
+    for (const s of arr) {
+      if (!s?.name || !s?.cookies) continue;
+      await fetch('/__switch/api/grok/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: s.name, cookies: s.cookies }),
+      });
+    }
+    localStorage.removeItem(GROK_STORAGE_KEY);
+    toast(`Migrated ${arr.length} sessions to disk`, 'success');
+    if (typeof grokRenderSaved === 'function') grokRenderSaved();
+  } catch (e) {
+    console.warn('grok migrate failed', e);
+  }
+})();
+
+// ---- Grok launcher supervisor UI ----
+// Дашборд бьёт напрямую в http://localhost:8765/launch (у launcher.py CORS *).
+// Здесь мы только показываем статус supervisor'а из :8200 и умеем его пнуть.
+async function grokLauncherRefresh() {
+  const el = $('grok-launcher-state');
+  if (!el) return;
+  try {
+    const r = await fetch('/__switch/api/grok/health');
+    const d = await r.json();
+    const alive = !!d.alive;
+    const map = {
+      running:  { txt: '✓ launcher :8765', cls: 'bg-emerald/10 border-emerald/40 text-emerald' },
+      starting: { txt: '… стартует',        cls: 'bg-azure/10 border-azure/40 text-azure' },
+      failed:   { txt: '✗ упал',            cls: 'bg-crimson/10 border-crimson/40 text-crimson' },
+      idle:     { txt: '· выключен',        cls: 'bg-elevated border-line-soft text-faint' },
+      disabled: { txt: '⊘ нет launcher.py', cls: 'bg-crimson/10 border-crimson/40 text-crimson' },
+    };
+    const view = map[alive ? 'running' : (d.state || 'idle')] || map.idle;
+    el.textContent = view.txt;
+    el.className = `px-2 py-1 rounded font-mono text-[10px] border ${view.cls}`;
+    const errPart = d.lastErr ? `\n\nlast stderr:\n${d.lastErr}` : '';
+    el.title = `state=${d.state} · alive=${alive} · ${d.path || ''}${errPart}`;
+  } catch {
+    el.textContent = 'launcher: ?';
+    el.className = 'px-2 py-1 rounded font-mono text-[10px] bg-elevated border border-line-soft text-faint';
+  }
+}
+
+async function grokLauncherRestart() {
+  const el = $('grok-launcher-state');
+  if (el) { el.textContent = '… рестарт'; el.className = 'px-2 py-1 rounded font-mono text-[10px] bg-azure/10 border border-azure/40 text-azure'; }
+  try {
+    const r = await fetch('/__switch/api/grok/health', { method: 'POST' });
+    const d = await r.json();
+    toast(`launcher: ${d.state}`, d.state === 'running' ? 'success' : 'warn');
+  } catch (e) { toast('Restart failed: ' + e.message, 'error'); }
+  await grokLauncherRefresh();
+}
+
+// Привязка фильтра/сортировки к таблице сессий.
+document.getElementById('grok-filter')?.addEventListener('input', () => grokRenderSaved());
+document.getElementById('grok-sort')?.addEventListener('change', () => grokRenderSaved());
+
+// Признак: таб Grok сейчас показан пользователю.
+function grokTabVisible() {
+  return document.querySelector('[data-tab-content="grok"]')?.offsetParent !== null;
+}
+
+// Обновлять launcher-статус при заходе на таб + периодически.
+grokLauncherRefresh();
+setInterval(() => { if (grokTabVisible()) grokLauncherRefresh(); }, 5000);
+
+// Initial render списка сразу при загрузке страницы — не ждать клика по табу.
+// Это исправляет "список появляется через 6 секунд" (grokTabVisible() возвращал
+// false до первого клика, авто-refresh пропускал первые итерации).
+grokRenderSaved().catch(e => console.warn('[grok] initial render failed', e));
+
+// Список Saved Sessions: обновлять каждые 4с пока таб открыт, чтобы новые сессии,
+// добавленные другими способами (например по HTTP из скрипта или после restart прокси),
+// появлялись без необходимости кликать по вкладкам туда-сюда.
+let __grokLastRefreshAt = 0;
+async function grokRefreshSavedIfIdle() {
+  if (!grokTabVisible()) return;
+  const now = Date.now();
+  if (now - __grokLastRefreshAt < 3500) return;
+  __grokLastRefreshAt = now;
+  try { await grokRenderSaved(); } catch (e) { console.warn('[grok] auto-refresh failed', e); }
+}
+setInterval(grokRefreshSavedIfIdle, 4000);
+
+// Плюс — refresh при возврате в браузер из другого окна/приложения.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') grokRefreshSavedIfIdle();
+});
+
+// Живой таймер: раз в секунду перерисовываем текст ⏳ бейджей, не дёргая fetch.
+// Если какой-то таймер истёк — форсим полный refresh (сработает через 3.5с throttle).
+setInterval(() => {
+  if (!grokTabVisible()) return;
+  const badges = document.querySelectorAll('[data-grok-timer]');
+  if (!badges.length) return;
+  let expired = false;
+  const now = Date.now();
+  badges.forEach(el => {
+    const until = Number(el.getAttribute('data-grok-timer'));
+    const left = until - now;
+    if (left <= 0) { expired = true; return; }
+    el.textContent = '⏳ ' + grokCooldownFmt(left);
+  });
+  if (expired) grokRenderSaved().catch(() => {});
+}, 1000);
+</script>
 
 </body>
 </html>

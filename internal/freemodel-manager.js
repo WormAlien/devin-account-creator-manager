@@ -152,12 +152,12 @@ function getFreemodelSessions() {
     return list.sort((a, b) => b.date.localeCompare(a.date) || b.name.localeCompare(a.name));
 }
 
-// Форсим английский UI: freemodel определяет язык по Accept-Language/navigator.language.
-// Без этого новые v3-аккаунты, регистрировавшиеся под русским системным locale,
-// открываются на русском, и парсер "AVAILABLE NOW" / "5-Hour window" ничего не находит.
+// Локаль: en-US отдаёт фейковый "Pro" всем, включая Free-акки. ru нельзя (гео).
+// Ставим западноевропейскую — сайт должен вернуть либо en, либо локализованный,
+// но без буга «всем Pro». По результатам probe можно уточнить (de/nl/fr/it).
 const EN_CONTEXT_OPTS = {
-    locale: 'en-US',
-    extraHTTPHeaders: { 'accept-language': 'en-US,en;q=0.9' },
+    locale: 'de-DE',
+    extraHTTPHeaders: { 'accept-language': 'de-DE,de;q=0.9,en;q=0.5' },
 };
 
 // ─── Парсинг /dashboard/usage ────────────────────────────────────
@@ -174,13 +174,13 @@ async function checkFreemodelQuota(session) {
         let planInfo = { plan: '', renews: '' };
         try {
             await page.goto('https://freemodel.dev/dashboard', { waitUntil: 'domcontentloaded', timeout: 20000 });
-            // Ждём пока React дорендерит хоть что-то узнаваемое: явные маркеры плана
-            // ИЛИ структура /dashboard (Sidebar-нав, "Usage"-таб и т.п.), чтобы не
-            // возвращать пустой план при медленном рендере.
+            // Ждём пока React дорендерит хоть что-то узнаваемое.
+            // Freemodel локализует UI (ru: "ТЕКУЩИЙ ТАРИФ / Улучшить"), поэтому
+            // включаем и русские, и английские маркеры.
             await page.waitForFunction(
                 () => {
                     const t = document.body?.innerText || '';
-                    return /CURRENT\s+PLAN|Upgrade to Pro|Manage subscription|Free plan|Pro plan|Billing|Subscription/i.test(t);
+                    return /CURRENT\s+PLAN|ТЕКУЩИЙ\s+ТАРИФ|Upgrade to Pro|Улучшить|Manage subscription|Управлять подпиской|Billing|Биллинг|Subscription/i.test(t);
                 },
                 { timeout: 12000 }
             ).catch(() => {});
@@ -190,23 +190,39 @@ async function checkFreemodelQuota(session) {
         // Известные названия — всё остальное (плейсхолдер "—", "…", "Loading")
         // игнорируем, чтобы не залетало в кеш и не показывалось потом чипом-прочерком.
         const KNOWN_PLAN = /^(Free|Pro|Max|Team|Enterprise|Ultimate|Plus|Business|Trial|Beta)$/i;
-        const planIdx = lines.findIndex(l => /^CURRENT\s+PLAN$/i.test(l));
+        // САНITY: у Free-акков всегда есть блок "Complete these steps to unlock
+        // VIP route access" / "Verify phone number" / "Make your first top-up".
+        // У Pro-акков этого блока нет вообще. Freemodel периодически (race?) отдаёт
+        // на /dashboard "CURRENT PLAN Pro" даже для Free-акков — не доверяем
+        // заголовку, если ниже стоит VIP-unlock виджет.
+        const HAS_VIP_UNLOCK =
+            /Complete these steps to unlock VIP|unlock VIP route|Verify phone number.*Make your first top-up|Разблокируйте VIP|Подтвердите номер телефона.*Сделайте первое пополнение|VIP-Route freischalten/is.test(homeText);
+        // Ищем строку-заголовок "CURRENT PLAN" / "ТЕКУЩИЙ ТАРИФ" — под ней стоит
+        // название плана. Это самый надёжный сигнал, локализация не помеха.
+        const planIdx = lines.findIndex(l => /^(CURRENT\s+PLAN|ТЕКУЩИЙ\s+ТАРИФ)$/i.test(l));
         if (planIdx >= 0 && lines[planIdx + 1] && KNOWN_PLAN.test(lines[planIdx + 1].trim())) {
-            planInfo.plan = lines[planIdx + 1].trim();
-        }
-        // Fallback: если "CURRENT PLAN" не нашли — определяем по маркерам upgrade-CTA.
-        // "Upgrade to Pro"/"Get Pro" → Free. "Manage subscription"/"Cancel subscription" → Pro.
-        // Совпадение слова "Pro" в шапке без "Upgrade" рядом — Pro.
-        if (!planInfo.plan) {
-            if (/Manage subscription|Cancel subscription|Pro plan\b|You're on Pro|Pro member/i.test(homeText)) {
-                planInfo.plan = 'Pro';
-            } else if (/Upgrade to Pro|Get Pro|Free plan|You're on Free/i.test(homeText)) {
+            const headerPlan = lines[planIdx + 1].trim();
+            // Если заголовок говорит Pro, но виден VIP-unlock — это Free (баг freemodel).
+            if (HAS_VIP_UNLOCK && /^Pro$/i.test(headerPlan)) {
                 planInfo.plan = 'Free';
+            } else {
+                planInfo.plan = headerPlan;
             }
+        } else if (HAS_VIP_UNLOCK) {
+            planInfo.plan = 'Free';
         }
-        // Ещё один fallback: явные бэйджи в DOM. freemodel.dev рендерит "Pro" chip
-        // в шапке, но текст может не попасть в innerText из-за scoped CSS. Ищем
-        // изолированный текст-узел "Pro"/"Free"/"Max" на кнопке/бэйдже.
+        // Fallback: маркеры upgrade-CTA. Критично не путать «Pro plan» (это подпись
+        // в CTA-блоке, показывается ВСЕМ включая Free-акки) с реальным индикатором.
+        // Free-маркеры проверяем первыми — у Pro такого CTA нет.
+        if (!planInfo.plan) {
+            const freeMarkers = /Upgrade to Pro|Upgrade\s+plan|Get\s+Pro|You'?re on Free|Free plan\b|Улучшить\s+→|Улучшить тариф|Обновить до Pro/i;
+            const proMarkers  = /Manage subscription|Cancel subscription|You'?re on Pro|Pro member|Управлять подпиской|Отменить подписку/i;
+            if (freeMarkers.test(homeText)) planInfo.plan = 'Free';
+            else if (proMarkers.test(homeText)) planInfo.plan = 'Pro';
+        }
+        // DOM-бэйдж fallback — тоже опасен: короткий текст "Pro" может быть где
+        // угодно (в CTA-кнопке, sidebar-упоминании). Требуем чтобы это был именно
+        // визуальный бэйдж: маленький, с фоном/бордером, и рядом НЕ было "Upgrade".
         if (!planInfo.plan) {
             try {
                 const badgePlan = await page.evaluate(() => {
@@ -215,9 +231,19 @@ async function checkFreemodelQuota(session) {
                     for (const n of nodes) {
                         const t = (n.textContent || '').trim();
                         if (!CLEAN.test(t)) continue;
-                        // маленький элемент, стилизованный под бэйдж — короткий текст, ограниченная ширина
                         const r = n.getBoundingClientRect();
-                        if (r.width > 0 && r.width < 120 && r.height > 0 && r.height < 44) return t;
+                        if (!(r.width > 0 && r.width < 120 && r.height > 0 && r.height < 44)) continue;
+                        // Отсечь CTA-кнопки: рядом с ними обычно есть слово Upgrade/Get.
+                        const parent = n.closest('button,a,[role="button"]');
+                        const near = (parent?.textContent || '').toLowerCase();
+                        if (/upgrade|get\s+pro|subscribe|buy/.test(near)) continue;
+                        // Требуем визуальный признак бэйджа: фон или бордер.
+                        const cs = getComputedStyle(n);
+                        const hasChrome =
+                            (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent') ||
+                            (cs.borderTopWidth && parseFloat(cs.borderTopWidth) > 0);
+                        if (!hasChrome) continue;
+                        return t;
                     }
                     return '';
                 });
@@ -230,12 +256,13 @@ async function checkFreemodelQuota(session) {
                 await page.goto('https://freemodel.dev/dashboard/billing', { waitUntil: 'domcontentloaded', timeout: 12000 });
                 await page.waitForTimeout(1500);
                 const bt = await page.evaluate(() => (document.body?.innerText || ''));
-                if (/Manage subscription|Cancel subscription|Pro plan|You're on Pro|Pro member|Current plan.*Pro/i.test(bt)) planInfo.plan = 'Pro';
-                else if (/Upgrade to Pro|Get Pro|Free plan|You're on Free|Current plan.*Free/i.test(bt)) planInfo.plan = 'Free';
-                // Ещё один пас: ищем "CURRENT PLAN" + строку под ним.
+                // Free/Pro маркеры на обоих языках.
+                if (/Upgrade to Pro|Upgrade\s+plan|Get\s+Pro|You'?re on Free|Free plan\b|Current plan.*Free|Улучшить\s+→|Улучшить тариф|Обновить до Pro|Текущий тариф.*Free/i.test(bt)) planInfo.plan = 'Free';
+                else if (/Manage subscription|Cancel subscription|You'?re on Pro|Pro member|Current plan.*Pro|Управлять подпиской|Отменить подписку|Текущий тариф.*Pro/i.test(bt)) planInfo.plan = 'Pro';
+                // Ещё один пас: ищем "CURRENT PLAN" / "ТЕКУЩИЙ ТАРИФ" + строку под ним.
                 if (!planInfo.plan) {
                     const btLines = bt.split('\n').map(s => s.trim()).filter(Boolean);
-                    const idx = btLines.findIndex(l => /^CURRENT\s+PLAN$/i.test(l));
+                    const idx = btLines.findIndex(l => /^(CURRENT\s+PLAN|ТЕКУЩИЙ\s+ТАРИФ)$/i.test(l));
                     if (idx >= 0) {
                         for (let k = idx + 1; k < Math.min(btLines.length, idx + 5); k++) {
                             if (/^(Free|Pro|Max|Team|Enterprise|Ultimate|Plus|Business|Trial|Beta)$/i.test(btLines[k])) {
@@ -261,6 +288,16 @@ async function checkFreemodelQuota(session) {
         }
         const renewsMatch = homeText.match(/Renews(?:\s+on)?\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
         if (renewsMatch) planInfo.renews = new Date(renewsMatch[1]).toISOString();
+        // Новая механика freemodel (июль 2026): "LIMITED-TIME TRIAL CREDIT $X.XX",
+        // ниже "Claude Code CLI only", "Expires <Month> <day>, <year>", "N days left".
+        // Даётся при бинде TG (реф-цепочка на 1 акк отключена, идёт только за пополнение).
+        // Пишем в planInfo — потом попадёт в quota как trialCredit / trialExpires.
+        const trialAmount = homeText.match(/LIMITED[-\s]TIME TRIAL CREDIT\s*\$([\d.,]+)/i);
+        if (trialAmount) planInfo.trialCredit = `$${trialAmount[1]}`;
+        const trialExpires = homeText.match(/Expires\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+        if (trialExpires) planInfo.trialExpires = new Date(trialExpires[1]).toISOString();
+        const trialDaysLeft = homeText.match(/(\d+)\s+days?\s+left/i);
+        if (trialDaysLeft) planInfo.trialDaysLeft = parseInt(trialDaysLeft[1], 10);
         // Detect Telegram binding: phone near "Telegram" or "connected" text.
         const tgPhoneMatch = homeText.match(/(?:telegram|tg)[\s\S]{0,60}?\+?(\d{6,15})/i) ||
                              homeText.match(/\+?(\d{6,15})[\s\S]{0,60}?(?:telegram|tg)/i) ||
@@ -275,73 +312,85 @@ async function checkFreemodelQuota(session) {
 
         await page.goto(USAGE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
 
-        // Ждём пока появится "AVAILABLE NOW" (заголовок блока)
+        // Ждём пока появится "AVAILABLE NOW" — на Free-акках окон лимитов НЕТ
+        // ("No active limits"), поэтому дальше ждать нечего, страница готова.
         await page.waitForFunction(
             () => /AVAILABLE NOW/i.test(document.body?.innerText || ''),
             { timeout: 15000 }
         ).catch(() => {});
-
-        // Ждём пока числа реально подгрузятся (а не "$0.00" placeholder).
-        // Считаем готовым, когда AVAILABLE NOW > 0 ИЛИ оба окна (5h, 7d) уже не нулевые.
+        // Ждём пока сумма подтянется (не $0.00 placeholder). Если реально 0 — не
+        // ждём вечность: max 4с.
         await page.waitForFunction(() => {
-            const text = (document.body?.innerText || '');
-            const availMatch = text.match(/AVAILABLE NOW[\s\S]{0,80}?\$([\d.,]+)/i);
-            if (availMatch && parseFloat(availMatch[1].replace(',', '')) > 0) return true;
-            // если у юзера реально 0 — должны увидеть лимиты в окнах
-            const w5 = text.match(/5-Hour window[\s\S]{0,120}?\$[\d.,]+\s*\/\s*\$([\d.,]+)/i);
-            const w7 = text.match(/7-Day window[\s\S]{0,120}?\$[\d.,]+\s*\/\s*\$([\d.,]+)/i);
-            return !!(w5 && w7 && parseFloat(w5[1]) > 0 && parseFloat(w7[1]) > 0);
-        }, { timeout: 8000 }).catch(() => {});
-
-        // Дополнительный буфер на ре-рендер React-state
-        await page.waitForTimeout(1800);
+            const t = document.body?.innerText || '';
+            const m = t.match(/AVAILABLE NOW[\s\S]{0,80}?\$([\d.,]+)/i);
+            return m && parseFloat(m[1].replace(',', '')) > 0;
+        }, { timeout: 4000 }).catch(() => {});
+        await page.waitForTimeout(600);
 
         const data = await page.evaluate(() => {
             const text = (document.body?.innerText || '').replace(/\r/g, '');
             const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
 
-            const out = { available: '', plan: '', bonus: '', h5: '', h5max: '', h5resets: '', h5pct: null, d7: '', d7max: '', d7resets: '', d7pct: null, renews: '' };
+            const out = {
+                available: '', plan: '', bonus: '', renews: '',
+                // Referral bonus block (freemodel июль 2026):
+                //   "Current balance", "From N referral · $Y each", "$USED / $CAP"
+                referralBonus: '',        // $USED / $CAP как строка ("$3.49 / $10.00")
+                referralBonusUsed: null,  // число
+                referralBonusMax: null,   // число
+                referralCount: null,      // "From N referral" → N
+                // Старые окна лимитов оставлены для Pro-акков (если появятся).
+                h5: '', h5max: '', h5resets: '', h5pct: null,
+                d7: '', d7max: '', d7resets: '', d7pct: null,
+            };
 
-            // "Renews <Month> <day>, <year>" / "Renews on ..." / "Next billing ..."
+            // "Renews <Month> <day>, <year>" (Pro) / "Next billing ..." — не для Free.
             const renewsMatch = text.match(/Renews(?:\s+on)?\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i) ||
                                 text.match(/Next\s+(?:billing|renewal|payment)[\s\S]{0,40}?([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
             if (renewsMatch) out.renews = new Date(renewsMatch[1]).toISOString();
 
-            // "AVAILABLE NOW" → следующая строка с $X.XX (в правой колонке), либо в одной из ближайших строк
+            // "AVAILABLE NOW" → следующая строка с $X.XX + "Bonus credits $Y.YY" рядом.
             const availIdx = lines.findIndex(l => /^AVAILABLE NOW$/i.test(l));
             if (availIdx >= 0) {
                 for (let i = availIdx + 1; i < Math.min(lines.length, availIdx + 6); i++) {
                     const m = lines[i].match(/^\$[\d.,]+$/);
                     if (m) { out.available = m[0]; break; }
                 }
+                // "Bonus credits $Y.YY" в 3-4 строках после AVAILABLE NOW.
+                for (let i = availIdx + 1; i < Math.min(lines.length, availIdx + 6); i++) {
+                    const mb = lines[i].match(/Bonus credits\s*\$([\d.,]+)/i);
+                    if (mb) { out.bonus = `$${mb[1]}`; break; }
+                }
             }
-            // "Plan (this week) $X.XX · Bonus credits $Y.YY" — это НЕДЕЛЬНЫЕ РАСХОДЫ,
-            // а НЕ название плана. Раньше здесь писали в out.plan долларовую сумму
-            // и она затирала настоящее "Free/Pro" из /dashboard, если тот не смог
-            // распарсить. В UI это отображалось как "—" (regex не матчил $12.34).
-            // Название плана заполняется только из planInfo.plan (см. ниже).
-            const planLine = lines.find(l => /Plan\s*\(this week\)/i.test(l));
-            if (planLine) {
-                const mb = planLine.match(/Bonus credits\s*\$?([\d.,]+)/i);
-                if (mb) out.bonus = `$${mb[1]}`;
+
+            // EXTRA USAGE → "Current balance" → "From N referral · $Y each" → "$USED / $CAP".
+            const extraIdx = lines.findIndex(l => /EXTRA USAGE/i.test(l));
+            if (extraIdx >= 0) {
+                for (let i = extraIdx; i < Math.min(lines.length, extraIdx + 10); i++) {
+                    const mc = lines[i].match(/From\s+(\d+)\s+referral/i);
+                    if (mc) out.referralCount = parseInt(mc[1], 10);
+                    const mb = lines[i].match(/^\$([\d.,]+)\s*\/\s*\$([\d.,]+)$/);
+                    if (mb) {
+                        out.referralBonus = `$${mb[1]} / $${mb[2]}`;
+                        out.referralBonusUsed = parseFloat(mb[1].replace(',', ''));
+                        out.referralBonusMax = parseFloat(mb[2].replace(',', ''));
+                        break;
+                    }
+                }
             }
-            // "5-Hour window" → "Resets in 3h 7m", "$0.13 / $10.00", "1% used"
-            // Also handles percentage-only displays
+
+            // Старые окна 5h/7d — для Pro-акков. На Free их нет ("No active limits").
             const findWindow = (label) => {
-                // Skip fake "X-Hour window $0.00" lines in the AVAILABLE section
                 let i = -1;
                 for (let k = 0; k < lines.length; k++) {
                     const l = lines[k].toLowerCase();
-                    if (l.startsWith(label.toLowerCase()) && !/\$/.test(l)) {
-                        i = k; break;
-                    }
+                    if (l.startsWith(label.toLowerCase()) && !/\$/.test(l)) { i = k; break; }
                 }
                 if (i < 0) return null;
                 let used = '', max = '', resets = '', pct = '';
                 for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
                     const ln = lines[j];
-                    // Stop if we hit the next section header
-                    if (/^(7-Day|AVAILABLE|Plan|API|Usage|Logs|Billing)/i.test(ln)) break;
+                    if (/^(7-Day|AVAILABLE|Plan|API|Usage|Logs|Billing|EXTRA)/i.test(ln)) break;
                     let m = ln.match(/^Resets\s+(.+)$/i);
                     if (m) { resets = m[1].trim(); continue; }
                     m = ln.match(/^\$?([\d.,]+)\s*\/\s*\$?([\d.,]+)$/);
@@ -365,8 +414,14 @@ async function checkFreemodelQuota(session) {
         if (planInfo.renews) data.renews = planInfo.renews;
         if (planInfo.tgPhone) data.tgPhone = planInfo.tgPhone;
         data.tgBound = planInfo.tgBound ?? null;
+        // Trial credit блок (июль 2026): даётся при бинде TG, срок ~3 дня.
+        if (planInfo.trialCredit)   data.trialCredit = planInfo.trialCredit;
+        if (planInfo.trialExpires)  data.trialExpires = planInfo.trialExpires;
+        if (typeof planInfo.trialDaysLeft === 'number') data.trialDaysLeft = planInfo.trialDaysLeft;
 
-        if (!data.available && !data.h5 && !data.d7) return null;
+        // Возвращаем null только если ВООБЩЕ ничего не подтянулось. На Free есть
+        // available но нет окон — это норма, данные валидные.
+        if (!data.available && !data.h5 && !data.d7 && !data.trialCredit) return null;
         return data;
     } catch (e) {
         return null;

@@ -217,7 +217,9 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
         return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
     }
 
-    // refresh — skip banned and error sessions
+    // refresh — skip banned/error, всё остальное молотим. Юзер нажал кнопку —
+    // значит хочет пересканировать (даже если только что скринил). Если нужен
+    // «дешёвый» refresh — используй withQuotas:'cache' или отдельный endpoint.
     const eligible = sessions.filter(s => {
         const m = meta[s.name] || {};
         return s.status === '✅' && !m.banned;

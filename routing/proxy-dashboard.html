@@ -557,8 +557,7 @@
               <span class="text-violet">🌐</span>
               <a href="https://www.cun.ai/" target="_blank" rel="noopener" class="text-ink hover:text-violet hover:underline">Cun</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-violet text-xs">routing/cun-sessions.json</code> · клик по ключу = активный (API Helper)</p>
-            <p class="text-xs text-faint mt-1.5">Регистрация: через <span class="text-ink">GitHub</span> или <span class="text-ink">Google</span> → потом API key в дашборде.</p>
+            <p class="text-sm text-muted mt-1">Клик по модели → settings + txt · на лету в Claude: <code class="font-mono text-xs">/model &lt;id&gt;</code> · рег: GitHub/Google на <a href="https://www.cun.ai/" target="_blank" rel="noopener" class="text-violet hover:underline">cun.ai</a></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
             <button onclick="loadCunSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
@@ -567,10 +566,43 @@
           </div>
         </header>
 
+        <!-- Active model picker -->
+        <div id="cun-control" class="rounded-xl bg-surface border border-violet/40 p-5 relative overflow-hidden">
+          <div class="absolute -top-16 -right-16 size-48 rounded-full bg-violet/10 blur-3xl pointer-events-none"></div>
+          <div class="relative space-y-3">
+            <div class="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <div class="text-[10px] uppercase tracking-wide text-faint">Активная модель</div>
+                <div class="text-2xl font-semibold tracking-tight mt-0.5">
+                  <span id="cun-active-model" class="text-amber font-mono">—</span>
+                </div>
+                <div id="cun-apply-hint" class="text-xs text-faint mt-1">клик по чипу · или /model id в Claude</div>
+              </div>
+              <div class="flex flex-col items-end gap-1 text-[10px] font-mono text-faint">
+                <span>model → <code id="cun-model-file" class="text-violet">~/.claude/cun-active-model.txt</code></span>
+                <span>key → <code id="cun-key-file" class="text-violet">~/.claude/cun-active-key.txt</code></span>
+                <span>base → <code class="text-ink">https://www.cun.ai</code></span>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center">
+              <span class="text-[10px] text-faint uppercase tracking-wide mr-1">быстро</span>
+              <button type="button" onclick="cunSelectModel('glm-5.2')" class="text-xs px-3 py-1.5 rounded-lg border bg-amber/10 border-amber/50 text-amber hover:bg-amber/20 font-medium font-mono">glm-5.2</button>
+              <button type="button" onclick="cunSelectTier('opus')" class="text-xs px-3 py-1.5 rounded-lg border bg-rose/10 border-rose/40 text-rose hover:bg-rose/20 font-medium">opus</button>
+              <button type="button" onclick="cunSelectTier('sonnet')" class="text-xs px-3 py-1.5 rounded-lg border bg-cyan/10 border-cyan/40 text-cyan hover:bg-cyan/20 font-medium">sonnet</button>
+              <button type="button" onclick="cunSelectTier('haiku')" class="text-xs px-3 py-1.5 rounded-lg border bg-emerald/10 border-emerald/40 text-emerald hover:bg-emerald/20 font-medium">haiku</button>
+              <button type="button" onclick="cunApplyFromFile()" class="text-xs px-3 py-1.5 rounded-lg border bg-surface border-line-soft hover:border-violet/50 text-muted" title="Перечитать cun-active-model.txt → settings">📄 из файла</button>
+            </div>
+            <!-- hidden tier ids for quick buttons; not shown as noisy alias row -->
+            <span id="cun-tier-opus" class="hidden"></span>
+            <span id="cun-tier-sonnet" class="hidden"></span>
+            <span id="cun-tier-haiku" class="hidden"></span>
+          </div>
+        </div>
+
         <!-- Models: 🔥 Hype + Все (вариант A) -->
         <div id="cun-models" class="rounded-xl bg-surface border border-line-soft p-4 space-y-4">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h2 class="text-sm font-semibold tracking-tight">Models (копировать /model для терминала)</h2>
+            <h2 class="text-sm font-semibold tracking-tight">Каталог — клик = выбрать · 📋 = копировать id</h2>
             <div class="flex items-center gap-2">
               <input id="cun-models-filter" type="search" placeholder="фильтр: opus, gpt-5.4…"
                      oninput="renderCunModels()"
@@ -1468,19 +1500,30 @@ function paintStatus() {
   const label = LABELS[t] || ('? ' + t);
   const dotClass = COLORS[t] || COLORS.unknown;
 
-  $('side-current').textContent = label;
+  if ($('side-current')) $('side-current').textContent = label;
   const modeEl = $('side-mode');
-  if (t === 'apihelper' || t === 'aerolink' || t === 'cun' || t === 'conduit' || t === 'evomap' || t === 'ourtoken' || t === 'omniroute') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
-  else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
-  else modeEl.className = 'hidden';
-  $('side-url').textContent     = state.urls[t] || '';
-  $('side-dot').className       = `relative inline-block size-2 rounded-full pulse-dot ${dotClass}`;
+  if (modeEl) {
+    if (t === 'cun') {
+      modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-violet/10 border-violet/40 text-violet';
+      modeEl.textContent = '🔑 Token';
+    } else if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap' || t === 'ourtoken' || t === 'omniroute') {
+      modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure';
+      modeEl.textContent = '🤝 Helper';
+    } else if (t === 'freemodel_rotator' || t === 'freemodel') {
+      modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald';
+      modeEl.textContent = '🔑 Прямой';
+    } else {
+      modeEl.className = 'hidden';
+    }
+  }
+  if ($('side-url')) $('side-url').textContent = state.urls[t] || '';
+  if ($('side-dot')) $('side-dot').className = `relative inline-block size-2 rounded-full pulse-dot ${dotClass}`;
 
-  $('hero-name').textContent = label;
-  $('hero-url').textContent  = state.urls[t] || '';
-  $('hero-pill').textContent = t || '?';
+  if ($('hero-name')) $('hero-name').textContent = label;
+  if ($('hero-url')) $('hero-url').textContent = state.urls[t] || '';
+  if ($('hero-pill')) $('hero-pill').textContent = t || '?';
 
-  renderPresets();
+  try { renderPresets(); } catch (e) { console.warn('renderPresets', e); }
 }
 
 async function switchTo(target) {
@@ -1547,17 +1590,17 @@ function getDefaultPresets() {
       }
     },
     'cunHelper': {
-      label: 'Cun · API Helper',
-      desc: 'apiKeyHelper → cat ~/.claude/cun-active-key.txt',
+      label: 'Cun · AUTH_TOKEN',
+      desc: 'BASE_URL=https://www.cun.ai + ANTHROPIC_AUTH_TOKEN (ключ — с вкладки Cun)',
       icon: '🌐',
       color: 'violet',
       settings: {
-        apiKeyHelper: 'cat ~/.claude/cun-active-key.txt',
+        apiKeyHelper: '',
         model: null,
         env: {
-          ANTHROPIC_BASE_URL: 'https://www.cun.ai/v1',
-          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
-          ANTHROPIC_API_KEY: null
+          ANTHROPIC_BASE_URL: 'https://www.cun.ai',
+          ANTHROPIC_API_KEY: null,
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: null
         }
       }
     },
@@ -2068,6 +2111,11 @@ async function loadCunSessions(probe) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.cun = data.sessions || [];
+    state.cunActiveModel = data.activeModel || null;
+    state.cunTiers = data.tiers || null;
+    state.cunModelFile = data.modelFile || null;
+    state.cunKeyFile = data.keyFile || null;
+    cunPaintTiers();
     $('nav-count-cun').textContent = state.cun.length;
     renderCun();
     loadCunModels();
@@ -2194,13 +2242,18 @@ function cunSplitHypeModels(models) {
 }
 
 function cunModelChip(id, tone) {
-  const full = 'cun/' + id;
-  const cls = tone === 'hype'
+  const active = state.cunActiveModel === id;
+  const idJ = JSON.stringify(id);
+  const baseCls = tone === 'hype'
     ? 'bg-amber/10 border-amber/40 text-amber'
     : 'bg-violet/10 border-violet/30 text-violet';
-  return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border ${cls}">
-    ${esc(full)}
-    <button onclick='cunCopyModel(${JSON.stringify(full)})' title="Копировать /model cun/…"
+  const activeCls = active
+    ? 'bg-emerald/15 border-emerald/60 text-emerald ring-1 ring-emerald/40'
+    : baseCls;
+  return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border ${activeCls}">
+    <button onclick='cunSelectModel(${idJ})' title="Выбрать модель → settings (ANTHROPIC_MODEL)"
+      class="hover:underline text-left">${active ? '🌟 ' : ''}${esc(id)}</button>
+    <button onclick='cunCopyModel(${idJ})' title="Копировать /model &lt;id&gt;"
       class="text-faint hover:text-ink px-1">📋</button>
   </span>`;
 }
@@ -2240,11 +2293,107 @@ function renderCunModels(models) {
   }
 }
 
-async function cunCopyModel(full) {
+async function cunCopyModel(id) {
   try {
-    await navigator.clipboard.writeText('/model ' + full);
-    toast('📋 /model ' + full, 'success', 2500);
+    await navigator.clipboard.writeText('/model ' + id);
+    toast('📋 /model ' + id, 'success', 2500);
   } catch (e) { toast('copy: ' + e.message, 'error'); }
+}
+
+function cunShortPath(p) {
+  if (!p) return '—';
+  const home = (typeof navigator !== 'undefined' && /Win/.test(navigator.platform))
+    ? null : null;
+  // показываем ~\.claude\... если путь внутри .claude
+  const m = String(p).replace(/\\/g, '/').match(/\.claude\/(.+)$/i);
+  return m ? '~/.claude/' + m[1] : p;
+}
+
+function cunPaintTiers() {
+  if ($('cun-active-model')) $('cun-active-model').textContent = state.cunActiveModel || '— выбери модель';
+  const t = state.cunTiers || {};
+  if ($('cun-tier-opus')) $('cun-tier-opus').textContent = t.opus || '';
+  if ($('cun-tier-sonnet')) $('cun-tier-sonnet').textContent = t.sonnet || '';
+  if ($('cun-tier-haiku')) $('cun-tier-haiku').textContent = t.haiku || '';
+  if ($('cun-model-file') && state.cunModelFile) $('cun-model-file').textContent = cunShortPath(state.cunModelFile);
+  if ($('cun-key-file') && state.cunKeyFile) $('cun-key-file').textContent = cunShortPath(state.cunKeyFile);
+  const hint = $('cun-apply-hint');
+  if (hint) {
+    hint.textContent = state.cunActiveModel
+      ? ('в settings · /model ' + state.cunActiveModel)
+      : 'клик по чипу · или /model id в Claude';
+  }
+}
+
+/** Клик по модели → txt + ANTHROPIC_MODEL. Тиры opus/sonnet/haiku разные. */
+async function cunSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  if (!state.cun?.length) return toast('сначала ➕ Добавить ключ Cun', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/cun/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.cunActiveModel = data.model || id;
+    if (data.tiers) state.cunTiers = data.tiers;
+    if (data.modelFile) state.cunModelFile = data.modelFile;
+    if (data.keyFile) state.cunKeyFile = data.keyFile;
+    cunPaintTiers();
+    state.current = 'cun';
+    state.urls = state.urls || {};
+    state.urls.cun = data.baseUrl || 'https://www.cun.ai';
+    try { paintStatus(); } catch (e) { console.warn(e); }
+    try { renderCunModels(); } catch (e) { console.warn(e); }
+    // не дёргаем полный reload сразу — только счётчик/список ключей без probe
+    try { loadCunSessions(false); } catch (e) { console.warn(e); }
+    toast('✓ ' + state.cunActiveModel, 'success', 3000);
+  } catch (e) { toast('set-model: ' + e.message, 'error'); }
+}
+
+/** Быстрый выбор по тиру (opus/sonnet/haiku из резолва). */
+async function cunSelectTier(tier) {
+  const t = state.cunTiers || {};
+  const id = t[tier];
+  if (!id) {
+    // тиры ещё не известны — activate первого ключа подтянет
+    if (!state.cun?.length) return toast('нет ключей', 'warn');
+    const key = (state.cun.find(s => s.active) || state.cun[0]).api_key;
+    try {
+      const res = await fetch('/__switch/api/cun/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key }),
+      });
+      const data = await res.json();
+      if (data.tiers) state.cunTiers = data.tiers;
+      const id2 = (data.tiers || {})[tier];
+      if (!id2) return toast('тир ' + tier + ' не резолвится', 'error');
+      return cunSelectModel(id2);
+    } catch (e) { return toast(e.message, 'error'); }
+  }
+  return cunSelectModel(id);
+}
+
+/** Перечитать cun-active-model.txt → settings (ручная правка файла). */
+async function cunApplyFromFile() {
+  try {
+    const res = await fetch('/__switch/api/cun/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromFile: true }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('из файла: ' + (data.error || '?'), 'error', 5000);
+    state.cunActiveModel = data.model;
+    if (data.tiers) state.cunTiers = data.tiers;
+    cunPaintTiers();
+    state.current = 'cun';
+    state.urls.cun = data.baseUrl || 'https://www.cun.ai';
+    paintStatus();
+    renderCunModels();
+    toast('✓ ' + data.model, 'success', 3000);
+  } catch (e) { toast('from-file: ' + e.message, 'error'); }
 }
 
 function cunStatusBadge(st) {
@@ -2266,7 +2415,7 @@ function renderCun() {
     return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
       <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(s.email)}</td>
       <td class="px-4 py-2.5">
-        <button onclick='cunActivate(${kJ})' title="Сделать активным (API Helper)"
+        <button onclick='cunActivate(${kJ})' title="Активировать: AUTH_TOKEN + https://www.cun.ai"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-violet hover:border-violet/50'} transition">${esc(keyMask)}</button>
       </td>
       <td class="px-4 py-2.5 text-xs whitespace-nowrap">${cunStatusBadge(s.status)}</td>
@@ -2343,13 +2492,17 @@ async function cunActivate(api_key) {
   try {
     const res = await fetch('/__switch/api/cun/activate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
+      body: JSON.stringify({ api_key, model: state.cunActiveModel || undefined }),
     });
     const data = await res.json();
     if (data.ok) {
-      toast(`🌟 Активен: ${data.email} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      if (data.model) state.cunActiveModel = data.model;
+      if (data.tiers) state.cunTiers = data.tiers;
+      cunPaintTiers();
+      const t = data.tiers || {};
+      toast('✓ Cun ' + data.mask + (data.model ? ' · ' + data.model : ''), 'success', 4000);
       state.current = 'cun';
-      state.urls.cun = 'https://www.cun.ai/v1';
+      state.urls.cun = data.baseUrl || 'https://www.cun.ai';
       paintStatus();
       loadCunSessions(false);
     } else toast('Ошибка: ' + data.error, 'error');

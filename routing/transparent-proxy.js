@@ -1832,13 +1832,37 @@ async function handleOtModels(req, res) {
     }
 }
 
-// ───── Cun (cun) — ручной пул ключей (cun.ai), активация через API Helper ─────
-// Как Aerolink: helper + ANTHROPIC_BASE_URL. Модели — OpenAI-совместимый GET /v1/models.
-// Endpoint https://www.cun.ai/v1 — Anthropic /messages и OpenAI /chat/completions.
+// ───── Cun (cun) — ручной пул ключей (cun.ai) ─────
+// Docs: https://doc.cun.ai/zh/guide/clients/claude-code
+// Claude Code: ANTHROPIC_BASE_URL=https://www.cun.ai (БЕЗ /v1) + ANTHROPIC_AUTH_TOKEN
+// OpenAI-compat API (models/chat): https://www.cun.ai/v1
 const CUN_SESSIONS_FILE = path.join(__dirname, 'cun-sessions.json');
 const CUN_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'cun-active-key.txt');
-const CUN_BASE_URL = 'https://www.cun.ai/v1';
+const CUN_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'cun-active-model.txt');
+const CUN_TIERS_FILE = path.join(os.homedir(), '.claude', 'cun-active-tiers.json');
+const CUN_SITE_URL = 'https://www.cun.ai';       // Claude Code ANTHROPIC_BASE_URL
+const CUN_API_URL = 'https://www.cun.ai/v1';    // OpenAI-compat /models
 const CUN_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+// Алиасы Claude Code: /model opus|sonnet|haiku → разные тиры, НЕ одна и та же модель.
+// Первый ID из списка, который есть в /v1/models, побеждает.
+const CUN_TIER_PREFS = {
+    opus: [
+        'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6',
+        'gpt-5.4-pro', 'gpt-5.5', 'gpt-5.6-sol', 'gpt-5.4-high', 'gpt-5.2-xhigh',
+        'gemini-3.1-pro-preview', 'kimi-k2.6', 'deepseek-v4-pro',
+    ],
+    sonnet: [
+        'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929',
+        'gpt-5.4', 'gpt-5.2', 'gpt-5.1', 'glm-5.2', 'MiniMax-M2.7',
+        'qwen3.7-max', 'gemini-3-flash', 'kimi-k2.5',
+    ],
+    haiku: [
+        'claude-haiku-4-5', 'deepseek-v4-flash', 'gemini-3.5-flash',
+        'gemini-3.1-flash-lite', 'qwen3.5-flash', 'gpt-5-mini', 'gpt-5-nano',
+        'gpt-4.1-mini', 'gpt-4o-mini',
+    ],
+};
 
 function cunLoad() {
     try {
@@ -1850,10 +1874,119 @@ function cunLoad() {
 function cunSave(arr) {
     fs.writeFileSync(CUN_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
 }
+function cunReadActiveModel() {
+    try { return fs.readFileSync(CUN_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function cunReadTiers() {
+    try {
+        const t = JSON.parse(fs.readFileSync(CUN_TIERS_FILE, 'utf8'));
+        if (t && t.opus && t.sonnet && t.haiku) return t;
+    } catch {}
+    return null;
+}
+function cunWriteTiers(tiers) {
+    try { fs.writeFileSync(CUN_TIERS_FILE, JSON.stringify(tiers, null, 2) + '\n', 'utf8'); }
+    catch (e) { logLine(`cun tiers write failed: ${e.message}`); }
+}
+
+function cunPickFromPrefs(prefs, availableSet) {
+    for (const id of prefs) {
+        if (availableSet.has(id)) return id;
+    }
+    return null;
+}
+
+/** Собрать opus/sonnet/haiku из каталога Cun (разные модели). */
+function cunResolveTiers(availableIds) {
+    const set = new Set((availableIds || []).filter(Boolean));
+    const saved = cunReadTiers();
+    // если сохранённые тиры всё ещё в каталоге — оставить (ручной override через файл ок)
+    if (saved && set.has(saved.opus) && set.has(saved.sonnet) && set.has(saved.haiku)) {
+        return { ...saved, source: 'saved' };
+    }
+    let opus = cunPickFromPrefs(CUN_TIER_PREFS.opus, set);
+    let sonnet = cunPickFromPrefs(CUN_TIER_PREFS.sonnet, set);
+    let haiku = cunPickFromPrefs(CUN_TIER_PREFS.haiku, set);
+    // fallbacks если каталог урезан
+    const any = [...set];
+    if (!opus) opus = sonnet || haiku || any[0] || 'claude-opus-4-8';
+    if (!sonnet) sonnet = opus;
+    if (!haiku) haiku = sonnet;
+    // не даём всем трём совпасть, если есть хоть 2 разных id
+    if (opus === sonnet && opus === haiku && any.length >= 2) {
+        const other = any.find(id => id !== opus) || opus;
+        haiku = other;
+    }
+    if (opus === sonnet && any.length >= 3) {
+        const mid = any.find(id => id !== opus && id !== haiku);
+        if (mid) sonnet = mid;
+    }
+    return { opus, sonnet, haiku, source: 'auto' };
+}
+
+async function cunFetchModelIds(apiKey) {
+    if (CUN_MODELS_CACHE.data && Date.now() - CUN_MODELS_CACHE.ts < CUN_MODELS_CACHE.TTL) {
+        return CUN_MODELS_CACHE.data.map(m => m.id);
+    }
+    try {
+        const resp = await fetch(CUN_API_URL + '/models', {
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(8000),
+        });
+        if (!resp.ok) return (CUN_MODELS_CACHE.data || []).map(m => m.id);
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        CUN_MODELS_CACHE.data = models;
+        CUN_MODELS_CACHE.ts = Date.now();
+        return models.map(m => m.id);
+    } catch {
+        return (CUN_MODELS_CACHE.data || []).map(m => m.id);
+    }
+}
+
+/**
+ * Только активная модель → ANTHROPIC_MODEL (+ top-level model).
+ * DEFAULT_OPUS/SONNET/HAIKU/*_NAME НЕ пишем: мусор в settings, юзер выбирает
+ * конкретный id с дашборда. Тиры живут в cun-active-tiers.json для UI/быстрых кнопок.
+ */
+function cunApplyModelToSettings(settings, model, tiers) {
+    const m = String(model || '').trim();
+    settings.env = settings.env || {};
+    // снести старые тир-маппинги, если остались от прошлых activate
+    for (const k of [
+        'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME',
+        'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME',
+        'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME',
+        'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL_NAME',
+    ]) delete settings.env[k];
+    if (m) {
+        settings.model = m;
+        settings.env.ANTHROPIC_MODEL = m;
+    }
+    if (tiers && tiers.opus && tiers.sonnet && tiers.haiku) {
+        cunWriteTiers({ opus: tiers.opus, sonnet: tiers.sonnet, haiku: tiers.haiku });
+    }
+}
+
+/** Конфиг Claude Code по доке Cun: site base + AUTH_TOKEN, без apiKeyHelper. */
+function cunApplyGatewayToSettings(settings, apiKey) {
+    settings.env = settings.env || {};
+    clearOtEnv(settings);
+    settings.env.ANTHROPIC_BASE_URL = CUN_SITE_URL;
+    settings.env.ANTHROPIC_AUTH_TOKEN = apiKey;
+    delete settings.apiKeyHelper;
+    delete settings.env.ANTHROPIC_API_KEY;
+    delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+}
 
 async function cunProbe(apiKey) {
     try {
-        const r = await fetch(`${CUN_BASE_URL}/models`, {
+        const r = await fetch(`${CUN_API_URL}/models`, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${apiKey}` },
             signal: AbortSignal.timeout(12000),
@@ -1873,7 +2006,17 @@ async function handleCunSessions(req, res) {
             }
             cunSave(sessions);
         }
-        jsonRes(res, 200, { sessions });
+        const tiers = cunReadTiers();
+        jsonRes(res, 200, {
+            sessions,
+            activeModel: cunReadActiveModel(),
+            tiers,
+            siteUrl: CUN_SITE_URL,
+            apiUrl: CUN_API_URL,
+            // «как API Helper», но для модели — source of truth = txt
+            modelFile: CUN_ACTIVE_MODEL_FILE,
+            keyFile: CUN_ACTIVE_KEY_FILE,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -1916,15 +2059,22 @@ async function handleCunDelete(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// Клик по ключу → активный: cun-active-key.txt + apiKeyHelper (как Aerolink).
+// Клик по ключу → settings: BASE_URL=https://www.cun.ai + ANTHROPIC_AUTH_TOKEN (дока Cun).
 async function handleCunActivate(req, res) {
     try {
-        const { api_key } = await readJsonBody(req);
-        const key = String(api_key || '').trim();
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
         if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
         const sessions = cunLoad();
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        const ids = await cunFetchModelIds(key);
+        const tiers = cunResolveTiers(ids);
+        let model = body.model != null ? String(body.model).trim() : cunReadActiveModel();
+        // дефолт старта = mid-tier (sonnet), не opus
+        if (!model) model = tiers.sonnet;
+        if (model) fs.writeFileSync(CUN_ACTIVE_MODEL_FILE, model, { encoding: 'utf-8', flag: 'w' });
 
         fs.writeFileSync(CUN_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
         sessions.forEach(s => { s.active = s.api_key === key; });
@@ -1935,20 +2085,78 @@ async function handleCunActivate(req, res) {
             const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-cun');
-            settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = CUN_BASE_URL;
-            settings.apiKeyHelper = 'cat ~/.claude/cun-active-key.txt';
-            delete settings.model;
-            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
-            delete settings.env.ANTHROPIC_API_KEY;
-            clearOtEnv(settings);
+            cunApplyGatewayToSettings(settings, key);
+            cunApplyModelToSettings(settings, model, tiers);
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`cun activate: settings.json FAILED: ${e.message}`);
         }
-        logLine(`cun activate: ${target.email} → ***${key.slice(-6)} (helper)`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+        logLine(`cun activate: ${target.email} → ***${key.slice(-6)} model=${model} tiers opus=${tiers.opus} sonnet=${tiers.sonnet} haiku=${tiers.haiku}`);
+        jsonRes(res, 200, {
+            ok: true,
+            email: target.email,
+            mask: '***' + key.slice(-6),
+            model: model || null,
+            tiers,
+            baseUrl: CUN_SITE_URL,
+            settingsUpdated: settingsOk,
+            via: 'auth_token',
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Выбор модели с дашборда (интерактив):
+// 1) пишет ~/.claude/cun-active-model.txt  (как active-key у helper)
+// 2) синкает settings: ANTHROPIC_MODEL + gateway AUTH_TOKEN
+// Claude Code читает model при старте → после клика нужен рестарт (нет modelHelper).
+async function handleCunSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // model omit / empty / fromFile → взять из cun-active-model.txt
+        let m = body.model != null ? String(body.model).trim() : '';
+        if (!m || body.fromFile) m = cunReadActiveModel() || m;
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен (или заполни cun-active-model.txt)' });
+
+        const sessions = cunLoad();
+        const active = sessions.find(s => s.active)
+            || sessions.find(s => s.status === 'live')
+            || sessions[0];
+        if (!active || !active.api_key) {
+            return jsonRes(res, 400, { error: 'добавь ключ Cun (➕ Добавить), потом кликни модель' });
+        }
+
+        const ids = await cunFetchModelIds(active.api_key);
+        const tiers = cunResolveTiers(ids);
+
+        fs.writeFileSync(CUN_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === active.api_key; });
+        cunSave(sessions);
+        fs.writeFileSync(CUN_ACTIVE_KEY_FILE, active.api_key, { encoding: 'utf-8', flag: 'w' });
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-cun-model');
+            cunApplyGatewayToSettings(settings, active.api_key);
+            cunApplyModelToSettings(settings, m, tiers);
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`cun set-model: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`cun set-model: ${m} tiers opus=${tiers.opus} sonnet=${tiers.sonnet} haiku=${tiers.haiku}`);
+        jsonRes(res, 200, {
+            ok: true,
+            model: m,
+            tiers,
+            settingsUpdated: settingsOk,
+            baseUrl: CUN_SITE_URL,
+            modelFile: CUN_ACTIVE_MODEL_FILE,
+            keyFile: CUN_ACTIVE_KEY_FILE,
+            restartRequired: true,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -1965,7 +2173,7 @@ async function handleCunModels(req, res) {
 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 8000);
-        const resp = await fetch(CUN_BASE_URL + '/models', {
+        const resp = await fetch(CUN_API_URL + '/models', {
             signal: controller.signal,
             headers: { 'Authorization': `Bearer ${api_key}` }
         });
@@ -2659,12 +2867,13 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/al/delete')    return handleAlDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/activate')  return handleAlActivate(req, res);
 
-    // ---- Cun (cun) — ручной пул cun.ai, активация через API Helper + models ----
+    // ---- Cun (cun) — пул cun.ai: AUTH_TOKEN + BASE_URL без /v1 (doc.cun.ai) ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cun/sessions')) return handleCunSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cun/ping'))     return handleCunPing(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cun/add')       return handleCunAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cun/delete')    return handleCunDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cun/activate')  return handleCunActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cun/set-model') return handleCunSetModel(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cun/models')) return handleCunModels(req, res);
 
     // ---- Evomap (ev) — ручной пул, активация через API Helper (api.evomap.ai/v1) ----

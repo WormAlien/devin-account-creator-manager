@@ -584,15 +584,7 @@
                 <span>base → <code class="text-ink">https://www.cun.ai</code></span>
               </div>
             </div>
-            <div class="flex flex-wrap gap-2 items-center">
-              <span class="text-[10px] text-faint uppercase tracking-wide mr-1">быстро</span>
-              <button type="button" onclick="cunSelectModel('glm-5.2')" class="text-xs px-3 py-1.5 rounded-lg border bg-amber/10 border-amber/50 text-amber hover:bg-amber/20 font-medium font-mono">glm-5.2</button>
-              <button type="button" onclick="cunSelectTier('opus')" class="text-xs px-3 py-1.5 rounded-lg border bg-rose/10 border-rose/40 text-rose hover:bg-rose/20 font-medium">opus</button>
-              <button type="button" onclick="cunSelectTier('sonnet')" class="text-xs px-3 py-1.5 rounded-lg border bg-cyan/10 border-cyan/40 text-cyan hover:bg-cyan/20 font-medium">sonnet</button>
-              <button type="button" onclick="cunSelectTier('haiku')" class="text-xs px-3 py-1.5 rounded-lg border bg-emerald/10 border-emerald/40 text-emerald hover:bg-emerald/20 font-medium">haiku</button>
-              <button type="button" onclick="cunApplyFromFile()" class="text-xs px-3 py-1.5 rounded-lg border bg-surface border-line-soft hover:border-violet/50 text-muted" title="Перечитать cun-active-model.txt → settings">📄 из файла</button>
-            </div>
-            <!-- hidden tier ids for quick buttons; not shown as noisy alias row -->
+            <!-- tier ids (для JS, без UI) -->
             <span id="cun-tier-opus" class="hidden"></span>
             <span id="cun-tier-sonnet" class="hidden"></span>
             <span id="cun-tier-haiku" class="hidden"></span>

@@ -150,6 +150,9 @@ function currentTarget() {
         if (helper.includes('al-active-key.txt')) {
             return 'aerolink';
         }
+        if (helper.includes('cun-active-key.txt')) {
+            return 'cun';
+        }
         if (helper.includes('cdt-active-key.txt')) {
             return 'conduit';
         }
@@ -165,6 +168,10 @@ function currentTarget() {
         // ourtoken использует ANTHROPIC_AUTH_TOKEN (без helper) → детектим по base_url
         if (url === 'https://api.ourtoken.ai' || url.startsWith('https://api.ourtoken.ai')) {
             return 'ourtoken';
+        }
+        // cun.ai — Anthropic-совместимый, детект по base_url (если helper сбросили)
+        if (url.includes('cun.ai')) {
+            return 'cun';
         }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
@@ -793,6 +800,130 @@ async function handleSessionDelete(req, res) {
         } finally {
             process.chdir(cwd);
         }
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+async function handleGrokBuild(req, res) {
+    try {
+        const { name, userCode } = await readJsonBody(req);
+        const safe = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+        if (!safe) return jsonRes(res, 400, { error: 'name required' });
+        if (!userCode) return jsonRes(res, 400, { error: 'userCode required' });
+        const grokDir = grokCookiesDir();
+        const cookieFile = path.join(grokDir, `${safe}.json`);
+        if (!fs.existsSync(cookieFile)) {
+            return jsonRes(res, 404, { error: `session not found: ${safe}` });
+        }
+        const { spawn } = require('child_process');
+        const script = path.join(__dirname, '..', 'grok-launcher', 'camoufox_device.py');
+        const child = spawn(process.env.PYTHON || 'python', [script, String(userCode).trim(), safe], {
+            cwd: path.dirname(script),
+            detached: true,
+            stdio: 'ignore',
+            env: process.env,
+        });
+        child.unref();
+        logLine(`grok build: запущен camoufox_device для ${safe} (pid ${child.pid})`);
+        jsonRes(res, 200, { ok: true, pid: child.pid, name: safe });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+function getGrokTerminalStatus(name) {
+  const safe = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+  if (!safe) return { status: 'error', message: 'invalid name' };
+
+  // Map dashboard name (e.g. "1") to GROK_HOME profile dir .grok-1
+  const home = path.join(os.homedir(), `.grok-${safe}`);
+  const authFile = path.join(home, 'auth.json');
+
+  if (!fs.existsSync(authFile)) {
+    return {
+      status: 'not_authorized',
+      message: 'Not authorized',
+      home: home,
+      hasAuth: false
+    };
+  }
+
+  try {
+    const stat = fs.statSync(authFile);
+    if (stat.size < 20) {
+      return { status: 'not_authorized', message: 'Empty auth', home, hasAuth: false };
+    }
+    const auth = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+    // Check for any token entry
+    const hasToken = Object.keys(auth || {}).length > 0;
+    return {
+      status: hasToken ? 'authorized' : 'not_authorized',
+      message: hasToken ? 'Authorized' : 'No token',
+      home: home,
+      hasAuth: hasToken,
+      lastModified: stat.mtime.toISOString()
+    };
+  } catch (e) {
+    return { status: 'error', message: e.message, home };
+  }
+}
+
+async function handleGrokTerminalStatus(req, res) {
+  const url = new URL(req.url, `http://localhost`);
+  const name = url.searchParams.get('name');
+  const status = getGrokTerminalStatus(name);
+  jsonRes(res, 200, { name, ...status });
+}
+
+async function handleGrokLaunchTerminal(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        const safe = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+        if (!safe) return jsonRes(res, 400, { error: 'name required' });
+
+        const home = path.join(os.homedir(), `.grok-${safe}`);
+        // Direct command with proper double quotes so $env expands.
+        // User can cd to project dir first if needed.
+        const psCommand = `$env:GROK_HOME = '${home.replace(/\\/g, '\\\\')}'; & "$env:USERPROFILE\\.grok\\bin\\grok.exe"`;
+
+        const { spawn } = require('child_process');
+        const child = spawn('cmd', ['/c', 'start', '""', 'powershell', '-NoExit', '-Command', psCommand], {
+            detached: true,
+            stdio: 'ignore',
+            cwd: process.cwd(),
+        });
+        child.unref();
+
+        logLine(`grok terminal: launched for ${safe} (pid ${child.pid})`);
+        jsonRes(res, 200, { ok: true, pid: child.pid, name: safe });
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+async function handleGrokStartAuth(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        const safe = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+        if (!safe) return jsonRes(res, 400, { error: 'name required' });
+
+        const home = path.join(os.homedir(), `.grok-${safe}`);
+        // Direct command. Double quotes around the $env path so PowerShell expands it.
+        // The terminal will show the device code right away.
+        const psCommand = `$env:GROK_HOME = '${home.replace(/\\/g, '\\\\')}'; & "$env:USERPROFILE\\.grok\\bin\\grok.exe" login --device-auth`;
+
+        const { spawn } = require('child_process');
+        // Open a new PowerShell window and run the device login command.
+        const child = spawn('cmd', ['/c', 'start', '""', 'powershell', '-NoExit', '-Command', psCommand], {
+            detached: true,
+            stdio: 'ignore',
+            cwd: process.cwd(),
+        });
+        child.unref();
+
+        logLine(`grok start-auth: opened terminal for ${safe} with login --device-auth (pid ${child.pid})`);
+        jsonRes(res, 200, { ok: true, pid: child.pid, name: safe, message: 'Terminal opened with login --device-auth. Copy the user_code from the terminal and use "Approve code" in the dashboard for this cookie session.' });
     } catch (e) {
         jsonRes(res, 400, { error: e.message });
     }
@@ -1701,6 +1832,165 @@ async function handleOtModels(req, res) {
     }
 }
 
+// ───── Cun (cun) — ручной пул ключей (cun.ai), активация через API Helper ─────
+// Как Aerolink: helper + ANTHROPIC_BASE_URL. Модели — OpenAI-совместимый GET /v1/models.
+// Endpoint https://www.cun.ai/v1 — Anthropic /messages и OpenAI /chat/completions.
+const CUN_SESSIONS_FILE = path.join(__dirname, 'cun-sessions.json');
+const CUN_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'cun-active-key.txt');
+const CUN_BASE_URL = 'https://www.cun.ai/v1';
+const CUN_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+function cunLoad() {
+    try {
+        const raw = fs.readFileSync(CUN_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function cunSave(arr) {
+    fs.writeFileSync(CUN_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+async function cunProbe(apiKey) {
+    try {
+        const r = await fetch(`${CUN_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(12000),
+        });
+        return r.status === 401 ? 'dead' : (r.ok ? 'live' : 'unknown');
+    } catch { return 'unknown'; }
+}
+
+async function handleCunSessions(req, res) {
+    try {
+        const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
+        const sessions = cunLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                const batch = sessions.slice(i, i + 3);
+                await Promise.all(batch.map(async s => { s.status = await cunProbe(s.api_key); }));
+            }
+            cunSave(sessions);
+        }
+        jsonRes(res, 200, { sessions });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleCunPing(req, res) {
+    try {
+        const q = new URL(req.url, 'http://localhost');
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await cunProbe(api_key);
+        const sessions = cunLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; cunSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleCunAdd(req, res) {
+    try {
+        const { email, api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = cunLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({ email: mail, api_key: key, active: false });
+        cunSave(sessions);
+        logLine(`cun add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleCunDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const sessions = cunLoad().filter(s => s.api_key !== key);
+        cunSave(sessions);
+        logLine(`cun delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Клик по ключу → активный: cun-active-key.txt + apiKeyHelper (как Aerolink).
+async function handleCunActivate(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = cunLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(CUN_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        cunSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-cun');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = CUN_BASE_URL;
+            settings.apiKeyHelper = 'cat ~/.claude/cun-active-key.txt';
+            delete settings.model;
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`cun activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`cun activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleCunModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (CUN_MODELS_CACHE.data && Date.now() - CUN_MODELS_CACHE.ts < CUN_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: CUN_MODELS_CACHE.data, cached: true });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const resp = await fetch(CUN_BASE_URL + '/models', {
+            signal: controller.signal,
+            headers: { 'Authorization': `Bearer ${api_key}` }
+        });
+        clearTimeout(timeout);
+
+        if (!resp.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        CUN_MODELS_CACHE.data = models;
+        CUN_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (CUN_MODELS_CACHE.data) {
+            jsonRes(res, 200, { ok: true, models: CUN_MODELS_CACHE.data, cached: true, note: e.message });
+        } else {
+            jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        }
+    }
+}
+
 // ───── OmniRoute (om) — ручной пул ключей, активация через API Helper ─────
 // По аналогии с Aerolink/Evomap. OmniRoute на localhost:20128/v1.
 const OM_SESSIONS_FILE = path.join(__dirname, 'omniroute-sessions.json');
@@ -2312,6 +2602,22 @@ const server = http.createServer((req, res) => {
         return handleSessionDelete(req, res);
     }
 
+    if (req.method === 'POST' && req.url === '/__switch/api/grok-build') {
+        return handleGrokBuild(req, res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/grok/launch-terminal') {
+        return handleGrokLaunchTerminal(req, res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/grok/start-auth') {
+        return handleGrokStartAuth(req, res);
+    }
+
+    if (req.method === 'GET' && req.url.startsWith('/__switch/api/grok/terminal-status')) {
+        return handleGrokTerminalStatus(req, res);
+    }
+
     if (req.method === 'GET' && req.url === '/__switch/api/notion/cards') {
         return handleNotionCards(res);
     }
@@ -2352,6 +2658,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/al/add')       return handleAlAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/delete')    return handleAlDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/activate')  return handleAlActivate(req, res);
+
+    // ---- Cun (cun) — ручной пул cun.ai, активация через API Helper + models ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cun/sessions')) return handleCunSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cun/ping'))     return handleCunPing(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cun/add')       return handleCunAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cun/delete')    return handleCunDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cun/activate')  return handleCunActivate(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cun/models')) return handleCunModels(req, res);
 
     // ---- Evomap (ev) — ручной пул, активация через API Helper (api.evomap.ai/v1) ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ev/sessions')) return handleEvSessions(req, res);
@@ -2796,12 +3110,14 @@ const server = http.createServer((req, res) => {
                 try {
                     const stat = fs.statSync(full);
                     const cookies = JSON.parse(fs.readFileSync(full, 'utf8'));
+                    const termStatus = getGrokTerminalStatus(safe);
                     return {
                         name: safe,
                         cookies,
                         savedAt: stat.mtime.toISOString(),
                         cookieCount: Array.isArray(cookies) ? cookies.length : Object.keys(cookies || {}).length,
                         meta: loadMeta(safe),
+                        terminalStatus: termStatus
                     };
                 } catch (e) {
                     return { name: safe, error: e.message };

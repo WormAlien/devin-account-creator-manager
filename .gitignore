@@ -118,6 +118,9 @@ routing/evomap-sessions.json
 # Ourtoken ручной пул ключей (usTHAz8-*). ourtoken-sessions.example.json IS committed.
 routing/ourtoken-sessions.json
 
+# Cun.ai ручной пул ключей (sk-*). cun-sessions.example.json IS committed.
+routing/cun-sessions.json
+
 # Video API ключи (fal/Replicate/Veo/Kling/…). video-keys.example.json IS committed.
 routing/video-keys.json
 

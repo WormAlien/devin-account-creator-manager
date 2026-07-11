@@ -196,6 +196,11 @@
         <span class="flex-1">Aerolink</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-aerolink">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="cun">
+        <span class="text-base">🌐</span>
+        <span class="flex-1">Cun</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-cun">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="evomap">
         <span class="text-base">🧭</span>
         <span class="flex-1">Evomap</span>
@@ -543,6 +548,78 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: CUN ═════════ -->
+    <div data-tab-content="cun">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-violet">🌐</span>
+              <a href="https://www.cun.ai/" target="_blank" rel="noopener" class="text-ink hover:text-violet hover:underline">Cun</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-violet text-xs">routing/cun-sessions.json</code> · клик по ключу = активный (API Helper)</p>
+            <p class="text-xs text-faint mt-1.5">Регистрация: через <span class="text-ink">GitHub</span> или <span class="text-ink">Google</span> → потом API key в дашборде.</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadCunSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadCunSessions(true)" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">📡 Пинг статусов</button>
+            <button onclick="cunShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          </div>
+        </header>
+
+        <!-- Models: 🔥 Hype + Все (вариант A) -->
+        <div id="cun-models" class="rounded-xl bg-surface border border-line-soft p-4 space-y-4">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <h2 class="text-sm font-semibold tracking-tight">Models (копировать /model для терминала)</h2>
+            <div class="flex items-center gap-2">
+              <input id="cun-models-filter" type="search" placeholder="фильтр: opus, gpt-5.4…"
+                     oninput="renderCunModels()"
+                     class="text-[11px] px-2.5 py-1.5 bg-elevated border border-line-soft rounded-lg w-44 focus:outline-none focus:border-violet/50 text-ink placeholder:text-faint">
+              <button onclick="loadCunModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xs font-semibold text-amber">🔥 Hype</span>
+              <span id="cun-hype-count" class="text-[10px] text-faint font-mono">—</span>
+            </div>
+            <div id="cun-hype-list" class="flex flex-wrap gap-1.5">
+              <span class="text-[10px] text-faint">загрузка…</span>
+            </div>
+          </div>
+          <div class="border-t border-line-soft pt-3">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xs font-semibold text-muted">Все модели</span>
+              <span id="cun-all-count" class="text-[10px] text-faint font-mono">—</span>
+            </div>
+            <div id="cun-models-list" class="flex flex-wrap gap-1.5">
+              <span class="text-[10px] text-faint">загрузка…</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="cun-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email / имя</span>
+              <input id="cun-add-email" placeholder="Cun / user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key</span>
+              <input id="cun-add-key" placeholder="sk-…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="cunAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="cunShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="cun-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: EVOMAP ═════════ -->
     <div data-tab-content="evomap">
       <div class="px-6 py-8 space-y-4">
@@ -802,6 +879,8 @@
             <p class="text-sm text-muted mt-1">
               куки → <code class="font-mono text-amber text-xs">D:\WORMALIENAIGIGANT\app\grok-cookie-mcp\cookies\*.json</code>
               · квоты — headless Chrome через <code class="font-mono text-amber text-xs">launcher.py</code>
+              <br>
+              <span class="text-[10px]">Нормальный процесс аутентификации: 1) Нажми "🚀 Open Terminal + Start Auth" — откроется терминал с правильным профилем и запустится login --device-auth. 2) Скопируй user_code из терминала. 3) Нажми "🛠 Approve code" — Camoufox с куками аккаунта одобрит. 4) Терминал сохранит auth.json. Статус обновится. Потом используй Copy/Launch.</span>
             </p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
@@ -1202,9 +1281,11 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false },
   tg: [],
   aerolink: [],
+  cun: [],
+  cunModels: [],
   evomap: [],
   ourtoken: [],
   otModels: [],
@@ -1334,6 +1415,7 @@ function showTab(name) {
     loadNotionCards();
   }
   if (name === 'aerolink' && !state.loaded.aerolink) { state.loaded.aerolink = true; loadAlSessions(false); }
+  if (name === 'cun' && !state.loaded.cun) { state.loaded.cun = true; loadCunSessions(false); }
   if (name === 'evomap' && !state.loaded.evomap) { state.loaded.evomap = true; loadEvomapSessions(false); }
   if (name === 'ourtoken' && !state.loaded.ourtoken) { state.loaded.ourtoken = true; loadOurtokenSessions(false); }
   if (name === 'omniroute-pool' && !state.loaded['omniroute-pool']) { state.loaded['omniroute-pool'] = true; loadOmSessions(false); }
@@ -1367,8 +1449,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -1388,7 +1470,7 @@ function paintStatus() {
 
   $('side-current').textContent = label;
   const modeEl = $('side-mode');
-  if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap' || t === 'ourtoken' || t === 'omniroute') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
+  if (t === 'apihelper' || t === 'aerolink' || t === 'cun' || t === 'conduit' || t === 'evomap' || t === 'ourtoken' || t === 'omniroute') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure', modeEl.textContent = '🤝 Helper';
   else if (t === 'freemodel_rotator' || t === 'freemodel') modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald/10 border-emerald/40 text-emerald', modeEl.textContent = '🔑 Прямой';
   else modeEl.className = 'hidden';
   $('side-url').textContent     = state.urls[t] || '';
@@ -1459,6 +1541,21 @@ function getDefaultPresets() {
         model: null,
         env: {
           ANTHROPIC_BASE_URL: 'https://capi.aerolink.lat/',
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_API_KEY: null
+        }
+      }
+    },
+    'cunHelper': {
+      label: 'Cun · API Helper',
+      desc: 'apiKeyHelper → cat ~/.claude/cun-active-key.txt',
+      icon: '🌐',
+      color: 'violet',
+      settings: {
+        apiKeyHelper: 'cat ~/.claude/cun-active-key.txt',
+        model: null,
+        env: {
+          ANTHROPIC_BASE_URL: 'https://www.cun.ai/v1',
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
           ANTHROPIC_API_KEY: null
         }
@@ -1552,12 +1649,14 @@ function renderPresets() {
   const presetBackend = (p) => {
     const h = p.settings?.apiKeyHelper || '';
     if (h.includes('al-active-key')) return 'aerolink';
+    if (h.includes('cun-active-key')) return 'cun';
     if (h.includes('cdt-active-key')) return 'conduit';
     if (h.includes('ev-active-key')) return 'evomap';
     if (h.includes('om-active-key')) return 'omniroute';
     if (h.includes('fm-active-key')) return 'apihelper';
     const url = p.settings?.env?.ANTHROPIC_BASE_URL || '';
     if (url.includes('20128')) return 'omniroute';
+    if (url.includes('cun.ai')) return 'cun';
     if (url.includes('freemodel')) return state.current === 'apihelper' ? '' : 'freemodel_rotator';
     return '';
   };
@@ -1957,6 +2056,302 @@ async function alActivate(api_key) {
       state.urls.aerolink = 'https://capi.aerolink.lat/';
       paintStatus();
       loadAlSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ CUN (cun.ai) ═══════════════════════════════════
+async function loadCunSessions(probe) {
+  if (probe) $('cun-list').innerHTML = `<div class="p-12 text-center text-violet text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/cun/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.cun = data.sessions || [];
+    $('nav-count-cun').textContent = state.cun.length;
+    renderCun();
+    loadCunModels();
+    if (probe) toast('✓ Cun: статусы обновлены', 'success');
+  } catch (e) {
+    $('cun-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadCunModels(force) {
+  const keys = state.cun
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  const empty = (msg) => {
+    if ($('cun-hype-list')) $('cun-hype-list').innerHTML = `<span class="text-[10px] text-faint">${esc(msg)}</span>`;
+    if ($('cun-models-list')) $('cun-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(msg)}</span>`;
+    if ($('cun-hype-count')) $('cun-hype-count').textContent = '—';
+    if ($('cun-all-count')) $('cun-all-count').textContent = '—';
+  };
+  if (!keys.length) return empty('нет ключей');
+  if ($('cun-hype-list')) $('cun-hype-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  if ($('cun-models-list')) $('cun-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/cun/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderCunModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  empty(lastNote + ' · все ключи не вернули моделей');
+}
+
+// ── Cun hype ranking: explicit priority + light auto-patterns ──
+// Только то, что реально есть в /models; image / mini / dated — не в Hype.
+const CUN_HYPE_PRIORITY = [
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'gpt-5.6-sol',
+  'gpt-5.6-luna',
+  'gpt-5.6-terra',
+  'gpt-5.5',
+  'gpt-5.4-pro',
+  'gpt-5.4-high',
+  'gpt-5.2-xhigh',
+  'gpt-5.1-codex-high',
+  'gpt-5-codex-high',
+  'o3',
+  'gemini-3.1-pro-preview',
+  'gemini-3.5-flash',
+  'kimi-k2.6',
+  'deepseek-v4-pro',
+  'MiniMax-M2.7',
+  'qwen3.7-max',
+  'glm-5.2',
+];
+
+// Авто-подхват будущих флагманов (если ID нет в whitelist).
+const CUN_HYPE_AUTO = [
+  /^claude-opus-4-[6-9]$/i,
+  /^claude-opus-4-\d+$/i,
+  /^claude-sonnet-5$/i,
+  /^claude-sonnet-4-6$/i,
+  /^gpt-5\.[5-9](-pro|-high|-xhigh)?$/i,
+  /^gpt-5\.\d+-(sol|luna|terra)$/i,
+  /^gpt-5\.\d+-pro$/i,
+  /^gpt-5\.\d+-codex-high$/i,
+  /^gpt-5-codex-high$/i,
+  /^o3$/i,
+  /^gemini-3(\.\d+)?-pro(-preview)?$/i,
+  /^gemini-3\.5-flash$/i,
+  /^kimi-k2\.[6-9]$/i,
+  /^deepseek-v4-pro$/i,
+  /^MiniMax-M2\.[7-9]$/i,
+  /^qwen3\.[7-9]-max$/i,
+  /^glm-5\.[2-9]$/i,
+];
+
+function cunIsHypeNoise(id) {
+  const s = String(id || '');
+  if (/thinking/i.test(s)) return true;
+  if (/\d{8}/.test(s)) return true; // dated …-20251001
+  if (/(^|-)(mini|nano|low|lite|minimal|flash-lite)(-|$)/i.test(s)) return true;
+  if (/image/i.test(s)) return true;
+  if (/chat-latest$/i.test(s)) return true;
+  return false;
+}
+
+function cunHypeRank(id) {
+  const exact = CUN_HYPE_PRIORITY.indexOf(id);
+  if (exact >= 0) return exact;
+  // auto: after explicit list, stable by id
+  if (!cunIsHypeNoise(id) && CUN_HYPE_AUTO.some(re => re.test(id))) {
+    return CUN_HYPE_PRIORITY.length + id.toLowerCase().charCodeAt(0);
+  }
+  return -1;
+}
+
+function cunSplitHypeModels(models) {
+  const hype = [];
+  const rest = [];
+  const hypeIds = new Set();
+  for (const m of models) {
+    const id = m.id || m;
+    const rank = cunHypeRank(id);
+    if (rank >= 0) {
+      hype.push({ id, rank, owned_by: m.owned_by });
+      hypeIds.add(id);
+    }
+  }
+  hype.sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
+  for (const m of models) {
+    const id = m.id || m;
+    if (!hypeIds.has(id)) rest.push({ id, owned_by: m.owned_by });
+  }
+  rest.sort((a, b) => a.id.localeCompare(b.id));
+  return { hype, rest };
+}
+
+function cunModelChip(id, tone) {
+  const full = 'cun/' + id;
+  const cls = tone === 'hype'
+    ? 'bg-amber/10 border-amber/40 text-amber'
+    : 'bg-violet/10 border-violet/30 text-violet';
+  return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border ${cls}">
+    ${esc(full)}
+    <button onclick='cunCopyModel(${JSON.stringify(full)})' title="Копировать /model cun/…"
+      class="text-faint hover:text-ink px-1">📋</button>
+  </span>`;
+}
+
+function renderCunModels(models) {
+  if (models) state.cunModels = models;
+  const list = state.cunModels || [];
+  const q = ($('cun-models-filter')?.value || '').trim().toLowerCase();
+  const match = (id) => !q || id.toLowerCase().includes(q);
+
+  if (!list.length) {
+    if ($('cun-hype-list')) $('cun-hype-list').innerHTML = '<span class="text-[10px] text-faint">нет моделей</span>';
+    if ($('cun-models-list')) $('cun-models-list').innerHTML = '<span class="text-[10px] text-faint">нет моделей</span>';
+    return;
+  }
+
+  const { hype, rest } = cunSplitHypeModels(list);
+  const hypeView = hype.filter(m => match(m.id));
+  const restView = rest.filter(m => match(m.id));
+
+  if ($('cun-hype-count')) $('cun-hype-count').textContent = q
+    ? `${hypeView.length}/${hype.length}`
+    : String(hype.length);
+  if ($('cun-all-count')) $('cun-all-count').textContent = q
+    ? `${restView.length}/${rest.length}`
+    : String(rest.length);
+
+  if ($('cun-hype-list')) {
+    $('cun-hype-list').innerHTML = hypeView.length
+      ? hypeView.map(m => cunModelChip(m.id, 'hype')).join('')
+      : `<span class="text-[10px] text-faint">${q ? 'нет совпадений в hype' : 'нет hype-моделей в каталоге'}</span>`;
+  }
+  if ($('cun-models-list')) {
+    $('cun-models-list').innerHTML = restView.length
+      ? restView.map(m => cunModelChip(m.id, 'all')).join('')
+      : `<span class="text-[10px] text-faint">${q ? 'нет совпадений' : 'пусто'}</span>`;
+  }
+}
+
+async function cunCopyModel(full) {
+  try {
+    await navigator.clipboard.writeText('/model ' + full);
+    toast('📋 /model ' + full, 'success', 2500);
+  } catch (e) { toast('copy: ' + e.message, 'error'); }
+}
+
+function cunStatusBadge(st) {
+  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
+  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
+  return '<span class="text-faint">⚪ —</span>';
+}
+
+function renderCun() {
+  const rows = state.cun;
+  if (!rows.length) {
+    $('cun-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить</div>`;
+    return;
+  }
+  const body = rows.map(s => {
+    const active = !!s.active;
+    const keyMask = s.api_key.length > 18 ? s.api_key.slice(0, 14) + '…' + s.api_key.slice(-6) : s.api_key;
+    const kJ = JSON.stringify(s.api_key);
+    return `<tr class="border-t border-line-soft hover:bg-elevated/30 ${active ? 'bg-emerald/5' : ''}">
+      <td class="px-4 py-2.5 text-xs">${active ? '<span class="text-emerald" title="активный">🌟</span> ' : ''}${esc(s.email)}</td>
+      <td class="px-4 py-2.5">
+        <button onclick='cunActivate(${kJ})' title="Сделать активным (API Helper)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-violet hover:border-violet/50'} transition">${esc(keyMask)}</button>
+      </td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${cunStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-right whitespace-nowrap space-x-1">
+        <button onclick='cunCopyKey(${kJ})' title="Скопировать API-ключ" class="text-xs text-faint hover:text-violet px-1">📋</button>
+        <button onclick='cunPing(${kJ})' title="Проверить ключ" class="text-xs text-faint hover:text-violet px-1">🩺</button>
+        <button onclick='cunDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-1">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  $('cun-list').innerHTML = `<table class="w-full text-left">
+    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
+      <th class="px-4 py-2 font-medium">email / имя</th>
+      <th class="px-4 py-2 font-medium">ключ</th>
+      <th class="px-4 py-2 font-medium">статус</th>
+      <th class="px-4 py-2"></th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function cunShowAdd(show = true) {
+  $('cun-add-form').classList.toggle('hidden', !show);
+  if (show) { $('cun-add-email').value = ''; $('cun-add-key').value = ''; $('cun-add-email').focus(); }
+}
+
+async function cunAdd() {
+  const email = $('cun-add-email').value.trim();
+  const api_key = $('cun-add-key').value.trim();
+  if (!email || !api_key) return toast('email и api_key обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/cun/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ добавлен', 'success'); cunShowAdd(false); loadCunSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function cunDelete(api_key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    const res = await fetch('/__switch/api/cun/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadCunSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function cunPing(api_key) {
+  try {
+    toast('🩺 проверяю ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/cun/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.cun.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.cun[idx].status = data.status;
+    renderCun();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function cunCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+async function cunActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/cun/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
+      state.current = 'cun';
+      state.urls.cun = 'https://www.cun.ai/v1';
+      paintStatus();
+      loadCunSessions(false);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Activate: ' + e.message, 'error'); }
 }
@@ -5553,6 +5948,7 @@ function autoRefreshTick() {
         loadFreemodelSessions(false);
         break;
       case 'aerolink':      loadAlSessions(false); break;
+      case 'cun':           loadCunSessions(false); break;
       case 'evomap':        loadEvomapSessions(false); break;
       case 'ourtoken':      loadOurtokenSessions(false); break;
       case 'conduit':       loadConduitSessions(false); break;
@@ -5703,6 +6099,111 @@ async function grokRefreshQuota(name) {
       if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
     });
   }
+}
+
+async function approveGrokAuth(name, providedCode) {
+  let uc = (providedCode || '').trim();
+  if (!uc) {
+    uc = prompt(`Вставь USER_CODE из терминала для аккаунта ${name}:`);
+    if (!uc) return;
+    uc = uc.trim();
+  }
+  if (!uc) return;
+
+  try {
+    const res = await fetch('/__switch/api/grok-build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, userCode: uc }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'grok-build failed');
+
+    toast(`✅ Код отправлен для ${name}. Camoufox с куками этой сессии одобрит device auth. Терминал получит токен и сохранит auth.json.`, 'success', 9000);
+
+    // Refresh status
+    setTimeout(() => { grokRenderSaved().catch(()=>{}); }, 4000);
+  } catch (e) {
+    toast(`Ошибка авторизации ${name}: ${e.message}`, 'error', 8000);
+  }
+}
+
+// Keep for compatibility
+async function grokBuild(name) {
+  return approveGrokAuth(name);
+}
+
+async function grokLaunchTerminal(name) {
+  try {
+    const res = await fetch('/__switch/api/grok/launch-terminal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'launch failed');
+    toast(`🖥 Grok terminal launched for ${name} (using grok-profiles.ps1)`, 'success', 6000);
+  } catch (e) {
+    toast(`Launch terminal fail (${name}): ${e.message}`, 'error', 8000);
+  }
+}
+
+async function grokStartAuth(name) {
+  try {
+    const res = await fetch('/__switch/api/grok/start-auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'start-auth failed');
+    toast(`🚀 Terminal opened for ${name} with "grok login --device-auth". Copy the user_code from the terminal window, then click "Approve code" for this account.`, 'success', 9000);
+  } catch (e) {
+    toast(`Start auth fail for ${name}: ${e.message}`, 'error', 8000);
+  }
+}
+
+// Удобная копия команды для терминала (Warp / PowerShell)
+// Это то, что просил пользователь: из дешборда — готовая команда, которую можно вставить
+function grokCopyLoginCommand(name) {
+  // Нормальный процесс аутентификации:
+  // 1. cd в папку своего проекта
+  // 2. Вставь эту команду в терминал → получи USER_CODE
+  // 3. В дашборде нажми "🛠 Approve code" и вставь код
+  // 4. Camoufox (с куками аккаунта) одобрит → терминал сохранит auth.json
+  const safe = name || '1';
+  const cmd = `# 1. cd в папку проекта\n# 2. Вставь ниже\n$env:GROK_HOME = "$env:USERPROFILE\\.grok-${safe}"; & "$env:USERPROFILE\\.grok\\bin\\grok.exe" login --device-auth`;
+  navigator.clipboard.writeText(cmd).then(() => {
+    toast(`Скопировано для ${name}. Следуй шагам в комментарии.`, 'success', 12000);
+    const status = $('grok-status');
+    if (status) {
+      status.textContent = cmd;
+      status.className = 'text-xs p-3 rounded-lg border border-blue/50 bg-blue/5 text-blue font-mono break-all';
+      status.classList.remove('hidden');
+      setTimeout(() => { if (status && status.textContent === cmd) status.classList.add('hidden'); }, 15000);
+    }
+  }).catch(() => {
+    prompt('Скопируй (после cd в проект):', cmd);
+  });
+}
+
+function grokCopyTerminalCommand(name) {
+  // Для запуска grok после того, как авторизация сохранена.
+  // Сделай cd в нужную папку проекта, потом вставь команду.
+  const safe = name || '1';
+  const cmd = `# cd в папку своего проекта\n$env:GROK_HOME = "$env:USERPROFILE\\.grok-${safe}"; & "$env:USERPROFILE\\.grok\\bin\\grok.exe"`;
+  navigator.clipboard.writeText(cmd).then(() => {
+    toast(`Скопировано для ${name}. Сделай cd → вставь.`, 'success', 8000);
+    const status = $('grok-status');
+    if (status) {
+      status.textContent = cmd;
+      status.className = 'text-xs p-3 rounded-lg border border-amber/50 bg-amber/5 text-amber font-mono break-all';
+      status.classList.remove('hidden');
+      setTimeout(() => { if (status && status.textContent === cmd) status.classList.add('hidden'); }, 12000);
+    }
+  }).catch(() => {
+    prompt('Скопируй (после cd в проект):', cmd);
+  });
 }
 
 async function grokClearCooldown(name) {
@@ -6033,10 +6534,29 @@ async function grokRenderSaved() {
       ? `<button onclick='grokClearCooldown(${nameJ})' title="Снять cooldown вручную" class="text-xs px-2 py-1 text-emerald hover:bg-emerald/10 rounded">✓</button>`
       : `<button onclick='grokMarkExhausted(${nameJ})' title="Пометить как выдохшуюся · таймер" class="text-xs px-2 py-1 text-faint hover:text-amber rounded">⏳</button>`;
 
+    // Terminal Grok Build auth status (from backend enrichment via .grok-N/auth.json)
+    const tStatus = s.terminalStatus || { status: 'unknown', message: 'unknown' };
+    const isAuthorized = tStatus.status === 'authorized';
+    const statusBadge = isAuthorized
+      ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald/10 border border-emerald/40 text-emerald font-medium">✅ Authorized</span>`
+      : `<span class="text-[9px] px-1.5 py-0.5 rounded bg-crimson/10 border border-crimson/40 text-crimson font-medium">❌ Not authorized</span>`;
+
+    // Normal auth process:
+    // - Status shows if terminal auth (auth.json in .grok-N) is saved.
+    // - Always primary: 📋 Copy command (cd to your project dir first, then paste).
+    // - For not authorized: after running the copied login command and getting code, use Approve.
+    // - For authorized: launch or re-auth if needed.
+    const mainCopyBtn = `<button onclick='${isAuthorized ? `grokCopyTerminalCommand(${nameJ})` : `grokCopyLoginCommand(${nameJ})`}' title="${isAuthorized ? 'Скопировать команду для запуска grok. Сделай cd в папку проекта первым делом!' : 'Скопировать команду для начала авторизации (cd + paste в терминал, чтобы получить код)'}" class="text-xs px-2 py-1 ${isAuthorized ? 'bg-amber/10 border-amber/50 text-amber' : 'bg-blue/10 border-blue/50 text-blue'} rounded hover:bg-opacity-80 border">📋 Copy command</button>`;
+
+    const secondaryBtn = isAuthorized
+      ? `<button onclick='grokLaunchTerminal(${nameJ})' title="Запустить Grok Build в терминале с этим профилем (cd в проект сначала рекомендуется)" class="text-xs px-2 py-1 bg-violet/10 border border-violet/50 text-violet rounded hover:bg-violet/20">🖥 Launch Grok</button>`
+      : `<button onclick='grokStartAuth(${nameJ})' title="Открыть терминал с правильным профилем и запустить login --device-auth. Скопируй код оттуда и нажми Approve code ниже." class="text-xs px-2 py-1 bg-blue/10 border border-blue/50 text-blue rounded hover:bg-blue/20">🚀 Open Terminal + Start Auth</button>`;
+
     return `<tr class="hover:bg-elevated/40 transition ${rowDim}">
       <td class="px-3 py-2.5 text-sm text-ink whitespace-nowrap" title="${esc(s.name)}">
-        <div class="flex items-center flex-wrap">
+        <div class="flex items-center flex-wrap gap-1">
           <span class="font-medium">${esc(s.name)}</span>${fpTag}${rateLimitsHint}
+          ${statusBadge}
         </div>
         <div class="text-[10px] text-faint font-mono">${size} cookies</div>
       </td>
@@ -6048,7 +6568,9 @@ async function grokRenderSaved() {
       <td class="px-3 py-2.5 text-right">${cooldownCell}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${launchBtn}
-        <button onclick='grokRefreshQuota(${nameJ})' data-grok-refresh="${esc(s.name)}" title="Обновить квоту (headless Chrome, ~15с)" class="text-xs px-2 py-1 bg-emerald/10 border border-emerald/50 text-emerald rounded hover:bg-emerald/20 disabled:opacity-50 disabled:cursor-wait">🔄</button>
+        ${mainCopyBtn}
+        ${secondaryBtn}
+        ${!isAuthorized ? `<button onclick='approveGrokAuth(${nameJ})' title="Вставь код из терминала сюда — Camoufox с куками этого аккаунта одобрит device auth. Терминал сохранит сессию." class="text-xs px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">🛠 Approve code</button>` : ''}
         <button onclick='grokLoadSession(${idxJ})' title="Загрузить куки в редактор" class="text-xs px-2 py-1 text-faint hover:text-ink rounded">📋</button>
         ${cooldownBtn}
         <button onclick='grokDeleteSession(${idxJ})' title="Удалить сессию" class="text-xs px-2 py-1 text-faint hover:text-crimson rounded">🗑</button>

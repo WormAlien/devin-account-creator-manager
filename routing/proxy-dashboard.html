@@ -3915,6 +3915,9 @@ async function loadFreemodelSessions(refresh) {
     $('nav-count-freemodel').textContent = state.freemodel.length;
     await loadActiveFmKey(true);   // skip inner render — вызовем ниже одним махом
     renderFreemodel(data.refreshed);
+    // TG-пул живёт на этой же вкладке и меняется при регах (free → used) —
+    // без этого «↻ Обновить» показывал устаревший пул до F5 страницы.
+    loadTgPool();
     if (refresh) toast('✓ FreeModel: квоты обновлены', 'success');
   } catch (e) {
     if (!hasData) $('freemodel-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;

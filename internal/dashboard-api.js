@@ -183,6 +183,26 @@ async function extractFreemodelApiKey(name) {
     return await extractKey(session);
 }
 
+// «Липкий» мерж свежего скрапа с кешем: freemodel.dev рендерит план/renews/окна
+// через React с задержкой (окна 5h/7d — отдельный fetch, ~2с позже остального).
+// При неудачном wait поля приходят пустыми и раньше затирали валидный кеш —
+// UI сваливался на trial/реф-бонус fallback и ломал полосу пула.
+function mergeStickyFmQuota(prev, q) {
+    const merged = { ...q };
+    if (!merged.plan && prev.plan) merged.plan = prev.plan;
+    if (!merged.renews && prev.renews) merged.renews = prev.renews;
+    if (!merged.tgPhone && prev.tgPhone) merged.tgPhone = prev.tgPhone;
+    if (!merged.h5 && merged.h5pct == null && prev.h5) {
+        merged.h5 = prev.h5; merged.h5max = prev.h5max;
+        merged.h5resets = prev.h5resets; merged.h5pct = prev.h5pct;
+    }
+    if (!merged.d7 && merged.d7pct == null && prev.d7) {
+        merged.d7 = prev.d7; merged.d7max = prev.d7max;
+        merged.d7resets = prev.d7resets; merged.d7pct = prev.d7pct;
+    }
+    return merged;
+}
+
 // withQuotas behavior:
 //   'cache'   — return cached quotas only (instant, no Playwright)
 //   'refresh' — refresh via Playwright in parallel, update cache, return new values
@@ -241,10 +261,7 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
                     // wait план приходит пустым, и раньше это стирало кэшированный "Pro"/"Free"
                     // на UI, оставляя прочерк. Мержим: пусто в q → берём из cache.
                     const prev = cache[eligible[i].name] || {};
-                    const merged = { ...q };
-                    if (!merged.plan && prev.plan) merged.plan = prev.plan;
-                    if (!merged.renews && prev.renews) merged.renews = prev.renews;
-                    if (!merged.tgPhone && prev.tgPhone) merged.tgPhone = prev.tgPhone;
+                    const merged = mergeStickyFmQuota(prev, q);
                     if (origIdx >= 0) out[origIdx].quota = { ...merged, updatedAt: Date.now() };
                     cache[eligible[i].name] = out[origIdx >= 0 ? origIdx : i].quota;
                     // TG-привязка — локальная мета (ставится при bind) авторитетна.
@@ -457,7 +474,7 @@ async function refreshOneFreemodelQuota(name) {
     const q = await checkFreemodelQuota(session);
     const cache = loadFreemodelQuotaCache();
     if (q) {
-        cache[name] = { ...q, updatedAt: Date.now() };
+        cache[name] = { ...mergeStickyFmQuota(cache[name] || {}, q), updatedAt: Date.now() };
         saveFreemodelQuotaCache(cache);
     }
     return cache[name] || null;

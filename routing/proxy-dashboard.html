@@ -901,11 +901,19 @@
               <span class="text-amber">🤖</span> SuperGrok Sessions
             </h1>
             <p class="text-sm text-muted mt-1">
-              куки → <code class="font-mono text-amber text-xs">D:\WORMALIENAIGIGANT\app\grok-cookie-mcp\cookies\*.json</code>
+              куки → <code class="font-mono text-amber text-xs">grok-launcher/cookies/*.json</code>
+              · auth CLI → <code class="font-mono text-amber text-xs">~/.grok/auth.json</code>
               · квоты — headless Chrome через <code class="font-mono text-amber text-xs">launcher.py</code>
               <br>
-              <span class="text-[10px]">Нормальный процесс аутентификации: 1) Нажми "🚀 Open Terminal + Start Auth" — откроется терминал с правильным профилем и запустится login --device-auth. 2) Скопируй user_code из терминала. 3) Нажми "🛠 Approve code" — Camoufox с куками аккаунта одобрит. 4) Терминал сохранит auth.json. Статус обновится. Потом используй Copy/Launch.</span>
+              <span class="text-[10px]">
+                Два способа (после тестов оставим один):
+                <b class="text-emerald">⚡ Copy</b> — копирует <code class="font-mono">auth.json</code> в <code class="font-mono">~/.grok</code>.
+                <b class="text-sky">🔌 Helper</b> — pointer + <code class="font-mono">auth_provider_command</code> (как FreeModel apiKeyHelper); Grok сам зовёт helper за токеном.
+                Auth: Open Terminal + Start Auth → Approve code → Authorized → Copy/Helper → перезапуск grok.
+                <span class="text-faint">Launch Grok теперь только открывает терминал и не меняет active CLI.</span>
+              </span>
             </p>
+            <div id="grok-active-badge" class="mt-2 text-xs font-mono text-faint">active CLI: …</div>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
             <span id="grok-launcher-state" class="px-2 py-1 rounded font-mono text-[10px] bg-elevated border border-line-soft text-faint">launcher: ?</span>
@@ -921,6 +929,10 @@
             </select>
             <button onclick="grokRenderSaved()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="grokRefreshAllQuota()" title="Прогнать headless-пробу по каждой сессии (по 10-15с)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Квоты все</button>
+            <button onclick="grokActivateBest('copy')" title="COPY: auth.json лучшего акка в ~/.grok. Перезапусти grok."
+                    class="text-xs px-3 py-2 bg-emerald/15 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/25 font-medium">⚡ Лучший · Copy</button>
+            <button onclick="grokActivateBest('helper')" title="HELPER: pointer + auth_provider_command. Grok сам дергает helper. Перезапусти grok."
+                    class="text-xs px-3 py-2 bg-sky/15 border border-sky/50 text-sky rounded-lg hover:bg-sky/25 font-medium">🔌 Лучший · Helper</button>
           </div>
         </header>
 
@@ -1319,6 +1331,8 @@ const state = {
 
 const $   = (id) => document.getElementById(id);
 const esc = (s)  => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Для безопасной вставки значения внутрь JS-строки (в onclick-атрибутах).
+const escJs = (s) => String(s ?? '').replace(/[\\'"`\n\r]/g, c => '\\' + ({'\n':'n','\r':'r'}[c] || c));
 
 // ═══════════════════ TOASTS ══════════════════════════════════════════
 function toast(text, kind='info', ms=4000) {
@@ -4016,31 +4030,41 @@ function renderFreemodel(refreshed) {
     if (q) {
       availCell = `<span class="text-emerald font-semibold font-mono">${esc(q.available || '—')}</span>`;
       // 5h колонка: приоритет Pro-окно (если есть), иначе Trial credit (Free).
+      // Бар показывает ЗАПАС (остаток), как верхняя полоса и Claude-статуслайн —
+      // раньше показывал used% и юзер читал «76%» как остаток при реальных 24%.
       if (q.h5 || q.h5pct != null) {
         let pct = q.h5pct;
         if (pct == null) {
           const frac = parseFrac(q.h5, q.h5max);
           pct = frac != null ? frac * 100 : null;
         }
-        h5Cell = pct != null
-          ? bar(pct, pct > 70 ? 'bg-crimson' : pct > 40 ? 'bg-amber' : 'bg-emerald')
-          : `<span class="text-amber font-mono text-xs">${esc(q.h5 || '')}/${esc(q.h5max || '')}</span>`;
+        if (pct != null) {
+          const rem = Math.max(0, 100 - pct);
+          const ttl = `Запас 5h: ${Math.round(rem)}% (использовано ${esc(q.h5 || '')} из ${esc(q.h5max || '')}${q.h5resets ? ' · сброс ' + esc(q.h5resets) : ''})`;
+          h5Cell = `<div title="${ttl}">${bar(rem, rem < 30 ? 'bg-crimson' : rem < 60 ? 'bg-amber' : 'bg-emerald')}</div>`;
+        } else {
+          h5Cell = `<span class="text-amber font-mono text-xs">${esc(q.h5 || '')}/${esc(q.h5max || '')}</span>`;
+        }
       } else if (q.trialCredit) {
         const dl = typeof q.trialDaysLeft === 'number' ? q.trialDaysLeft : null;
         const clr = dl != null && dl <= 1 ? 'text-crimson' : dl != null && dl <= 2 ? 'text-amber' : 'text-emerald';
         const dLabel = dl != null ? `${dl}д` : '';
         h5Cell = `<span class="font-mono text-xs ${clr}" title="Trial credit${dl != null ? ` · ${dl} дн. осталось` : ''}">🎁 ${esc(q.trialCredit)}${dLabel ? ' · ' + dLabel : ''}</span>`;
       }
-      // 7d колонка: приоритет Pro-окно, иначе Referral bonus $USED/$CAP как bar.
+      // 7d колонка: приоритет Pro-окно, иначе Referral bonus. Тоже ЗАПАС.
       if (q.d7 || q.d7pct != null) {
         let pct = q.d7pct;
         if (pct == null) {
           const frac = parseFrac(q.d7, q.d7max);
           pct = frac != null ? frac * 100 : null;
         }
-        d7Cell = pct != null
-          ? bar(pct, pct > 70 ? 'bg-crimson' : pct > 40 ? 'bg-amber' : 'bg-azure')
-          : `<span class="text-azure font-mono text-xs">${esc(q.d7 || '')}/${esc(q.d7max || '')}</span>`;
+        if (pct != null) {
+          const rem = Math.max(0, 100 - pct);
+          const ttl = `Запас 7d: ${Math.round(rem)}% (использовано ${esc(q.d7 || '')} из ${esc(q.d7max || '')}${q.d7resets ? ' · сброс ' + esc(q.d7resets) : ''})`;
+          d7Cell = `<div title="${ttl}">${bar(rem, rem < 30 ? 'bg-crimson' : rem < 60 ? 'bg-amber' : 'bg-azure')}</div>`;
+        } else {
+          d7Cell = `<span class="text-azure font-mono text-xs">${esc(q.d7 || '')}/${esc(q.d7max || '')}</span>`;
+        }
       } else if (q.referralBonusMax) {
         const used = q.referralBonusUsed || 0;
         const max = q.referralBonusMax;
@@ -6249,13 +6273,21 @@ async function grokRefreshQuota(name) {
 async function approveGrokAuth(name, providedCode) {
   let uc = (providedCode || '').trim();
   if (!uc) {
-    uc = prompt(`Вставь USER_CODE из терминала для аккаунта ${name}:`);
+    uc = prompt(`Вставь USER_CODE или полную ссылку device-flow для аккаунта ${name}:`);
     if (!uc) return;
     uc = uc.trim();
   }
   if (!uc) return;
 
   try {
+    // Поддерживаем оба варианта: чистый USER_CODE и полную ссылку
+    try {
+      const parsed = new URL(uc);
+      const fromUrl = parsed.searchParams.get('user_code');
+      if (fromUrl) uc = fromUrl.trim();
+    } catch {}
+    if (!uc) throw new Error('user_code not found');
+
     const res = await fetch('/__switch/api/grok-build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6287,7 +6319,8 @@ async function grokLaunchTerminal(name) {
     });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || 'launch failed');
-    toast(`🖥 Grok terminal launched for ${name} (using grok-profiles.ps1)`, 'success', 6000);
+    toast(`🖥 Grok terminal: ${name}`, 'success', 7000);
+    await grokRenderSaved();
   } catch (e) {
     toast(`Launch terminal fail (${name}): ${e.message}`, 'error', 8000);
   }
@@ -6444,8 +6477,31 @@ async function grokLaunch() {
   }
 }
 
-// Sessions live on disk at D:\WORMALIENAIGIGANT\app\grok-cookie-mcp\cookies via /__switch/api/grok/sessions
+// Sessions live on disk via /__switch/api/grok/sessions; active = auth in ~/.grok
 let grokSessionsCache = [];
+let grokActiveCache = null; // { name, email, userId, hasAuth, … }
+
+function grokRenderActiveBadge() {
+  const el = $('grok-active-badge');
+  if (!el) return;
+  const a = grokActiveCache;
+  if (!a || (!a.hasAuth && !a.name)) {
+    el.innerHTML = `<span class="text-crimson">active CLI: не выбран (Copy или Helper)</span>`;
+    return;
+  }
+  const name = a.name ? esc(a.name) : '?';
+  const email = a.email ? esc(a.email) : '—';
+  const mode = a.mode === 'helper' ? 'helper' : (a.mode === 'copy' ? 'copy' : '?');
+  const modeBadge = mode === 'helper'
+    ? `<span class="text-sky">🔌 helper</span>`
+    : `<span class="text-emerald">⚡ copy</span>`;
+  const helperHint = a.helperConfigured
+    ? `<span class="text-faint ml-2">provider OK</span>`
+    : (mode === 'helper' ? `<span class="text-amber ml-2">provider не в config?</span>` : '');
+  el.innerHTML = `${modeBadge} <span class="text-muted">active:</span> <b class="text-ink">${name}</b> · <span class="text-muted">${email}</span>
+    <span class="text-faint ml-1">(~/.grok)</span>${helperHint}
+    <span class="text-faint ml-2">после смены — перезапусти grok</span>`;
+}
 
 async function grokFetchSessions() {
   try {
@@ -6453,13 +6509,62 @@ async function grokFetchSessions() {
     if (!res.ok) throw new Error(`http ${res.status}`);
     const data = await res.json();
     grokSessionsCache = Array.isArray(data.sessions) ? data.sessions : [];
-    console.log('[grok] fetched sessions:', grokSessionsCache.length, grokSessionsCache.map(s => s.name));
+    grokActiveCache = data.active || null;
+    grokRenderActiveBadge();
+    console.log('[grok] fetched sessions:', grokSessionsCache.length, grokSessionsCache.map(s => s.name), 'active=', grokActiveCache?.name);
   } catch (e) {
     grokSessionsCache = [];
+    grokActiveCache = null;
     console.warn('[grok] fetch failed:', e);
     toast('Failed to load sessions: ' + e.message, 'error');
   }
   return grokSessionsCache;
+}
+
+/**
+ * Активировать профиль.
+ * mode: 'copy' | 'helper'
+ *   copy   — auth.json → ~/.grok
+ *   helper — pointer + auth_provider_command (FreeModel-style)
+ */
+async function grokActivate(name, mode = 'copy') {
+  try {
+    const res = await fetch('/__switch/api/grok/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, mode }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'activate failed');
+    grokActiveCache = d.active || { name: d.name, email: d.email, hasAuth: true, mode: d.mode };
+    grokRenderActiveBadge();
+    const tag = d.mode === 'helper' ? '🔌 Helper' : '⚡ Copy';
+    toast(`${tag}: ${d.name} (${d.email || '—'}). ${d.message || 'Перезапусти grok.'}`, 'success', 10000);
+    await grokRenderSaved();
+  } catch (e) {
+    toast(`Activate fail (${name}/${mode}): ${e.message}`, 'error', 8000);
+  }
+}
+
+/** Автовыбор authorized с минимальным weeklyUsedPct → activate. */
+async function grokActivateBest(mode = 'copy') {
+  try {
+    const res = await fetch('/__switch/api/grok/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ best: true, requireFree: true, mode }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'activate best failed');
+    const used = d.picked?.used != null ? ` · used ~${Math.round(d.picked.used)}%` : '';
+    grokActiveCache = d.active || { name: d.name, email: d.email, hasAuth: true, mode: d.mode };
+    grokRenderActiveBadge();
+    const tag = d.mode === 'helper' ? '🔌 Лучший·Helper' : '⚡ Лучший·Copy';
+    toast(`${tag}: ${d.name} (${d.email || '—'}${used}). Перезапусти grok.`, 'success', 10000);
+    await grokRenderSaved();
+  } catch (e) {
+    toast(`Лучший (${mode}): ${e.message}`, 'error', 9000);
+  }
 }
 
 async function grokSaveSession() {
@@ -6682,22 +6787,34 @@ async function grokRenderSaved() {
     // Terminal Grok Build auth status (from backend enrichment via .grok-N/auth.json)
     const tStatus = s.terminalStatus || { status: 'unknown', message: 'unknown' };
     const isAuthorized = tStatus.status === 'authorized';
+    const isCliActive = !!tStatus.isActive;
     const statusBadge = isAuthorized
-      ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald/10 border border-emerald/40 text-emerald font-medium">✅ Authorized</span>`
+      ? (isCliActive
+          ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald/20 border border-emerald text-emerald font-semibold">⚡ ACTIVE CLI</span>`
+          : `<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald/10 border border-emerald/40 text-emerald font-medium">✅ Authorized</span>`)
       : `<span class="text-[9px] px-1.5 py-0.5 rounded bg-crimson/10 border border-crimson/40 text-crimson font-medium">❌ Not authorized</span>`;
 
     // Normal auth process:
     // - Status shows if terminal auth (auth.json in .grok-N) is saved.
+    // - ⚡ Activate → copy auth into ~/.grok so plain `grok` restart uses this account.
     // - Always primary: 📋 Copy command (cd to your project dir first, then paste).
-    // - For not authorized: after running the copied login command and getting code, use Approve.
-    // - For authorized: launch or re-auth if needed.
     const mainCopyBtn = `<button onclick='${isAuthorized ? `grokCopyTerminalCommand(${nameJ})` : `grokCopyLoginCommand(${nameJ})`}' title="${isAuthorized ? 'Скопировать команду для запуска grok. Сделай cd в папку проекта первым делом!' : 'Скопировать команду для начала авторизации (cd + paste в терминал, чтобы получить код)'}" class="text-xs px-2 py-1 ${isAuthorized ? 'bg-amber/10 border-amber/50 text-amber' : 'bg-blue/10 border-blue/50 text-blue'} rounded hover:bg-opacity-80 border">📋 Copy command</button>`;
+    const approveDirectBtn = `<button onclick='approveGrokAuth(${nameJ}, prompt("Вставь USER_CODE или полную ссылку accounts.x.ai/oauth2/device?user_code=... для ${escJs(s.name)}:", ""))' title="Можно вставить USER_CODE или полную ссылку device-flow${isAuthorized ? ' (переввод токена, если сессия протухла)' : ''}" class="text-xs px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">🔗 Link / Code</button>`;
+
+    const activeMode = grokActiveCache?.mode === 'helper' ? 'helper' : 'copy';
+    const activateBtns = isAuthorized
+      ? (isCliActive
+          ? `<button disabled title="Уже active (${activeMode})" class="text-xs px-2 py-1 bg-emerald/5 border border-emerald/30 text-emerald/60 rounded cursor-default">⚡ ${activeMode === 'helper' ? 'Helper' : 'Copy'} ✓</button>`
+          : `<button onclick='grokActivate(${nameJ}, "copy")' title="COPY: скопировать auth.json в ~/.grok" class="text-xs px-2 py-1 bg-emerald/15 border border-emerald/50 text-emerald rounded hover:bg-emerald/25 font-medium">⚡ Copy</button>
+             <button onclick='grokActivate(${nameJ}, "helper")' title="HELPER: pointer + auth_provider_command (как FreeModel apiKeyHelper)" class="text-xs px-2 py-1 bg-sky/15 border border-sky/50 text-sky rounded hover:bg-sky/25 font-medium">🔌 Helper</button>`)
+      : '';
 
     const secondaryBtn = isAuthorized
-      ? `<button onclick='grokLaunchTerminal(${nameJ})' title="Запустить Grok Build в терминале с этим профилем (cd в проект сначала рекомендуется)" class="text-xs px-2 py-1 bg-violet/10 border border-violet/50 text-violet rounded hover:bg-violet/20">🖥 Launch Grok</button>`
+      ? `<button onclick='grokLaunchTerminal(${nameJ})' title="Запустить Grok Build в терминале с этим профилем (через GROK_HOME, без смены active CLI)" class="text-xs px-2 py-1 bg-violet/10 border border-violet/50 text-violet rounded hover:bg-violet/20">🖥 Launch Grok</button>`
       : `<button onclick='grokStartAuth(${nameJ})' title="Открыть терминал с правильным профилем и запустить login --device-auth. Скопируй код оттуда и нажми Approve code ниже." class="text-xs px-2 py-1 bg-blue/10 border border-blue/50 text-blue rounded hover:bg-blue/20">🚀 Open Terminal + Start Auth</button>`;
 
-    return `<tr class="hover:bg-elevated/40 transition ${rowDim}">
+    const rowActive = isCliActive ? 'bg-emerald/5 ring-1 ring-inset ring-emerald/30' : '';
+    return `<tr class="hover:bg-elevated/40 transition ${rowDim} ${rowActive}">
       <td class="px-3 py-2.5 text-sm text-ink whitespace-nowrap" title="${esc(s.name)}">
         <div class="flex items-center flex-wrap gap-1">
           <span class="font-medium">${esc(s.name)}</span>${fpTag}${rateLimitsHint}
@@ -6712,10 +6829,12 @@ async function grokRenderSaved() {
       <td class="px-3 py-2.5 text-[11px] text-muted font-mono whitespace-nowrap">${esc(new Date(s.savedAt).toLocaleString('ru'))}</td>
       <td class="px-3 py-2.5 text-right">${cooldownCell}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${activateBtns}
         ${launchBtn}
         ${mainCopyBtn}
         ${secondaryBtn}
-        ${!isAuthorized ? `<button onclick='approveGrokAuth(${nameJ})' title="Вставь код из терминала сюда — Camoufox с куками этого аккаунта одобрит device auth. Терминал сохранит сессию." class="text-xs px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">🛠 Approve code</button>` : ''}
+        ${approveDirectBtn}
+        <button onclick='approveGrokAuth(${nameJ})' title="Вставь код из терминала сюда — Camoufox с куками этого аккаунта одобрит device auth. Терминал сохранит сессию.${isAuthorized ? ' Переввод токена, если протух.' : ''}" class="text-xs px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">🛠 Approve code</button>
         <button onclick='grokLoadSession(${idxJ})' title="Загрузить куки в редактор" class="text-xs px-2 py-1 text-faint hover:text-ink rounded">📋</button>
         ${cooldownBtn}
         <button onclick='grokDeleteSession(${idxJ})' title="Удалить сессию" class="text-xs px-2 py-1 text-faint hover:text-crimson rounded">🗑</button>

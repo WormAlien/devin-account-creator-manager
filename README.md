@@ -2,7 +2,7 @@
 
 # Vibe-Code Account Creator Manager
 
-Локальная control-plane: автореги бесплатных Claude-аккаунтов (`FreeModel` · `Conduit`) + переключение backend'а Claude Code между пулами (**FreeModel · OmniRoute · Aerolink · Conduit**) одним кликом из веб-дашборда, с авто-ротацией ключей **без перезапуска** Claude Code. Плюс ТГ-пульт для управления с телефона.
+Локальная control-plane: автореги бесплатных Claude-аккаунтов (`FreeModel` · `Conduit`) + переключение backend'а Claude Code между пулами (**FreeModel · OmniRoute · Aerolink · Cun · Evomap · Ourtoken · Conduit**) одним кликом из веб-дашборда, с авто-ротацией ключей **без перезапуска** Claude Code. Плюс ТГ-пульт для управления с телефона.
 
 <br>
 
@@ -25,7 +25,11 @@
 | **Switcher** | Переключатель бэкенда + глобальная шкала запаса. Правит `settings.json` (с `.bak`). |
 | **FreeModel** | Аккаунты `freemodel.dev` + пул Telegram для привязки + **авто-ротация** ключей. |
 | **Aerolink** | Ручной пул `email + ключ` (`capi.aerolink.lat`), активация через API Helper. |
+| **Cun** | Пул ключей `cun.ai` (Anthropic-совместимый), выбор модели, активация через `AUTH_TOKEN`. |
+| **Evomap** | Ручной пул `email + ключ` (`api.evomap.ai`), активация через API Helper. |
+| **Ourtoken** | Ручной пул `email + ключ` (`api.ourtoken.ai`) + автореги Playwright. |
 | **Conduit** | Аккаунты `conduit.ozdoev.net`, авторег **из Telegram** (device-code, без Playwright). |
+| **SuperGrok** | Сессии grok.com (device-auth через Camoufox), квоты, cooldown после rate-limit. |
 | **Video / Картинки API** | Хранилища ключей видео- и картинко-провайдеров (CRUD + триал-каталог). |
 | **Плагины** | Вкл/выкл плагинов Claude Code (тоггл `enabledPlugins`) + ★ рекомендованные. |
 | **Telegram-пульт** (`tgbot/`) | Управление дашбордом и живая claude-сессия прямо из Telegram. |
@@ -137,7 +141,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 ## Дашборд
 
-`http://localhost:8200/__switch`. Сайдбар: **Switcher · FreeModel · Aerolink · Evomap · Ourtoken · Conduit · Video · Картинки · Плагины · Настройки** (+ архив «Чтим память»).
+`http://localhost:8200/__switch`. Сайдбар: **Switcher · FreeModel · Aerolink · Cun · Evomap · Ourtoken · Conduit · Video API · Картинки API · SuperGrok · Плагины · Настройки** (+ архив «Чтим память»).
 
 ### Switcher
 
@@ -148,12 +152,16 @@ npm run tgbot                              # опц.: ТГ-пульт
 Менеджер сессий `freemodel.dev` с квотами (окна 5h/7d, `$`) и пулом Telegram-привязок.
 
 - **Режим ключа** — бейдж 🔑 **Прямой ключ** (`env.ANTHROPIC_API_KEY`) или 🤝 **API Helper** (`apiKeyHelper` читает `~/.claude/fm-active-key.txt`). Тумблер на каждой сессии.
-- **➕ Создать v3** — реги пачкой · **🔄 Квоты ~30s** — перепрогон через headless Chrome.
+- **➕ Создать v3** — реги пачкой · **🔄 Квоты (~2 мин)** — перепрогон через headless Chrome.
 - **Авто-ротация** — держит активным наименее использованный ключ, переписывает `fm-active-key.txt` без перезапуска CC. Настройки: интервал (90с) + потолок used% (70%). Лог свитчей, состояние в `logs/.freemodel_autorotate.json` (переживает рестарт).
 
 ### Aerolink
 
 Ручной пул `email + ключ` (`capi.aerolink.lat`). Пинг `/v1/me` → статус, активация через API Helper (`al-active-key.txt`). Данные — `routing/al-sessions.json` (gitignored).
+
+### Cun
+
+Пул ключей `cun.ai` (Anthropic-совместимый gateway). Активация пишет `ANTHROPIC_AUTH_TOKEN` + `BASE_URL=https://www.cun.ai` в `settings.json`, выбор модели per-ключ. Данные — `routing/cun-sessions.json` (gitignored).
 
 ### Evomap
 
@@ -169,6 +177,10 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 - **Автореги из ТГ** — `conduit/conduit_autoreger.js` берёт ТГ из **общего пула** с FreeModel, подписывается на канал, поллит авторизацию. Реф-цепочка парами 2+2.
 - Баланс/план/лимиты + **шкала запаса**, активация ключа через API Helper (`cdt-active-key.txt`).
+
+### SuperGrok
+
+Сессии grok.com для Grok CLI: device-auth через Camoufox (`grok-launcher/`), профили `~/.grok-<name>/auth.json`, активация подставляет auth активного профиля в `~/.grok`. Квоты/план, ручной cooldown после rate-limit (обычно 4ч).
 
 ### Telegram — пул сессий (общий для FreeModel и Conduit)
 
@@ -303,7 +315,7 @@ node routing/transparent-proxy.js        # switcher вручную
 </tr>
 <tr>
   <td>Квоты в кеше устарели</td>
-  <td>Кнопка <b>🔄 Квоты ~30s</b> в табе — перепрогон через headless Chrome</td>
+  <td>Кнопка <b>🔄 Квоты (~2 мин)</b> в табе — перепрогон через headless Chrome</td>
 </tr>
 <tr>
   <td><b>✈ Открыть</b> падает / <code>нет tools/tg-venv</code></td>

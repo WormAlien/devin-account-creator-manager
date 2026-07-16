@@ -314,17 +314,27 @@ async function checkFreemodelQuota(session) {
 
         // Ждём пока появится "AVAILABLE NOW" — на Free-акках окон лимитов НЕТ
         // ("No active limits"), поэтому дальше ждать нечего, страница готова.
+        // Сайт может отдать русскую локализацию несмотря на de-DE контекст (гео).
         await page.waitForFunction(
-            () => /AVAILABLE NOW/i.test(document.body?.innerText || ''),
+            () => /AVAILABLE NOW|ДОСТУПНО СЕЙЧАС|VERFÜGBAR/i.test(document.body?.innerText || ''),
             { timeout: 15000 }
         ).catch(() => {});
         // Ждём пока сумма подтянется (не $0.00 placeholder). Если реально 0 — не
         // ждём вечность: max 4с.
         await page.waitForFunction(() => {
             const t = document.body?.innerText || '';
-            const m = t.match(/AVAILABLE NOW[\s\S]{0,80}?\$([\d.,]+)/i);
+            const m = t.match(/(?:AVAILABLE NOW|ДОСТУПНО СЕЙЧАС|VERFÜGBAR)[\s\S]{0,80}?\$([\d.,]+)/i);
             return m && parseFloat(m[1].replace(',', '')) > 0;
         }, { timeout: 4000 }).catch(() => {});
+        // Блок окон 5h/7d рендерится ~2с ПОЗЖЕ, чем "AVAILABLE NOW" (отдельный
+        // fetch). Причём сначала мелькает плейсхолдер "No active limits", который
+        // потом ЗАМЕНЯЕТСЯ окнами — поэтому его нельзя принимать за терминальное
+        // состояние. Ждём именно окна; на настоящем Free без окон отваливаемся
+        // по таймауту 8с (цена — 8с на такой акк, зато кеш не портится пустыми h5/d7).
+        await page.waitForFunction(() => {
+            const t = document.body?.innerText || '';
+            return /5-Hour window|Окно 5 часов/i.test(t);
+        }, { timeout: 8000 }).catch(() => {});
         await page.waitForTimeout(600);
 
         const data = await page.evaluate(() => {
@@ -349,8 +359,8 @@ async function checkFreemodelQuota(session) {
                                 text.match(/Next\s+(?:billing|renewal|payment)[\s\S]{0,40}?([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
             if (renewsMatch) out.renews = new Date(renewsMatch[1]).toISOString();
 
-            // "AVAILABLE NOW" → следующая строка с $X.XX + "Bonus credits $Y.YY" рядом.
-            const availIdx = lines.findIndex(l => /^AVAILABLE NOW$/i.test(l));
+            // "AVAILABLE NOW" / "ДОСТУПНО СЕЙЧАС" → следующая строка с $X.XX + "Bonus credits $Y.YY" рядом.
+            const availIdx = lines.findIndex(l => /^(AVAILABLE NOW|ДОСТУПНО СЕЙЧАС)$/i.test(l));
             if (availIdx >= 0) {
                 for (let i = availIdx + 1; i < Math.min(lines.length, availIdx + 6); i++) {
                     const m = lines[i].match(/^\$[\d.,]+$/);
@@ -358,16 +368,17 @@ async function checkFreemodelQuota(session) {
                 }
                 // "Bonus credits $Y.YY" в 3-4 строках после AVAILABLE NOW.
                 for (let i = availIdx + 1; i < Math.min(lines.length, availIdx + 6); i++) {
-                    const mb = lines[i].match(/Bonus credits\s*\$([\d.,]+)/i);
+                    const mb = lines[i].match(/(?:Bonus credits|Бонусные кредиты)\s*\$([\d.,]+)/i);
                     if (mb) { out.bonus = `$${mb[1]}`; break; }
                 }
             }
 
             // EXTRA USAGE → "Current balance" → "From N referral · $Y each" → "$USED / $CAP".
-            const extraIdx = lines.findIndex(l => /EXTRA USAGE/i.test(l));
+            const extraIdx = lines.findIndex(l => /EXTRA USAGE|ДОПОЛНИТЕЛЬНОЕ ИСПОЛЬЗОВАНИЕ/i.test(l));
             if (extraIdx >= 0) {
                 for (let i = extraIdx; i < Math.min(lines.length, extraIdx + 10); i++) {
-                    const mc = lines[i].match(/From\s+(\d+)\s+referral/i);
+                    const mc = lines[i].match(/From\s+(\d+)\s+referral/i) ||
+                               lines[i].match(/От\s+(\d+)\s+приглаш/i);
                     if (mc) out.referralCount = parseInt(mc[1], 10);
                     const mb = lines[i].match(/^\$([\d.,]+)\s*\/\s*\$([\d.,]+)$/);
                     if (mb) {
@@ -379,29 +390,31 @@ async function checkFreemodelQuota(session) {
                 }
             }
 
-            // Старые окна 5h/7d — для Pro-акков. На Free их нет ("No active limits").
-            const findWindow = (label) => {
+            // Окна 5h/7d. Заголовок локализуется ("5-Hour window" / "Окно 5 часов"),
+            // строки внутри: "Resets ..."/"Сброс ...", "$used / $max", "Использовано N%".
+            const findWindow = (labels) => {
                 let i = -1;
                 for (let k = 0; k < lines.length; k++) {
                     const l = lines[k].toLowerCase();
-                    if (l.startsWith(label.toLowerCase()) && !/\$/.test(l)) { i = k; break; }
+                    if (labels.some(lb => l.startsWith(lb)) && !/\$/.test(l)) { i = k; break; }
                 }
                 if (i < 0) return null;
                 let used = '', max = '', resets = '', pct = '';
                 for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
                     const ln = lines[j];
-                    if (/^(7-Day|AVAILABLE|Plan|API|Usage|Logs|Billing|EXTRA)/i.test(ln)) break;
-                    let m = ln.match(/^Resets\s+(.+)$/i);
+                    if (/^(7-Day|AVAILABLE|Plan|API|Usage|Logs|Billing|EXTRA|Окно 7|ДОСТУПНО|ДОПОЛНИТЕЛЬНОЕ|ПОПОЛНЕНИЕ)/i.test(ln)) break;
+                    let m = ln.match(/^(?:Resets|Сброс)\s+(?:через\s+)?(.+)$/i);
                     if (m) { resets = m[1].trim(); continue; }
                     m = ln.match(/^\$?([\d.,]+)\s*\/\s*\$?([\d.,]+)$/);
-                    if (m) { used = `$${m[1]}`; max = `$${m[2]}`; break; }
-                    m = ln.match(/([\d.]+)\s*%\s*(?:used)?/i);
-                    if (m && !used) { pct = parseFloat(m[1]); }
+                    if (m) { used = `$${m[1]}`; max = `$${m[2]}`; continue; }
+                    m = ln.match(/^(?:Использовано\s+)?([\d.]+)\s*%(?:\s*used)?$/i);
+                    if (m) { pct = parseFloat(m[1]); }
+                    if (used && pct !== '') break;
                 }
                 return { used, max, resets, pct };
             };
-            const w5 = findWindow('5-Hour window');
-            const w7 = findWindow('7-Day window');
+            const w5 = findWindow(['5-hour window', 'окно 5 час']);
+            const w7 = findWindow(['7-day window', 'окно 7 дн']);
             if (w5) { out.h5 = w5.used; out.h5max = w5.max; out.h5resets = w5.resets; out.h5pct = w5.pct || null; }
             if (w7) { out.d7 = w7.used; out.d7max = w7.max; out.d7resets = w7.resets; out.d7pct = w7.pct || null; }
             return out;

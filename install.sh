@@ -122,15 +122,15 @@ if ask "Поставить Chromium для Playwright (нужен FreeModel-кв
   npx playwright install chromium && ok "chromium установлен"
 fi
 
-# ── 2. Claude Code 2.1.179 ──────────────────────────────────────────────────
-step "2. Claude Code (нужна РОВНО 2.1.179 — новее ломает apiKeyHelper)"
+# ── 2. Claude Code 2.1.153 ──────────────────────────────────────────────────
+step "2. Claude Code (нужна РОВНО 2.1.153 — новее ломает apiKeyHelper)"
 CUR=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-if [ "$CUR" = "2.1.179" ]; then
-  ok "уже 2.1.179"
-elif ask "Текущая: ${CUR:-нет}. Поставить 2.1.179?" Y; then
+if [ "$CUR" = "2.1.153" ]; then
+  ok "уже 2.1.153"
+elif ask "Текущая: ${CUR:-нет}. Поставить 2.1.153?" Y; then
   npm config delete prefix 2>/dev/null
   npm uninstall -g @anthropic-ai/claude-code 2>/dev/null
-  npm install -g @anthropic-ai/claude-code@2.1.179 && ok "Claude Code 2.1.179"
+  npm install -g @anthropic-ai/claude-code@2.1.153 && ok "Claude Code 2.1.153"
 fi
 
 # ── 3. Базовый ~/.claude/settings.json ──────────────────────────────────────

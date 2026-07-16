@@ -51,7 +51,7 @@
 → `apihelper`; с `al-active-key.txt` → `aerolink`; с `ev-active-key.txt` → `evomap`; с `ot-active-key.txt` → `ourtoken`; с `cdt-active-key.txt` → `conduit`;
 прямой ключ → backend по URL.
 
-> ⚠️ Для `apiKeyHelper`-режимов нужен Claude Code **2.1.179** + отключённый авто-апдейт
+> ⚠️ Для `apiKeyHelper`-режимов нужен Claude Code **2.1.153** + отключённый авто-апдейт
 > (`DISABLE_AUTOUPDATER=1`, `autoUpdates:false`). Новее ломает `apiKeyHelper`.
 > См. `README.md` (Установка) + `claude-settings.example.json`.
 

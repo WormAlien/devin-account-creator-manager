@@ -13,7 +13,7 @@ Switcher на `:8200` правит только `apiKeyHelper` + `env.ANTHROPIC_
   на КАЖДОМ запросе. Без этого ротация ключей на лету не работает.
 
 - **`DISABLE_AUTOUPDATER: "1"` + `autoUpdates: false`** — Claude Code обязан
-  остаться на `2.1.179`, новее ломает `apiKeyHelper`. Обе строки выключают
+  остаться на `2.1.153`, новее ломает `apiKeyHelper`. Обе строки выключают
   авто-обновление. НЕ возвращай `autoUpdatesChannel: "latest"` — оно перетянет
   на свежую версию.
 

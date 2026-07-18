@@ -832,40 +832,381 @@ async function handleGrokBuild(req, res) {
     }
 }
 
+// Default CLI home (~/.grok) — сюда дашборд подставляет auth.json активного профиля.
+// Профили сессий: ~/.grok-<name>/auth.json (после device-auth).
+const GROK_DEFAULT_HOME = path.join(os.homedir(), '.grok');
+const GROK_ACTIVE_PTR = path.join(GROK_DEFAULT_HOME, 'dashboard-active-session.json');
+
+function grokSanitizeName(name) {
+  return String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+}
+
+function grokProfileHome(name) {
+  const safe = grokSanitizeName(name);
+  return safe ? path.join(os.homedir(), `.grok-${safe}`) : '';
+}
+
+function grokProfileAuthPath(name) {
+  const home = grokProfileHome(name);
+  return home ? path.join(home, 'auth.json') : '';
+}
+
+/** Первый entry из auth.json → identity (email, user_id, expires_at, …). */
+function parseGrokAuthIdentity(authObj) {
+  if (!authObj || typeof authObj !== 'object') return null;
+  const keys = Object.keys(authObj);
+  if (!keys.length) return null;
+  const entry = authObj[keys[0]] || {};
+  return {
+    email: entry.email || null,
+    userId: entry.user_id || null,
+    firstName: entry.first_name || null,
+    expiresAt: entry.expires_at || null,
+    hasRefresh: !!entry.refresh_token,
+    entryKey: keys[0],
+  };
+}
+
+function readGrokAuthFile(authPath) {
+  try {
+    if (!authPath || !fs.existsSync(authPath)) return null;
+    const stat = fs.statSync(authPath);
+    if (stat.size < 20) return null;
+    const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+    const identity = parseGrokAuthIdentity(auth);
+    if (!identity) return null;
+    return { auth, identity, mtime: stat.mtime.toISOString(), path: authPath };
+  } catch {
+    return null;
+  }
+}
+
+function getDefaultGrokActive() {
+  const def = readGrokAuthFile(path.join(GROK_DEFAULT_HOME, 'auth.json'));
+  let ptr = null;
+  try { ptr = JSON.parse(fs.readFileSync(GROK_ACTIVE_PTR, 'utf8')); } catch {}
+  // При helper-mode identity берём из профиля-pointer, если default auth ещё пуст/старый.
+  let ptrIdentity = null;
+  if (ptr?.name) {
+    const p = readGrokAuthFile(grokProfileAuthPath(ptr.name));
+    ptrIdentity = p?.identity || null;
+  }
+  const mode = ptr?.mode === 'helper' ? 'helper' : (ptr?.mode === 'copy' ? 'copy' : (ptr?.name ? 'copy' : null));
+  return {
+    name: ptr?.name || null,
+    mode,
+    activatedAt: ptr?.activatedAt || null,
+    email: def?.identity?.email || ptrIdentity?.email || ptr?.email || null,
+    userId: def?.identity?.userId || ptrIdentity?.userId || ptr?.userId || null,
+    firstName: def?.identity?.firstName || ptrIdentity?.firstName || null,
+    expiresAt: def?.identity?.expiresAt || ptrIdentity?.expiresAt || null,
+    hasAuth: !!def || !!ptrIdentity,
+    authMtime: def?.mtime || null,
+    helperConfigured: isGrokAuthProviderConfigured(),
+    helperPath: grokAuthHelperPath(),
+  };
+}
+
+/** Абсолютный путь к auth-helper.js (для config.toml). */
+function grokAuthHelperPath() {
+  return path.resolve(__dirname, '..', 'grok-launcher', 'auth-helper.js');
+}
+
+function isGrokAuthProviderConfigured() {
+  try {
+    const cfg = fs.readFileSync(path.join(GROK_DEFAULT_HOME, 'config.toml'), 'utf8');
+    const helper = grokAuthHelperPath().replace(/\\/g, '/');
+    const base = path.basename(helper);
+    return /auth_provider_command\s*=/.test(cfg) && (cfg.includes(base) || cfg.includes('auth-helper'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Прописать [auth] auth_provider_command в ~/.grok/config.toml (как apiKeyHelper у Claude).
+ * Не трогает остальные секции. Бэкап config.toml.bak-dashboard-auth.
+ */
+function ensureGrokAuthProviderInConfig() {
+  const configPath = path.join(GROK_DEFAULT_HOME, 'config.toml');
+  const helperJs = grokAuthHelperPath().replace(/\\/g, '/');
+  // Без вложенных кавычек (путь репы без пробелов) — проще для sh -c / TOML
+  const cmd = `node ${helperJs}`;
+  const label = 'Dashboard';
+
+  fs.mkdirSync(GROK_DEFAULT_HOME, { recursive: true });
+  let raw = '';
+  try { raw = fs.readFileSync(configPath, 'utf8'); } catch { raw = ''; }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  if (raw && !raw.includes('auth-helper')) {
+    try {
+      fs.copyFileSync(configPath, configPath + '.bak-dashboard-auth-' + stamp);
+    } catch (e) {
+      logLine(`grok helper config backup failed: ${e.message}`);
+    }
+  }
+
+  const authBlock =
+    `[auth]\n` +
+    `auth_provider_command = ${JSON.stringify(cmd)}\n` +
+    `auth_provider_label = ${JSON.stringify(label)}\n`;
+
+  if (/^\[auth\]/m.test(raw) || /\n\[auth\]/m.test(raw)) {
+    // Заменить/дополнить секцию [auth]
+    let replaced = false;
+    raw = raw.replace(/(\[auth\][^\[]*)/m, (section) => {
+      replaced = true;
+      let s = section;
+      if (/auth_provider_command\s*=/.test(s)) {
+        s = s.replace(/auth_provider_command\s*=\s*.+/m, `auth_provider_command = ${JSON.stringify(cmd)}`);
+      } else {
+        s = s.replace(/\[auth\]\s*\n?/, `[auth]\nauth_provider_command = ${JSON.stringify(cmd)}\n`);
+      }
+      if (/auth_provider_label\s*=/.test(s)) {
+        s = s.replace(/auth_provider_label\s*=\s*.+/m, `auth_provider_label = ${JSON.stringify(label)}`);
+      } else {
+        s = s.replace(
+          /auth_provider_command\s*=\s*.+/m,
+          (line) => `${line}\nauth_provider_label = ${JSON.stringify(label)}`
+        );
+      }
+      // секция должна заканчиваться переводом строки
+      if (!s.endsWith('\n')) s += '\n';
+      return s;
+    });
+    if (!replaced) raw = raw.trimEnd() + '\n\n' + authBlock;
+  } else {
+    raw = (raw ? raw.trimEnd() + '\n\n' : '') + authBlock;
+  }
+
+  fs.writeFileSync(configPath, raw.endsWith('\n') ? raw : raw + '\n', 'utf8');
+  logLine(`grok helper: config.toml auth_provider_command → ${cmd}`);
+  return { configPath, command: cmd, label };
+}
+
+/**
+ * mode:
+ *   'copy'   — как раньше: скопировать ~/.grok-<name>/auth.json → ~/.grok/auth.json
+ *   'helper' — pointer + auth_provider_command (аналог FreeModel apiKeyHelper);
+ *              auth.json бэкапится и убирается, чтобы grok заново взял токен у helper
+ */
+function activateGrokSession(name, opts = {}) {
+  const mode = opts.mode === 'helper' ? 'helper' : 'copy';
+  const safe = grokSanitizeName(name);
+  if (!safe) throw new Error('name required');
+  const src = grokProfileAuthPath(safe);
+  const dstDir = GROK_DEFAULT_HOME;
+  const dst = path.join(dstDir, 'auth.json');
+  if (!fs.existsSync(src)) {
+    throw new Error(`нет auth.json у профиля ${safe} — сначала device-auth (Open Terminal + Approve code)`);
+  }
+  const srcData = readGrokAuthFile(src);
+  if (!srcData) throw new Error(`auth.json профиля ${safe} пустой или битый`);
+
+  fs.mkdirSync(dstDir, { recursive: true });
+
+  const ptr = {
+    name: safe,
+    mode,
+    email: srcData.identity.email,
+    userId: srcData.identity.userId,
+    activatedAt: Date.now(),
+  };
+  fs.writeFileSync(GROK_ACTIVE_PTR, JSON.stringify(ptr, null, 2), 'utf8');
+
+  if (mode === 'copy') {
+    if (fs.existsSync(dst)) {
+      try {
+        fs.copyFileSync(dst, path.join(dstDir, 'auth.json.bak-dashboard'));
+      } catch (e) {
+        logLine(`grok activate(copy): backup failed: ${e.message}`);
+      }
+    }
+    fs.copyFileSync(src, dst);
+    logLine(`grok activate(copy): ${safe} → ${dst} (${srcData.identity.email || 'no-email'})`);
+    return {
+      ok: true,
+      mode: 'copy',
+      name: safe,
+      email: srcData.identity.email,
+      userId: srcData.identity.userId,
+      firstName: srcData.identity.firstName,
+      expiresAt: srcData.identity.expiresAt,
+      hasRefresh: srcData.identity.hasRefresh,
+      dst,
+      message: 'COPY: auth.json → ~/.grok. Перезапусти grok.',
+    };
+  }
+
+  // helper mode
+  const cfg = ensureGrokAuthProviderInConfig();
+  if (fs.existsSync(dst)) {
+    try {
+      fs.copyFileSync(dst, path.join(dstDir, 'auth.json.bak-dashboard-helper'));
+      fs.unlinkSync(dst);
+    } catch (e) {
+      logLine(`grok activate(helper): clear auth failed: ${e.message}`);
+    }
+  }
+  // lock-файл мешает иногда — не критично
+  try { fs.unlinkSync(path.join(dstDir, 'auth.json.lock')); } catch {}
+
+  logLine(`grok activate(helper): ${safe} ptr only · ${srcData.identity.email || 'no-email'}`);
+  return {
+    ok: true,
+    mode: 'helper',
+    name: safe,
+    email: srcData.identity.email,
+    userId: srcData.identity.userId,
+    firstName: srcData.identity.firstName,
+    expiresAt: srcData.identity.expiresAt,
+    hasRefresh: srcData.identity.hasRefresh,
+    ptr: GROK_ACTIVE_PTR,
+    helperCommand: cfg.command,
+    configPath: cfg.configPath,
+    message:
+      'HELPER: pointer + auth_provider_command. auth.json сброшен — перезапусти grok, он возьмёт токен у helper.',
+  };
+}
+
+/** weeklyUsedPct из meta; null если нет данных. */
+function grokMetaUsedPct(meta) {
+  const q = meta?.quota;
+  if (!q) return null;
+  if (typeof q.credits?.weeklyUsedPct === 'number') return q.credits.weeklyUsedPct;
+  const r = q.rateLimits;
+  if (r && r.totalQueries > 0) {
+    return ((r.totalQueries - r.remainingQueries) / r.totalQueries) * 100;
+  }
+  // квота есть, weekly ещё не заполнилось → считаем 0
+  if (q.plan || q.credits) return 0;
+  return null;
+}
+
+/**
+ * Выбрать профиль с максимальным остатком квоты среди authorized + не cooldown.
+ * Если bestOnlyWithQuota и у всех нет meta — ошибка с подсказкой refresh.
+ */
+function pickBestGrokSession(opts = {}) {
+  const grokDir = grokCookiesDir();
+  let files = [];
+  try {
+    files = fs.readdirSync(grokDir).filter(f => f.endsWith('.json') && !f.endsWith('.meta.json'));
+  } catch {
+    files = [];
+  }
+  const now = Date.now();
+  const candidates = [];
+  for (const f of files) {
+    const safe = f.replace(/\.json$/, '');
+    const authPath = grokProfileAuthPath(safe);
+    const authData = readGrokAuthFile(authPath);
+    if (!authData) continue;
+    let meta = {};
+    try {
+      meta = JSON.parse(fs.readFileSync(path.join(grokDir, `${safe}.meta.json`), 'utf8')) || {};
+    } catch {}
+    if (meta.cooldownUntil && Number(meta.cooldownUntil) > now) continue;
+    const used = grokMetaUsedPct(meta);
+    candidates.push({
+      name: safe,
+      used: used == null ? 50 : used, // без квоты — середина, не приоритет
+      usedKnown: used != null,
+      email: authData.identity.email,
+    });
+  }
+  if (!candidates.length) {
+    throw new Error('нет authorized профилей (нужен auth.json в ~/.grok-<name>)');
+  }
+  // Сначала с известной квотой и минимальным used; при равенстве — известная квота важнее.
+  candidates.sort((a, b) => {
+    if (a.usedKnown !== b.usedKnown) return a.usedKnown ? -1 : 1;
+    if (a.used !== b.used) return a.used - b.used;
+    return a.name.localeCompare(b.name);
+  });
+  const best = candidates[0];
+  if (opts.requireFree && best.used >= 99) {
+    throw new Error(`все authorized аккаунты на ~100% (лучший: ${best.name} · ${Math.round(best.used)}%)`);
+  }
+  return best;
+}
+
 function getGrokTerminalStatus(name) {
-  const safe = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
+  const safe = grokSanitizeName(name);
   if (!safe) return { status: 'error', message: 'invalid name' };
 
   // Map dashboard name (e.g. "1") to GROK_HOME profile dir .grok-1
-  const home = path.join(os.homedir(), `.grok-${safe}`);
+  const home = grokProfileHome(safe);
   const authFile = path.join(home, 'auth.json');
+  const active = getDefaultGrokActive();
 
   if (!fs.existsSync(authFile)) {
     return {
       status: 'not_authorized',
       message: 'Not authorized',
       home: home,
-      hasAuth: false
+      hasAuth: false,
+      isActive: false,
     };
   }
 
   try {
     const stat = fs.statSync(authFile);
     if (stat.size < 20) {
-      return { status: 'not_authorized', message: 'Empty auth', home, hasAuth: false };
+      return { status: 'not_authorized', message: 'Empty auth', home, hasAuth: false, isActive: false };
     }
     const auth = JSON.parse(fs.readFileSync(authFile, 'utf8'));
-    // Check for any token entry
-    const hasToken = Object.keys(auth || {}).length > 0;
+    const identity = parseGrokAuthIdentity(auth);
+    const hasToken = !!identity;
+    // Активный = pointer дашборда (helper/copy) или совпадение identity с ~/.grok/auth.json.
+    let isActive = false;
+    if (active.name === safe) {
+      isActive = true;
+    } else if (hasToken && active.hasAuth) {
+      if (active.userId && identity.userId && active.userId === identity.userId) isActive = true;
+      else if (active.email && identity.email && active.email === identity.email) isActive = true;
+    }
     return {
       status: hasToken ? 'authorized' : 'not_authorized',
       message: hasToken ? 'Authorized' : 'No token',
       home: home,
       hasAuth: hasToken,
-      lastModified: stat.mtime.toISOString()
+      lastModified: stat.mtime.toISOString(),
+      email: identity?.email || null,
+      userId: identity?.userId || null,
+      isActive,
     };
   } catch (e) {
-    return { status: 'error', message: e.message, home };
+    return { status: 'error', message: e.message, home, isActive: false };
+  }
+}
+
+async function handleGrokActivate(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    let name = body?.name;
+    let picked = null;
+    // mode: 'copy' (default) | 'helper'
+    const mode = body?.mode === 'helper' ? 'helper' : 'copy';
+    if (body?.best || name === 'best' || name === '__best__') {
+      picked = pickBestGrokSession({ requireFree: !!body?.requireFree });
+      name = picked.name;
+    }
+    if (!name) return jsonRes(res, 400, { error: 'name required (или best:true)' });
+    const result = activateGrokSession(name, { mode });
+    const active = getDefaultGrokActive();
+    jsonRes(res, 200, { ...result, picked, active });
+  } catch (e) {
+    jsonRes(res, 400, { error: e.message });
+  }
+}
+
+async function handleGrokActive(req, res) {
+  try {
+    jsonRes(res, 200, { active: getDefaultGrokActive() });
+  } catch (e) {
+    jsonRes(res, 500, { error: e.message });
   }
 }
 
@@ -1317,6 +1658,51 @@ async function handleFreemodelActivate(req, res) {
         jsonRes(res, 200, { ok: true, name, mode: helperMode ? 'helper' : 'direct', mask: apiKey.substring(0, 8) + '...' + apiKey.slice(-6), settingsUpdated: settingsOk });
     } catch (e) {
         jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// Доступные модели FreeModel: OpenAI-compat GET cc.freemodel.dev/v1/models
+// с активным ключом (fm-active-key.txt). Кеш 5 мин, как у Cun.
+const FM_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+async function handleFreemodelModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const force = url.searchParams.get('force') === '1';
+
+        if (FM_MODELS_CACHE.data && Date.now() - FM_MODELS_CACHE.ts < FM_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: FM_MODELS_CACHE.data, cached: true });
+        }
+
+        let apiKey = '';
+        try { apiKey = fs.readFileSync(FM_ACTIVE_KEY_FILE, 'utf-8').trim(); } catch {}
+        if (!apiKey) return jsonRes(res, 200, { ok: true, models: [], note: 'нет активного ключа (fm-active-key.txt)' });
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const resp = await fetch('https://cc.freemodel.dev/v1/models', {
+            signal: controller.signal,
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        clearTimeout(timeout);
+
+        if (!resp.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        FM_MODELS_CACHE.data = models;
+        FM_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (FM_MODELS_CACHE.data) {
+            jsonRes(res, 200, { ok: true, models: FM_MODELS_CACHE.data, cached: true, note: e.message });
+        } else {
+            jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        }
     }
 }
 
@@ -2822,6 +3208,14 @@ const server = http.createServer((req, res) => {
         return handleGrokStartAuth(req, res);
     }
 
+    // Подставить auth.json профиля в ~/.grok (default CLI) — после restart grok = этот аккаунт
+    if (req.method === 'POST' && req.url === '/__switch/api/grok/activate') {
+        return handleGrokActivate(req, res);
+    }
+    if (req.method === 'GET' && req.url === '/__switch/api/grok/active') {
+        return handleGrokActive(req, res);
+    }
+
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/grok/terminal-status')) {
         return handleGrokTerminalStatus(req, res);
     }
@@ -2860,6 +3254,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-key')      return handleFreemodelSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/extract-key')  return handleFreemodelExtractKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/activate')     return handleFreemodelActivate(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/freemodel/models')) return handleFreemodelModels(req, res);
 
     // ---- Aerolink (al) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/al/sessions')) return handleAlSessions(req, res);
@@ -3335,7 +3730,10 @@ const server = http.createServer((req, res) => {
         };
 
         if (req.method === 'GET' && req.url === '/__switch/api/grok/sessions') {
-            return jsonRes(res, 200, { sessions: listSessions() });
+            return jsonRes(res, 200, {
+                sessions: listSessions(),
+                active: getDefaultGrokActive(),
+            });
         }
 
         if (req.method === 'POST' && req.url === '/__switch/api/grok/sessions') {

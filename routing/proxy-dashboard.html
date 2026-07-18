@@ -1119,6 +1119,19 @@
               🌟 Активен
             </span>
           </div>
+          <!-- Доступные модели (cc.freemodel.dev/v1/models, ключ = активный) -->
+          <div class="relative mt-3 pt-3 border-t border-line-soft/60">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-[10px] uppercase tracking-wide text-faint">Доступные модели</span>
+              <span id="fm-models-count" class="text-[10px] text-faint font-mono">—</span>
+              <button onclick="loadFmModels(true)" title="Обновить список моделей"
+                      class="text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft rounded hover:border-line text-muted">↻</button>
+              <span class="text-[10px] text-faint ml-auto">клик = 📋 id · выбор — <code class="text-emerald">/model id</code> в Claude</span>
+            </div>
+            <div id="fm-models-list" class="flex flex-wrap gap-1.5">
+              <span class="text-[10px] text-faint">загрузка…</span>
+            </div>
+          </div>
         </div>
 
         <!-- Авто-ротация (API Helper, балансировка нагрузки) -->
@@ -3535,7 +3548,43 @@ async function loadActiveFmKey(skipRender) {
     // skipRender=true → вызывающий сам вызовет renderFreemodel сразу после.
     // Это убирает двойной ререндер при loadFreemodelSessions → loadActiveFmKey → render → render.
     if (!skipRender) renderFreemodel(false);
+    loadFmModels();
   } catch (e) { /* silent */ }
+}
+
+// ── FreeModel: доступные модели (cc.freemodel.dev/v1/models, активный ключ) ──
+let fmModelsLoading = false;
+async function loadFmModels(force) {
+  const listEl = $('fm-models-list'), cntEl = $('fm-models-count');
+  if (!listEl) return;
+  if (fmModelsLoading && !force) return;
+  // без force не перезагружаем чипы, если уже отрисованы (кеш на бэке 5 мин)
+  if (!force && state.fmModels?.length) return;
+  fmModelsLoading = true;
+  try {
+    const res = await fetch('/__switch/api/freemodel/models' + (force ? '?force=1' : ''));
+    const data = await res.json();
+    const models = data.models || [];
+    state.fmModels = models;
+    if (cntEl) cntEl.textContent = models.length ? String(models.length) : '—';
+    if (!models.length) {
+      listEl.innerHTML = `<span class="text-[10px] text-faint">${esc(data.note || 'пусто')}</span>`;
+      return;
+    }
+    listEl.innerHTML = models.map(m => {
+      const idJ = JSON.stringify(m.id);
+      return `<button onclick='fmCopyModel(${idJ})' title="Копировать /model ${esc(m.id)}"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-emerald/10 border-emerald/30 text-emerald hover:bg-emerald/20 transition">${esc(m.id)} <span class="opacity-50">📋</span></button>`;
+    }).join('');
+  } catch (e) {
+    listEl.innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
+  } finally { fmModelsLoading = false; }
+}
+async function fmCopyModel(id) {
+  try {
+    await navigator.clipboard.writeText('/model ' + id);
+    toast('📋 /model ' + id, 'success', 2500);
+  } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ ENERGY GAUGE (батарея «сколько осталось») ════════

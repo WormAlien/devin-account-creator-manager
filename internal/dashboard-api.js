@@ -240,9 +240,11 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
     // refresh — skip banned/error, всё остальное молотим. Юзер нажал кнопку —
     // значит хочет пересканировать (даже если только что скринил). Если нужен
     // «дешёвый» refresh — используй withQuotas:'cache' или отдельный endpoint.
+    // manual-аккаунты (имя+ключ, stub session.json) пропускаем — браузерной
+    // сессии нет, Playwright упрётся в логин-страницу.
     const eligible = sessions.filter(s => {
         const m = meta[s.name] || {};
-        return s.status === '✅' && !m.banned;
+        return s.status === '✅' && !m.banned && s.backend !== 'manual';
     });
     if (eligible.length === 0) return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
 
@@ -471,8 +473,16 @@ async function refreshOneFreemodelQuota(name) {
     const { getFreemodelSessions, checkFreemodelQuota } = freemodelMod();
     const session = getFreemodelSessions().find(s => s.name === name);
     if (!session) throw new Error(`session not found: ${name}`);
-    const q = await checkFreemodelQuota(session);
     const cache = loadFreemodelQuotaCache();
+    // manual-аккаунт: браузерной сессии нет, Playwright упрётся в логин.
+    // Ставим updatedAt, чтобы авто-ротация не считала кэш вечно протухшим
+    // и не дёргала этот no-op каждый тик.
+    if (session.backend === 'manual') {
+        cache[name] = { ...(cache[name] || {}), updatedAt: Date.now() };
+        saveFreemodelQuotaCache(cache);
+        return cache[name];
+    }
+    const q = await checkFreemodelQuota(session);
     if (q) {
         cache[name] = { ...mergeStickyFmQuota(cache[name] || {}, q), updatedAt: Date.now() };
         saveFreemodelQuotaCache(cache);

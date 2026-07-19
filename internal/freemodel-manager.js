@@ -61,7 +61,7 @@ function isFreemodelSession(itemPath) {
 
 // v3-формат: freemodel/accounts/<idx>_<ts>_ok_<ident>/{session.json, cookies.json, account_info.txt}
 function readV3AccountInfo(itemPath) {
-    const info = { email: '', invite: '', status: '', apiKey: '' };
+    const info = { email: '', invite: '', status: '', apiKey: '', backend: '' };
     const f = path.join(itemPath, 'account_info.txt');
     if (!fs.existsSync(f)) return info;
     try {
@@ -74,6 +74,7 @@ function readV3AccountInfo(itemPath) {
             else if (k.startsWith('invite code')) info.invite = v;
             else if (k === 'status') info.status = v;
             else if (k === 'api key') info.apiKey = v;
+            else if (k === 'backend') info.backend = v;
         }
     } catch {}
     return info;
@@ -86,6 +87,7 @@ function parseV3Account(item, itemPath) {
 
     const dtFull = item.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/);
     const okMark = /_ok_/.test(item) || /✅/.test(info.status);
+    const manual = /^manual$/i.test(info.backend) || item.startsWith('manual_');
 
     return {
         name: item,
@@ -94,7 +96,7 @@ function parseV3Account(item, itemPath) {
         email: info.email || '—',
         date: dtFull ? `${dtFull[1]} ${dtFull[2]}:${dtFull[3]}` : '—',
         status: okMark ? '✅' : '❌',
-        backend: 'v3',
+        backend: manual ? 'manual' : 'v3',
     };
 }
 

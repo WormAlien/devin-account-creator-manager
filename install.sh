@@ -160,6 +160,40 @@ else
   warn "без sqlite3 не будут работать: закидывание .session в TG-пул, вкладка OmniRoute"
 fi
 
+# ── 0.7 cat в системном PATH (критично для apiKeyHelper) ────────────────────
+# Claude Code запускает apiKeyHelper ("cat ~/.claude/xx-active-key.txt") через
+# системный шелл, НЕ через git-bash. Если Git ставился с дефолтной опцией PATH,
+# unix-тулзов (cat, sh) в системном PATH нет → helper молча отдаёт пустой ключ
+# → "Authentication failed" / вечные ретраи. Фикс: докинуть Git\usr\bin в КОНЕЦ
+# user-PATH (в конец — чтобы не перекрыть виндовые find/sort).
+step "0.7 cat для apiKeyHelper"
+if cmd //c "cat --version" >/dev/null 2>&1; then
+  ok "cat доступен из системного шелла"
+else
+  GIT_USR_BIN=""
+  for d in "/c/Program Files/Git/usr/bin" "/c/Program Files (x86)/Git/usr/bin"; do
+    [ -f "$d/cat.exe" ] && { GIT_USR_BIN="$d"; break; }
+  done
+  if [ -z "$GIT_USR_BIN" ] && have git; then
+    GIT_USR_BIN="$(dirname "$(command -v git)")/../usr/bin"
+    [ -f "$GIT_USR_BIN/cat.exe" ] || GIT_USR_BIN=""
+  fi
+  if [ -n "$GIT_USR_BIN" ]; then
+    WIN_PATH=$(cd "$GIT_USR_BIN" && pwd -W | sed 's|/|\\|g')
+    warn "cat не виден из cmd — Claude Code не сможет прочитать ключ через apiKeyHelper."
+    if ask "Добавить $WIN_PATH в конец user-PATH?" Y; then
+      powershell -NoProfile -Command \
+        "\$p=[Environment]::GetEnvironmentVariable('Path','User'); if(\$p -notlike '*Git\usr\bin*'){[Environment]::SetEnvironmentVariable('Path', \$p.TrimEnd(';')+';$WIN_PATH','User')}" \
+        && ok "добавлено в user-PATH: $WIN_PATH"
+      warn "PATH обновится в НОВЫХ процессах — перезапусти терминал и Claude Code после установки."
+    else
+      err "без cat в PATH режимы apihelper/aerolink/conduit работать НЕ будут (Authentication failed)"
+    fi
+  else
+    err "не нашёл Git\\usr\\bin с cat.exe — переустанови Git for Windows (git-scm.com)"
+  fi
+fi
+
 # ── 1. Node-зависимости ─────────────────────────────────────────────────────
 step "1. Node-зависимости (npm install)"
 npm install || { err "npm install упал"; exit 1; }
@@ -224,6 +258,22 @@ elif ask "Вписать $KEY_NAME API-ключ сейчас? (без него C
   else
     warn "ключ пустой — впиши позже через дашборд (вкладка ключей → Активировать)."
   fi
+fi
+
+# Статуслайн: [provider] provider/model + шкала остатка квоты (как в дашборде).
+# settings.json указывает на скрипт ПРЯМО в репо — обновления приезжают с git pull.
+if grep -q '"statusLine"' "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+  warn "statusLine уже настроен в settings.json — не трогаю."
+elif [ -f "$CLAUDE_DIR/settings.json" ] && ask "Подключить статуслайн Claude Code (провайдер/модель + квота)?" Y; then
+  REPO_W="$(pwd -W 2>/dev/null || pwd)"
+  node -e '
+    const fs = require("fs");
+    const [p, repo] = process.argv.slice(1);
+    const j = JSON.parse(fs.readFileSync(p, "utf8"));
+    const fwd = repo.split("\\").join("/");
+    j.statusLine = { type: "command", command: `bash "${fwd}/routing/statusline-autoreger.sh"` };
+    fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+  ' "$CLAUDE_DIR/settings.json" "$REPO_W" && ok "statusLine подключён (routing/statusline-autoreger.sh)"
 fi
 
 # ── 4. Локальные конфиги + секреты ──────────────────────────────────────────

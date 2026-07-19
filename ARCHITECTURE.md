@@ -82,7 +82,7 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |
-| **Плагины**   | активна   | вкл/выкл плагинов Claude Code (тоггл `enabledPlugins`), ★ рекомендованные | `/api/plugins/list`, `/api/settings/apply` |
+| **Плагины / MCP** | активна | слева плагины Claude Code (тоггл `enabledPlugins`, ★ рекомендованные), справа MCP-серверы из `~/.claude.json` | `/api/plugins/list`, `/api/settings/apply`, `/api/mcp/list`, `/api/mcp/toggle` |
 | **Настройки** | активна   | обновление дашборда, OmniRoute env, JSON-редактор `settings.json` + бэкапы, **тоггл статус-бара CC** и **автокомпакта** | `/api/settings/*`, `/api/env`, `/api/statusline/default`, `/api/dashboard/update-*` |
 | **TokenRouter** | архив («Чтим память») | аккаунты, usage, health   | `/api/tokenrouter/*` |
 | **Devin**     | архив     | сессии + квоты (daily/weekly %)     | `/api/session/*` |
@@ -241,7 +241,7 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
 зашит в код, пользовательские статусы working/dead в `*-trials.json`, gitignored).
 Реальные `*-keys.json` / `*-trials.json` — gitignored; закоммичены `*-keys.example.json`.
 
-## Плагины — вкл/выкл
+## Плагины / MCP — вкл/выкл
 
 `GET /api/plugins/list` отдаёт объединение установленных
 (`~/.claude/plugins/installed_plugins.json`) и включённых
@@ -250,6 +250,12 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
 константа `PLUGIN_RECO` в `proxy-dashboard.html`; кнопка «★ Включить
 рекомендованные» добавляет их, не трогая остальные. Установка новых из
 маркетплейса не реализована (нужен `claude plugin install`).
+
+MCP-серверы (правая колонка): `GET /api/mcp/list` читает `~/.claude.json` —
+глобальные `mcpServers` + проектные `projects[*].mcpServers`. У Claude Code нет
+флага «выключен», поэтому `POST /api/mcp/toggle` перекладывает конфиг сервера
+в стэш-ключ `_disabledMcpServers` (Claude Code его игнорирует) и обратно.
+Перед каждой записью — timestamped-бэкап `~/.claude.json.bak-*`.
 
 ---
 

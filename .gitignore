@@ -183,3 +183,12 @@ recordings/
 tools/tg-venv/
 tools/telegram-portable/
 tools/tg-profiles/
+
+# Grok сессии (живые куки + артефакты device-auth). Код (launcher.py и пр.) коммитим.
+grok-launcher/cookies/
+grok-launcher/xai_cookies.json
+grok-launcher/xai_after_grok.json
+grok-launcher/xai_device_auth.log
+grok-launcher/*_text.txt
+grok-launcher/probe*.out
+grok-launcher/probe_out.txt

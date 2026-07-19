@@ -143,6 +143,23 @@ else
   ok "credential.helper: $(git config --global credential.helper)"
 fi
 
+# ── 0.6 sqlite3.exe ─────────────────────────────────────────────────────────
+# Нужен дашборду (OmniRoute-вкладка) и парсеру .session для TG-пула
+# (freemodel/lib/tg-session-parser.js). Ищется в WinGet Links либо через
+# env SQLITE3. Без него закидывание .session падает невнятной ошибкой.
+step "0.6 sqlite3 (TG-пул + OmniRoute)"
+SQLITE_LINK="$LOCALAPPDATA/Microsoft/WinGet/Links/sqlite3.exe"
+if [ -n "${SQLITE3:-}" ] && [ -f "$SQLITE3" ]; then
+  ok "sqlite3: $SQLITE3 (env SQLITE3)"
+elif [ -f "$SQLITE_LINK" ]; then
+  ok "sqlite3: $SQLITE_LINK"
+elif have winget && ask "sqlite3.exe не найден — поставить через winget? (нужен TG-пулу)" Y; then
+  winget install -e --id SQLite.SQLite
+  [ -f "$SQLITE_LINK" ] && ok "sqlite3 установлен" || warn "sqlite3 не появился в $SQLITE_LINK — проверь winget и перезапусти git-bash"
+else
+  warn "без sqlite3 не будут работать: закидывание .session в TG-пул, вкладка OmniRoute"
+fi
+
 # ── 1. Node-зависимости ─────────────────────────────────────────────────────
 step "1. Node-зависимости (npm install)"
 npm install || { err "npm install упал"; exit 1; }

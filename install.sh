@@ -114,6 +114,35 @@ if [ -n "$MISSING" ]; then
   fi
 fi
 
+# ── 0.5 Git: identity + вход в GitHub ───────────────────────────────────────
+# Без user.name/user.email git pull с merge-коммитом падает («Committer identity
+# unknown»). Настраиваем интерактивно, дефолты — из имени пользователя Windows.
+step "0.5 Git identity + GitHub"
+GIT_NAME=$(git config --global user.name 2>/dev/null || true)
+GIT_EMAIL=$(git config --global user.email 2>/dev/null || true)
+if [ -n "$GIT_NAME" ] && [ -n "$GIT_EMAIL" ]; then
+  ok "git user: $GIT_NAME <$GIT_EMAIL>"
+else
+  warn "git identity не настроен — git pull/commit будут падать"
+  WINUSER="${USERNAME:-$(whoami 2>/dev/null | sed 's/.*\\\\//')}"
+  GIT_NAME=$(prompt "  Имя для git" "${GIT_NAME:-$WINUSER}")
+  GIT_EMAIL=$(prompt "  Email для git (любой)" "${GIT_EMAIL:-${WINUSER}@local}")
+  git config --global user.name "$GIT_NAME"
+  git config --global user.email "$GIT_EMAIL"
+  ok "git user: $GIT_NAME <$GIT_EMAIL>"
+fi
+# pull = merge (без вопросов про rebase на каждом pull)
+git config --global pull.rebase false 2>/dev/null || true
+# Логин в GitHub: Git Credential Manager (идёт в комплекте Git for Windows)
+# сам откроет браузер с OAuth-логином при первом обращении, ничего вводить
+# руками не нужно. Просто убеждаемся, что helper включён.
+if ! git config --global credential.helper >/dev/null 2>&1; then
+  git config --global credential.helper manager
+  ok "credential.helper=manager — при первом push/private-pull откроется браузер с логином GitHub"
+else
+  ok "credential.helper: $(git config --global credential.helper)"
+fi
+
 # ── 1. Node-зависимости ─────────────────────────────────────────────────────
 step "1. Node-зависимости (npm install)"
 npm install || { err "npm install упал"; exit 1; }

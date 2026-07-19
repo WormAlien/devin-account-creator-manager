@@ -187,40 +187,51 @@ async function checkFreemodelQuota(session) {
                 { timeout: 12000 }
             ).catch(() => {});
             await page.waitForTimeout(700);
+            // Race "Free→Pro": /dashboard сперва рендерит закешированный Free
+            // (и VIP-unlock виджет), а через 1-3с подтягивает реальный план и
+            // перерисовывает. Снимок в этот момент = неверный план залетает в
+            // кеш. Ждём стабилизации: два последовательных чтения (план под
+            // "CURRENT PLAN" + наличие VIP-виджета) должны совпасть, макс ~8с.
+            try {
+                let prevSig = null;
+                for (let i = 0; i < 7; i++) {
+                    const sig = await page.evaluate(() => {
+                        const t = (document.body?.innerText || '').replace(/\r/g, '');
+                        const ls = t.split('\n').map(s => s.trim()).filter(Boolean);
+                        const idx = ls.findIndex(l => /^(CURRENT\s+PLAN|ТЕКУЩИЙ\s+ТАРИФ)$/i.test(l));
+                        const plan = idx >= 0 ? (ls[idx + 1] || '') : '';
+                        const vip = /unlock VIP|Разблокируйте VIP|VIP-Route freischalten/i.test(t);
+                        return plan + '|' + vip;
+                    });
+                    if (prevSig !== null && sig === prevSig) break;
+                    prevSig = sig;
+                    await page.waitForTimeout(1200);
+                }
+            } catch {}
         const homeText = await page.evaluate(() => (document.body?.innerText || '').replace(/\r/g, ''));
         const lines = homeText.split('\n').map(s => s.trim()).filter(Boolean);
         // Известные названия — всё остальное (плейсхолдер "—", "…", "Loading")
         // игнорируем, чтобы не залетало в кеш и не показывалось потом чипом-прочерком.
         const KNOWN_PLAN = /^(Free|Pro|Max|Team|Enterprise|Ultimate|Plus|Business|Trial|Beta)$/i;
-        // САНITY: у Free-акков всегда есть блок "Complete these steps to unlock
-        // VIP route access" / "Verify phone number" / "Make your first top-up".
-        // У Pro-акков этого блока нет вообще. Freemodel периодически (race?) отдаёт
-        // на /dashboard "CURRENT PLAN Pro" даже для Free-акков — не доверяем
-        // заголовку, если ниже стоит VIP-unlock виджет.
-        const HAS_VIP_UNLOCK =
-            /Complete these steps to unlock VIP|unlock VIP route|Verify phone number.*Make your first top-up|Разблокируйте VIP|Подтвердите номер телефона.*Сделайте первое пополнение|VIP-Route freischalten/is.test(homeText);
         // Ищем строку-заголовок "CURRENT PLAN" / "ТЕКУЩИЙ ТАРИФ" — под ней стоит
         // название плана. Это самый надёжный сигнал, локализация не помеха.
+        // ВАЖНО: виджет "unlock VIP route access" НЕ признак Free — он висит и на
+        // Pro-акках, пока не верифицирован телефон / нет топ-апа $30 (проверено
+        // живым пробником 2026-07-19: Pro-акк, VIP-виджет присутствует все 10с).
+        // Прежний sanity «VIP-виджет ⇒ Free» насильно даунгрейдил Pro → Free.
         const planIdx = lines.findIndex(l => /^(CURRENT\s+PLAN|ТЕКУЩИЙ\s+ТАРИФ)$/i.test(l));
         if (planIdx >= 0 && lines[planIdx + 1] && KNOWN_PLAN.test(lines[planIdx + 1].trim())) {
-            const headerPlan = lines[planIdx + 1].trim();
-            // Если заголовок говорит Pro, но виден VIP-unlock — это Free (баг freemodel).
-            if (HAS_VIP_UNLOCK && /^Pro$/i.test(headerPlan)) {
-                planInfo.plan = 'Free';
-            } else {
-                planInfo.plan = headerPlan;
-            }
-        } else if (HAS_VIP_UNLOCK) {
-            planInfo.plan = 'Free';
+            planInfo.plan = lines[planIdx + 1].trim();
         }
         // Fallback: маркеры upgrade-CTA. Критично не путать «Pro plan» (это подпись
         // в CTA-блоке, показывается ВСЕМ включая Free-акки) с реальным индикатором.
-        // Free-маркеры проверяем первыми — у Pro такого CTA нет.
+        // «Upgrade plan» — тоже НЕ Free-маркер: это shortcut, висит и на Pro
+        // (пробник 2026-07-19). Pro-маркеры проверяем первыми — они однозначные.
         if (!planInfo.plan) {
-            const freeMarkers = /Upgrade to Pro|Upgrade\s+plan|Get\s+Pro|You'?re on Free|Free plan\b|Улучшить\s+→|Улучшить тариф|Обновить до Pro/i;
+            const freeMarkers = /Upgrade to Pro|Get\s+Pro|You'?re on Free|Free plan\b|Улучшить тариф|Обновить до Pro/i;
             const proMarkers  = /Manage subscription|Cancel subscription|You'?re on Pro|Pro member|Управлять подпиской|Отменить подписку/i;
-            if (freeMarkers.test(homeText)) planInfo.plan = 'Free';
-            else if (proMarkers.test(homeText)) planInfo.plan = 'Pro';
+            if (proMarkers.test(homeText)) planInfo.plan = 'Pro';
+            else if (freeMarkers.test(homeText)) planInfo.plan = 'Free';
         }
         // DOM-бэйдж fallback — тоже опасен: короткий текст "Pro" может быть где
         // угодно (в CTA-кнопке, sidebar-упоминании). Требуем чтобы это был именно

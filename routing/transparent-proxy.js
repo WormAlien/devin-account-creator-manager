@@ -146,6 +146,15 @@ function writeSettings(obj) {
     logLine(`settings.json written, backup at ${path.basename(bakPath)}`);
 }
 
+// apiKeyHelper-команда для key-файла. НЕ "cat ~/...": Claude Code запускает
+// helper через системный шелл, где может не быть cat в PATH, HOME для ~,
+// а кириллица в имени юзера ломает путь. node есть у всех (без него дашборд
+// не работает), os.homedir() отдаёт путь в юникоде, .trim() режет CRLF.
+function keyHelperCmd(keyFile) {
+    return 'node -e "process.stdout.write(require(\'fs\').readFileSync('
+        + 'require(\'os\').homedir()+\'/.claude/' + keyFile + '\',\'utf8\').trim())"';
+}
+
 // Figure out which backend/config matches the URL/key currently in settings.json.
 // apiKeyHelper → ApiHelper (FreeModel direct), direct API key → backend by URL.
 function currentTarget() {
@@ -489,7 +498,7 @@ function fmEnsureHelperMode() {
         const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
         const raw = fs.readFileSync(settingsFile, 'utf-8');
         const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
-        const want = 'cat ~/.claude/fm-active-key.txt';
+        const want = keyHelperCmd('fm-active-key.txt');
         const already = settings.apiKeyHelper === want
             && settings.env?.ANTHROPIC_BASE_URL === 'https://cc.freemodel.dev'
             && !settings.env?.ANTHROPIC_API_KEY;
@@ -1691,7 +1700,7 @@ async function handleFreemodelActivate(req, res) {
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute не работает на FreeModel)
             clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги, иначе перебьют freemodel
             if (helperMode) {
-                settings.apiKeyHelper = 'cat ~/.claude/fm-active-key.txt';
+                settings.apiKeyHelper = keyHelperCmd('fm-active-key.txt');
                 settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
                 delete settings.env.ANTHROPIC_API_KEY;   // helper drives auth; direct key would shadow it
             } else {
@@ -1906,7 +1915,7 @@ async function handleAlActivate(req, res) {
             makeSettingsBackup('settings-al');
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = AL_BASE_URL + '/';
-            settings.apiKeyHelper = 'cat ~/.claude/al-active-key.txt';
+            settings.apiKeyHelper = keyHelperCmd('al-active-key.txt');
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
@@ -2010,7 +2019,7 @@ async function handleEvActivate(req, res) {
             makeSettingsBackup('settings-ev');
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = EV_BASE_URL;
-            settings.apiKeyHelper = 'cat ~/.claude/ev-active-key.txt';
+            settings.apiKeyHelper = keyHelperCmd('ev-active-key.txt');
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
@@ -2741,7 +2750,7 @@ async function handleOmActivate(req, res) {
             makeSettingsBackup('settings-om');
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = OM_BASE_URL;
-            settings.apiKeyHelper = 'cat ~/.claude/om-active-key.txt';
+            settings.apiKeyHelper = keyHelperCmd('om-active-key.txt');
             delete settings.model;
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;
@@ -2999,7 +3008,7 @@ async function handleConduitActivate(req, res) {
             makeSettingsBackup('settings-cdt');
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = CDT_BASE_URL;
-            settings.apiKeyHelper = 'cat ~/.claude/cdt-active-key.txt';
+            settings.apiKeyHelper = keyHelperCmd('cdt-active-key.txt');
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией

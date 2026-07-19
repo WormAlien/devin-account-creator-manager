@@ -146,6 +146,20 @@ function writeSettings(obj) {
     logLine(`settings.json written, backup at ${path.basename(bakPath)}`);
 }
 
+// ~/.claude.json — здесь живут MCP-серверы (mcpServers global + projects[*].mcpServers).
+const CLAUDE_JSON_FILE = path.join(os.homedir(), '.claude.json');
+function readClaudeJson() {
+    const raw = fs.readFileSync(CLAUDE_JSON_FILE, 'utf8');
+    return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+}
+function writeClaudeJson(obj) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const bakPath = CLAUDE_JSON_FILE + '.bak-' + stamp;
+    fs.copyFileSync(CLAUDE_JSON_FILE, bakPath);
+    fs.writeFileSync(CLAUDE_JSON_FILE, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+    logLine(`.claude.json written, backup at ${path.basename(bakPath)}`);
+}
+
 // apiKeyHelper-команда для key-файла. НЕ "cat ~/...": Claude Code запускает
 // helper через системный шелл, где может не быть cat в PATH, HOME для ~,
 // а кириллица в имени юзера ломает путь. node есть у всех (без него дашборд
@@ -3123,6 +3137,13 @@ const server = http.createServer((req, res) => {
         return handleSettingsApply(req, res);
     }
 
+    // Дефолтная команда statusline для тоггла в дашборде — абсолютный путь
+    // до statusline-autoreger.sh на ЭТОЙ машине (у друга диск/папка другие).
+    if (req.method === 'GET' && req.url === '/__switch/api/statusline/default') {
+        const sl = path.join(__dirname, 'statusline-autoreger.sh').replace(/\\/g, '/');
+        return jsonRes(res, 200, { statusLine: { type: 'command', command: `bash "${sl}"` } });
+    }
+
     // Полная перезапись settings.json (ручной JSON-редактор). Бэкап перед записью.
     if (req.method === 'POST' && req.url === '/__switch/api/settings/save') {
         (async () => {
@@ -3136,6 +3157,58 @@ const server = http.createServer((req, res) => {
                 logLine(`settings.json saved manually (prev → ${bak})`);
                 return jsonRes(res, 200, { ok: true, previous: bak, current: currentTarget() });
             } catch (e) { return jsonRes(res, 400, { error: e.message }); }
+        })();
+        return;
+    }
+
+    // MCP-серверы Claude Code из ~/.claude.json: глобальные (mcpServers) +
+    // проектные (projects[*].mcpServers). У Claude Code нет флага "выключен" —
+    // тоггл перекладывает конфиг в наш стэш-ключ _disabledMcpServers (Claude
+    // Code его игнорирует) и обратно. Бэкап ~/.claude.json перед каждой записью.
+    if (req.method === 'GET' && req.url === '/__switch/api/mcp/list') {
+        try {
+            const cj = readClaudeJson();
+            const servers = [];
+            const push = (scope, obj, enabled) => {
+                for (const [name, cfg] of Object.entries(obj || {})) {
+                    servers.push({
+                        name, scope, enabled,
+                        type: cfg.type || 'stdio',
+                        command: cfg.url || [cfg.command, ...(cfg.args || [])].filter(Boolean).join(' '),
+                    });
+                }
+            };
+            push('global', cj.mcpServers, true);
+            push('global', cj._disabledMcpServers, false);
+            for (const [proj, pv] of Object.entries(cj.projects || {})) {
+                push(proj, pv.mcpServers, true);
+                push(proj, pv._disabledMcpServers, false);
+            }
+            servers.sort((a, b) => (a.scope + a.name).localeCompare(b.scope + b.name));
+            return jsonRes(res, 200, { file: CLAUDE_JSON_FILE, servers });
+        } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/mcp/toggle') {
+        (async () => {
+            try {
+                const { name, scope, enable } = await readJsonBody(req);
+                if (!name || !scope) return jsonRes(res, 400, { error: 'name и scope обязательны' });
+                const cj = readClaudeJson();
+                const holder = scope === 'global' ? cj : (cj.projects || {})[scope];
+                if (!holder) return jsonRes(res, 404, { error: `scope не найден: ${scope}` });
+                const from = enable ? '_disabledMcpServers' : 'mcpServers';
+                const to = enable ? 'mcpServers' : '_disabledMcpServers';
+                if (!holder[from] || !(name in holder[from])) {
+                    return jsonRes(res, 404, { error: `${name} не найден в ${from}` });
+                }
+                holder[to] = holder[to] || {};
+                holder[to][name] = holder[from][name];
+                delete holder[from][name];
+                if (!Object.keys(holder[from]).length && from === '_disabledMcpServers') delete holder[from];
+                writeClaudeJson(cj);
+                logLine(`mcp ${enable ? 'enabled' : 'disabled'}: ${name} (${scope})`);
+                return jsonRes(res, 200, { ok: true });
+            } catch (e) { return jsonRes(res, 500, { error: e.message }); }
         })();
         return;
     }

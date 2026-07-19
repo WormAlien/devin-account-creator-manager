@@ -233,7 +233,7 @@
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="plugins">
         <span class="text-base">🧩</span>
-        <span class="flex-1">Плагины</span>
+        <span class="flex-1">Плагины / MCP</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-plugins">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="settings">
@@ -369,23 +369,49 @@
     </div>
 
     <!-- ═════════ TAB: SETTINGS ═════════ -->
-    <!-- ═════════ TAB: PLUGINS ═════════ -->
+    <!-- ═════════ TAB: PLUGINS / MCP ═════════ -->
     <div data-tab-content="plugins">
-      <div class="max-w-2xl mx-auto px-6 py-8 space-y-6">
-        <header class="flex items-center justify-between gap-3">
-          <div>
-            <h1 class="text-2xl font-semibold tracking-tight">Плагины</h1>
-            <p class="text-sm text-muted mt-1">Вкл/выкл плагинов Claude Code. Пишет в <code class="font-mono text-emerald text-xs">enabledPlugins</code> внутри <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>. ★ — рекомендую. Перезапусти Claude Code после изменений.</p>
-          </div>
-          <div class="shrink-0 flex gap-2">
-            <button onclick="applyRecommended()" class="px-3 py-2 bg-amber-400/15 border border-amber-400/40 text-amber-300 text-sm rounded-lg hover:bg-amber-400/25 transition">★ Включить рекомендованные</button>
-            <button onclick="loadPlugins()" class="px-3 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔄</button>
-          </div>
+      <div class="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        <header>
+          <h1 class="text-2xl font-semibold tracking-tight">Плагины / MCP-серверы</h1>
+          <p class="text-sm text-muted mt-1">Плагины пишут в <code class="font-mono text-emerald text-xs">enabledPlugins</code> (<code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>), MCP — в <code class="font-mono text-emerald text-xs">~/.claude.json</code>. Перезапусти Claude Code после изменений.</p>
         </header>
-        <div class="rounded-xl bg-surface border border-line-soft p-3">
-          <div id="plugins-list" class="divide-y divide-line-soft/40">
-            <div class="text-xs text-faint py-3 px-2">—</div>
-          </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <!-- Плагины -->
+          <section class="rounded-xl bg-surface border border-line-soft">
+            <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-line-soft">
+              <div class="flex items-center gap-2">
+                <span>🧩</span>
+                <h2 class="text-sm font-semibold">Плагины</h2>
+                <span class="text-[10px] font-mono text-faint" id="plugins-count"></span>
+              </div>
+              <div class="shrink-0 flex gap-2">
+                <button onclick="applyRecommended()" class="px-2.5 py-1.5 bg-amber-400/15 border border-amber-400/40 text-amber-300 text-xs rounded-lg hover:bg-amber-400/25 transition" title="Включить рекомендованные">★ рекоменд.</button>
+                <button onclick="loadPlugins()" class="px-2.5 py-1.5 bg-elevated border border-line-soft text-xs rounded-lg hover:border-emerald/60 transition">🔄</button>
+              </div>
+            </div>
+            <div class="p-3">
+              <div id="plugins-list" class="divide-y divide-line-soft/40">
+                <div class="text-xs text-faint py-3 px-2">—</div>
+              </div>
+            </div>
+          </section>
+          <!-- MCP-серверы -->
+          <section class="rounded-xl bg-surface border border-line-soft">
+            <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-line-soft">
+              <div class="flex items-center gap-2">
+                <span>🔌</span>
+                <h2 class="text-sm font-semibold">MCP-серверы</h2>
+                <span class="text-[10px] font-mono text-faint" id="mcp-count"></span>
+              </div>
+              <button onclick="loadMcp()" class="shrink-0 px-2.5 py-1.5 bg-elevated border border-line-soft text-xs rounded-lg hover:border-emerald/60 transition">🔄</button>
+            </div>
+            <div class="p-3">
+              <div id="mcp-list" class="divide-y divide-line-soft/40">
+                <div class="text-xs text-faint py-3 px-2">—</div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -410,6 +436,24 @@
             <button id="dash-update-btn" onclick="pullDashboardUpdate()" disabled
               class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">⬇ Обновить дашборд</button>
           </div>
+        </div>
+
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-sm font-semibold">Статус-бар Claude Code</h2>
+              <p class="text-xs text-muted mt-0.5">Строка внизу CC: <span class="font-mono text-emerald text-xs">[провайдер] модель · квота · контекст</span>. Скрипт — <code class="font-mono text-emerald text-xs">routing/statusline-autoreger.sh</code>, реальные окна контекста моделей зашиты в нём (проба — <code class="font-mono text-emerald text-xs">routing/ctx-probe.sh</code>). Применяется со следующего сообщения в сессии.</p>
+            </div>
+            <button id="sl-toggle-btn" onclick="toggleStatusline()" class="shrink-0 px-3 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">—</button>
+          </div>
+          <div class="flex items-center justify-between gap-3 pt-3 border-t border-line-soft/40">
+            <div>
+              <h2 class="text-sm font-semibold">Автокомпакт CC</h2>
+              <p class="text-xs text-muted mt-0.5">CC сам сжимает историю при ~78% <em>своего</em> представления об окне (200k для opus без <code class="font-mono text-xs">[1m]</code>) — на 1M-бэкендах срабатывает сильно рано. Выключено = компактишь вручную <code class="font-mono text-emerald text-xs">/compact</code>, ориентируясь на шкалу ⧉ в статус-баре.</p>
+            </div>
+            <button id="ac-toggle-btn" onclick="toggleAutocompact()" class="shrink-0 px-3 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">—</button>
+          </div>
+          <div id="sl-msg" class="text-xs text-emerald hidden"></div>
         </div>
 
         <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
@@ -1513,7 +1557,7 @@ function showTab(name) {
     loadTrUsageCache();
   }
   if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); }
-  if (name === 'plugins') { loadPlugins(); }
+  if (name === 'plugins') { loadPlugins(); loadMcp(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -5839,6 +5883,7 @@ async function loadPlugins() {
     _plugins = d.plugins;
     const on = _plugins.filter(p => p.enabled).length;
     $('nav-count-plugins').textContent = on + '/' + _plugins.length;
+    $('plugins-count').textContent = on + '/' + _plugins.length;
     box.innerHTML = _plugins.map(p => {
       const short = p.id.split('@')[0];
       const reco = PLUGIN_RECO.has(short);
@@ -5891,6 +5936,52 @@ async function togglePlugin(id, enable) {
   } catch (e) { toast('Plugin: ' + e.message, 'error'); }
 }
 
+// ═══════════════════ MCP SERVERS (правая колонка) ══════════════════════
+// Читает ~/.claude.json через /api/mcp/list. Тоггл перекладывает конфиг
+// между mcpServers ↔ _disabledMcpServers (см. transparent-proxy.js).
+async function loadMcp() {
+  const box = $('mcp-list');
+  box.innerHTML = '<div class="text-xs text-faint py-3 px-2">загрузка…</div>';
+  try {
+    const res = await fetch('/__switch/api/mcp/list');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    const servers = d.servers;
+    const on = servers.filter(s => s.enabled).length;
+    $('mcp-count').textContent = on + '/' + servers.length;
+    if (!servers.length) { box.innerHTML = '<div class="text-xs text-faint py-3 px-2">MCP-серверов не найдено</div>'; return; }
+    box.innerHTML = servers.map(s => {
+      const scopeLabel = s.scope === 'global' ? 'глобальный' : s.scope.split(/[\\/]/).pop();
+      return `<div class="flex items-center gap-3 py-2.5 px-2">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium truncate">${s.name}
+            <span class="ml-1 text-[9px] font-mono px-1.5 py-0.5 rounded ${s.scope === 'global' ? 'bg-violet/15 text-violet' : 'bg-sky-400/15 text-sky-300'}" title="${s.scope}">${scopeLabel}</span>
+          </div>
+          <div class="text-[10px] text-faint font-mono truncate" title="${s.command.replace(/"/g, '&quot;')}">${s.type} · ${s.command}</div>
+        </div>
+        <button onclick="toggleMcp('${s.name}', '${s.scope.replace(/\\/g, '\\\\')}', ${!s.enabled})"
+          class="shrink-0 px-3 py-1 rounded-md text-xs font-medium border transition ${s.enabled
+            ? 'bg-emerald/15 border-emerald/40 text-emerald hover:bg-emerald/25'
+            : 'bg-elevated border-line-soft text-dim hover:text-ink'}">
+          ${s.enabled ? '● ВКЛ' : 'выкл'}</button>
+      </div>`;
+    }).join('');
+  } catch (e) { box.innerHTML = `<div class="text-xs text-crimson py-3 px-2">✗ ${e.message}</div>`; }
+}
+
+async function toggleMcp(name, scope, enable) {
+  try {
+    const res = await fetch('/__switch/api/mcp/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, scope, enable }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast(`${enable ? '✓ включён' : '✗ выключен'} MCP ${name} — перезапусти Claude Code`, 'success', 5000);
+    loadMcp();
+  } catch (e) { toast('MCP: ' + e.message, 'error'); }
+}
+
 // ═══════════════════ SETTINGS TAB ═════════════════════════════════════
 async function checkDashboardUpdate() {
   const badge = $('dash-update-badge'), btn = $('dash-update-btn');
@@ -5940,7 +6031,61 @@ async function loadSettingsJson() {
     ta.value = JSON.stringify(d.settings, null, 2);
     $('settings-cur-target').textContent = LABELS[state.current] || state.current || '—';
     st.textContent = 'загружено'; st.className = 'shrink-0 text-xs text-faint';
+    renderStatuslineToggles(d.settings);
   } catch (e) { st.textContent = '✗ ' + e.message; st.className = 'shrink-0 text-xs text-crimson'; }
+}
+
+// ── Статус-бар CC + автокомпакт: тумблеры поверх settings.json ──────────────
+function renderStatuslineToggles(s) {
+  const slOn = !!(s.statusLine && s.statusLine.command);
+  const acOn = s.autoCompactEnabled !== false;  // отсутствие ключа = включён
+  const sl = $('sl-toggle-btn'), ac = $('ac-toggle-btn');
+  if (sl) {
+    sl.textContent = slOn ? '🟢 Включён' : '⚫ Выключен';
+    sl.dataset.on = slOn ? '1' : '0';
+  }
+  if (ac) {
+    ac.textContent = acOn ? '🟢 Включён' : '⚫ Выключен';
+    ac.dataset.on = acOn ? '1' : '0';
+  }
+}
+
+async function applySettingsPatch(patch, okMsg) {
+  const msg = $('sl-msg');
+  const res = await fetch('/__switch/api/settings/apply', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings: patch })
+  });
+  const d = await res.json();
+  if (!res.ok) throw new Error(d.error || 'fail');
+  if (msg) { msg.textContent = okMsg; msg.classList.remove('hidden'); setTimeout(() => msg.classList.add('hidden'), 4000); }
+  loadSettingsJson();  // перечитать редактор + тумблеры
+}
+
+async function toggleStatusline() {
+  try {
+    const on = $('sl-toggle-btn')?.dataset.on === '1';
+    if (on) {
+      await applySettingsPatch({ statusLine: null }, '⚫ Статус-бар выключен (перезапусти сессию CC)');
+      toast('⚫ Статус-бар выключен', 'info');
+    } else {
+      const res = await fetch('/__switch/api/statusline/default');
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'fail');
+      await applySettingsPatch({ statusLine: d.statusLine }, '🟢 Статус-бар включён (применится со следующего сообщения)');
+      toast('🟢 Статус-бар включён', 'success');
+    }
+  } catch (e) { toast('Статус-бар: ' + e.message, 'error'); }
+}
+
+async function toggleAutocompact() {
+  try {
+    const on = $('ac-toggle-btn')?.dataset.on === '1';
+    // выкл = явный false; вкл = убрать ключ (дефолт CC — включён)
+    await applySettingsPatch({ autoCompactEnabled: on ? false : null },
+      on ? '⚫ Автокомпакт выключен — /compact вручную' : '🟢 Автокомпакт включён (дефолт CC)');
+    toast(on ? '⚫ Автокомпакт выключен' : '🟢 Автокомпакт включён', on ? 'info' : 'success');
+  } catch (e) { toast('Автокомпакт: ' + e.message, 'error'); }
 }
 
 // Кнопка «Сбросить»: заливает в редактор ЧИСТЫЙ рабочий шаблон (активный ключ/URL

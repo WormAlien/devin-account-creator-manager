@@ -1087,8 +1087,19 @@
               <button onclick="launchFreemodelCreate()"
                       class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Создать v3</button>
             </div>
+            <button onclick="fmToggleManualAdd()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line" title="Добавить аккаунт вручную: имя + API-ключ (без браузерной сессии)">➕ Вручную</button>
           </div>
         </header>
+
+        <!-- Manual add form (hidden by default) -->
+        <div id="freemodel-manual-add" class="hidden rounded-xl bg-elevated/30 border border-line-soft p-4 space-y-3">
+          <div class="text-xs font-medium text-muted">Добавить аккаунт вручную — имя + API-ключ. TG сразу пометится «вручную», квоты не парсятся (нет браузерной сессии).</div>
+          <div class="flex gap-2 flex-wrap">
+            <input id="fm-manual-name" placeholder="имя / email" class="flex-1 min-w-[160px] text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-amber/60">
+            <input id="fm-manual-key" placeholder="fe_... или sk-..." class="flex-[2] min-w-[260px] text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-amber/60">
+            <button onclick="addFreemodelManual()" class="text-xs px-4 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Добавить</button>
+          </div>
+        </div>
 
         <!-- Quick jump pills -->
         <div class="flex items-center gap-2 flex-wrap text-[11px]">
@@ -1119,7 +1130,24 @@
               🌟 Активен
             </span>
           </div>
-          <!-- Доступные модели (cc.freemodel.dev/v1/models, ключ = активный) -->
+          <!-- Переключатель провайдера: Anthropic (claude, напрямую) ↔ OpenAI (gpt, прокси :20130) -->
+          <div class="relative mt-3 pt-3 border-t border-line-soft/60">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-[10px] uppercase tracking-wide text-faint">Провайдер моделей</span>
+              <span id="fm-provider-hint" class="text-[10px] text-faint ml-auto">переключение = перезапуск Claude Code</span>
+            </div>
+            <div class="inline-flex rounded-lg border border-line-soft overflow-hidden text-xs font-medium">
+              <button id="fm-provider-anthropic" onclick="fmSetProvider('anthropic')"
+                      class="px-3 py-2 transition flex items-center gap-1.5">
+                🟣 Anthropic <span class="opacity-60 font-mono text-[10px]">claude · напрямую</span>
+              </button>
+              <button id="fm-provider-openai" onclick="fmSetProvider('openai')"
+                      class="px-3 py-2 transition flex items-center gap-1.5 border-l border-line-soft">
+                🤖 OpenAI <span class="opacity-60 font-mono text-[10px]">gpt · прокси :20130</span>
+              </button>
+            </div>
+          </div>
+          <!-- Доступные модели: claude (cc.freemodel.dev) + gpt (api.freemodel.dev), ключ = активный -->
           <div class="relative mt-3 pt-3 border-t border-line-soft/60">
             <div class="flex items-center gap-2 mb-2">
               <span class="text-[10px] uppercase tracking-wide text-faint">Доступные модели</span>
@@ -1128,7 +1156,7 @@
                       class="text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft rounded hover:border-line text-muted">↻</button>
               <span class="text-[10px] text-faint ml-auto">клик = 📋 id · выбор — <code class="text-emerald">/model id</code> в Claude</span>
             </div>
-            <div id="fm-models-list" class="flex flex-wrap gap-1.5">
+            <div id="fm-models-list" class="space-y-2">
               <span class="text-[10px] text-faint">загрузка…</span>
             </div>
           </div>
@@ -1500,8 +1528,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -1542,7 +1570,45 @@ function paintStatus() {
   if ($('hero-url')) $('hero-url').textContent = state.urls[t] || '';
   if ($('hero-pill')) $('hero-pill').textContent = t || '?';
 
+  try { fmPaintProvider(); } catch (e) { console.warn('fmPaintProvider', e); }
   try { renderPresets(); } catch (e) { console.warn('renderPresets', e); }
+}
+
+// FreeModel: какой провайдер активен сейчас (по state.current).
+// openai → бэкенд fm_openai (:20130); anthropic → apihelper/freemodel_rotator
+// (claude напрямую на cc.freemodel.dev). null → активен другой провайдер (Cun и т.п.).
+function fmCurrentProvider() {
+  const t = state.current;
+  if (t === 'fm_openai') return 'openai';
+  if (t === 'apihelper' || t === 'freemodel_rotator' || t === 'freemodel') return 'anthropic';
+  return null;
+}
+
+function fmPaintProvider() {
+  const aBtn = $('fm-provider-anthropic'), oBtn = $('fm-provider-openai');
+  if (!aBtn || !oBtn) return;
+  const cur = fmCurrentProvider();
+  const on  = 'bg-emerald/15 text-emerald';
+  const onO = 'bg-amber/15 text-amber';
+  const off = 'bg-elevated/40 text-muted hover:text-ink';
+  aBtn.className = `px-3 py-2 transition flex items-center gap-1.5 ${cur === 'anthropic' ? on : off}`;
+  oBtn.className = `px-3 py-2 transition flex items-center gap-1.5 border-l border-line-soft ${cur === 'openai' ? onO : off}`;
+  const hint = $('fm-provider-hint');
+  if (hint) {
+    hint.textContent = cur ? 'активен · переключение = перезапуск Claude Code'
+                           : 'активен другой провайдер · выбери режим FreeModel';
+  }
+}
+
+// Переключить провайдера FreeModel. anthropic → пресет fmHelper (claude напрямую),
+// openai → пресет fmOpenai (gpt через прокси :20130). Ключ один, аккаунт общий.
+async function fmSetProvider(provider) {
+  if (fmCurrentProvider() === provider) {
+    return toast(provider === 'openai' ? 'Уже на OpenAI (gpt)' : 'Уже на Anthropic (claude)', 'warn');
+  }
+  await applyPreset(provider === 'openai' ? 'fmOpenai' : 'fmHelper');
+  fmPaintProvider();
+  loadFmModels(true);
 }
 
 async function switchTo(target) {
@@ -1590,6 +1656,21 @@ function getDefaultPresets() {
           ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev',
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
           ANTHROPIC_API_KEY: null  // drop direct key so it can't shadow the helper
+        }
+      }
+    },
+    'fmOpenai': {
+      label: 'FreeModel · GPT (OpenAI-прокси)',
+      desc: 'localhost:20130 → cc.freemodel.dev/v1 chat/completions (gpt-5.5, codex)',
+      icon: '🤖',
+      color: 'amber',
+      settings: {
+        apiKeyHelper: '',
+        model: null,
+        env: {
+          ANTHROPIC_BASE_URL: 'http://localhost:20130',
+          ANTHROPIC_API_KEY: 'dummy',  // реальный ключ прокси берёт из fm-active-key.txt
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: null
         }
       }
     },
@@ -1718,6 +1799,7 @@ function renderPresets() {
     if (h.includes('fm-active-key')) return 'apihelper';
     const url = p.settings?.env?.ANTHROPIC_BASE_URL || '';
     if (url.includes('20128')) return 'omniroute';
+    if (url.includes('20130')) return 'fm_openai';
     if (url.includes('cun.ai')) return 'cun';
     if (url.includes('freemodel')) return state.current === 'apihelper' ? '' : 'freemodel_rotator';
     return '';
@@ -3552,7 +3634,7 @@ async function loadActiveFmKey(skipRender) {
   } catch (e) { /* silent */ }
 }
 
-// ── FreeModel: доступные модели (cc.freemodel.dev/v1/models, активный ключ) ──
+// ── FreeModel: доступные модели — claude (cc.) + gpt (api., через fm_openai :20130) ──
 let fmModelsLoading = false;
 async function loadFmModels(force) {
   const listEl = $('fm-models-list'), cntEl = $('fm-models-count');
@@ -3571,11 +3653,29 @@ async function loadFmModels(force) {
       listEl.innerHTML = `<span class="text-[10px] text-faint">${esc(data.note || 'пусто')}</span>`;
       return;
     }
-    listEl.innerHTML = models.map(m => {
+    const claude = models.filter(m => m.source !== 'openai');
+    const openai = models.filter(m => m.source === 'openai');
+    const chip = (m, color) => {
       const idJ = JSON.stringify(m.id);
       return `<button onclick='fmCopyModel(${idJ})' title="Копировать /model ${esc(m.id)}"
-        class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-emerald/10 border-emerald/30 text-emerald hover:bg-emerald/20 transition">${esc(m.id)} <span class="opacity-50">📋</span></button>`;
-    }).join('');
+        class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-${color}/10 border-${color}/30 text-${color} hover:bg-${color}/20 transition">${esc(m.id)} <span class="opacity-50">📋</span></button>`;
+    };
+    const group = (label, badge, items, color, hint) => items.length ? `
+      <div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-[10px] px-1.5 py-0.5 rounded border bg-${color}/10 border-${color}/40 text-${color} font-medium">${badge}</span>
+          <span class="text-[10px] text-faint">${label}</span>
+          <span class="text-[10px] text-faint font-mono">${items.length}</span>
+          ${hint ? `<span class="text-[10px] text-faint ml-auto">${hint}</span>` : ''}
+        </div>
+        <div class="flex flex-wrap gap-1.5">${items.map(m => chip(m, color)).join('')}</div>
+      </div>` : '';
+    listEl.innerHTML =
+      group('Claude · cc.freemodel.dev', '🟣 CLAUDE', claude, 'emerald', 'бэкенды FreeModel / API Helper') +
+      group('OpenAI · api.freemodel.dev', '🤖 GPT', openai, 'amber', 'через прокси :20130 (пресет FreeModel · GPT)');
+    if (data.note) {
+      listEl.innerHTML += `<div class="text-[10px] text-faint mt-1">${esc(data.note)}</div>`;
+    }
   } catch (e) {
     listEl.innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
   } finally { fmModelsLoading = false; }
@@ -4036,6 +4136,7 @@ function renderFreemodel(refreshed) {
     const banned  = !!s.meta?.banned;
     const tgPhone = s.meta?.tgPhone || null;
     const apiKey  = s.meta?.apiKey  || null;
+    const isManual = s.backend === 'manual';
     const isActive = state.activeFm.name && s.name === state.activeFm.name;
     const fmMode = state.current === 'apihelper' ? 'helper' : 'direct';  // глобальный режим из settings.json
     const rowDim  = banned ? 'opacity-60' : '';
@@ -4043,6 +4144,9 @@ function renderFreemodel(refreshed) {
     const skull   = banned ? ' <span class="text-crimson" title="banned ' + esc((s.meta.bannedAt || '').slice(0,10)) + '">💀</span>' : '';
     const nameJ   = JSON.stringify(s.name);
     const activeBadge = '';  // активность видно по зелёной кнопке 🌟 + подсветке строки; чип убран, чтобы не прятать TG-номер
+    const manualBadge = isManual
+      ? ' <span class="ml-1 inline-flex items-center text-[10px] px-1.5 py-0.5 rounded border bg-violet/10 border-violet/30 text-violet font-mono" title="Добавлен вручную (имя + ключ, без браузерной сессии — квоты не парсятся)">✍ manual</span>'
+      : '';
     // TG-бэйдж: если привязан — клик отвязывает; если нет — клик запускает привязку из пула.
     // Отдельный вид для 'manual' — аккаунт помечен как имеющий TG, привязанный вручную (вне пула).
     const tgBadge = tgPhone === 'manual'
@@ -4159,7 +4263,7 @@ function renderFreemodel(refreshed) {
     const trHtml = `<tr data-fm-key="${esc(s.name)}" data-fm-sig="${esc(sig)}" class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
       <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
       <td class="px-3 py-2.5 text-sm text-ink whitespace-nowrap" title="${esc(email)}">
-        ${activateBtn}<span class="inline-block min-w-[22ch] ${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${planBadge}${activeBadge}${skull}${tgBadge}${keyBadge}
+        ${activateBtn}<span class="inline-block min-w-[22ch] ${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${planBadge}${manualBadge}${activeBadge}${skull}${tgBadge}${keyBadge}
       </td>
       <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
       <td class="px-3 py-2.5">${s.quota?.renews ? timerHtml(s.date, s.quota.renews) : regAgeHtml(s.date, 'обнови квоту для renewal')}</td>
@@ -4172,9 +4276,9 @@ function renderFreemodel(refreshed) {
         ${actBtn(`copyKey(${nameJ})`,         'Скопировать API-ключ',       '📋🔑', 'emerald')}
         ${tgPhone ? '' : actBtn(`freemodelBindTelegram(${nameJ})`, 'Привязать TG из пула', '📱', 'azure')}
         ${tgPhone ? '' : actBtn(`freemodelMarkTgManual(${nameJ})`, 'ТГ уже привязан вручную (пометить)', '✅', 'emerald')}
-        ${actBtn(`extractKey(${nameJ})`,      'Извлечь API-ключ (Playwright)', '🔑', 'violet')}
-        ${actBtn(`openSession('freemodel', ${nameJ})`,    'Открыть в Chrome (claude.ai/usage)', '🌐', 'azure')}
-        ${actBtn(`refreshQuota(${nameJ}, 'freemodel')`,   'Обновить квоту',                     '🔄', 'amber')}
+        ${isManual ? '' : actBtn(`extractKey(${nameJ})`,      'Извлечь API-ключ (Playwright)', '🔑', 'violet')}
+        ${isManual ? '' : actBtn(`openSession('freemodel', ${nameJ})`,    'Открыть в Chrome (claude.ai/usage)', '🌐', 'azure')}
+        ${isManual ? '' : actBtn(`refreshQuota(${nameJ}, 'freemodel')`,   'Обновить квоту',                     '🔄', 'amber')}
         ${actBtn(`freemodelToggleBan(${nameJ}, ${banned})`, banned ? 'Снять 💀 (unban)' : 'Пометить как 💀 banned', banned ? '↻' : '💀', banned ? 'emerald' : 'crimson')}
         ${actBtn(`deleteSession('freemodel', ${nameJ}, ${JSON.stringify(email)})`, 'Удалить сессию', '🗑', 'crimson')}
       </td>
@@ -4416,6 +4520,30 @@ async function launchFreemodelCreate() {
   await launchScript('freemodel-create',
     `➕ FreeModel v3: создание ${count} аккаунт${count === 1 ? 'а' : 'ов'} запущено`,
     [String(count)]);
+}
+
+function fmToggleManualAdd() {
+  $('freemodel-manual-add').classList.toggle('hidden');
+}
+
+async function addFreemodelManual() {
+  const name = $('fm-manual-name').value.trim();
+  const apiKey = $('fm-manual-key').value.trim();
+  if (!name || !apiKey) return toast('имя и apiKey обязательны', 'warn');
+  if (!/^(?:fe[_-]|sk-)[A-Za-z0-9_-]{20,}$/.test(apiKey)) return toast('формат ключа: fe_... или sk-...', 'warn');
+  try {
+    const res = await fetch('/__switch/api/freemodel/add-manual', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, apiKey }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast(`✓ Добавлен: ${name}`, 'success');
+    $('fm-manual-name').value = '';
+    $('fm-manual-key').value = '';
+    $('freemodel-manual-add').classList.add('hidden');
+    loadFreemodelSessions(false);
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ FREEMODEL INVITE CHAIN ══════════════════════════

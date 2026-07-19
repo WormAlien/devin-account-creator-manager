@@ -109,6 +109,15 @@ const BACKENDS = {
         model: 'opus[1m]',
         // Direct cc.freemodel.dev — key managed by freemodel-rotator.js
     },
+    fm_openai: {
+        label: 'FreeModel OpenAI (gpt)',
+        base_url: 'http://localhost:20130',
+        api_key: 'dummy',           // real key proxy reads from fm-active-key.txt
+        model: null,
+        clear_helper: true,         // else currentTarget() would misdetect as apihelper
+        // Anthropic→OpenAI прокси (freemodel-openai-proxy.js) → cc.freemodel.dev/v1
+        // chat/completions. Маппинг claude-* → gpt-* в fm-openai-config.json.
+    },
 };
 
 const LOG_BUFFER = [];
@@ -226,6 +235,9 @@ async function applyTarget(target) {
 
     settings.env.ANTHROPIC_API_KEY = apiKey;
     clearOtEnv(settings);   // убрать ourtoken AUTH_TOKEN/маппинги, иначе перебьют API_KEY
+    // fm_openai: helper с fm-active-key.txt надо убрать, иначе currentTarget()
+    // детектит apihelper, а Claude Code шлёт ключ мимо прокси
+    if (backend.clear_helper) settings.apiKeyHelper = '';
     // model: строка → задать; null → удалить (бэкенд не знает чужую модель —
     // иначе ComboWombo от OmniRoute залипает на FreeModel/Aerolink/Conduit);
     // undefined → не трогать.
@@ -1586,6 +1598,44 @@ async function handleFreemodelBindTelegram(req, res) {
     }
 }
 
+// Ручное добавление FreeModel-аккаунта: имя + API-ключ, без браузерной сессии.
+// Создаёт v3-папку freemodel/accounts/manual_<ts>_ok_<имя> со stub session.json
+// (пустой storageState — квоты Playwright не спарсит, ключ работает как обычно)
+// и сразу помечает TG как привязанный вручную (tgPhone='manual').
+async function handleFreemodelAddManual(req, res) {
+    try {
+        const { name, apiKey } = await readJsonBody(req);
+        const label = String(name || '').trim();
+        const key = String(apiKey || '').trim();
+        if (!label) return jsonRes(res, 400, { error: 'имя обязательно' });
+        if (!/^(?:fe[_-]|sk-)[A-Za-z0-9_-]{20,}$/.test(key)) {
+            return jsonRes(res, 400, { error: 'формат ключа: fe_... или sk-...' });
+        }
+        const slug = label.replace(/[^a-zA-Z0-9._@-]/g, '_').slice(0, 40) || 'manual';
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const dirName = `manual_${ts}_ok_${slug}`;
+        const dir = path.join(__dirname, '..', 'freemodel', 'accounts', dirName);
+        if (fs.existsSync(dir)) return jsonRes(res, 409, { error: 'уже существует: ' + dirName });
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'session.json'),
+            JSON.stringify({ cookies: [], origins: [] }, null, 2), 'utf-8');
+        fs.writeFileSync(path.join(dir, 'account_info.txt'), [
+            `Email: ${label}`,
+            `API Key: ${key}`,
+            'Status: ✅ OK (manual)',
+            'Backend: manual',
+            `Created: ${new Date().toISOString()}`,
+            '',
+        ].join('\n'), 'utf-8');
+        dashApi.setFreemodelApiKey(dirName, key);
+        dashApi.setFreemodelTgPhone(dirName, 'manual');
+        logLine(`freemodel add-manual: ${label} → ${dirName} (key ***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, name: dirName });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
 // Ручное проставление API-ключа (например, юзер скопировал руками).
 async function handleFreemodelSetKey(req, res) {
     try {
@@ -1661,9 +1711,37 @@ async function handleFreemodelActivate(req, res) {
     }
 }
 
-// Доступные модели FreeModel: OpenAI-compat GET cc.freemodel.dev/v1/models
-// с активным ключом (fm-active-key.txt). Кеш 5 мин, как у Cun.
+// Доступные модели FreeModel с активным ключом (fm-active-key.txt). Кеш 5 мин.
+// Два upstream под одним ключом: cc.freemodel.dev — claude-модели (anthropic),
+// api.freemodel.dev — gpt-модели (openai, ходить через fm_openai прокси :20130).
+// Опрашиваем оба параллельно, каждой модели ставим source: 'claude' | 'openai'.
 const FM_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+async function fetchFmModelsFrom(host, apiKey, source) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+        const resp = await fetch(`https://${host}/v1/models`, {
+            signal: controller.signal,
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        if (!resp.ok) return { models: [], note: `${host}: HTTP ${resp.status}` };
+        const data = await resp.json();
+        return {
+            models: (data.data || []).map(m => ({
+                id: m.id,
+                owned_by: m.owned_by,
+                supported_endpoint_types: m.supported_endpoint_types || [],
+                source,
+            })),
+            note: null,
+        };
+    } catch (e) {
+        return { models: [], note: `${host}: ${e.message}` };
+    } finally {
+        clearTimeout(timeout);
+    }
+}
 
 async function handleFreemodelModels(req, res) {
     try {
@@ -1678,25 +1756,18 @@ async function handleFreemodelModels(req, res) {
         try { apiKey = fs.readFileSync(FM_ACTIVE_KEY_FILE, 'utf-8').trim(); } catch {}
         if (!apiKey) return jsonRes(res, 200, { ok: true, models: [], note: 'нет активного ключа (fm-active-key.txt)' });
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-        const resp = await fetch('https://cc.freemodel.dev/v1/models', {
-            signal: controller.signal,
-            headers: { 'Authorization': `Bearer ${apiKey}` }
-        });
-        clearTimeout(timeout);
+        const [cc, oa] = await Promise.all([
+            fetchFmModelsFrom('cc.freemodel.dev', apiKey, 'claude'),
+            fetchFmModelsFrom('api.freemodel.dev', apiKey, 'openai'),
+        ]);
+        const models = [...cc.models, ...oa.models];
+        const notes = [cc.note, oa.note].filter(Boolean).join('; ');
 
-        if (!resp.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        if (!models.length) return jsonRes(res, 200, { ok: true, models: [], note: notes || 'пусто' });
 
-        const data = await resp.json();
-        const models = (data.data || []).map(m => ({
-            id: m.id,
-            owned_by: m.owned_by,
-            supported_endpoint_types: m.supported_endpoint_types || [],
-        }));
         FM_MODELS_CACHE.data = models;
         FM_MODELS_CACHE.ts = Date.now();
-        jsonRes(res, 200, { ok: true, models, cached: false });
+        jsonRes(res, 200, { ok: true, models, cached: false, note: notes || undefined });
     } catch (e) {
         if (FM_MODELS_CACHE.data) {
             jsonRes(res, 200, { ok: true, models: FM_MODELS_CACHE.data, cached: true, note: e.message });
@@ -3252,6 +3323,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-tg')   return handleFreemodelSetTg(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/bind-telegram') return handleFreemodelBindTelegram(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-key')      return handleFreemodelSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/add-manual')   return handleFreemodelAddManual(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/extract-key')  return handleFreemodelExtractKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/activate')     return handleFreemodelActivate(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/freemodel/models')) return handleFreemodelModels(req, res);

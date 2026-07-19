@@ -14,12 +14,13 @@
 |--------|-------------------------|--------------------------------|------|
 | `8200` | **Backend Switcher / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |
 | `20126`| **FreeModel Key Rotator** | `routing/freemodel-rotator.js` | Менеджер прямых ключей для backend `freemodel_rotator`. Пишет ключ в `settings.json`. |
+| `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
 
-Запуск: `routing/start-switcher.bat` (поднимает :20126 + :8200, открывает UI).
-Рестарт: `routing/restart-dashboard.bat` (убивает :8200, перезапускает оба).
+Запуск: `routing/start-switcher.bat` (поднимает :20126 + :20130 + :8200, открывает UI).
+Рестарт: `routing/restart-dashboard.bat` (убивает все три, перезапускает).
 ТГ-бот: `npm run tgbot` (нужен `tgbot/.env`, см. `tgbot/README.md`).
 
 ---
@@ -31,6 +32,11 @@
 - **omniroute** — `http://localhost:20128/v1`, модель `ComboWombo` (основной).
 - **notion** — `http://localhost:8190` (дешёвый, архив).
 - **freemodel_rotator** — `https://cc.freemodel.dev`, ключ резолвится из ротатора :20126.
+- **fm_openai** — `http://localhost:20130` (freemodel-openai-proxy.js). Claude Code шлёт
+  Anthropic-формат, прокси конвертит в OpenAI chat/completions на `api.freemodel.dev/v1`
+  (там живут gpt-модели; `cc.freemodel.dev` — только claude). Ключ прокси читает сам из
+  `fm-active-key.txt` (в settings.json пишется `dummy`). Маппинг claude-*→gpt-* правится
+  в `routing/fm-openai-config.json` без рестарта (перечитывается по mtime).
 - **apihelper** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/fm-active-key.txt`,
   `ANTHROPIC_BASE_URL=cc.freemodel.dev`, TTL=0. Claude Code читает ключ из файла на
   каждый запрос → ключ можно менять **без перезапуска**. На этом построена авто-ротация.
@@ -83,6 +89,10 @@ API-обвязка: `internal/dashboard-api.js`.
 
 - Аккаунты: `freemodel/accounts/<dir>/{session.json, account_info.txt}` (v3) +
   старый формат `manual_sessions/`.
+- Ручное добавление: `POST /api/freemodel/add-manual` (имя + API-ключ) — создаёт
+  `freemodel/accounts/manual_<ts>_ok_<имя>/` со stub `session.json` (`Backend: manual`),
+  TG сразу помечается `tgPhone='manual'`. Квоты не парсятся (нет браузерной сессии),
+  refresh такие аккаунты пропускает; ключ участвует в активации и авто-ротации как обычный.
 - Квоты кеш: `logs/.freemodel_quota_cache.json`.
 - Мета (apiKey/banned/tgPhone): `logs/.freemodel_meta.json`.
 - TG-пул для привязки: `freemodel/tg_pool.json` (либы в `freemodel/lib/`).

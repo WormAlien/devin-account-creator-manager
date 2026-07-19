@@ -1423,7 +1423,7 @@ function cmpNullable(a, b, getter, dir) {
   return dir === 'asc' ? va - vb : vb - va;
 }
 
-function timerHtml(createdAt, targetAt) {
+function timerHtml(createdAt, targetAt, compact) {
   if (!createdAt) return '<span class="text-faint">—</span>';
   const t = new Date(createdAt).getTime();
   if (!isFinite(t)) return '<span class="text-faint">—</span>';
@@ -1439,21 +1439,25 @@ function timerHtml(createdAt, targetAt) {
   const elapsedStr = fmtDuration(elapsed);
   const regDate = new Date(t).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
   const targetDate = new Date(target).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
+  // compact: одна строка «ост. X», даты — в tooltip. Для узких экранов (FM-таблица).
   if (left <= 0) {
+    if (compact) return `<span class="text-[10px] text-crimson font-medium whitespace-nowrap" title="${regDate} → ${targetDate} · ${elapsedStr} назад">истёк</span>`;
     return `<div class="text-[10px] leading-tight whitespace-nowrap"><div class="text-faint">${regDate} → ${targetDate}</div><div class="text-crimson font-medium">истёк · ${elapsedStr} назад</div></div>`;
   }
   const leftStr = fmtDuration(left);
   const color = left < 3600_000 ? 'text-crimson' : left < 4 * 3600_000 ? 'text-amber' : 'text-emerald';
+  if (compact) return `<span class="text-[10px] ${color} font-medium whitespace-nowrap" title="${regDate} → ${targetDate} · рега ${elapsedStr} назад">ост. ${leftStr}</span>`;
   return `<div class="text-[10px] leading-tight whitespace-nowrap"><div class="text-faint">${regDate} → ${targetDate}</div><div class="${color} font-medium">ост. ${leftStr} · ${elapsedStr} назад</div></div>`;
 }
 
-function regAgeHtml(createdAt, note) {
+function regAgeHtml(createdAt, note, compact) {
   if (!createdAt) return '<span class="text-faint">—</span>';
   const t = new Date(createdAt).getTime();
   if (!isFinite(t)) return '<span class="text-faint">—</span>';
   const elapsed = Date.now() - t;
   const elapsedStr = fmtDuration(elapsed);
   const regDate = new Date(t).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }).replace(',','');
+  if (compact) return `<span class="text-[10px] text-ink whitespace-nowrap" title="рега ${regDate}${note ? ' · ' + note : ''}">${elapsedStr} назад</span>`;
   const noteHtml = note ? `<div class="text-[10px] text-dim">${note}</div>` : '';
   return `<div class="text-[10px] leading-tight whitespace-nowrap"><div class="text-faint">${regDate}</div><div class="text-ink">${elapsedStr} назад</div>${noteHtml}</div>`;
 }
@@ -1931,7 +1935,7 @@ function bar(pct, color) {
   if (pct == null) return '<span class="text-faint">—</span>';
   const w = Math.min(100, Math.max(0, pct));
   return `
-    <div class="flex items-center gap-2 min-w-24">
+    <div class="flex items-center gap-1.5 min-w-16">
       <div class="flex-1 h-1.5 bg-line-soft rounded-full overflow-hidden">
         <div class="h-full ${color} rounded-full" style="width:${w}%"></div>
       </div>
@@ -1958,7 +1962,7 @@ function actBtn(onclick, title, icon, color) {
   // Кавычки в onclick: используем одинарные снаружи (onclick='...'), чтобы внутри спокойно
   // жили двойные от JSON.stringify(имя сессии). Любые ' внутри expression экранируем как &#39;.
   const safe = String(onclick).replace(/'/g, '&#39;');
-  return `<button onclick='${safe}' title="${esc(title)}" class="size-8 inline-flex items-center justify-center rounded-md border border-line-soft text-${color} hover:border-${color}/60 hover:bg-${color}/10 transition text-[14px]">${icon}</button>`;
+  return `<button onclick='${safe}' title="${esc(title)}" class="size-6 inline-flex items-center justify-center rounded-md border border-line-soft text-${color} hover:border-${color}/60 hover:bg-${color}/10 transition text-[12px]">${icon}</button>`;
 }
 
 // ═══════════════════ DEVIN ═══════════════════════════════════════════
@@ -4150,10 +4154,10 @@ function renderFreemodel(refreshed) {
     // TG-бэйдж: если привязан — клик отвязывает; если нет — клик запускает привязку из пула.
     // Отдельный вид для 'manual' — аккаунт помечен как имеющий TG, привязанный вручную (вне пула).
     const tgBadge = tgPhone === 'manual'
-      ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-emerald/10 border border-emerald/30 text-emerald rounded font-mono hover:bg-emerald/20" title="TG привязан вручную (вне пула) · клик чтобы снять пометку">✅ TG вручную</button>`
+      ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-emerald/10 border border-emerald/30 text-emerald rounded font-mono hover:bg-emerald/20" title="TG привязан вручную (вне пула) · клик чтобы снять пометку">✅ TG вручную</button>`
       : tgPhone
-      ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/30 text-azure rounded font-mono hover:bg-azure/20" title="TG привязан · клик чтобы отвязать">📱 ${/^\+?\d+$/.test(String(tgPhone)) ? '+' + esc(tgPhone) : esc(tgPhone)}</button>`
-      : `<button onclick='freemodelBindTelegram(${nameJ})' class="ml-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-azure/60 hover:text-azure" title="TG не привязан · клик чтобы привязать из пула">📱 —</button>`;
+      ? `<button onclick='freemodelToggleTg(${nameJ}, true)' class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/30 text-azure rounded font-mono hover:bg-azure/20" title="TG привязан · клик чтобы отвязать">📱 ${/^\+?\d+$/.test(String(tgPhone)) ? '+' + esc(tgPhone) : esc(tgPhone)}</button>`
+      : `<button onclick='freemodelBindTelegram(${nameJ})' class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-azure/60 hover:text-azure" title="TG не привязан · клик чтобы привязать из пула">📱 —</button>`;
 
     const keyBadge = '';
 
@@ -4185,9 +4189,10 @@ function renderFreemodel(refreshed) {
     let ageCell   = '<span class="text-faint">нет в кеше</span>';
     if (q) {
       availCell = `<span class="text-emerald font-semibold font-mono">${esc(q.available || '—')}</span>`;
-      // 5h колонка: приоритет Pro-окно (если есть), иначе Trial credit (Free).
-      // Бар показывает ЗАПАС (остаток), как верхняя полоса и Claude-статуслайн —
-      // раньше показывал used% и юзер читал «76%» как остаток при реальных 24%.
+      // 5h колонка. Бар показывает ЗАПАС (остаток), как верхняя полоса и
+      // Claude-статуслайн — раньше показывал used% и юзер читал «76%» как
+      // остаток при реальных 24%. (Trial-credit fallback выпилен — останки
+      // старой схемы freemodel, окна 5h/7d теперь есть у всех.)
       if (q.h5 || q.h5pct != null) {
         let pct = q.h5pct;
         if (pct == null) {
@@ -4201,13 +4206,8 @@ function renderFreemodel(refreshed) {
         } else {
           h5Cell = `<span class="text-amber font-mono text-xs">${esc(q.h5 || '')}/${esc(q.h5max || '')}</span>`;
         }
-      } else if (q.trialCredit) {
-        const dl = typeof q.trialDaysLeft === 'number' ? q.trialDaysLeft : null;
-        const clr = dl != null && dl <= 1 ? 'text-crimson' : dl != null && dl <= 2 ? 'text-amber' : 'text-emerald';
-        const dLabel = dl != null ? `${dl}д` : '';
-        h5Cell = `<span class="font-mono text-xs ${clr}" title="Trial credit${dl != null ? ` · ${dl} дн. осталось` : ''}">🎁 ${esc(q.trialCredit)}${dLabel ? ' · ' + dLabel : ''}</span>`;
       }
-      // 7d колонка: приоритет Pro-окно, иначе Referral bonus. Тоже ЗАПАС.
+      // 7d колонка — тоже ЗАПАС. (Referral-bonus fallback выпилен вместе с trial.)
       if (q.d7 || q.d7pct != null) {
         let pct = q.d7pct;
         if (pct == null) {
@@ -4221,17 +4221,6 @@ function renderFreemodel(refreshed) {
         } else {
           d7Cell = `<span class="text-azure font-mono text-xs">${esc(q.d7 || '')}/${esc(q.d7max || '')}</span>`;
         }
-      } else if (q.referralBonusMax) {
-        const used = q.referralBonusUsed || 0;
-        const max = q.referralBonusMax;
-        const pct = Math.min(100, Math.round((used / max) * 100));
-        d7Cell = `
-          <div class="flex items-center gap-2 min-w-24" title="Реф. бонус: использовано $${used.toFixed(2)} из $${max.toFixed(2)}">
-            <div class="flex-1 h-1.5 bg-line-soft rounded-full overflow-hidden">
-              <div class="h-full bg-violet rounded-full" style="width:${pct}%"></div>
-            </div>
-            <span class="text-violet text-xs font-mono w-16 text-right">$${used.toFixed(2)}/$${max.toFixed(0)}</span>
-          </div>`;
       }
       ageCell = `<span class="text-muted">${ageStr(q.updatedAt)}</span>`;
     }
@@ -4239,10 +4228,10 @@ function renderFreemodel(refreshed) {
     // Сегмент-переключатель режима. Выбранный = сплошная зелёная заливка; второй на активном аккаунте = призрачный («переключить»); на неактивном — цветной outline («активировать»).
     const fmSeg = (mode, icon, label, offCls, ghostHover) => {
       if (isActive && fmMode === mode)
-        return `<button disabled title="Выбрано сейчас: ${label}" class="mr-1 inline-flex items-center justify-center box-border leading-none text-[10px] w-[96px] h-[28px] whitespace-nowrap bg-emerald/20 border border-emerald/60 text-emerald rounded font-semibold disabled:opacity-100 cursor-default">✓ ${label}</button>`;
+        return `<button disabled title="Выбрано сейчас: ${label}" class="mr-1 inline-flex items-center justify-center box-border leading-none text-[10px] w-[68px] h-[24px] whitespace-nowrap bg-emerald/20 border border-emerald/60 text-emerald rounded font-semibold disabled:opacity-100 cursor-default">✓ ${label}</button>`;
       const cls = isActive ? `bg-transparent border border-line-soft text-muted ${ghostHover}` : offCls;
       const ttl = isActive ? `Переключить активный аккаунт на: ${label}` : `Активировать · ${label}`;
-      return `<button onclick='activateFmKey(${nameJ}, "${mode}")' title="${ttl}" class="mr-1 inline-flex items-center justify-center box-border leading-none text-[10px] w-[96px] h-[28px] whitespace-nowrap ${cls} rounded transition font-medium">${icon} ${label}</button>`;
+      return `<button onclick='activateFmKey(${nameJ}, "${mode}")' title="${ttl}" class="mr-1 inline-flex items-center justify-center box-border leading-none text-[10px] w-[68px] h-[24px] whitespace-nowrap ${cls} rounded transition font-medium">${icon} ${label}</button>`;
     };
     const activateBtn =
         fmSeg('direct', '🔑', 'Ключ', 'bg-crimson/10 border border-crimson/50 text-crimson hover:bg-crimson/20', 'hover:border-crimson/60 hover:text-crimson')
@@ -4255,26 +4244,24 @@ function renderFreemodel(refreshed) {
       ok ? 1 : 0, email, s.date || '', banned ? 1 : 0, isActive ? 1 : 0,
       tgPhone || '', apiKey ? 1 : 0, planRaw, fmMode,
       q?.available || '', q?.h5 || '', q?.h5max || '', q?.h5pct ?? '',
-      q?.d7 || '', q?.d7max || '', q?.d7pct ?? '', q?.renews || '',
-      q?.trialCredit || '', q?.trialDaysLeft ?? '',
-      q?.referralBonusUsed ?? '', q?.referralBonusMax ?? ''
+      q?.d7 || '', q?.d7max || '', q?.d7pct ?? '', q?.renews || ''
     ];
     const sig = sigParts.join('|');
     const trHtml = `<tr data-fm-key="${esc(s.name)}" data-fm-sig="${esc(sig)}" class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
-      <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
-      <td class="px-3 py-2.5 text-sm text-ink whitespace-nowrap" title="${esc(email)}">
-        ${activateBtn}<span class="inline-block min-w-[22ch] ${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${manualBadge}${activeBadge}${skull}${tgBadge}${keyBadge}
+      <td class="px-2 py-2.5 w-7">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
+      <td class="px-2 py-2.5 text-xs text-ink whitespace-nowrap" title="${esc(email)}">
+        <span class="inline-flex items-center">${activateBtn}<span class="inline-block max-w-[18ch] truncate align-middle ${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${manualBadge}${activeBadge}${skull}${keyBadge}</span>
       </td>
-      <td class="px-3 py-2.5 text-center whitespace-nowrap">${planBadge}</td>
-      <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
-      <td class="px-3 py-2.5">${s.quota?.renews ? timerHtml(s.date, s.quota.renews) : regAgeHtml(s.date, 'обнови квоту для renewal')}</td>
-      <td class="px-3 py-2.5 text-right">${availCell}</td>
-      <td class="px-3 py-2.5">${h5Cell}</td>
-      <td class="px-3 py-2.5">${d7Cell}</td>
-      <td class="px-3 py-2.5 text-[10px] text-right text-muted font-mono">${ageCell}</td>
-      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
-        ${actBtn(`copyEmail(${nameJ})`,       'Скопировать email',          '📋✉', 'azure')}
-        ${actBtn(`copyKey(${nameJ})`,         'Скопировать API-ключ',       '📋🔑', 'emerald')}
+      <td class="px-2 py-2.5 text-center whitespace-nowrap">${planBadge}</td>
+      <td class="px-2 py-2.5 text-left whitespace-nowrap">${tgBadge}</td>
+      <td class="px-2 py-2.5">${s.quota?.renews ? timerHtml(s.date, s.quota.renews, true) : regAgeHtml(s.date, 'обнови квоту для renewal', true)}</td>
+      <td class="px-2 py-2.5 text-right">${availCell}</td>
+      <td class="px-2 py-2.5">${h5Cell}</td>
+      <td class="px-2 py-2.5">${d7Cell}</td>
+      <td class="px-2 py-2.5 text-[10px] text-right text-muted font-mono">${ageCell}</td>
+      <td class="px-2 py-2.5"><div class="flex items-center justify-end gap-0.5 flex-nowrap">
+        ${actBtn(`copyEmail(${nameJ})`,       'Скопировать email',          '✉', 'azure')}
+        ${actBtn(`copyKey(${nameJ})`,         'Скопировать API-ключ',       '🗝', 'emerald')}
         ${tgPhone ? '' : actBtn(`freemodelBindTelegram(${nameJ})`, 'Привязать TG из пула', '📱', 'azure')}
         ${tgPhone ? '' : actBtn(`freemodelMarkTgManual(${nameJ})`, 'ТГ уже привязан вручную (пометить)', '✅', 'emerald')}
         ${isManual ? '' : actBtn(`extractKey(${nameJ})`,      'Извлечь API-ключ (Playwright)', '🔑', 'violet')}
@@ -4282,7 +4269,7 @@ function renderFreemodel(refreshed) {
         ${isManual ? '' : actBtn(`refreshQuota(${nameJ}, 'freemodel')`,   'Обновить квоту',                     '🔄', 'amber')}
         ${actBtn(`freemodelToggleBan(${nameJ}, ${banned})`, banned ? 'Снять 💀 (unban)' : 'Пометить как 💀 banned', banned ? '↻' : '💀', banned ? 'emerald' : 'crimson')}
         ${actBtn(`deleteSession('freemodel', ${nameJ}, ${JSON.stringify(email)})`, 'Удалить сессию', '🗑', 'crimson')}
-      </td>
+      </div></td>
     </tr>`;
     return { key: s.name, sig, html: trHtml };
   });
@@ -4318,16 +4305,16 @@ function renderFreemodel(refreshed) {
     <table class="min-w-full text-sm">
       <thead>
         <tr class="text-[10px] uppercase tracking-wider text-faint bg-bg/40 border-b border-line-soft">
-          <th class="px-3 py-2.5 w-8 font-medium"></th>
-          <th class="px-3 py-2.5 text-left font-medium">Email</th>
-          <th class="px-3 py-2.5 text-center font-medium" title="Freemodel plan (Free/Pro)">Plan</th>
-          <th class="px-3 py-2.5 text-left font-medium">Created</th>
-          <th class="px-3 py-2.5 text-left font-medium">Timer</th>
-          <th class="px-3 py-2.5 text-right font-medium">Available</th>
-          <th class="px-3 py-2.5 text-left font-medium" title="Pro: 5h window · Free: trial credit ($X · Nд)">Trial / 5h</th>
-          <th class="px-3 py-2.5 text-left font-medium" title="Pro: 7d window · Free: реф. бонус (используется на запросы)">Реф-бонус / 7d</th>
-          <th class="px-3 py-2.5 text-right font-medium">Updated</th>
-          <th class="px-3 py-2.5 text-right font-medium">Actions</th>
+          <th class="px-2 py-2.5 w-7 font-medium"></th>
+          <th class="px-2 py-2.5 text-left font-medium">Email</th>
+          <th class="px-2 py-2.5 text-center font-medium" title="Freemodel plan (Free/Pro)">Plan</th>
+          <th class="px-2 py-2.5 text-left font-medium" title="Telegram: привязан/нет, клик по бейджу — привязать/отвязать">TG</th>
+          <th class="px-2 py-2.5 text-left font-medium" title="Дата реги → renewal">Timer</th>
+          <th class="px-2 py-2.5 text-right font-medium">Avail</th>
+          <th class="px-2 py-2.5 text-left font-medium" title="5-hour window: запас (остаток) окна">5h</th>
+          <th class="px-2 py-2.5 text-left font-medium" title="7-day window: запас (остаток) окна">7d</th>
+          <th class="px-2 py-2.5 text-right font-medium">Upd</th>
+          <th class="px-2 py-2.5 text-right font-medium">Actions</th>
         </tr>
       </thead>
       <tbody data-fm-list class="divide-y divide-line-soft/50">${rowItems.map(r => r.html).join('')}</tbody>

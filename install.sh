@@ -177,6 +177,20 @@ elif ask "Текущая: ${CUR:-нет}. Поставить 2.1.153?" Y; then
   npm config delete prefix 2>/dev/null
   npm uninstall -g @anthropic-ai/claude-code 2>/dev/null
   npm install -g @anthropic-ai/claude-code@2.1.153 && ok "Claude Code 2.1.153"
+  # npm с allow-scripts не запускает postinstall (node install.cjs) без
+  # одобрения — из-за этого claude может не завестись или тормозить на
+  # первом старте. approve-scripts есть не во всех npm — ошибку глотаем.
+  npm approve-scripts @anthropic-ai/claude-code >/dev/null 2>&1 || true
+  # Проверяем результат тут же, а не у друга через неделю.
+  NEWVER=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  if [ "$NEWVER" = "2.1.153" ]; then
+    ok "claude --version → $NEWVER"
+  else
+    warn "claude не отвечает после установки (got: ${NEWVER:-ничего})."
+    warn "В PowerShell npm может блокироваться политикой (PSSecurityException) — лечится:"
+    warn "  Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force"
+    warn "Затем перезапусти терминал и повтори: npm install -g @anthropic-ai/claude-code@2.1.153"
+  fi
 fi
 
 # ── 3. Базовый ~/.claude/settings.json ──────────────────────────────────────

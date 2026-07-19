@@ -51,11 +51,24 @@ function hasTable(dbPath, tableName) {
 function parseSessionBuffer(buf, fallbackPhone = null) {
     if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
 
+    // Ранние проверки с честными ошибками — иначе hasTable() глотает
+    // «sqlite3 не найден» и всё выглядит как «нет таблицы sessions».
+    if (!fs.existsSync(SQLITE_EXE)) {
+        throw new Error(`sqlite3.exe не найден (${SQLITE_EXE}) — поставь: winget install -e --id SQLite.SQLite`);
+    }
+    if (buf.length < 16 || !buf.slice(0, 15).equals(Buffer.from('SQLite format 3'))) {
+        throw new Error('файл не похож на SQLite .session (Telethon/Pyrogram); tdata из Telegram Desktop не подходит');
+    }
+
     const tmp = path.join(os.tmpdir(), `_tg_session_${process.pid}_${Date.now()}.session`);
     fs.writeFileSync(tmp, buf);
     try {
         if (!hasTable(tmp, 'sessions')) {
-            throw new Error('в .session нет таблицы sessions');
+            let names = [];
+            try {
+                names = runSqlite(tmp, "SELECT name FROM sqlite_master WHERE type='table';").map(r => r.name);
+            } catch {}
+            throw new Error(`в .session нет таблицы sessions (есть: ${names.join(', ') || 'ничего'}) — нужен Telethon/Pyrogram .session`);
         }
 
         const sessCols = tableColumns(tmp, 'sessions');

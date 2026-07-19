@@ -4175,9 +4175,9 @@ function renderFreemodel(refreshed) {
     const planFallback = q
       ? '<span class="text-[10px] text-amber/60" title="план не определён — обнови квоту">?</span>'
       : '<span class="text-[10px] text-faint/60" title="нет данных о квоте">—</span>';
-    const planBadge = `<span class="ml-2 inline-block w-14 text-center align-middle">${planRaw
+    const planBadge = planRaw
       ? `<span class="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded border font-medium ${planCls}" title="Freemodel plan">${esc(planRaw)}</span>`
-      : planFallback}</span>`;
+      : planFallback;
 
     let availCell = '<span class="text-faint">—</span>';
     let h5Cell    = '<span class="text-faint">—</span>';
@@ -4263,8 +4263,9 @@ function renderFreemodel(refreshed) {
     const trHtml = `<tr data-fm-key="${esc(s.name)}" data-fm-sig="${esc(sig)}" class="hover:bg-elevated/40 transition ${rowDim} ${activeRow}">
       <td class="px-3 py-2.5 w-8">${ok ? '<span class="text-emerald">✓</span>' : '<span class="text-crimson">✗</span>'}</td>
       <td class="px-3 py-2.5 text-sm text-ink whitespace-nowrap" title="${esc(email)}">
-        ${activateBtn}<span class="inline-block min-w-[22ch] ${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${planBadge}${manualBadge}${activeBadge}${skull}${tgBadge}${keyBadge}
+        ${activateBtn}<span class="inline-block min-w-[22ch] ${banned ? 'line-through text-faint' : ''}">${esc(email)}</span>${manualBadge}${activeBadge}${skull}${tgBadge}${keyBadge}
       </td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${planBadge}</td>
       <td class="px-3 py-2.5 text-xs text-muted font-mono whitespace-nowrap">${esc(s.date || '')}</td>
       <td class="px-3 py-2.5">${s.quota?.renews ? timerHtml(s.date, s.quota.renews) : regAgeHtml(s.date, 'обнови квоту для renewal')}</td>
       <td class="px-3 py-2.5 text-right">${availCell}</td>
@@ -4319,6 +4320,7 @@ function renderFreemodel(refreshed) {
         <tr class="text-[10px] uppercase tracking-wider text-faint bg-bg/40 border-b border-line-soft">
           <th class="px-3 py-2.5 w-8 font-medium"></th>
           <th class="px-3 py-2.5 text-left font-medium">Email</th>
+          <th class="px-3 py-2.5 text-center font-medium" title="Freemodel plan (Free/Pro)">Plan</th>
           <th class="px-3 py-2.5 text-left font-medium">Created</th>
           <th class="px-3 py-2.5 text-left font-medium">Timer</th>
           <th class="px-3 py-2.5 text-right font-medium">Available</th>
@@ -7015,6 +7017,7 @@ async function grokRenderSaved() {
         ${secondaryBtn}
         ${approveDirectBtn}
         <button onclick='approveGrokAuth(${nameJ})' title="Вставь код из терминала сюда — Camoufox с куками этого аккаунта одобрит device auth. Терминал сохранит сессию.${isAuthorized ? ' Переввод токена, если протух.' : ''}" class="text-xs px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">🛠 Approve code</button>
+        <button onclick='grokCopyCookies(${idxJ})' title="Скопировать куки (Cookie-Editor JSON) в буфер" class="text-xs px-2 py-1 bg-elevated border border-line-soft text-muted rounded hover:text-ink hover:border-ink/30">🍪 Куки</button>
         <button onclick='grokLoadSession(${idxJ})' title="Загрузить куки в редактор" class="text-xs px-2 py-1 text-faint hover:text-ink rounded">📋</button>
         ${cooldownBtn}
         <button onclick='grokDeleteSession(${idxJ})' title="Удалить сессию" class="text-xs px-2 py-1 text-faint hover:text-crimson rounded">🗑</button>
@@ -7138,6 +7141,23 @@ function grokLoadSession(index) {
   toast('Session loaded: ' + s.name, 'info');
 }
 
+// Достаёт массив кук из сессии. Пересланные файлы иногда содержат обёртку
+// {url, cookies:[...]} (J2TEAM и другие экспортёры) — разворачиваем.
+function grokSessionCookies(s) {
+  const c = s && s.cookies;
+  if (Array.isArray(c)) return c;
+  if (c && Array.isArray(c.cookies)) return c.cookies;
+  return null;
+}
+
+function grokCopyCookies(index) {
+  const s = grokSessionsCache[index];
+  if (!s) { toast('Session not found', 'error'); return; }
+  const cookies = grokSessionCookies(s);
+  if (!cookies || !cookies.length) { toast(`${s.name}: в файле нет валидного массива кук`, 'error'); return; }
+  copyToClipboard(JSON.stringify(cookies, null, 2), `куки «${s.name}» (${cookies.length} шт)`);
+}
+
 async function grokLaunchSession(index) {
   const session = grokSessionsCache[index];
   if (!session) { toast('Session not found', 'error'); return; }
@@ -7146,6 +7166,15 @@ async function grokLaunchSession(index) {
     return toast(`⏳ ${session.name}: осталось ${grokCooldownFmt(left)} до сброса cooldown`, 'warn');
   }
   const status = $('grok-status');
+  // Валидация ДО запроса: битый/обёрнутый файл раньше молча уходил в launcher
+  // и рапортовал "Chrome opened" без Chrome.
+  const cookies = grokSessionCookies(session);
+  if (!cookies || !cookies.length) {
+    status.textContent = `✗ ${session.name}: ${session.error ? 'файл не читается (' + session.error + ')' : 'в файле нет массива кук'} — пересохрани сессию (вставь JSON из Cookie-Editor в редактор выше и 💾 Сохранить)`;
+    status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+    status.classList.remove('hidden');
+    return toast(`✗ ${session.name}: куки не валидны`, 'error', 6000);
+  }
   status.textContent = `Launching ${session.name}...`;
   status.className = 'text-xs p-3 rounded-lg border border-azure/50 bg-azure/5 text-azure';
   status.classList.remove('hidden');
@@ -7154,7 +7183,7 @@ async function grokLaunchSession(index) {
     const res = await fetch('http://localhost:8765/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cookies: session.cookies, target: 'grok.com' }),
+      body: JSON.stringify({ cookies, target: 'grok.com' }),
     });
     const data = await res.json();
     if (res.ok) {
@@ -7164,10 +7193,12 @@ async function grokLaunchSession(index) {
     } else {
       status.textContent = 'Launch failed: ' + (data.detail || 'unknown error');
       status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+      toast('✗ Launch: ' + (data.detail || 'unknown error'), 'error', 6000);
     }
   } catch (e) {
-    status.textContent = 'Connection failed: ' + e.message;
+    status.textContent = 'Connection failed: ' + e.message + ' (launcher :8765 не отвечает — проверь бейдж launcher сверху)';
     status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
+    toast('✗ launcher :8765 не отвечает', 'error', 6000);
   }
 }
 

@@ -26,6 +26,20 @@ if (-not (Have winget)) {
   Die "winget не найден. Обнови 'App Installer' из Microsoft Store, потом запусти снова."
 }
 
+# ── Execution Policy ─────────────────────────────────────────────────────────
+# Дефолтная политика Restricted блокирует npm.ps1/npx.ps1 → npm в PowerShell
+# падает с PSSecurityException. RemoteSigned для CurrentUser достаточно и
+# не требует прав администратора.
+try {
+  $pol = Get-ExecutionPolicy -Scope CurrentUser
+  if ($pol -eq 'Undefined' -or $pol -eq 'Restricted' -or $pol -eq 'AllSigned') {
+    Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+    Ok "ExecutionPolicy CurrentUser -> RemoteSigned (иначе npm в PowerShell не работает)"
+  } else {
+    Ok "ExecutionPolicy: $pol"
+  }
+} catch { Warn "не смог поменять ExecutionPolicy: $_" }
+
 # ── Git ──────────────────────────────────────────────────────────────────────
 if (Have git) {
   Ok "git уже есть"

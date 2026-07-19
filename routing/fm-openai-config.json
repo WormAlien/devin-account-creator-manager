@@ -1,0 +1,5 @@
+{
+    "BIG_MODEL": "gpt-5.5",
+    "MIDDLE_MODEL": "gpt-5.5",
+    "SMALL_MODEL": "gpt-5.5"
+}

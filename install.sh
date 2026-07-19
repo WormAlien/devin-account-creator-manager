@@ -202,14 +202,25 @@ elif ask "Создать из шаблона claude-settings.example.json?" Y; t
   cp claude-settings.example.json "$CLAUDE_DIR/settings.json" && ok "settings.json создан"
 fi
 
-# Ключ Aerolink: settings.json берёт его через apiKeyHelper (cat al-active-key.txt).
-# Без этого файла Claude Code получит пустой ключ и упадёт. Дашборд потом сам его перезапишет.
-if [ -f "$CLAUDE_DIR/al-active-key.txt" ]; then
-  warn "al-active-key.txt уже есть — не трогаю."
-elif ask "Вписать Aerolink API-ключ сейчас? (без него Claude Code не заведётся)" Y; then
-  AK=$(prompt "Aerolink API-ключ")
+# Ключ бэкенда: settings.json берёт его через apiKeyHelper (cat <какой-то>-active-key.txt).
+# Без этого файла Claude Code получит пустой ключ и упадёт с "Authentication failed".
+# Смотрим, на какой файл ссылается apiKeyHelper в settings.json, и спрашиваем именно тот ключ.
+KEY_FILE=$(grep -o '[a-z]*-active-key\.txt' "$CLAUDE_DIR/settings.json" 2>/dev/null | head -1)
+[ -z "$KEY_FILE" ] && KEY_FILE="al-active-key.txt"
+case "$KEY_FILE" in
+  fm-*) KEY_NAME="FreeModel" ;;
+  al-*) KEY_NAME="Aerolink" ;;
+  cdt-*) KEY_NAME="Conduit" ;;
+  ev-*) KEY_NAME="EvoMap" ;;
+  ot-*) KEY_NAME="OurToken" ;;
+  *) KEY_NAME="$KEY_FILE" ;;
+esac
+if [ -s "$CLAUDE_DIR/$KEY_FILE" ]; then
+  warn "$KEY_FILE уже есть и непустой — не трогаю."
+elif ask "Вписать $KEY_NAME API-ключ сейчас? (без него Claude Code не заведётся)" Y; then
+  AK=$(prompt "$KEY_NAME API-ключ")
   if [ -n "$AK" ]; then
-    printf '%s' "$AK" > "$CLAUDE_DIR/al-active-key.txt" && ok "ключ записан в ~/.claude/al-active-key.txt"
+    printf '%s' "$AK" > "$CLAUDE_DIR/$KEY_FILE" && ok "ключ записан в ~/.claude/$KEY_FILE"
   else
     warn "ключ пустой — впиши позже через дашборд (вкладка ключей → Активировать)."
   fi
@@ -311,6 +322,29 @@ if ask "Поставить Python-зависимости (Camoufox + opentele ve
         fi
         warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"
       fi
+    fi
+  fi
+fi
+
+# ── Финал: sanity-check авторизации Claude Code ─────────────────────────────
+step "Проверка авторизации Claude Code"
+KEY_FILE=$(grep -o '[a-z]*-active-key\.txt' "$CLAUDE_DIR/settings.json" 2>/dev/null | head -1)
+if [ -n "$KEY_FILE" ]; then
+  if [ ! -s "$CLAUDE_DIR/$KEY_FILE" ]; then
+    err "~/.claude/$KEY_FILE пустой или отсутствует — Claude Code скажет 'Authentication failed'."
+    err "Фикс: printf '%s' \"sk-ТВОЙ-КЛЮЧ\" > ~/.claude/$KEY_FILE  (перезапуск CC не нужен)"
+  else
+    BASE_URL=$(grep -o '"ANTHROPIC_BASE_URL"[^,]*' "$CLAUDE_DIR/settings.json" | grep -o 'https\?://[^"]*' | head -1)
+    if [ -n "$BASE_URL" ] && command -v curl >/dev/null 2>&1; then
+      HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${BASE_URL%/}/v1/models" \
+        -H "x-api-key: $(cat "$CLAUDE_DIR/$KEY_FILE")" 2>/dev/null)
+      case "$HTTP" in
+        200) ok "ключ живой: $BASE_URL → 200" ;;
+        401|403) err "бэкенд $BASE_URL отверг ключ ($HTTP) — ключ дохлый, активируй другой через дашборд" ;;
+        *) warn "бэкенд $BASE_URL ответил '$HTTP' — не смог проверить ключ (сеть/VPN?)" ;;
+      esac
+    else
+      ok "ключ на месте: ~/.claude/$KEY_FILE"
     fi
   fi
 fi

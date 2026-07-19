@@ -37,21 +37,28 @@
   (там живут gpt-модели; `cc.freemodel.dev` — только claude). Ключ прокси читает сам из
   `fm-active-key.txt` (в settings.json пишется `dummy`). Маппинг claude-*→gpt-* правится
   в `routing/fm-openai-config.json` без рестарта (перечитывается по mtime).
-- **apihelper** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/fm-active-key.txt`,
+- **apihelper** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/fm-active-key.txt`,
   `ANTHROPIC_BASE_URL=cc.freemodel.dev`, TTL=0. Claude Code читает ключ из файла на
   каждый запрос → ключ можно менять **без перезапуска**. На этом построена авто-ротация.
-- **aerolink** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/al-active-key.txt`,
+- **aerolink** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/al-active-key.txt`,
   `ANTHROPIC_BASE_URL=capi.aerolink.lat/`, TTL=0. То же, что apihelper, но для пула
   Aerolink. Ключ читается на каждый запрос → смена на лету, без перезапуска.
-- **evomap** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/ev-active-key.txt`,
+- **evomap** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/ev-active-key.txt`,
   `ANTHROPIC_BASE_URL=api.evomap.ai/v1`, TTL=0. То же, что apihelper, но для пула
   Evomap. Ключ читается на каждый запрос → смена на лету, без перезапуска.
-- **ourtoken** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/ot-active-key.txt`,
+- **ourtoken** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/ot-active-key.txt`,
   `ANTHROPIC_BASE_URL=api.ourtoken.ai/v1`, TTL=0. То же, что apihelper, но для пула
   Ourtoken. Ключ читается на каждый запрос → смена на лету, без перезапуска.
-- **conduit** (виртуальный режим) — `apiKeyHelper: cat ~/.claude/cdt-active-key.txt`,
+- **conduit** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/cdt-active-key.txt`,
   `ANTHROPIC_BASE_URL=https://conduit.ozdoev.net/api/v1`, TTL=0. Anthropic-совместимый
   endpoint (ключи `sk-cdt-`), реги из Telegram. То же, что aerolink, но для пула Conduit.
+
+**⚠ Формат apiKeyHelper — только node-вариант** (`keyHelperCmd()` в transparent-proxy.js):
+`node -e "...readFileSync(os.homedir()+'/.claude/<xx>-active-key.txt'...).trim()"`.
+НЕ `cat ~/...`: CC запускает helper через системный шелл, где cat может отсутствовать
+в PATH (дефолтная установка Git for Windows), `~` не резолвится без HOME, кириллица в
+имени юзера ломает путь. Симптом — бесконечные ретраи по таймауту (НЕ auth-ошибка):
+cat без файла виснет на stdin. Выяснено на чистой установке 2026-07-19.
 
 Режим определяется по `settings.json` (`currentTarget`): apiKeyHelper с `fm-active-key.txt`
 → `apihelper`; с `al-active-key.txt` → `aerolink`; с `ev-active-key.txt` → `evomap`; с `ot-active-key.txt` → `ourtoken`; с `cdt-active-key.txt` → `conduit`;
@@ -151,9 +158,12 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
   API Helper» на главной. ТГ-пул — **зеркало** блока из FreeModel (общий пул:
   `renderTgPool` рисует во все `.tg-list`/`.tg-stats`).
 
-## Статуслайн Claude Code (`~/.claude/statusline-autoreger.sh`)
+## Статуслайн Claude Code (`routing/statusline-autoreger.sh`)
 
-Скрипт-строка снизу CLI: `[transport] provider/model │ $ ▰▰▰▰▱▱ 60% $9.26`.
+Скрипт-строка снизу CLI: `[transport] provider/model │ $ ▰▰▰▰▱▱ 60% $9.26 │ ⧉ ▰▱▱▱▱ 11% 110k/1M`.
+Лежит **в репо** (обновления приезжают с `git pull`), `install.sh` (шаг 3)
+прописывает его в `~/.claude/settings.json` → `statusLine.command`.
+`ROOT` определяет сам по своему расположению (`<repo>/routing/`).
 
 - **Провайдер**: сначала пробует `GET :8200/__switch/api/status` (1с timeout), при
   недоступности — фолбэк по `apiKeyHelper`/`ANTHROPIC_BASE_URL` из `settings.json`.
@@ -162,6 +172,12 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
   (`apiKey`) → блок в `.freemodel_quota_cache.json`. Метрика — 5h окно:
   `pct = (1 − h5/h5max)·100`, `$ = h5max − h5` (остаток до reset).
 - **Квота для `ourtoken`** — `live/total` из `ourtoken-sessions.json`.
+- **Контекстное окно** (`⧉ ▰▱▱▱▱ 11% 110k/1M`) — из stdin-payload Claude Code
+  (`context_window.used_percentage` + `total_input_tokens`/`context_window_size`,
+  CC ≥2.1.132). Цвет по занятости: <50% зелёный → <80% жёлтый → красный.
+  Нет поля — шкала не рисуется. На 1M-окне процент ползёт медленно
+  (1% = 10k токенов), поэтому рядом токены — по ним видно живое движение;
+  ~105k на старте сессии = системный промпт + CLAUDE.md + memory, это норма.
 
 ### Lazy refresh (пишет в общий кеш дашборда)
 

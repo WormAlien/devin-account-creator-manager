@@ -785,6 +785,20 @@ async function registerOne(index, inviteCode) {
         } catch (e) {
           log(`[#${index}] ⚠️ финализация TG не удалась: ${e.message}`);
         }
+        // Trial credit ($8 июль 2026) даётся именно за бинд TG. Подтягиваем квоту
+        // асинхронно после привязки, чтобы UI сразу показал новый аккаунт с
+        // бонусом, а не пустышку до следующего массового refresh. 4с пауза —
+        // freemodel лениво рендерит trial credit после верификации.
+        (async () => {
+          const sessionName = path.basename(exportedDir);
+          await sleep(4000);
+          try {
+            const q = await dashApi.refreshOneFreemodelQuota(sessionName);
+            log(`[#${index}] 📊 квота подтянута: plan=${q?.plan || '?'} avail=${q?.available || '?'} trial=${q?.trialCredit || '—'}`);
+          } catch (e) {
+            log(`[#${index}] ⚠️ подтяжка квоты не удалась: ${e.message}`);
+          }
+        })();
       }
       if (refCode) {
         appendKeysFile(email, apiKey, refCode);

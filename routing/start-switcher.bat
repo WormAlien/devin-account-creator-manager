@@ -15,6 +15,14 @@ echo Starting Freemodel Key Rotator on :20126 ...
 start "FM Rotator" /B node freemodel-rotator.js
 timeout /t 1 /nobreak >nul
 
+REM Kill + start FreeModel OpenAI proxy (:20130) — Anthropic->OpenAI for gpt models
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20130 " ^| findstr LISTENING') do (
+    taskkill /F /PID %%P >nul 2>&1
+)
+echo Starting FreeModel OpenAI Proxy on :20130 ...
+start "FM OpenAI Proxy" /B node freemodel-openai-proxy.js
+timeout /t 1 /nobreak >nul
+
 echo Starting Backend Switcher on :8200 ...
 start "Backend Switcher" node transparent-proxy.js
 timeout /t 2 /nobreak >nul
@@ -30,3 +38,4 @@ echo Window will stay open. Close it (or press a key) to stop the switcher.
 pause >nul
 taskkill /FI "WINDOWTITLE eq Backend Switcher*" /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq FM Rotator*" /F >nul 2>&1
+taskkill /FI "WINDOWTITLE eq FM OpenAI Proxy*" /F >nul 2>&1

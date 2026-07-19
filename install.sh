@@ -198,8 +198,17 @@ fi
 step "1. Node-зависимости (npm install)"
 npm install || { err "npm install упал"; exit 1; }
 ok "deps установлены"
-if ask "Поставить Chromium для Playwright (нужен FreeModel-квотам/регистрациям)?" Y; then
-  npx playwright install chromium && ok "chromium установлен"
+# Браузеры Node-плейрайта (НЕ то же, что Camoufox из шага 7 — там отдельный
+# Python-стек). chromium — квоты FreeModel; chromium-headless-shell — извлечение
+# ключей из дашборда (без него "Извлекаю ключ через Playwright" падает).
+# Ставить строго из папки репы: npx берёт версию playwright из node_modules,
+# и браузер качается под неё. Повторный запуск ничего не перекачивает.
+PW_MARKER=$(node -e "try{console.log(require('playwright-core/package.json').version)}catch(e){console.log('')}" 2>/dev/null)
+if ask "Поставить браузеры Playwright: chromium + headless-shell (FreeModel-квоты, извлечение ключей)?" Y; then
+  npx playwright install chromium chromium-headless-shell \
+    && ok "браузеры playwright установлены (playwright ${PW_MARKER:-?})" \
+    || { warn "chromium-headless-shell не поддерживается этой версией — ставлю только chromium"; \
+         npx playwright install chromium && ok "chromium установлен"; }
 fi
 
 # ── 2. Claude Code 2.1.153 ──────────────────────────────────────────────────

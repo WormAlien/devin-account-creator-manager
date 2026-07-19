@@ -29,7 +29,13 @@ def log(tag: str, msg: str):
 
 
 def out(obj: dict):
-    print(json.dumps(obj, ensure_ascii=False), flush=True, file=sys.stdout)
+    try:
+        print(json.dumps(obj, ensure_ascii=False), flush=True, file=sys.stdout)
+    except UnicodeEncodeError:
+        # cp1251-консоль (Windows без utf-8 stdout): не-ASCII символ в error-тексте
+        # роняет сам print, и Node не получает даже {"ok":false} — процесс умирает
+        # с UnicodeEncodeError вместо ответа. ASCII-эскейпы JSON парсит одинаково.
+        print(json.dumps(obj, ensure_ascii=True), flush=True, file=sys.stdout)
 
 
 def _flatten_strings(obj, acc=None):

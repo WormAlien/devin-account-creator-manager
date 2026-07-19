@@ -38,6 +38,9 @@ class CamoufoxTmailor {
     this.proc = spawn(this.python, args, {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: path.dirname(this.script),
+      // utf-8 stdout/stderr: без этого на чистой Windows питон наследует cp1251
+      // и не-ASCII в JSON-ответе роняет print (UnicodeEncodeError вместо ответа).
+      env: { ...process.env, PYTHONIOENCODING: "utf-8" },
     });
 
     this.proc.stderr.on("data", (data) => {

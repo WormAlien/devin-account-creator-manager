@@ -216,7 +216,10 @@ if ask "Поставить Python-зависимости (Camoufox + opentele ve
 
     if ask "  Camoufox (TokenRouter автореги)?" Y; then
       $PY -m pip install --upgrade pip
-      $PY -m pip install camoufox==0.4.11 requests playwright==1.61.0 && $PY -m camoufox fetch && ok "camoufox готов"
+      # playwright строго 1.60.0: в 1.61 Firefox-клиент шлёт viewport.isMobile,
+      # которого juggler Camoufox (FF152) не знает → Browser.setDefaultViewport
+      # падает на старте и вся авторега умирает (проверено на чистой установке).
+      $PY -m pip install camoufox==0.4.11 requests playwright==1.60.0 && $PY -m camoufox fetch && ok "camoufox готов"
     fi
 
     # grok-launcher: FastAPI-сервис на :8765 для SuperGrok Sessions.

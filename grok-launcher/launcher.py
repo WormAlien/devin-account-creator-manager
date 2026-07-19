@@ -401,10 +401,14 @@ async def launch(data: dict):
 #
 # Забирает в headless Chrome:
 #   email + display name — из кнопки профиля (sidebar)
-#   план (SuperGrok / Lite / Heavy / free) — по DOM-маркерам
+#   план (SuperGrok / Lite / Heavy / free) — по DOM (primary) + credits tiers (fallback)
 #   rate-limits — из /rest/rate-limits (простой REST)
 #   credits/billing period — из /grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig
 #     (grpc-web, декодируется через минимальный protobuf-парсер ниже)
+#
+# План раньше часто ошибочно становился "SuperGrok" из-за tier 6 в breakdown
+# (backend может возвращать все tiers даже free-аккаунтам). Теперь приоритет у
+# DOM-детекции + sleep для рендера + только positive-pct tiers как fallback.
 #
 # Всё делается через тот же spawn+CDP что и Launch, но с --headless=new и
 # автоматическим завершением инстанса после сбора данных.
@@ -657,6 +661,44 @@ async def _probe_quota(cookies: list[dict]) -> dict:
 
             body_low = (body_text or '').lower()
 
+            # Give UI time to render plan/usage badges (dynamic content)
+            await asyncio.sleep(1.2)
+
+            # Re-query richer body text for accurate plan detection
+            try:
+                body_text = await evalx("document.body ? document.body.innerText.slice(0, 12000) : ''") or ''
+            except Exception:
+                pass
+            body_low = (body_text or '').lower()
+
+            # Targeted plan extraction via DOM (only for strong signals: heavy/lite or clear free)
+            # Generic "supergrok" mentions are ignored — they appear in marketing even for free users.
+            try:
+                ui_plan = await evalx('''(() => {
+                    const getText = (el) => (el && (el.textContent || el.innerText || '')).trim().toLowerCase();
+                    const bt = (document.body ? document.body.innerText : '').toLowerCase();
+                    const candidates = [];
+                    try {
+                        document.querySelectorAll('[class*="plan" i], [class*="subscription" i], button, [role="status"], header *, aside *').forEach(el => {
+                            const t = getText(el);
+                            if (t && t.length > 1 && t.length < 60) candidates.push(t);
+                        });
+                    } catch (_) {}
+                    for (const l of candidates) {
+                        if (l.includes('supergrok heavy') || l.includes('heavy plan')) return 'SuperGrok Heavy';
+                        if (l.includes('supergrok lite') || l.includes('lite plan')) return 'SuperGrok Lite';
+                        if ((l.includes('free') && (l.includes('plan') || l.includes('current'))) || l === 'free') return 'Free';
+                    }
+                    if (bt.includes('supergrok heavy')) return 'SuperGrok Heavy';
+                    if (bt.includes('supergrok lite')) return 'SuperGrok Lite';
+                    if (bt.includes('free plan') || bt.includes("you're on free")) return 'Free';
+                    return null;
+                })()''')
+                if ui_plan:
+                    body_low = (ui_plan + ' ' + body_low).lower()
+            except Exception:
+                pass
+
         if credits_body_b64:
             try:
                 credits = _parse_grok_credits(credits_body_b64)
@@ -665,18 +707,53 @@ async def _probe_quota(cookies: list[dict]) -> dict:
             except Exception as e:
                 print(f"[probe] credits decode fail: {e}", flush=True)
 
-        # План определяем по составу weekly tier'ов: у Free только Imagine(5)+Разговор(4);
-        # у SuperGrok/Lite добавляется Голосовой(6); Heavy — доп. маркер в DOM.
-        tiers = {b.get('tier') for b in (result.get('credits', {}).get('breakdown') or [])}
-        body_low = locals().get('body_low', '')
-        if 'supergrok heavy' in body_low:
+        # Ensure body_low exists even on early exit paths
+        body_low = locals().get('body_low', '') or ''
+
+        # --- Plan detection ---
+        # Priority:
+        # 1. Explicit heavy/lite from DOM (rare)
+        # 2. Objective credits breakdown: presence of positive-pct tier 6 = paid (voice)
+        # 3. If we got any positive usage tiers but no voice → Free
+        # 4. If we got a credits response at all (even minimal) → Free (don't default to SuperGrok)
+        # 5. Strong "free" / "current plan free" text
+        # Generic "supergrok" mention in body is now ignored (too many marketing texts on free accounts too).
+        credits = result.get('credits') or {}
+        positive_tiers = [b for b in (credits.get('breakdown') or []) if (b.get('pct') or 0) > 0]
+        positive_tier_ids = {b.get('tier') for b in positive_tiers}
+        has_voice = 6 in positive_tier_ids
+        has_any_positive_usage = len(positive_tiers) > 0
+
+        has_heavy_text = 'supergrok heavy' in body_low
+        has_lite_text = 'supergrok lite' in body_low
+        looks_like_free = (
+            'free plan' in body_low or
+            "you're on free" in body_low or
+            ("current plan" in body_low and 'free' in body_low)
+        )
+
+        if has_heavy_text:
             result['plan'] = 'SuperGrok Heavy'
-        elif 'supergrok lite' in body_low:
+        elif has_lite_text:
             result['plan'] = 'SuperGrok Lite'
-        elif 6 in tiers:
+        elif has_voice:
             result['plan'] = 'SuperGrok'
-        elif tiers:
+        elif looks_like_free:
             result['plan'] = 'Free'
+        elif 'supergrok' in body_low and not looks_like_free:
+            # Generic "supergrok" mention + no free signals → treat as paid (marketing is everywhere, but combined with credits)
+            result['plan'] = 'SuperGrok'
+        elif has_any_positive_usage and not looks_like_free:
+            # Has usage data but no explicit free text and no voice this period → still likely SuperGrok
+            result['plan'] = 'SuperGrok'
+        elif credits and not looks_like_free:
+            # Got credits config (period info) but no usage yet this period, no free signals → SuperGrok
+            result['plan'] = 'SuperGrok'
+        elif has_any_positive_usage:
+            result['plan'] = 'Free'
+        elif credits:
+            result['plan'] = 'Free'
+        # else: leave without plan (—)
 
         return result
     finally:

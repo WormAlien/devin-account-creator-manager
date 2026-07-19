@@ -18,7 +18,7 @@ import httpx
 import websockets
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 app = FastAPI(title="Cookie Launcher")
 
@@ -383,8 +383,15 @@ async def index():
 async def launch(data: dict):
     cookies = data.get("cookies", [])
     target = data.get("target", "grok.com")
+    # ВАЖНО: не flask — `return {...}, 400` FastAPI отдаёт как 200 с массивом,
+    # дашборд считал это успехом и молча "открывал" Chrome при любой ошибке.
     if not cookies:
-        return {"detail": "No cookies provided"}, 400
+        return JSONResponse(status_code=400, content={"detail": "No cookies provided"})
+    if not isinstance(cookies, list):
+        return JSONResponse(status_code=400, content={
+            "detail": "cookies must be a JSON array (Cookie-Editor → Export → JSON). "
+                      "Пересохрани сессию: Load → проверь формат → Save."
+        })
     try:
         print(f"[launcher] Received {len(cookies)} cookies for {target}", flush=True)
         result = await launch_browser(cookies, target)
@@ -394,7 +401,7 @@ async def launch(data: dict):
         print(f"[launcher] Error: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        return {"detail": str(e)}, 500
+        return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
 # --- Grok quota / plan / identity probe ---------------------------------------
@@ -765,7 +772,7 @@ async def _probe_quota(cookies: list[dict]) -> dict:
 async def quota(data: dict):
     cookies = data.get("cookies", [])
     if not cookies:
-        return {"detail": "No cookies provided"}, 400
+        return JSONResponse(status_code=400, content={"detail": "No cookies provided"})
     try:
         print(f"[quota] probing session ({len(cookies)} cookies)", flush=True)
         res = await _probe_quota(cookies)
@@ -774,7 +781,7 @@ async def quota(data: dict):
     except Exception as e:
         print(f"[quota] error: {e}", flush=True)
         import traceback; traceback.print_exc()
-        return {"detail": str(e)}, 500
+        return JSONResponse(status_code=500, content={"detail": str(e)})
 
 
 if __name__ == "__main__":

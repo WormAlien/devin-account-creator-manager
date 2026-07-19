@@ -192,3 +192,7 @@ grok-launcher/xai_device_auth.log
 grok-launcher/*_text.txt
 grok-launcher/probe*.out
 grok-launcher/probe_out.txt
+grok-launcher/sso_probe*.py
+
+# Автодампы схем MCP-тулов (генерируются инструментом, не наш код).
+mcps/

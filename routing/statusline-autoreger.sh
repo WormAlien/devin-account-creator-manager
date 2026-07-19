@@ -199,6 +199,21 @@ fi
 
 # ---- context window gauge: ⧉ ▰▰▱▱▱ 42% -------------------------------------
 # заполнение = занято; цвет от занятости: <50% зелёный, <80% жёлтый, дальше красный
+
+# РЕАЛЬНЫЕ окна бэкендов (проверено пробой routing/ctx-probe.sh, не верой CC).
+# CC выставляет context_window_size по model id (opus-4-6 → 200k), а бэкенд
+# может держать больше: freemodel = 1M на любых opus/fable (проба 2026-07-19:
+# "prompt is too long: 1148091 > 1000000 maximum"). Добавляй провайдеров сюда
+# по мере проверки: bash routing/ctx-probe.sh <base_url> <key> <model> 210
+real_max=""
+case "$provider" in
+    freemodel) real_max=1000000 ;;
+esac
+if [ -n "$real_max" ] && [ -n "$ctx_tok" ] && [ "$real_max" != "${ctx_max:-0}" ]; then
+    ctx_max="$real_max"
+    ctx_pct=$(( ctx_tok * 100 / real_max ))
+fi
+
 if [ -n "$ctx_pct" ]; then
     [ "$ctx_pct" -gt 100 ] && ctx_pct=100
     ctx_bars=5

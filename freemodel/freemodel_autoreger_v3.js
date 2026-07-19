@@ -438,14 +438,28 @@ async function grabReferralCodeInner(page) {
   let code = await tryExtract();
   if (code) { log(`[реф] 🔗 ${code}`); return code; }
 
+  // Медленный инет: SPA рендерит реф-блок сильно позже load. Фиксированные 2.5с
+  // не хватало — теперь активный поллинг DOM до появления FRE-кода, два круга
+  // по URL, второй круг с reload (лечит «поле с реф-ссылкой не прогрузилось»).
   const urls = [`${config.DASHBOARD_URL}/refer`, `${config.DASHBOARD_URL}/invite`, `${config.DASHBOARD_URL}/referrals`];
-  for (const u of urls) {
-    try {
-      await page.goto(u, { waitUntil: "load", timeout: 12000 }).catch(() => {});
-      await page.waitForTimeout(2500);
-      code = await tryExtract();
-      if (code) { log(`[реф] 🔗 ${code}`); return code; }
-    } catch {}
+  const pollForCode = async (ms) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      const c = await tryExtract();
+      if (c) return c;
+      await page.waitForTimeout(1000);
+    }
+    return null;
+  };
+  for (let round = 0; round < 2; round++) {
+    for (const u of urls) {
+      try {
+        await page.goto(u, { waitUntil: "load", timeout: 15000 }).catch(() => {});
+        code = await pollForCode(round === 0 ? 8000 : 15000);
+        if (code) { log(`[реф] 🔗 ${code}`); return code; }
+        log(`[реф] ${u.slice(config.DASHBOARD_URL.length) || "/"}: код не появился за ${round === 0 ? 8 : 15}с${round === 0 ? "" : " (после reload)"}`);
+      } catch {}
+    }
   }
   log("[реф] ⚠️ реф-код не найден");
   return null;
@@ -454,10 +468,12 @@ async function grabReferralCodeInner(page) {
 async function grabReferralCode(page) {
   log("[реф] ищу свою реф-ссылку");
   // Жёсткий потолок на всю функцию — что бы ни зависло (goto/SPA), не виснем
-  // навсегда: аккаунт уже зареган, реф-код опционален.
+  // навсегда: аккаунт уже зареган, реф-код опционален. 150с покрывает худший
+  // случай двух кругов на медленном инете (2×3×(goto 15с + поллинг)).
+  const capMs = config.REF_WAIT_MAX_MS || 150000;
   return Promise.race([
     grabReferralCodeInner(page),
-    new Promise((r) => setTimeout(() => { log("[реф] ⏱ таймаут поиска реф-кода"); r(null); }, 45000)),
+    new Promise((r) => setTimeout(() => { log("[реф] ⏱ таймаут поиска реф-кода"); r(null); }, capMs)),
   ]);
 }
 

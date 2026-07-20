@@ -89,6 +89,23 @@ has_cpp_build_tools() {
     [ -d "/c/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC" ]
 }
 
+# Python 3.11 — целевая версия для tg-venv (tgcrypto без компиляции).
+# Ставится через winget, а без winget — напрямую с python.org.
+PY311_EXE="$LOCALAPPDATA/Programs/Python/Python311/python.exe"
+install_python311() {
+  if [ -f "$PY311_EXE" ]; then return 0; fi
+  if have winget; then
+    winget install -e --id Python.Python.3.11
+  else
+    warn "winget нет — качаю Python 3.11.9 с python.org (~25 МБ)"
+    local exe="${TEMP:-/tmp}/python-3.11.9-amd64.exe"
+    curl -fL -o "$exe" https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe || return 1
+    warn "Ставлю (окно прогресса появится и само закроется)..."
+    MSYS_NO_PATHCONV=1 "$exe" /passive InstallAllUsers=0 PrependPath=1 Include_test=0
+  fi
+  [ -f "$PY311_EXE" ]
+}
+
 clear
 b "════════════════════════════════════════════════════════"
 b "  Vibe-Code Account Creator Manager — установщик"
@@ -391,26 +408,41 @@ if ask "Проверить/поставить Python-зависимости (Cam
     if tg_venv_ok; then
       ok "tg-venv уже готов (opentele+tgcrypto импортируются) — пропускаю"
     elif ask "  venv для ✈ Открыть TG (opentele)?" Y; then
-      SKIP_TG_VENV=0
-      if [ "$PYVER" = "3.12" ] && ! has_cpp_build_tools; then
-        warn "Для tgcrypto на Python 3.12 нужны Visual C++ Build Tools. Поставить можно так:"
-        warn "winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override \"--wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\""
-        if ! ask "  Продолжить попытку установки venv на Python 3.12?" N; then
-          warn "Пропускаю tg-venv. Поставь Python 3.11 или Build Tools и запусти install.sh снова."
-          SKIP_TG_VENV=1
+      # tgcrypto ставится колесом только на Python 3.11; на 3.12+ без Build Tools
+      # сборка падает. Поэтому: нет 3.11 → ставим его сами (winget или python.org)
+      # и берём по прямому пути — в PATH текущей сессии он всё равно не попадёт.
+      # tg_py: обёртка, т.к. PY бывает двусловным ("py -3.11"), а PY311_EXE —
+      # путём с пробелами (C:\Users\Happy Creator\...).
+      TG_PY_EXE=""
+      tg_py() { if [ -n "$TG_PY_EXE" ]; then "$TG_PY_EXE" "$@"; else $PY "$@"; fi; }
+      if [ "$PYVER" != "3.11" ]; then
+        if [ -f "$PY311_EXE" ]; then
+          TG_PY_EXE="$PY311_EXE"
+          ok "для tg-venv беру Python 3.11: $PY311_EXE"
+        elif [ "$PYVER" = "3.12" ] && has_cpp_build_tools; then
+          warn "Python 3.12 + Build Tools — пробую собрать tgcrypto из исходников"
+        elif ask "  Python 3.11 не найден — поставить автоматически? (надёжный путь для tg-venv)" Y; then
+          if install_python311; then
+            TG_PY_EXE="$PY311_EXE"
+            ok "Python 3.11 установлен: $PY311_EXE"
+          else
+            err "Python 3.11 не встал — пробую на Python $PYVER (может упасть на tgcrypto)"
+          fi
         fi
       fi
 
-      if [ "$SKIP_TG_VENV" = "0" ]; then
-        rm -rf tools/tg-venv
-        $PY -m venv tools/tg-venv && \
-          tools/tg-venv/Scripts/python -m pip install --upgrade pip && \
-          tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt && \
-          tools/tg-venv/Scripts/python -c 'import opentele; import tgcrypto' && \
-          ok "tg-venv готов"
-        if [ $? -ne 0 ]; then
-          err "tg-venv не собрался. Чаще всего помогает Python 3.11: winget install -e --id Python.Python.3.11"
-        fi
+      rm -rf tools/tg-venv
+      TG_VENV_LOG="${TEMP:-/tmp}/tg-venv-install.log"
+      if tg_py -m venv tools/tg-venv && \
+         tools/tg-venv/Scripts/python -m pip install --upgrade pip >"$TG_VENV_LOG" 2>&1 && \
+         tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt >>"$TG_VENV_LOG" 2>&1 && \
+         tools/tg-venv/Scripts/python -c 'import opentele; import tgcrypto' 2>>"$TG_VENV_LOG"; then
+        ok "tg-venv готов"
+      else
+        err "tg-venv не собрался. Последние строки лога:"
+        tail -15 "$TG_VENV_LOG" 2>/dev/null | sed 's/^/    /'
+        err "Полный лог: $TG_VENV_LOG"
+        err "Обычно лечится Python 3.11 — перезапусти install.sh и согласись на его установку."
       fi
     fi
 

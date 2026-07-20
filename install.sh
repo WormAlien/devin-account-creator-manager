@@ -475,7 +475,21 @@ if ask "Проверить/поставить Python-зависимости (Cam
     fi
 
     if tg_venv_ok && [ ! -f tools/telegram-portable/Telegram/Telegram.exe ]; then
-      warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"
+      if ask "  Портативного Telegram нет — скачать с telegram.org (~70 МБ)? (нужен для ✈ Открыть)" Y; then
+        TG_ZIP="${TEMP:-/tmp}/tportable.zip"
+        # официальная ссылка-редирект на свежий tportable-x64.*.zip; распаковывается в Telegram/Telegram.exe
+        if curl -fL -o "$TG_ZIP" https://telegram.org/dl/desktop/win64_portable && \
+           mkdir -p tools/telegram-portable && \
+           unzip -o -q "$TG_ZIP" -d tools/telegram-portable && \
+           [ -f tools/telegram-portable/Telegram/Telegram.exe ]; then
+          ok "портативный Telegram установлен (tools/telegram-portable/Telegram)"
+          rm -f "$TG_ZIP"
+        else
+          err "не скачался/не распаковался — положи вручную: зип с https://desktop.telegram.org (Portable) → tools/telegram-portable/"
+        fi
+      else
+        warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"
+      fi
     fi
   fi
 fi

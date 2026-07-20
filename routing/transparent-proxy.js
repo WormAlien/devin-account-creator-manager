@@ -1531,7 +1531,7 @@ async function handleTgOpen(req, res) {
         const { phone } = await readJsonBody(req);
         if (!phone) return jsonRes(res, 400, { error: 'phone обязателен' });
         if (!fs.existsSync(TG_VENV_PY)) {
-            return jsonRes(res, 500, { error: 'нет tools/tg-venv — venv не создан' });
+            return jsonRes(res, 500, { error: `нет ${TG_VENV_PY} — venv не создан. Запусти UPDATE.bat в папке репо (git pull + установка), потом обнови страницу` });
         }
         logLine(`tg open: ${phone} → конвертация + запуск`);
         const child = spawn(TG_VENV_PY, [TG_OPEN_PY, String(phone)], {

@@ -198,3 +198,4 @@ grok-launcher/sso_probe*.py
 
 # Автодампы схем MCP-тулов (генерируются инструментом, не наш код).
 mcps/
+doctor-report.txt

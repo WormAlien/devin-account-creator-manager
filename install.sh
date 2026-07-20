@@ -385,33 +385,52 @@ tg_venv_ok() {
 if tg_venv_ok; then TG_VENV_STATE="уже готов"; else TG_VENV_STATE="НЕ создан — нужен для ✈ Открыть TG"; fi
 if ask "Проверить/поставить Python-зависимости (Camoufox + opentele venv)? [tg-venv: $TG_VENV_STATE]" Y; then
   PY=$(choose_python)
+  # Питона нет вообще (или только в LOCALAPPDATA без PATH) — ставим 3.11 сами
+  # и берём по прямому пути, не полагаясь на PATH текущей сессии.
+  if [ -z "$PY" ] && [ -f "$PY311_EXE" ]; then
+    PY="$PY311_EXE"
+  fi
   if [ -z "$PY" ]; then
-    err "python не найден — пропускаю. Лучше поставить Python 3.11: winget install -e --id Python.Python.3.11"
-  else
-    PYVER=$(python_version "$PY")
+    warn "python не найден вообще — без него не работают Camoufox-автореги и ✈ Открыть TG"
+    if ask "  Поставить Python 3.11 автоматически?" Y; then
+      if install_python311; then
+        PY="$PY311_EXE"
+        ok "Python 3.11 установлен: $PY311_EXE"
+      else
+        err "Python 3.11 не установился — пропускаю Python-шаги. Поставь вручную: https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+      fi
+    else
+      err "python не найден — пропускаю Python-шаги."
+    fi
+  fi
+  if [ -n "$PY" ]; then
+    # PY бывает двусловным ("py -3.11") или путём с пробелами
+    # ("C:\Users\Happy Creator\...\python.exe") — py_run обслуживает оба.
+    py_run() { if [ -f "$PY" ]; then "$PY" "$@"; else $PY "$@"; fi; }
+    PYVER=$(py_run -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
     ok "Python $PYVER → $PY"
     if [ "$PYVER" = "3.12" ]; then
       warn "Python 3.12 часто ломает tgcrypto/opentele без сборки. Надёжнее: winget install -e --id Python.Python.3.11"
     fi
 
     # Camoufox: пропускаем, если уже стоит рабочая пара camoufox + playwright 1.60.0
-    PW_VER=$($PY -c 'import importlib.metadata as m; print(m.version("playwright"))' 2>/dev/null)
-    if $PY -c 'import camoufox' >/dev/null 2>&1 && [ "$PW_VER" = "1.60.0" ]; then
+    PW_VER=$(py_run -c 'import importlib.metadata as m; print(m.version("playwright"))' 2>/dev/null)
+    if py_run -c 'import camoufox' >/dev/null 2>&1 && [ "$PW_VER" = "1.60.0" ]; then
       ok "camoufox уже стоит (playwright $PW_VER) — пропускаю"
     elif ask "  Camoufox (TokenRouter автореги)?" Y; then
-      $PY -m pip install --upgrade pip
+      py_run -m pip install --upgrade pip
       # playwright строго 1.60.0: в 1.61 Firefox-клиент шлёт viewport.isMobile,
       # которого juggler Camoufox (FF152) не знает → Browser.setDefaultViewport
       # падает на старте и вся авторега умирает (проверено на чистой установке).
-      $PY -m pip install camoufox==0.4.11 requests playwright==1.60.0 && $PY -m camoufox fetch && ok "camoufox готов"
+      py_run -m pip install camoufox==0.4.11 requests playwright==1.60.0 && py_run -m camoufox fetch && ok "camoufox готов"
     fi
 
     # grok-launcher: FastAPI-сервис на :8765 для SuperGrok Sessions.
     # Поднимается transparent-proxy.js автоматически, но зависимости надо один раз поставить.
-    if $PY -c 'import fastapi, uvicorn, websockets, httpx' >/dev/null 2>&1; then
+    if py_run -c 'import fastapi, uvicorn, websockets, httpx' >/dev/null 2>&1; then
       ok "grok-launcher deps уже стоят — пропускаю"
     elif ask "  grok-launcher (SuperGrok Sessions — headless-квоты + Chrome-launcher)?" Y; then
-      $PY -m pip install -r grok-launcher/requirements.txt && ok "grok-launcher готов"
+      py_run -m pip install -r grok-launcher/requirements.txt && ok "grok-launcher готов"
     fi
 
     if tg_venv_ok; then
@@ -423,7 +442,7 @@ if ask "Проверить/поставить Python-зависимости (Cam
       # tg_py: обёртка, т.к. PY бывает двусловным ("py -3.11"), а PY311_EXE —
       # путём с пробелами (C:\Users\Happy Creator\...).
       TG_PY_EXE=""
-      tg_py() { if [ -n "$TG_PY_EXE" ]; then "$TG_PY_EXE" "$@"; else $PY "$@"; fi; }
+      tg_py() { if [ -n "$TG_PY_EXE" ]; then "$TG_PY_EXE" "$@"; else py_run "$@"; fi; }
       if [ "$PYVER" != "3.11" ]; then
         if [ -f "$PY311_EXE" ]; then
           TG_PY_EXE="$PY311_EXE"

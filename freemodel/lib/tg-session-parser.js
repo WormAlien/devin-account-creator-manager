@@ -15,7 +15,11 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const SQLITE_EXE = process.env.SQLITE3
-    || path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'sqlite3.exe');
+    || [
+        path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'sqlite3.exe'),
+        path.join(os.homedir(), 'bin', 'sqlite3.exe'),
+    ].find(p => fs.existsSync(p))
+    || path.join(os.homedir(), 'bin', 'sqlite3.exe');
 
 function runSqlite(dbPath, sql) {
     if (!fs.existsSync(SQLITE_EXE)) {
@@ -54,7 +58,7 @@ function parseSessionBuffer(buf, fallbackPhone = null) {
     // Ранние проверки с честными ошибками — иначе hasTable() глотает
     // «sqlite3 не найден» и всё выглядит как «нет таблицы sessions».
     if (!fs.existsSync(SQLITE_EXE)) {
-        throw new Error(`sqlite3.exe не найден (${SQLITE_EXE}) — поставь: winget install -e --id SQLite.SQLite`);
+        throw new Error(`sqlite3.exe не найден (${SQLITE_EXE}) — положи sqlite3.exe в ~/bin (setup-sqlite3.bat) или поставь: winget install -e --id SQLite.SQLite`);
     }
     if (buf.length < 16 || !buf.slice(0, 15).equals(Buffer.from('SQLite format 3'))) {
         throw new Error('файл не похож на SQLite .session (Telethon/Pyrogram); tdata из Telegram Desktop не подходит');

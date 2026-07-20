@@ -6,12 +6,18 @@
 // Нужен путь к БД и STORAGE_ENCRYPTION_KEY.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const DB_PATH = process.env.OMNI_DB || 'C:\\Users\\WormAlien\\AppData\\Local\\Temp\\opencode\\omniroute-storage.sqlite';
-const SQLITE_EXE = process.env.SQLITE3 || path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'sqlite3.exe');
+const SQLITE_EXE = process.env.SQLITE3
+    || [
+        path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'sqlite3.exe'),
+        path.join(os.homedir(), 'bin', 'sqlite3.exe'),
+    ].find(p => fs.existsSync(p))
+    || path.join(os.homedir(), 'bin', 'sqlite3.exe');
 const STORAGE_KEY = process.env.STORAGE_ENCRYPTION_KEY;
 const NODE_ID = process.env.OMNI_PROVIDER_NODE || 'openai-compatible-chat-8f2ae822-58f2-49b4-b212-393f686b00c5';
 

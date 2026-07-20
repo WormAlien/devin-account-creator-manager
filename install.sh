@@ -145,19 +145,34 @@ fi
 
 # ── 0.6 sqlite3.exe ─────────────────────────────────────────────────────────
 # Нужен дашборду (OmniRoute-вкладка) и парсеру .session для TG-пула
-# (freemodel/lib/tg-session-parser.js). Ищется в WinGet Links либо через
-# env SQLITE3. Без него закидывание .session падает невнятной ошибкой.
+# (freemodel/lib/tg-session-parser.js). Ищется в WinGet Links, в ~/bin
+# (setup-sqlite3.bat) либо через env SQLITE3. Без него закидывание .session
+# падает невнятной ошибкой.
 step "0.6 sqlite3 (TG-пул + OmniRoute)"
 SQLITE_LINK="$LOCALAPPDATA/Microsoft/WinGet/Links/sqlite3.exe"
+SQLITE_HOMEBIN="$HOME/bin/sqlite3.exe"
 if [ -n "${SQLITE3:-}" ] && [ -f "$SQLITE3" ]; then
   ok "sqlite3: $SQLITE3 (env SQLITE3)"
 elif [ -f "$SQLITE_LINK" ]; then
   ok "sqlite3: $SQLITE_LINK"
+elif [ -f "$SQLITE_HOMEBIN" ]; then
+  ok "sqlite3: $SQLITE_HOMEBIN"
 elif have winget && ask "sqlite3.exe не найден — поставить через winget? (нужен TG-пулу)" Y; then
   winget install -e --id SQLite.SQLite
   [ -f "$SQLITE_LINK" ] && ok "sqlite3 установлен" || warn "sqlite3 не появился в $SQLITE_LINK — проверь winget и перезапусти git-bash"
 else
-  warn "без sqlite3 не будут работать: закидывание .session в TG-пул, вкладка OmniRoute"
+  warn "winget нет — качаю sqlite-tools с sqlite.org в ~/bin"
+  SQLITE_TMP="$(mktemp -d)"
+  if curl -fL -o "$SQLITE_TMP/sqlite-tools.zip" https://sqlite.org/2026/sqlite-tools-win-x64-3530300.zip \
+     && (cd "$SQLITE_TMP" && unzip -o -q sqlite-tools.zip); then
+    mkdir -p "$HOME/bin"
+    find "$SQLITE_TMP" -name sqlite3.exe -exec cp {} "$HOME/bin/" \;
+    [ -f "$SQLITE_HOMEBIN" ] && ok "sqlite3: $SQLITE_HOMEBIN" \
+      || warn "sqlite3.exe не встал — без него не работают: закидывание .session в TG-пул, вкладка OmniRoute"
+  else
+    warn "скачать не вышло — без sqlite3 не работают: закидывание .session в TG-пул, вкладка OmniRoute"
+  fi
+  rm -rf "$SQLITE_TMP"
 fi
 
 # ── 0.7 cat в системном PATH (критично для apiKeyHelper) ────────────────────

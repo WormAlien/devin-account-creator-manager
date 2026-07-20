@@ -27,7 +27,11 @@ function devinMod() {
 
 const OMNI_DB = path.join(os.homedir(), '.omniroute', 'storage.sqlite');
 const SQLITE_EXE = process.env.SQLITE3
-    || path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'sqlite3.exe');
+    || [
+        path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'sqlite3.exe'),
+        path.join(os.homedir(), 'bin', 'sqlite3.exe'),
+    ].find(p => fs.existsSync(p))
+    || path.join(os.homedir(), 'bin', 'sqlite3.exe');
 
 function sqliteJson(sql) {
     if (!fs.existsSync(SQLITE_EXE)) {

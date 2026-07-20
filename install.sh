@@ -14,9 +14,17 @@ warn() { printf '\033[33m  ! %s\033[0m\n' "$*"; }
 err() { printf '\033[31m  ✗ %s\033[0m\n' "$*"; }
 step() { printf '\n\033[36m── %s\033[0m\n' "$*"; }
 
+# Авто-режим (AUTO=1, используется update.sh): все вопросы получают дефолт,
+# ничего не спрашиваем — установка идёт по «умным» проверкам идемпотентно.
+AUTO=${AUTO:-0}
+
 # Да/нет вопрос. ask "Текст?" Y  → дефолт да;  ask "Текст?" N → дефолт нет
 ask() {
   local q="$1" def="${2:-Y}" hint ans
+  if [ "$AUTO" = "1" ]; then
+    if [ "$def" = "Y" ]; then printf '  %s → авто: да\n' "$q"; return 0
+    else printf '  %s → авто: нет\n' "$q"; return 1; fi
+  fi
   [ "$def" = "Y" ] && hint="[Д/н]" || hint="[д/Н]"
   read -r -p "$q $hint " ans
   ans="${ans:-$def}"
@@ -26,6 +34,7 @@ ask() {
 # Запрос значения с дефолтом. val=$(prompt "Текст" "дефолт")
 prompt() {
   local q="$1" def="${2:-}" ans
+  if [ "$AUTO" = "1" ]; then echo "$def"; return 0; fi
   if [ -n "$def" ]; then read -r -p "$q [$def]: " ans; echo "${ans:-$def}";
   else read -r -p "$q: " ans; echo "$ans"; fi
 }
@@ -106,7 +115,7 @@ install_python311() {
   [ -f "$PY311_EXE" ]
 }
 
-clear
+[ "$AUTO" = "1" ] || clear
 b "════════════════════════════════════════════════════════"
 b "  Vibe-Code Account Creator Manager — установщик"
 b "════════════════════════════════════════════════════════"

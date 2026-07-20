@@ -347,8 +347,17 @@ if ask "Настроить ТГ-бота?" N; then
 fi
 
 # ── 7. Опциональные зависимости (Python) ────────────────────────────────────
+# Идемпотентно: каждый блок сначала чекает "уже стоит?" и не переустанавливает.
 step "7. Опц. зависимости: TokenRouter (Camoufox) + ✈ Открыть TG"
-if ask "Поставить Python-зависимости (Camoufox + opentele venv)?" N; then
+
+# tg-venv живой? (главный источник "нет tools/tg-venv" в дашборде)
+tg_venv_ok() {
+  [ -f tools/tg-venv/Scripts/python.exe ] && \
+    tools/tg-venv/Scripts/python -c 'import opentele, tgcrypto' >/dev/null 2>&1
+}
+
+if tg_venv_ok; then TG_VENV_STATE="уже готов"; else TG_VENV_STATE="НЕ создан — нужен для ✈ Открыть TG"; fi
+if ask "Проверить/поставить Python-зависимости (Camoufox + opentele venv)? [tg-venv: $TG_VENV_STATE]" Y; then
   PY=$(choose_python)
   if [ -z "$PY" ]; then
     err "python не найден — пропускаю. Лучше поставить Python 3.11: winget install -e --id Python.Python.3.11"
@@ -359,7 +368,11 @@ if ask "Поставить Python-зависимости (Camoufox + opentele ve
       warn "Python 3.12 часто ломает tgcrypto/opentele без сборки. Надёжнее: winget install -e --id Python.Python.3.11"
     fi
 
-    if ask "  Camoufox (TokenRouter автореги)?" Y; then
+    # Camoufox: пропускаем, если уже стоит рабочая пара camoufox + playwright 1.60.0
+    PW_VER=$($PY -c 'import importlib.metadata as m; print(m.version("playwright"))' 2>/dev/null)
+    if $PY -c 'import camoufox' >/dev/null 2>&1 && [ "$PW_VER" = "1.60.0" ]; then
+      ok "camoufox уже стоит (playwright $PW_VER) — пропускаю"
+    elif ask "  Camoufox (TokenRouter автореги)?" Y; then
       $PY -m pip install --upgrade pip
       # playwright строго 1.60.0: в 1.61 Firefox-клиент шлёт viewport.isMobile,
       # которого juggler Camoufox (FF152) не знает → Browser.setDefaultViewport
@@ -369,11 +382,15 @@ if ask "Поставить Python-зависимости (Camoufox + opentele ve
 
     # grok-launcher: FastAPI-сервис на :8765 для SuperGrok Sessions.
     # Поднимается transparent-proxy.js автоматически, но зависимости надо один раз поставить.
-    if ask "  grok-launcher (SuperGrok Sessions — headless-квоты + Chrome-launcher)?" Y; then
+    if $PY -c 'import fastapi, uvicorn, websockets, httpx' >/dev/null 2>&1; then
+      ok "grok-launcher deps уже стоят — пропускаю"
+    elif ask "  grok-launcher (SuperGrok Sessions — headless-квоты + Chrome-launcher)?" Y; then
       $PY -m pip install -r grok-launcher/requirements.txt && ok "grok-launcher готов"
     fi
 
-    if ask "  venv для ✈ Открыть TG (opentele)?" Y; then
+    if tg_venv_ok; then
+      ok "tg-venv уже готов (opentele+tgcrypto импортируются) — пропускаю"
+    elif ask "  venv для ✈ Открыть TG (opentele)?" Y; then
       SKIP_TG_VENV=0
       if [ "$PYVER" = "3.12" ] && ! has_cpp_build_tools; then
         warn "Для tgcrypto на Python 3.12 нужны Visual C++ Build Tools. Поставить можно так:"
@@ -394,8 +411,11 @@ if ask "Поставить Python-зависимости (Camoufox + opentele ve
         if [ $? -ne 0 ]; then
           err "tg-venv не собрался. Чаще всего помогает Python 3.11: winget install -e --id Python.Python.3.11"
         fi
-        warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"
       fi
+    fi
+
+    if tg_venv_ok && [ ! -f tools/telegram-portable/Telegram/Telegram.exe ]; then
+      warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"
     fi
   fi
 fi

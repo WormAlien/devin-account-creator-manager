@@ -26,6 +26,11 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20130 " ^| findstr LISTENIN
     echo Stopping PID %%P on :20130 ...
     taskkill /F /PID %%P >nul 2>&1
 )
+REM Kill the VyceAI OpenAI proxy on :20131
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20131 " ^| findstr LISTENING') do (
+    echo Stopping PID %%P on :20131 ...
+    taskkill /F /PID %%P >nul 2>&1
+)
 
 REM Brief wait so the OS releases the port
 ping 127.0.0.1 -n 2 >nul
@@ -36,6 +41,10 @@ ping 127.0.0.1 -n 2 >nul
 
 echo Starting FreeModel OpenAI Proxy on :20130 ...
 start "FM OpenAI Proxy" /B node freemodel-openai-proxy.js
+ping 127.0.0.1 -n 2 >nul
+
+echo Starting VyceAI OpenAI Proxy on :20131 ...
+start "Vyce OpenAI Proxy" /B node vyceai-openai-proxy.js
 ping 127.0.0.1 -n 2 >nul
 
 echo Starting transparent-proxy.js (switcher + dashboard) on :8200 ...

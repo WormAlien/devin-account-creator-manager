@@ -45,6 +45,18 @@
     "minimax-m2.5": {
       "backend": "omniroute",
       "asModel": "ac-freemodel1/claude-opus-4-7"
+    },
+    "vyceai-claude-sonnet-5": {
+      "backend": "vyceai",
+      "asModel": "claude-sonnet-5"
+    },
+    "vyceai-claude-haiku-4-5": {
+      "backend": "vyceai",
+      "asModel": "claude-haiku-4-5"
+    },
+    "vyceai-auto": {
+      "backend": "vyceai",
+      "asModel": "auto"
     }
   },
   "defaultBackend": "omniroute",

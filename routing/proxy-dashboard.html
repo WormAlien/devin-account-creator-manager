@@ -191,6 +191,11 @@
         <span class="flex-1">FreeModel</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-freemodel">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="vyceai">
+        <span class="text-base">⚡</span>
+        <span class="flex-1">VyceAI</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-vyceai">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="aerolink">
         <span class="text-base">🔗</span>
         <span class="flex-1">Aerolink</span>
@@ -1039,6 +1044,7 @@
             <input id="conduit-count" type="number" min="1" max="50" value="1" class="text-xs bg-surface border border-line-soft rounded-lg px-2 py-2 w-16 focus:outline-none focus:border-emerald/60" title="сколько аккаунтов зарегать">
             <button onclick="conduitAutoreg()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium" title="Автореги из ТГ-пула (новое окно)">➕ Зарегать</button>
             <button onclick="launchScript('conduit-login', '🚇 Окно сохранения сессии Conduit открыто')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line" title="Залогиниться вручную и сохранить сессию">🔑 Сессия</button>
+            <button onclick="conduitShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить ключ</button>
           </div>
         </header>
 
@@ -1046,6 +1052,26 @@
 
         <div id="conduit-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
           <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <!-- Add key form (скрыта по умолчанию) -->
+        <div id="cdt-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">apiKey (sk-cdt-…)</span>
+              <input id="cdt-add-key" placeholder="sk-cdt-…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">username (опц.)</span>
+              <input id="cdt-add-username" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">TG phone (опц.)</span>
+              <input id="cdt-add-tg" placeholder="+1…" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="conduitAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="conduitShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
         </div>
 
         <!-- ТГ-пул — ЗЕРКАЛО блока из FreeModel (тот же пул, те же глобальные хендлеры
@@ -1081,6 +1107,56 @@
             </div>
           </div>
         </details>
+
+        <div id="cdt-model-control" class="rounded-xl bg-surface border border-violet/40 p-5 relative overflow-hidden">
+          <div class="absolute -top-16 -right-16 size-48 rounded-full bg-violet/10 blur-3xl pointer-events-none"></div>
+          <div class="relative space-y-3">
+            <div class="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <div class="text-[10px] uppercase tracking-wide text-faint">Активная модель</div>
+                <div class="text-2xl font-semibold tracking-tight mt-0.5">
+                  <span id="cdt-active-model" class="text-amber font-mono">—</span>
+                </div>
+                <div id="cdt-apply-hint" class="text-xs text-faint mt-1">клик по чипу · перезапусти Claude Code</div>
+              </div>
+              <div class="flex flex-col items-end gap-1 text-[10px] font-mono text-faint">
+                <span>model → <code class="text-violet">~/.claude/cdt-active-model.txt</code></span>
+                <span>key → <code class="text-violet">~/.claude/cdt-active-key.txt</code></span>
+                <span>base → <code class="text-ink">conduit.ozdoev.net/v1</code></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="cdt-models" class="rounded-xl bg-surface border border-line-soft p-4 space-y-4">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <h2 class="text-sm font-semibold tracking-tight">Каталог — клик = выбрать · 📋 = копировать id</h2>
+            <div class="flex items-center gap-2">
+              <input id="cdt-models-filter" type="search" placeholder="фильтр: opus, deepseek…"
+                     oninput="renderCdtModels()"
+                     class="text-[11px] px-2.5 py-1.5 bg-elevated border border-line-soft rounded-lg w-44 focus:outline-none focus:border-violet/50 text-ink placeholder:text-faint">
+              <button onclick="loadCdtModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xs font-semibold text-amber">🔥 Hype</span>
+              <span id="cdt-hype-count" class="text-[10px] text-faint font-mono">—</span>
+            </div>
+            <div id="cdt-hype-list" class="flex flex-wrap gap-1.5">
+              <span class="text-[10px] text-faint">загрузка…</span>
+            </div>
+          </div>
+          <div class="border-t border-line-soft pt-3">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xs font-semibold text-muted">Все модели</span>
+              <span id="cdt-all-count" class="text-[10px] text-faint font-mono">—</span>
+            </div>
+            <div id="cdt-models-list" class="flex flex-wrap gap-1.5">
+              <span class="text-[10px] text-faint">загрузка…</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1290,6 +1366,105 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: VYCEAI ═════════ -->
+    <div data-tab-content="vyceai">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-emerald">⚡</span> VyceAI sessions
+            </h1>
+            <p class="text-sm text-muted mt-1">прокси <code class="font-mono text-emerald text-xs">:20131</code> · upstream <code class="font-mono text-faint text-xs">vyceai.com/v1</code> · кеш — <code class="font-mono text-faint text-xs">vyceai/keys.txt</code></p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadVyceaiKeys()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <input id="vyceai-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-emerald/60 focus:ring-2 focus:ring-emerald/20">
+            <select id="vyceai-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-emerald/60">
+              <option value="status">⚡ статус</option>
+              <option value="key-asc">🔑 ключ A→Z</option>
+            </select>
+            <button onclick="loadVyceaiModels()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">📋 Модели</button>
+            <button onclick="vyceaiToggleManualAdd()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line" title="Добавить ключ вручную">➕ Вручную</button>
+          </div>
+        </header>
+
+        <!-- Manual add form (hidden by default) -->
+        <div id="vyceai-manual-add" class="hidden rounded-xl bg-elevated/30 border border-line-soft p-4 space-y-3">
+          <div class="text-xs font-medium text-muted">Добавить ключ VyceAI вручную — имя + API-ключ.</div>
+          <div class="flex gap-2 flex-wrap">
+            <input id="vyceai-manual-name" placeholder="имя / метка" class="flex-1 min-w-[160px] text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-emerald/60">
+            <input id="vyceai-manual-key" placeholder="sk-..." class="flex-[2] min-w-[260px] text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-emerald/60">
+            <button onclick="addVyceaiManual()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Добавить</button>
+          </div>
+        </div>
+
+        <!-- Quick jump pills -->
+        <div class="flex items-center gap-2 flex-wrap text-[11px]">
+          <span class="text-faint mr-0.5">прыгнуть к:</span>
+          <button onclick="jumpTo('vy-sec-gauge')"       class="jump-pill px-2.5 py-1 rounded-full border bg-surface border-line-soft text-muted hover:text-emerald hover:border-emerald/50">⚡ статус</button>
+          <button onclick="jumpTo('vy-sec-models-map')"  class="jump-pill px-2.5 py-1 rounded-full border bg-surface border-line-soft text-muted hover:text-emerald hover:border-emerald/50">🔀 маппинг</button>
+          <button onclick="jumpTo('vy-sec-models')"      class="jump-pill px-2.5 py-1 rounded-full border bg-surface border-line-soft text-muted hover:text-emerald hover:border-emerald/50">📋 модели</button>
+          <button onclick="jumpTo('vy-sec-keys')"        class="jump-pill px-2.5 py-1 rounded-full border bg-surface border-line-soft text-muted hover:text-emerald hover:border-emerald/50">🗝 ключи</button>
+        </div>
+
+        <!-- Proxy status gauge -->
+        <div id="vy-sec-gauge" class="rounded-xl bg-surface border border-line-soft p-5 relative overflow-hidden scroll-mt-6">
+          <div class="absolute -top-24 -right-24 size-56 rounded-full bg-emerald/10 blur-3xl pointer-events-none"></div>
+          <div id="vyceai-gauge" class="relative">
+            <div class="text-xs text-muted">загрузка…</div>
+          </div>
+        </div>
+
+        <!-- Active key hero -->
+        <div id="vyceai-active-hero" class="hidden rounded-xl bg-surface border border-emerald/40 p-4 relative overflow-hidden scroll-mt-6">
+          <div class="absolute -top-16 -right-16 size-32 rounded-full bg-emerald/10 blur-2xl pointer-events-none"></div>
+          <div class="relative flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <div class="text-[10px] uppercase tracking-[0.2em] text-emerald/80 mb-1">Активный ключ</div>
+              <div id="vyceai-active-name" class="text-sm font-semibold text-ink">—</div>
+              <div id="vyceai-active-key" class="text-xs font-mono text-emerald mt-0.5">—</div>
+            </div>
+            <span id="vyceai-active-mode" class="text-xs px-3 py-1.5 bg-emerald/10 border border-emerald/40 text-emerald rounded-lg font-medium">
+              🌟 Активен
+            </span>
+          </div>
+        </div>
+
+        <!-- Маппинг моделей -->
+        <div id="vy-sec-models-map" class="rounded-xl bg-surface border border-line-soft p-4 relative overflow-hidden scroll-mt-6">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-[10px] uppercase tracking-wide text-faint">Маппинг моделей</span>
+            <span class="text-[10px] text-faint ml-auto">прокси конвертирует Anthropic → OpenAI</span>
+          </div>
+          <div class="flex flex-wrap gap-1.5 text-[11px] font-mono">
+            <span class="px-2 py-1 rounded bg-emerald/10 border border-emerald/30 text-emerald">opus → claude-sonnet-5</span>
+            <span class="px-2 py-1 rounded bg-emerald/10 border border-emerald/30 text-emerald">sonnet → claude-sonnet-4-6</span>
+            <span class="px-2 py-1 rounded bg-emerald/10 border border-emerald/30 text-emerald">haiku → claude-haiku-4-5</span>
+          </div>
+        </div>
+
+        <!-- Доступные модели -->
+        <div id="vy-sec-models" class="rounded-xl bg-surface border border-line-soft p-4 relative overflow-hidden scroll-mt-6">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-[10px] uppercase tracking-wide text-faint">Доступные модели</span>
+            <span id="vyceai-models-count" class="text-[10px] text-faint font-mono">—</span>
+            <button onclick="loadVyceaiModels(true)" title="Обновить список моделей"
+                    class="text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft rounded hover:border-line text-muted">↻</button>
+            <span class="text-[10px] text-faint ml-auto">клик = 📋 id · <code class="text-emerald">/model id</code> в Claude</span>
+          </div>
+          <div id="vyceai-models-list" class="space-y-2">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- ═══ KEYS TABLE ═══ -->
+        <div id="vy-sec-keys" class="scroll-mt-6"></div>
+        <div id="vyceai-keys-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-muted text-xs">—</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: NOTION ═════════ -->
     <div data-tab-content="notion">
       <div class="px-6 py-8 space-y-6">
@@ -1412,6 +1587,8 @@ const state = {
   otModels: [],
   omniroutePool: [],
   conduit: [],
+  cdtActiveModel: '',
+  cdtModels: [],
 };
 
 const $   = (id) => document.getElementById(id);
@@ -1536,6 +1713,7 @@ function showTab(name) {
     fmAutoStartPolling();
     if (!state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); }
   }
+  if (name === 'vyceai' && !state.loaded.vyceai) { state.loaded.vyceai = true; loadVyceaiKeys(); loadVyceaiModels(); }
   if (name === 'notion' && !state.loaded.notion) {
     state.loaded.notion = true;
     loadNotionSessions();
@@ -1549,7 +1727,7 @@ function showTab(name) {
   if (name === 'video' && !state.loaded.video) { state.loaded.video = true; loadVideoKeys(); }
   if (name === 'grok') { grokRenderSaved(); }
   if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
-  if (name === 'conduit') { loadTgPool(); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
+  if (name === 'conduit') { loadTgPool(); loadCdtActiveModel(); loadCdtModels(false); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'tokenrouter' && !state.loaded.tokenrouter) {
     state.loaded.tokenrouter = true;
     loadTokenrouterAccounts();
@@ -1761,7 +1939,7 @@ function getDefaultPresets() {
         apiKeyHelper: 'cat ~/.claude/cdt-active-key.txt',
         model: null,
         env: {
-          ANTHROPIC_BASE_URL: 'https://conduit.ozdoev.net/api/v1',
+          ANTHROPIC_BASE_URL: 'https://conduit.ozdoev.net/v1',
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
           ANTHROPIC_API_KEY: null
         }
@@ -3622,9 +3800,10 @@ async function conduitActivate(name) {
     if (data.ok) {
       toast(`🌟 Активен: ${name} (${data.mask}) — применится на следующем запросе`, 'success', 5000);
       state.current = 'conduit';
-      state.urls.conduit = 'https://conduit.ozdoev.net/api/v1';
+      state.urls.conduit = 'https://conduit.ozdoev.net/v1';
       paintStatus();
       loadConduitSessions(false);
+      loadCdtActiveModel();
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Activate: ' + e.message, 'error'); }
 }
@@ -3641,6 +3820,29 @@ async function conduitRefreshOne(name) {
   } catch (e) { toast('Refresh: ' + e.message, 'error'); }
 }
 
+// ═══════════════════ CONDUIT ADD ══════════════════════════════════════
+function conduitShowAdd(show = true) {
+  $('cdt-add-form').classList.toggle('hidden', !show);
+  if (show) { $('cdt-add-key').value = ''; $('cdt-add-username').value = ''; $('cdt-add-tg').value = ''; $('cdt-add-key').focus(); }
+}
+
+async function conduitAdd() {
+  const apiKey = $('cdt-add-key').value.trim();
+  const username = $('cdt-add-username').value.trim();
+  const tgPhone = $('cdt-add-tg').value.trim();
+  if (!apiKey) return toast('apiKey обязателен', 'warn');
+  if (!/^sk-cdt-/.test(apiKey)) return toast('Ключ должен начинаться с sk-cdt-', 'warn');
+  try {
+    const res = await fetch('/__switch/api/conduit/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey, username: username || null, tgPhone: tgPhone || null }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ добавлен', 'success'); conduitShowAdd(false); loadConduitSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
 async function conduitAutoreg() {
   const count = Math.max(1, Math.min(50, parseInt($('conduit-count').value, 10) || 1));
   try {
@@ -3652,6 +3854,209 @@ async function conduitAutoreg() {
     if (data.ok) toast(`🚇 Conduit autoreg запущен (${count}) — смотри новое окно`, 'success', 4000);
     else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Autoreg: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ CONDUIT MODELS ═══════════════════════════════════
+// Динамический каталог: запрашивает /v1/models у Conduit через активный ключ.
+const CDT_HYPE_PRIORITY = [
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-sonnet-4-6',
+  'gpt-5',
+  'gpt-5-mini',
+  'gpt-4.1',
+  'o4',
+  'gemini-3-pro',
+  'gemini-2.5-pro',
+  'deepseek-r1',
+  'deepseek-v4-flash',
+  'grok-4',
+];
+
+const CDT_HYPE_AUTO = [
+  /^claude-opus-4-[6-9]$/i,
+  /^claude-opus-4-\d+$/i,
+  /^claude-sonnet-4-6$/i,
+  /^claude-sonnet-5$/i,
+  /^gpt-5(-pro|-high|-xhigh)?$/i,
+  /^gpt-5\.\d+(-pro|-high)?$/i,
+  /^o4$/i,
+  /^gemini-3(\.\d+)?-pro(-preview)?$/i,
+  /^gemini-2\.5-pro$/i,
+  /^deepseek-r1$/i,
+  /^deepseek-v4-pro$/i,
+  /^deepseek-v4-flash(-free)?$/i,
+  /^grok-4$/i,
+  /^grok-3$/i,
+  /^codestral$/i,
+  /^mistral-large-3$/i,
+  /^llama-4-maverick$/i,
+  /^qwen3-max$/i,
+];
+
+function cdtIsHypeNoise(id) {
+  const s = String(id || '');
+  if (/thinking/i.test(s)) return true;
+  if (/\d{8}/.test(s)) return true;
+  if (/(^|-)(mini|nano|low|lite|minimal|flash-lite)(-|$)/i.test(s)) return true;
+  if (/image/i.test(s)) return true;
+  if (/chat-latest$/i.test(s)) return true;
+  return false;
+}
+
+function cdtHypeRank(id) {
+  const exact = CDT_HYPE_PRIORITY.indexOf(id);
+  if (exact >= 0) return exact;
+  if (!cdtIsHypeNoise(id) && CDT_HYPE_AUTO.some(re => re.test(id))) {
+    return CDT_HYPE_PRIORITY.length + id.toLowerCase().charCodeAt(0);
+  }
+  return -1;
+}
+
+function cdtSplitHypeModels(models) {
+  const hype = [];
+  const rest = [];
+  const hypeIds = new Set();
+  for (const m of models) {
+    const id = m.id || m;
+    const rank = cdtHypeRank(id);
+    if (rank >= 0) {
+      hype.push({ id, rank, owned_by: m.owned_by });
+      hypeIds.add(id);
+    }
+  }
+  hype.sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
+  for (const m of models) {
+    const id = m.id || m;
+    if (!hypeIds.has(id)) rest.push({ id, owned_by: m.owned_by });
+  }
+  rest.sort((a, b) => a.id.localeCompare(b.id));
+  return { hype, rest };
+}
+
+function cdtModelChip(id, tone) {
+  const active = state.cdtActiveModel === id;
+  const idJ = JSON.stringify(id);
+  const baseCls = tone === 'hype'
+    ? 'bg-amber/10 border-amber/40 text-amber'
+    : 'bg-violet/10 border-violet/30 text-violet';
+  const activeCls = active
+    ? 'bg-emerald/15 border-emerald/60 text-emerald ring-1 ring-emerald/40'
+    : baseCls;
+  return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border ${activeCls}">
+    <button onclick='cdtSelectModel(${idJ})' title="Выбрать модель → settings"
+      class="hover:underline text-left">${active ? '🌟 ' : ''}${esc(id)}</button>
+    <button onclick='cdtCopyModel(${idJ})' title="Копировать /model &lt;id&gt;"
+      class="text-faint hover:text-ink px-1">📋</button>
+  </span>`;
+}
+
+function renderCdtModels() {
+  if (!state.cdtModels) {
+    if ($('cdt-hype-list')) $('cdt-hype-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+    if ($('cdt-models-list')) $('cdt-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+    return;
+  }
+  const list = state.cdtModels || [];
+  const q = ($('cdt-models-filter')?.value || '').trim().toLowerCase();
+  const match = (id) => !q || id.toLowerCase().includes(q);
+
+  if (!list.length) {
+    if ($('cdt-hype-list')) $('cdt-hype-list').innerHTML = '<span class="text-[10px] text-faint">нет моделей</span>';
+    if ($('cdt-models-list')) $('cdt-models-list').innerHTML = '<span class="text-[10px] text-faint">нет моделей</span>';
+    return;
+  }
+
+  const { hype, rest } = cdtSplitHypeModels(list);
+  const hypeView = hype.filter(m => match(m.id));
+  const restView = rest.filter(m => match(m.id));
+
+  if ($('cdt-hype-count')) $('cdt-hype-count').textContent = q
+    ? `${hypeView.length}/${hype.length}`
+    : String(hype.length);
+  if ($('cdt-all-count')) $('cdt-all-count').textContent = q
+    ? `${restView.length}/${rest.length}`
+    : String(rest.length);
+
+  if ($('cdt-hype-list')) {
+    $('cdt-hype-list').innerHTML = hypeView.length
+      ? hypeView.map(m => cdtModelChip(m.id, 'hype')).join('')
+      : `<span class="text-[10px] text-faint">${q ? 'нет совпадений в hype' : 'нет hype-моделей в каталоге'}</span>`;
+  }
+  if ($('cdt-models-list')) {
+    $('cdt-models-list').innerHTML = restView.length
+      ? restView.map(m => cdtModelChip(m.id, 'all')).join('')
+      : `<span class="text-[10px] text-faint">${q ? 'нет совпадений' : 'пусто'}</span>`;
+  }
+}
+
+async function loadCdtModels(force) {
+  const keys = (state.conduit || []).map(s => {
+    const q = s.quota || {};
+    return q.apiKey || s.apiKey || s.meta?.apiKey;
+  }).filter(Boolean);
+  if (!keys.length) {
+    state.cdtModels = [];
+    renderCdtModels();
+    return;
+  }
+  if (force) {
+    if ($('cdt-hype-list')) $('cdt-hype-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+    if ($('cdt-models-list')) $('cdt-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  }
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/conduit/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { lastNote = 'non-JSON ответ: ' + text.slice(0, 100); continue; }
+      if (data.ok && data.models?.length) { state.cdtModels = data.models; renderCdtModels(); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  state.cdtModels = [];
+  renderCdtModels();
+  toast('Модели Conduit: ' + lastNote, 'warn', 4000);
+}
+
+async function cdtSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/conduit/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id }),
+    });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { return toast('set-model: non-JSON: ' + text.slice(0, 100), 'error', 5000); }
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.cdtActiveModel = data.model || id;
+    if ($('cdt-active-model')) $('cdt-active-model').textContent = state.cdtActiveModel;
+    if ($('cdt-apply-hint')) $('cdt-apply-hint').textContent = 'в settings · перезапусти Claude Code';
+    renderCdtModels();
+    toast('✓ ' + state.cdtActiveModel, 'success', 3000);
+  } catch (e) { toast('set-model: ' + e.message, 'error'); }
+}
+
+async function cdtCopyModel(id) {
+  try {
+    await navigator.clipboard.writeText('/model ' + id);
+    toast('📋 /model ' + id, 'success', 2500);
+  } catch (e) { toast('copy: ' + e.message, 'error'); }
+}
+
+async function loadCdtActiveModel() {
+  try {
+    const res = await fetch('/__switch/api/conduit/active-model');
+    const text = await res.text();
+    try { const data = JSON.parse(text); state.cdtActiveModel = data.model || ''; }
+    catch { state.cdtActiveModel = ''; }
+    if ($('cdt-active-model')) $('cdt-active-model').textContent = state.cdtActiveModel || '— выбери модель';
+  } catch {}
+  renderCdtModels();
 }
 
 // ═══════════════════ FREEMODEL ═══════════════════════════════════════
@@ -6434,7 +6839,7 @@ function autoRefreshTick() {
       case 'cun':           loadCunSessions(false); break;
       case 'evomap':        loadEvomapSessions(false); break;
       case 'ourtoken':      loadOurtokenSessions(false); break;
-      case 'conduit':       loadConduitSessions(false); break;
+      case 'conduit':       loadConduitSessions(false); loadCdtActiveModel(); loadCdtModels(false); break;
       case 'video':         loadVideoKeys(); break;
       case 'image':         loadImageKeys(); break;
       case 'omniroute-pool': loadOmSessions(false); break;
@@ -6458,6 +6863,254 @@ document.getElementById('autoref-checkbox')?.addEventListener('change', (e) => {
   setAutoRefresh(e.target.checked);
   if (e.target.checked) autoRefreshTick();  // сразу дёрнуть, не ждать интервал
 });
+
+// ══════════════════════ VYCEAI ══════════════════════
+
+state.vyceaiKeys = [];
+state.vyceaiActive = { name: null, key: null };
+state.vyceaiModels = [];
+
+async function loadVyceaiKeys() {
+  const el = $('vyceai-keys-list');
+  if (!el) return;
+  el.innerHTML = `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
+  try {
+    const r = await fetch('/__switch/api/vyceai/keys');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const keys = d.keys || [];
+    state.vyceaiKeys = keys;
+    state.vyceaiActiveKey = d.activeKey || '';
+    $('nav-count-vyceai').textContent = keys.length;
+    // Hero: показать активный ключ
+    const activeKey = d.activeKey || '';
+    if (activeKey) {
+      const hero = $('vyceai-active-hero');
+      if (hero) hero.classList.remove('hidden');
+      const nameEl = $('vyceai-active-name');
+      const keyEl  = $('vyceai-active-key');
+      const active = keys.find(k => k.key === activeKey);
+      if (nameEl) nameEl.textContent = active?.name || '—';
+      if (keyEl)  keyEl.textContent = activeKey.substring(0,8) + '***' + activeKey.slice(-4);
+    }
+    try {
+      const sr = await fetch('/__switch/api/vyceai/status');
+      if (sr.ok) {
+        const sd = await sr.json();
+        state.vyceaiProxyOk = sd.ok;
+        state.vyceaiProxyStats = sd.stats;
+        renderVyceaiGauge(sd);
+      } else {
+        state.vyceaiProxyOk = false;
+        renderVyceaiGauge({ ok: false });
+      }
+    } catch {
+      state.vyceaiProxyOk = false;
+      renderVyceaiGauge({ ok: false });
+    }
+    renderVyceaiKeys();
+  } catch (e) {
+    state.vyceaiProxyOk = false;
+    renderVyceaiGauge({ ok: false });
+    el.innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function renderVyceaiGauge(status) {
+  const el = $('vyceai-gauge');
+  if (!el) return;
+  const ok = status?.ok;
+  const c = ok ? 'emerald' : 'crimson';
+  const stats = status?.stats || {};
+  el.innerHTML = `
+    <div class="flex items-center gap-3 mb-3">
+      <span class="relative inline-block size-2.5 rounded-full bg-${c} pulse-dot"></span>
+      <span class="text-sm font-semibold">${ok ? 'Прокси работает' : 'Прокси не запущен'}</span>
+      ${ok ? `<span class="text-[10px] text-faint font-mono ml-auto">:${status.port} → ${esc(status.upstream || '')}</span>` : ''}
+    </div>
+    ${ok ? `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+      <div class="bg-elevated/50 rounded-lg p-3">
+        <div class="text-faint mb-1">Запросов</div>
+        <div class="font-mono font-semibold text-ink">${stats.requests || 0}</div>
+      </div>
+      <div class="bg-elevated/50 rounded-lg p-3">
+        <div class="text-faint mb-1">Стримов</div>
+        <div class="font-mono font-semibold text-ink">${stats.streamed || 0}</div>
+      </div>
+      <div class="bg-elevated/50 rounded-lg p-3">
+        <div class="text-faint mb-1">Ошибок</div>
+        <div class="font-mono font-semibold ${stats.errors ? 'text-crimson' : 'text-ink'}">${stats.errors || 0}</div>
+      </div>
+      <div class="bg-elevated/50 rounded-lg p-3">
+        <div class="text-faint mb-1">Последняя</div>
+        <div class="font-mono font-semibold text-ink truncate text-[10px]">${stats.lastModel || '—'}</div>
+      </div>
+    </div>
+    <div class="text-[10px] text-faint mt-2 font-mono">Старт: ${stats.started || '—'} · Ключ: ${esc(status.keySource || '—')}</div>` : ''}
+    ${!ok ? `<div class="text-center pb-2 text-[10px] text-faint font-mono mt-2">node routing/vyceai-openai-proxy.js</div>` : ''}`;
+}
+
+function renderVyceaiKeys() {
+  const filter = $('vyceai-filter')?.value?.toLowerCase() || '';
+  const sort = $('vyceai-sort')?.value || 'status';
+  const all = state.vyceaiKeys.slice();
+  const sortFns = {
+    'status':  (a, b) => (a.status === b.status ? 0 : a.status === 'active' ? -1 : 1) || (a.name || '').localeCompare(b.name || ''),
+    'key-asc': (a, b) => (a.key || '').localeCompare(b.key || ''),
+  };
+  all.sort(sortFns[sort] || sortFns['status']);
+  const list = filter
+    ? all.filter(k => ((k.name || '') + ' ' + (k.key || '') + ' ' + (k.status || '')).toLowerCase().includes(filter))
+    : all;
+  if (!list.length) {
+    $('vyceai-keys-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">${filter ? 'ничего' : 'пусто — добавь ключ вручную'}</div>`;
+    return;
+  }
+  const rows = list.map(k => {
+    const isActive = k.status === 'active';
+    const rowCls = isActive ? 'bg-emerald/5 border-l-2 border-l-emerald' : '';
+    const mask = k.key ? k.key.substring(0, 8) + '***' + k.key.slice(-4) : '—';
+    return `<tr class="hover:bg-elevated/40 transition ${rowCls}">
+      <td class="px-3 py-2.5 w-7">${isActive ? '<span class="text-emerald">✓</span>' : '<span class="text-faint">○</span>'}</td>
+      <td class="px-3 py-2.5 text-sm text-ink" title="${esc(k.name || k.key)}">${esc(k.name || k.key || '—')}</td>
+      <td class="px-3 py-2.5 text-xs font-mono text-muted" title="${esc(k.key || '')}">${esc(mask)}</td>
+      <td class="px-3 py-2.5 text-xs">${isActive
+        ? '<span class="inline-flex items-center text-[10px] px-2 py-0.5 rounded border bg-emerald/10 border-emerald/40 text-emerald font-medium">🌟 Активен</span>'
+        : '<span class="inline-flex items-center text-[10px] px-2 py-0.5 rounded border bg-elevated border-line-soft text-faint">○ Готов</span>'}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${isActive
+          ? '<span class="text-[10px] px-2 py-1 rounded bg-emerald/10 border border-emerald/40 text-emerald font-medium cursor-default" title="Уже активен">✓ активен</span>'
+          : `<button onclick='activateVyceaiKey(${JSON.stringify(k.key || "")})' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-emerald/60 hover:text-emerald transition" title="Активировать ключ">⚡</button>`}
+        <button onclick='navigator.clipboard.writeText(${JSON.stringify(k.key || "")});toast("📋 скопировано","success",2000)' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-emerald/60 hover:text-emerald transition" title="Скопировать ключ">🗝</button>
+        <button onclick='navigator.clipboard.writeText(${JSON.stringify(k.name || "")});toast("📋 скопировано","success",2000)' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-azure/60 hover:text-azure transition" title="Скопировать имя">✉</button>
+        <button onclick='deleteVyceaiKey(${JSON.stringify(k.key || "")})' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-crimson/60 hover:text-crimson transition" title="Удалить ключ">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+  const activeCount = all.filter(k => k.status === 'active').length;
+  $('vyceai-keys-list').innerHTML = `
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-[10px] uppercase tracking-wider text-faint bg-bg/40 border-b border-line-soft">
+          <th class="px-3 py-2.5 w-7 font-medium"></th>
+          <th class="px-3 py-2.5 text-left font-medium">Имя</th>
+          <th class="px-3 py-2.5 text-left font-medium">Ключ</th>
+          <th class="px-3 py-2.5 text-left font-medium">Статус</th>
+          <th class="px-3 py-2.5 text-right font-medium">Действия</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-line-soft/50">${rows}</tbody>
+    </table>
+    <div class="px-4 py-2.5 text-[10px] text-faint border-t border-line-soft bg-bg/30 font-mono">${list.length} из ${all.length}${filter ? ' (отфильтр.)' : ''} · ${activeCount} активных</div>`;
+}
+
+function vyceaiToggleManualAdd() {
+  $('vyceai-manual-add')?.classList.toggle('hidden');
+}
+
+async function addVyceaiManual() {
+  const name = $('vyceai-manual-name')?.value?.trim();
+  const key = $('vyceai-manual-key')?.value?.trim();
+  if (!key || !key.startsWith('sk-')) { toast('Ключ должен начинаться с sk-', 'error'); return; }
+  try {
+    const r = await fetch('/__switch/api/vyceai/add-key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || key.substring(0, 16), key }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    toast('✓ Ключ добавлен', 'success');
+    $('vyceai-manual-name').value = '';
+    $('vyceai-manual-key').value = '';
+    $('vyceai-manual-add').classList.add('hidden');
+    loadVyceaiKeys();
+  } catch (e) { toast('Ошибка: ' + e.message, 'error'); }
+}
+
+async function deleteVyceaiKey(key) {
+  if (!key) return;
+  if (!confirm('Удалить ключ ' + key.substring(0, 12) + '...?')) return;
+  try {
+    const r = await fetch('/__switch/api/vyceai/delete-key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    toast('✓ Ключ удалён', 'success');
+    loadVyceaiKeys();
+  } catch (e) { toast('Ошибка: ' + e.message, 'error'); }
+}
+
+async function activateVyceaiKey(key) {
+  if (!key) return;
+  try {
+    toast('⏳ активирую ' + key.substring(0, 8) + '…', 'info', 2000);
+    const r = await fetch('/__switch/api/vyceai/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    toast('✓ Ключ активирован: ' + d.key, 'success');
+    loadVyceaiKeys();
+  } catch (e) { toast('Ошибка: ' + e.message, 'error'); }
+}
+
+async function loadVyceaiModels(force) {
+  const listEl = $('vyceai-models-list'), cntEl = $('vyceai-models-count');
+  if (!listEl) return;
+  if (!force && state.vyceaiModels?.length) return;
+  listEl.innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  try {
+    const r = await fetch('/__switch/api/vyceai/models');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const models = (d.models || []).sort();
+    state.vyceaiModels = models;
+    if (cntEl) cntEl.textContent = models.length ? String(models.length) : '—';
+    if (!models.length) { listEl.innerHTML = `<span class="text-[10px] text-faint">${esc(d.error || 'нет моделей')}</span>`; return; }
+    const claude  = models.filter(m => m.startsWith('claude'));
+    const gemini  = models.filter(m => m.startsWith('gemini'));
+    const other   = models.filter(m => !m.startsWith('claude') && !m.startsWith('gemini'));
+    const chip = (m, color) => {
+      const idJ = JSON.stringify(m);
+      return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-${color}/10 border-${color}/30 text-${color}">
+        <button onclick='vyceaiCopyModel(${idJ})' title="Копировать /model ${esc(m)}"
+          class="hover:underline text-left">${esc(m)}</button>
+        <button onclick='vyceaiCopyModel(${idJ})' title="Копировать /model id"
+          class="text-faint hover:text-ink px-1">📋</button>
+      </span>`;
+    };
+    const group = (label, badge, items, color, hint) => items.length ? `
+      <div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-[10px] px-1.5 py-0.5 rounded border bg-${color}/10 border-${color}/40 text-${color} font-medium">${badge}</span>
+          <span class="text-[10px] text-faint">${label}</span>
+          <span class="text-[10px] text-faint font-mono">${items.length}</span>
+          ${hint ? `<span class="text-[10px] text-faint ml-auto">${hint}</span>` : ''}
+        </div>
+        <div class="flex flex-wrap gap-1.5">${items.map(m => chip(m, color)).join('')}</div>
+      </div>` : '';
+    listEl.innerHTML =
+      group('Claude · vyceai.com', '🟣 CLAUDE', claude, 'emerald', 'Anthropic → OpenAI прокси') +
+      group('Gemini · vyceai.com', '💎 GEMINI', gemini, 'azure',  '') +
+      group('Прочие · vyceai.com', '⚡ OTHER',  other,  'amber', 'GPT · DeepSeek · Nemotron · Minimax · GLM · Mimo');
+  } catch (e) {
+    listEl.innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
+  }
+}
+
+async function vyceaiCopyModel(id) {
+  try {
+    await navigator.clipboard.writeText('/model ' + id);
+    toast('📋 /model ' + id, 'success', 2500);
+  } catch (e) { toast('copy: ' + e.message, 'error'); }
+}
+
+$('vyceai-filter')?.addEventListener('input', () => renderVyceaiKeys());
+$('vyceai-sort')?.addEventListener('change', () => renderVyceaiKeys());
+
 applyTabsConfig();
 showTab(localStorage.getItem('opencode_active_tab') || 'switcher');
 toggleLogPanel(); // log panel open by default
@@ -7464,6 +8117,7 @@ setInterval(() => {
   });
   if (expired) grokRenderSaved().catch(() => {});
 }, 1000);
+
 </script>
 
 </body>

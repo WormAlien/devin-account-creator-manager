@@ -122,6 +122,15 @@ const BACKENDS = {
         // Anthropic→OpenAI прокси (freemodel-openai-proxy.js) → cc.freemodel.dev/v1
         // chat/completions. Маппинг claude-* → gpt-* в fm-openai-config.json.
     },
+    vyce_openai: {
+        label: 'VyceAI (OpenAI)',
+        base_url: 'http://localhost:20131',
+        api_key: 'dummy',           // real key proxy reads from vyceai/keys.txt
+        model: null,
+        clear_helper: true,
+        // Anthropic→OpenAI прокси (vyceai-openai-proxy.js) → vyceai.com/v1
+        // chat/completions. Маппинг claude-* → vyce-модели в vyceai/config.js.
+    },
 };
 
 const LOG_BUFFER = [];
@@ -2981,7 +2990,13 @@ async function handleImageTrialStatus(req, res) {
 // dashApi.listConduitSessions (cookie-fetch, не Playwright). Активация = записать
 // ключ в cdt-active-key.txt + apiKeyHelper в settings.json (как Aerolink/FreeModel).
 const CDT_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'cdt-active-key.txt');
-const CDT_BASE_URL = 'https://conduit.ozdoev.net/api/v1';
+const CDT_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'cdt-active-model.txt');
+const CDT_BASE_URL = 'https://conduit.ozdoev.net/v1';
+const CDT_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+function cdtReadActiveModel() {
+    try { return fs.readFileSync(CDT_ACTIVE_MODEL_FILE, 'utf-8').trim(); } catch { return ''; }
+}
 
 async function handleConduitSessions(req, res) {
     try {
@@ -3041,6 +3056,17 @@ async function handleConduitActivate(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+async function handleConduitAdd(req, res) {
+    try {
+        const { apiKey, username, tgPhone } = await readJsonBody(req);
+        const key = String(apiKey || '').trim();
+        if (!key || !/^sk-cdt-/.test(key)) return jsonRes(res, 400, { error: 'apiKey обязателен и должен начинаться с sk-cdt-' });
+        const result = dashApi.addConduitKey({ apiKey: key, username: String(username || '').trim() || null, tgPhone: String(tgPhone || '').trim() || null });
+        logLine(`conduit add: ${result.ident} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 async function handleConduitAutoreg(req, res) {
     try {
         const body = await readJsonBody(req).catch(() => ({}));
@@ -3050,6 +3076,204 @@ async function handleConduitAutoreg(req, res) {
         const result = dashApi.launchScript('conduit-create', args);
         logLine(`conduit autoreg launched: count=${count}${body.ref ? ' ref=' + body.ref : ''}`);
         jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleConduitModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (CDT_MODELS_CACHE.data && Date.now() - CDT_MODELS_CACHE.ts < CDT_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: CDT_MODELS_CACHE.data, cached: true });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const resp = await fetch(CDT_BASE_URL + '/models', {
+            signal: controller.signal,
+            headers: { 'Authorization': `Bearer ${api_key}` }
+        });
+        clearTimeout(timeout);
+
+        const rawText = await resp.text();
+        const text = rawText.charCodeAt(0) === 0xFEFF ? rawText.slice(1) : rawText;
+        logLine(`conduit models: HTTP ${resp.status}, len=${text.length}, body=${text.slice(0, 150).replace(/\n/g, '\\n')}`);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}: ${text.slice(0, 120)}` });
+        }
+        let data;
+        try { data = JSON.parse(text); } catch (parseErr) {
+            logLine(`conduit models JSON.parse FAILED: ${parseErr.message}, body[0..60]=${text.slice(0, 60)}`);
+            return jsonRes(res, 200, { ok: true, models: [], note: 'non-JSON: ' + text.slice(0, 120) });
+        }
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        CDT_MODELS_CACHE.data = models;
+        CDT_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (CDT_MODELS_CACHE.data) {
+            jsonRes(res, 200, { ok: true, models: CDT_MODELS_CACHE.data, cached: true, note: e.message });
+        } else {
+            jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        }
+    }
+}
+
+// Выбор модели Conduit с дашборда: пишет cdt-active-model.txt + settings.json model.
+async function handleConduitSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        let m = body.model != null ? String(body.model).trim() : '';
+        if (!m || body.fromFile) m = cdtReadActiveModel() || m;
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+
+        fs.writeFileSync(CDT_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-cdt-model');
+            settings.model = m;
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`conduit set-model: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`conduit set-model: ${m}`);
+        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, modelFile: CDT_ACTIVE_MODEL_FILE });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── VyceAI — ключи + прокси :20131 ────────────────────────────────
+const _vyceaiRoot = path.join(__dirname, '..');
+const VYCEAI_KEYS_FILE = path.join(_vyceaiRoot, 'vyceai', 'keys.txt');
+const VYCEAI_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'vyceai-active-key.txt');
+
+function readVyceaiKeys() {
+    try {
+        const raw = fs.readFileSync(VYCEAI_KEYS_FILE, 'utf8');
+        return raw.split(/\r?\n/).map(l => l.trim()).filter(l => l && l.startsWith('sk-'));
+    } catch { return []; }
+}
+
+function writeVyceaiKeys(keys) {
+    try {
+        fs.mkdirSync(path.dirname(VYCEAI_KEYS_FILE), { recursive: true });
+        fs.writeFileSync(VYCEAI_KEYS_FILE, keys.join('\n') + '\n', 'utf8');
+        return true;
+    } catch (e) { logLine(`vyceai write keys: ${e.message}`); return false; }
+}
+
+function readVyceaiActiveKey() {
+    try { return fs.readFileSync(VYCEAI_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { return ''; }
+}
+
+function writeVyceaiActiveKey(key) {
+    try {
+        fs.mkdirSync(path.dirname(VYCEAI_ACTIVE_KEY_FILE), { recursive: true });
+        fs.writeFileSync(VYCEAI_ACTIVE_KEY_FILE, key, 'utf8');
+        return true;
+    } catch (e) { logLine(`vyceai write active key: ${e.message}`); return false; }
+}
+
+async function handleVyceaiStatus(req, res) {
+    const keys = readVyceaiKeys();
+    try {
+        const upstream = await fetch('http://localhost:20131/__vyceai/api/status', {
+            signal: AbortSignal.timeout(3000),
+        });
+        if (upstream.ok) {
+            const sd = await upstream.json();
+            return jsonRes(res, 200, { ...sd, keys: keys.length });
+        }
+    } catch {}
+    jsonRes(res, 200, { ok: false, keys: keys.length });
+}
+
+async function handleVyceaiModels(req, res) {
+    try {
+        const upstream = await fetch('http://localhost:20131/v1/models', {
+            headers: { 'Authorization': 'Bearer ' + (readVyceaiKeys()[0] || '') },
+            signal: AbortSignal.timeout(8000),
+        });
+        if (!upstream.ok) return jsonRes(res, upstream.status, { error: 'upstream ' + upstream.status });
+        const data = await upstream.json();
+        const models = (data.data || []).map(m => m.id || m).sort();
+        jsonRes(res, 200, { models });
+    } catch (e) { jsonRes(res, 502, { error: e.message }); }
+}
+
+function handleVyceaiKeys(req, res) {
+    const keys = readVyceaiKeys();
+    const activeKey = readVyceaiActiveKey();
+    jsonRes(res, 200, {
+        keys: keys.map((k, i) => ({
+            name: `key-${i + 1}`,
+            key: k,
+            status: k === activeKey ? 'active' : 'ready',
+        })),
+        activeKey,
+    });
+}
+
+async function handleVyceaiAddKey(req, res) {
+    try {
+        const { name, key } = await readJsonBody(req);
+        if (!key || !key.startsWith('sk-')) return jsonRes(res, 400, { error: 'key must start with sk-' });
+        const keys = readVyceaiKeys();
+        if (keys.includes(key)) return jsonRes(res, 409, { error: 'Ключ уже добавлен (' + key.substring(0, 12) + '...)' });
+        keys.push(key);
+        writeVyceaiKeys(keys);
+        logLine(`vyceai: added key ${name || key.substring(0, 16)}...`);
+        jsonRes(res, 200, { ok: true, count: keys.length });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleVyceaiDeleteKey(req, res) {
+    try {
+        const { key } = await readJsonBody(req);
+        if (!key) return jsonRes(res, 400, { error: 'key required' });
+        let keys = readVyceaiKeys();
+        const before = keys.length;
+        keys = keys.filter(k => k !== key);
+        if (keys.length === before) return jsonRes(res, 404, { error: 'key not found' });
+        writeVyceaiKeys(keys);
+        // Если удалили активный — сбросить active-key
+        if (key === readVyceaiActiveKey()) {
+            writeVyceaiActiveKey(keys[0] || '');
+        }
+        logLine(`vyceai: deleted key ${key.substring(0, 16)}...`);
+        jsonRes(res, 200, { ok: true, count: keys.length });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ключа: пишем в active-key.txt + переставляем в начало keys.txt
+// Прокси :20131 читает keys.txt на каждый запрос — первая строка = активный.
+async function handleVyceaiActivate(req, res) {
+    try {
+        const { key } = await readJsonBody(req);
+        if (!key) return jsonRes(res, 400, { error: 'key required' });
+        const keys = readVyceaiKeys();
+        if (!keys.includes(key)) return jsonRes(res, 404, { error: 'key not found in pool' });
+        // 1) Переставляем в начало keys.txt (прокси читает первую строку)
+        const reordered = [key, ...keys.filter(k => k !== key)];
+        writeVyceaiKeys(reordered);
+        // 2) Пишем active-key.txt (для бэка и совместимости с паттерном других провайдеров)
+        writeVyceaiActiveKey(key);
+        logLine(`vyceai activate: ${key.substring(0, 12)}... → active (pool: ${keys.length})`);
+        jsonRes(res, 200, {
+            ok: true,
+            key: key.substring(0, 8) + '...' + key.slice(-4),
+            count: keys.length,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -3414,6 +3638,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/activate')     return handleFreemodelActivate(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/freemodel/models')) return handleFreemodelModels(req, res);
 
+    // ---- VyceAI — ключи + прокси :20131 ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vyceai/status'))   return handleVyceaiStatus(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vyceai/models'))  return handleVyceaiModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vyceai/keys'))     return handleVyceaiKeys(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vyceai/add-key')         return handleVyceaiAddKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vyceai/delete-key')      return handleVyceaiDeleteKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vyceai/activate')        return handleVyceaiActivate(req, res);
+
     // ---- Aerolink (al) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/al/sessions')) return handleAlSessions(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/al/add')       return handleAlAdd(req, res);
@@ -3471,6 +3703,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/conduit/refresh-quota')       return handleConduitRefreshQuota(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/conduit/activate')            return handleConduitActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/conduit/autoreg')             return handleConduitAutoreg(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/conduit/add')                 return handleConduitAdd(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/conduit/models'))       return handleConduitModels(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/conduit/set-model')          return handleConduitSetModel(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/conduit/active-model')       return jsonRes(res, 200, { model: cdtReadActiveModel() || null });
 
     // ---- FreeModel auto-rotation (API Helper load balancer) ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/auto/start') {

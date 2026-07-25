@@ -15,6 +15,7 @@
 | `8200` | **Backend Switcher / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |
 | `20126`| **FreeModel Key Rotator** | `routing/freemodel-rotator.js` | Менеджер прямых ключей для backend `freemodel_rotator`. Пишет ключ в `settings.json`. |
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
+| `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -37,6 +38,10 @@
   (там живут gpt-модели; `cc.freemodel.dev` — только claude). Ключ прокси читает сам из
   `fm-active-key.txt` (в settings.json пишется `dummy`). Маппинг claude-*→gpt-* правится
   в `routing/fm-openai-config.json` без рестарта (перечитывается по mtime).
+- **vyce_openai** — `http://localhost:20131` (vyceai-openai-proxy.js). Claude Code шлёт
+  Anthropic-формат, прокси конвертит в OpenAI chat/completions на `vyceai.com/v1`.
+  Ключ прокси читает из `vyceai/keys.txt` (в settings.json пишется `dummy`).
+  Маппинг claude-*→vyce-модели правится в `vyceai/config.js` без рестарта.
 - **apihelper** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/fm-active-key.txt`,
   `ANTHROPIC_BASE_URL=cc.freemodel.dev`, TTL=0. Claude Code читает ключ из файла на
   каждый запрос → ключ можно менять **без перезапуска**. На этом построена авто-ротация.
@@ -50,7 +55,7 @@
   `ANTHROPIC_BASE_URL=api.ourtoken.ai/v1`, TTL=0. То же, что apihelper, но для пула
   Ourtoken. Ключ читается на каждый запрос → смена на лету, без перезапуска.
 - **conduit** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/cdt-active-key.txt`,
-  `ANTHROPIC_BASE_URL=https://conduit.ozdoev.net/api/v1`, TTL=0. Anthropic-совместимый
+  `ANTHROPIC_BASE_URL=https://conduit.ozdoev.net/v1`, TTL=0. Anthropic-совместимый
   endpoint (ключи `sk-cdt-`), реги из Telegram. То же, что aerolink, но для пула Conduit.
 
 **⚠ Формат apiKeyHelper — только node-вариант** (`keyHelperCmd()` в transparent-proxy.js):
@@ -76,6 +81,7 @@ cat без файла виснет на stdin. Выяснено на чисто�
 |---------------|-----------|-------------------------------------|------------------|
 | **Switcher**  | активна (главная) | пресеты, hero, **глобальная шкала запаса** | `/api/status`, `/api/switch`, `/api/settings/*` |
 | **FreeModel** | активна   | сессии + квоты (5h/7d, $), TG-пул, авто-ротация, **шкала запаса** | `/api/freemodel/*` |
+| **VyceAI**    | активна   | статус прокси, список моделей | `/__vyceai/api/status`, `/v1/models` |
 | **Aerolink**  | активна   | ручной пул email+ключ, статус (пинг `/v1/me`), активация через API Helper | `/api/al/*` |
 | **Evomap**    | активна   | ручной пул email+ключ (evomap.ai), статус (пинг `/v1/models`), активация через API Helper | `/api/ev/*` |
 | **Ourtoken**  | активна   | ручной пул email+ключ (ourtoken.ai), статус (пинг `/v1/models`), активация через API Helper | `/api/ot/*` |

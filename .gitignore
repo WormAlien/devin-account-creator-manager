@@ -22,6 +22,9 @@ freemodel/accounts/
 freemodel/sessions/
 freemodel/keys.txt
 freemodel/tg_pool.json
+
+# VyceAI приватные данные (ключи API)
+vyceai/keys.txt
 freemodel/tg_pool.json.bak-*
 freemodel/.tg_health_cache.json
 freemodel/.email_blocklist.json

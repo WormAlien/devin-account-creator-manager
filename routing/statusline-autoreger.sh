@@ -35,11 +35,13 @@ if [ -z "$raw_target" ]; then
         *ev-active-key.txt*)             raw_target="evomap" ;;
         *ot-active-key.txt*)             raw_target="ourtoken" ;;
         *om-active-key.txt*)             raw_target="omniroute" ;;
+        *vyceai-active-key.txt*)         raw_target="vyce_openai" ;;
     esac
     if [ -z "$raw_target" ]; then
         case "$base_url" in
             https://api.ourtoken.ai*) raw_target="ourtoken" ;;
             *localhost:20128*)        raw_target="omniroute" ;;
+            *localhost:20131*)        raw_target="vyce_openai" ;;
             *localhost:8190*)         raw_target="notion" ;;
             *cc.freemodel.dev*)       raw_target="apihelper" ;;
         esac
@@ -58,6 +60,7 @@ case "$raw_target" in
     evomap)                      provider="evomap" ;;
     ourtoken)                    provider="ourtoken" ;;
     conduit)                     provider="conduit" ;;
+    vyce_openai)                 provider="vyceai" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
 esac
@@ -200,19 +203,10 @@ fi
 # ---- context window gauge: ⧉ ▰▰▱▱▱ 42% -------------------------------------
 # заполнение = занято; цвет от занятости: <50% зелёный, <80% жёлтый, дальше красный
 
-# РЕАЛЬНЫЕ окна бэкендов (проверено пробой routing/ctx-probe.sh, не верой CC).
-# CC выставляет context_window_size по model id (opus-4-6 → 200k), а бэкенд
-# может держать больше: freemodel = 1M на любых opus/fable (проба 2026-07-19:
-# "prompt is too long: 1148091 > 1000000 maximum"). Добавляй провайдеров сюда
-# по мере проверки: bash routing/ctx-probe.sh <base_url> <key> <model> 210
-real_max=""
-case "$provider" in
-    freemodel) real_max=1000000 ;;
-esac
-if [ -n "$real_max" ] && [ -n "$ctx_tok" ] && [ "$real_max" != "${ctx_max:-0}" ]; then
-    ctx_max="$real_max"
-    ctx_pct=$(( ctx_tok * 100 / real_max ))
-fi
+# Показываем ЦИФРЫ CC, не бэкенда: даже если бэкенд принимает больше
+# (freemodel — 1M по пробе ctx-probe.sh 2026-07-19), сам Claude Code
+# предупреждает и автокомпактит по своему context_window_size (~200k).
+# Оверрайд на real_max давал ложные 16% при реальных 90% занятости.
 
 if [ -n "$ctx_pct" ]; then
     [ "$ctx_pct" -gt 100 ] && ctx_pct=100

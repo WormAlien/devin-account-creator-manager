@@ -23,6 +23,14 @@ echo Starting FreeModel OpenAI Proxy on :20130 ...
 start "FM OpenAI Proxy" /B node freemodel-openai-proxy.js
 timeout /t 1 /nobreak >nul
 
+REM Kill + start VyceAI OpenAI proxy (:20131) — Anthropic->OpenAI for vyceai.com
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20131 " ^| findstr LISTENING') do (
+    taskkill /F /PID %%P >nul 2>&1
+)
+echo Starting VyceAI OpenAI Proxy on :20131 ...
+start "Vyce OpenAI Proxy" /B node vyceai-openai-proxy.js
+timeout /t 1 /nobreak >nul
+
 echo Starting Backend Switcher on :8200 ...
 start "Backend Switcher" node transparent-proxy.js
 timeout /t 2 /nobreak >nul
@@ -39,3 +47,4 @@ pause >nul
 taskkill /FI "WINDOWTITLE eq Backend Switcher*" /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq FM Rotator*" /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq FM OpenAI Proxy*" /F >nul 2>&1
+taskkill /FI "WINDOWTITLE eq Vyce OpenAI Proxy*" /F >nul 2>&1

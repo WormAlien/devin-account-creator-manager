@@ -210,6 +210,9 @@ function currentTarget() {
         if (helper.includes('om-active-key.txt')) {
             return 'omniroute';
         }
+        if (helper.includes('vyceai-active-key.txt')) {
+            return 'vyce_openai';
+        }
         // ourtoken использует ANTHROPIC_AUTH_TOKEN (без helper) → детектим по base_url
         if (url === 'https://api.ourtoken.ai' || url.startsWith('https://api.ourtoken.ai')) {
             return 'ourtoken';
@@ -3256,7 +3259,10 @@ async function handleVyceaiDeleteKey(req, res) {
 }
 
 // Активация ключа: пишем в active-key.txt + переставляем в начало keys.txt
-// Прокси :20131 читает keys.txt на каждый запрос — первая строка = активный.
+// + прокидываем в settings.json (как Aerolink/FreeModel):
+//   ANTHROPIC_BASE_URL → localhost:20131 (наш прокси)
+//   apiKeyHelper → читает vyceai-active-key.txt
+//   TTL=0 (перечитывает на каждый запрос)
 async function handleVyceaiActivate(req, res) {
     try {
         const { key } = await readJsonBody(req);
@@ -3266,13 +3272,34 @@ async function handleVyceaiActivate(req, res) {
         // 1) Переставляем в начало keys.txt (прокси читает первую строку)
         const reordered = [key, ...keys.filter(k => k !== key)];
         writeVyceaiKeys(reordered);
-        // 2) Пишем active-key.txt (для бэка и совместимости с паттерном других провайдеров)
+        // 2) Пишем active-key.txt
         writeVyceaiActiveKey(key);
-        logLine(`vyceai activate: ${key.substring(0, 12)}... → active (pool: ${keys.length})`);
+
+        // 3) Прокидываем в settings.json — как Aerolink/FreeModel
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-vyceai');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = BACKENDS.vyce_openai.base_url;
+            settings.apiKeyHelper = keyHelperCmd('vyceai-active-key.txt');
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.model;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`vyceai activate: settings.json FAILED: ${e.message}`);
+        }
+
+        logLine(`vyceai activate: ${key.substring(0, 12)}... → active (pool: ${keys.length}, settings: ${settingsOk})`);
         jsonRes(res, 200, {
             ok: true,
             key: key.substring(0, 8) + '...' + key.slice(-4),
             count: keys.length,
+            settingsUpdated: settingsOk,
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }

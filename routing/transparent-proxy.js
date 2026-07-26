@@ -416,9 +416,12 @@ const freemodelManager = require('../internal/freemodel-manager');
 
 function readJsonBody(req) {
     return new Promise((resolve, reject) => {
-        let body = '';
-        req.on('data', c => body += c);
+        // Копим Buffer'ы и декодируем разом: `body += chunk` резал многобайтовый
+        // UTF-8 на границе чанка и превращал кириллицу в U+FFFD.
+        const chunks = [];
+        req.on('data', c => chunks.push(c));
         req.on('end', () => {
+            const body = Buffer.concat(chunks).toString('utf8');
             if (!body) return resolve({});
             try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
         });
@@ -3156,21 +3159,43 @@ async function handleConduitSetModel(req, res) {
 }
 
 // ───── VyceAI — ключи + прокси :20131 ────────────────────────────────
+// Ключи живут в vyceai/keys.json: [{ name, key }]. Имя задаёт пользователь и
+// оно не зависит от порядка в файле — раньше был плоский keys.txt, имя бралось
+// из позиции (key-1, key-2...), поэтому активация перетасовывала список и
+// ключи visually "переименовывались".
 const _vyceaiRoot = path.join(__dirname, '..');
-const VYCEAI_KEYS_FILE = path.join(_vyceaiRoot, 'vyceai', 'keys.txt');
+const VYCEAI_KEYS_FILE = path.join(_vyceaiRoot, 'vyceai', 'keys.json');
+const VYCEAI_LEGACY_KEYS_FILE = path.join(_vyceaiRoot, 'vyceai', 'keys.txt');
 const VYCEAI_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'vyceai-active-key.txt');
 
 function readVyceaiKeys() {
     try {
         const raw = fs.readFileSync(VYCEAI_KEYS_FILE, 'utf8');
-        return raw.split(/\r?\n/).map(l => l.trim()).filter(l => l && l.startsWith('sk-'));
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (Array.isArray(arr)) {
+            return arr.filter(e => e && typeof e.key === 'string' && e.key.startsWith('sk-'))
+                      .map((e, i) => ({ name: e.name || `key-${i + 1}`, key: e.key }));
+        }
+    } catch (e) {
+        if (e.code !== 'ENOENT') logLine(`vyceai read keys: ${e.message}`);
+    }
+    // Миграция со старого плоского keys.txt — имена назначаем по позиции один раз.
+    try {
+        const legacy = fs.readFileSync(VYCEAI_LEGACY_KEYS_FILE, 'utf8')
+            .split(/\r?\n/).map(l => l.trim()).filter(l => l.startsWith('sk-'))
+            .map((key, i) => ({ name: `key-${i + 1}`, key }));
+        if (legacy.length) {
+            writeVyceaiKeys(legacy);
+            logLine(`vyceai: migrated ${legacy.length} keys from keys.txt → keys.json`);
+        }
+        return legacy;
     } catch { return []; }
 }
 
 function writeVyceaiKeys(keys) {
     try {
         fs.mkdirSync(path.dirname(VYCEAI_KEYS_FILE), { recursive: true });
-        fs.writeFileSync(VYCEAI_KEYS_FILE, keys.join('\n') + '\n', 'utf8');
+        fs.writeFileSync(VYCEAI_KEYS_FILE, JSON.stringify(keys, null, 2) + '\n', 'utf8');
         return true;
     } catch (e) { logLine(`vyceai write keys: ${e.message}`); return false; }
 }
@@ -3204,7 +3229,7 @@ async function handleVyceaiStatus(req, res) {
 async function handleVyceaiModels(req, res) {
     try {
         const upstream = await fetch('http://localhost:20131/v1/models', {
-            headers: { 'Authorization': 'Bearer ' + (readVyceaiKeys()[0] || '') },
+            headers: { 'Authorization': 'Bearer ' + (readVyceaiActiveKey() || readVyceaiKeys()[0]?.key || '') },
             signal: AbortSignal.timeout(8000),
         });
         if (!upstream.ok) return jsonRes(res, upstream.status, { error: 'upstream ' + upstream.status });
@@ -3218,10 +3243,10 @@ function handleVyceaiKeys(req, res) {
     const keys = readVyceaiKeys();
     const activeKey = readVyceaiActiveKey();
     jsonRes(res, 200, {
-        keys: keys.map((k, i) => ({
-            name: `key-${i + 1}`,
-            key: k,
-            status: k === activeKey ? 'active' : 'ready',
+        keys: keys.map(k => ({
+            name: k.name,
+            key: k.key,
+            status: k.key === activeKey ? 'active' : 'ready',
         })),
         activeKey,
     });
@@ -3232,10 +3257,11 @@ async function handleVyceaiAddKey(req, res) {
         const { name, key } = await readJsonBody(req);
         if (!key || !key.startsWith('sk-')) return jsonRes(res, 400, { error: 'key must start with sk-' });
         const keys = readVyceaiKeys();
-        if (keys.includes(key)) return jsonRes(res, 409, { error: 'Ключ уже добавлен (' + key.substring(0, 12) + '...)' });
-        keys.push(key);
+        if (keys.some(k => k.key === key)) return jsonRes(res, 409, { error: 'Ключ уже добавлен (' + key.substring(0, 12) + '...)' });
+        const label = (name || '').trim() || `key-${keys.length + 1}`;
+        keys.push({ name: label, key });
         writeVyceaiKeys(keys);
-        logLine(`vyceai: added key ${name || key.substring(0, 16)}...`);
+        logLine(`vyceai: added key ${label} (${key.substring(0, 12)}...)`);
         jsonRes(res, 200, { ok: true, count: keys.length });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -3246,36 +3272,34 @@ async function handleVyceaiDeleteKey(req, res) {
         if (!key) return jsonRes(res, 400, { error: 'key required' });
         let keys = readVyceaiKeys();
         const before = keys.length;
-        keys = keys.filter(k => k !== key);
+        keys = keys.filter(k => k.key !== key);
         if (keys.length === before) return jsonRes(res, 404, { error: 'key not found' });
         writeVyceaiKeys(keys);
         // Если удалили активный — сбросить active-key
         if (key === readVyceaiActiveKey()) {
-            writeVyceaiActiveKey(keys[0] || '');
+            writeVyceaiActiveKey(keys[0]?.key || '');
         }
         logLine(`vyceai: deleted key ${key.substring(0, 16)}...`);
         jsonRes(res, 200, { ok: true, count: keys.length });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// Активация ключа: пишем в active-key.txt + переставляем в начало keys.txt
+// Активация ключа: пишем в active-key.txt (прокси :20131 читает его)
 // + прокидываем в settings.json (как Aerolink/FreeModel):
 //   ANTHROPIC_BASE_URL → localhost:20131 (наш прокси)
 //   apiKeyHelper → читает vyceai-active-key.txt
 //   TTL=0 (перечитывает на каждый запрос)
+// Порядок в keys.json НЕ меняем — иначе поедут имена в таблице.
 async function handleVyceaiActivate(req, res) {
     try {
         const { key } = await readJsonBody(req);
         if (!key) return jsonRes(res, 400, { error: 'key required' });
         const keys = readVyceaiKeys();
-        if (!keys.includes(key)) return jsonRes(res, 404, { error: 'key not found in pool' });
-        // 1) Переставляем в начало keys.txt (прокси читает первую строку)
-        const reordered = [key, ...keys.filter(k => k !== key)];
-        writeVyceaiKeys(reordered);
-        // 2) Пишем active-key.txt
+        const entry = keys.find(k => k.key === key);
+        if (!entry) return jsonRes(res, 404, { error: 'key not found in pool' });
         writeVyceaiActiveKey(key);
 
-        // 3) Прокидываем в settings.json — как Aerolink/FreeModel
+        // Прокидываем в settings.json — как Aerolink/FreeModel
         let settingsOk = false;
         try {
             const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
@@ -3294,9 +3318,10 @@ async function handleVyceaiActivate(req, res) {
             logLine(`vyceai activate: settings.json FAILED: ${e.message}`);
         }
 
-        logLine(`vyceai activate: ${key.substring(0, 12)}... → active (pool: ${keys.length}, settings: ${settingsOk})`);
+        logLine(`vyceai activate: ${entry.name} (${key.substring(0, 12)}...) → active (pool: ${keys.length}, settings: ${settingsOk})`);
         jsonRes(res, 200, {
             ok: true,
+            name: entry.name,
             key: key.substring(0, 8) + '...' + key.slice(-4),
             count: keys.length,
             settingsUpdated: settingsOk,

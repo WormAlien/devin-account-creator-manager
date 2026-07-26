@@ -7,8 +7,9 @@
 // Слушает :20131. Ключ берётся (по приоритету):
 //   1. из заголовка клиента (x-api-key / Authorization: Bearer) — его пишет
 //      transparent-proxy в settings.json при переключении на vyce_openai;
-//   2. из vyceai/keys.txt (первый непустая строка);
-//   3. из env OPENAI_API_KEY.
+//   2. из ~/.claude/vyceai-active-key.txt (что активировано в дашборде);
+//   3. первый ключ из vyceai/keys.json (или legacy keys.txt);
+//   4. из env OPENAI_API_KEY.
 //
 // Маппинг моделей (claude-* → vyce-*) — vyceai/config.js:
 //   opus → claude-sonnet-5, sonnet → claude-sonnet-4-6, haiku → claude-haiku-4-5
@@ -21,7 +22,9 @@ const path = require('path');
 
 const LISTEN_PORT = 20131;
 const UPSTREAM_BASE = 'https://vyceai.com/v1';
-const KEYS_FILE = path.join(__dirname, '..', 'vyceai', 'keys.txt');
+const KEYS_FILE = path.join(__dirname, '..', 'vyceai', 'keys.json');
+const LEGACY_KEYS_FILE = path.join(__dirname, '..', 'vyceai', 'keys.txt');
+const ACTIVE_KEY_FILE = path.join(require('os').homedir(), '.claude', 'vyceai-active-key.txt');
 const VYCE_CONFIG_FILE = path.join(__dirname, '..', 'vyceai', 'config.js');
 const MAX_TOKENS_LIMIT = 64000;
 const MIN_TOKENS_LIMIT = 1024;
@@ -73,9 +76,22 @@ function resolveKey(req) {
     const fromHeader = req.headers['x-api-key'] || (auth.startsWith('Bearer ') ? auth.slice(7) : '');
     if (fromHeader && fromHeader.trim() && fromHeader !== 'dummy') return fromHeader.trim();
 
-    // vyceai/keys.txt — первый непустая строка
+    // Активный ключ из дашборда — не зависит от порядка в keys.json.
     try {
-        const lines = fs.readFileSync(KEYS_FILE, 'utf8').split(/\r?\n/);
+        const active = fs.readFileSync(ACTIVE_KEY_FILE, 'utf8').trim();
+        if (active.startsWith('sk-')) return active;
+    } catch {}
+
+    // vyceai/keys.json — первый ключ в пуле
+    try {
+        const arr = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
+        const first = (Array.isArray(arr) ? arr : []).find(e => e && typeof e.key === 'string' && e.key.startsWith('sk-'));
+        if (first) return first.key;
+    } catch {}
+
+    // legacy плоский keys.txt
+    try {
+        const lines = fs.readFileSync(LEGACY_KEYS_FILE, 'utf8').split(/\r?\n/);
         for (const line of lines) {
             const k = line.trim();
             if (k && k.startsWith('sk-')) return k;
@@ -525,7 +541,7 @@ const server = http.createServer((req, res) => {
         return writeJSON(res, 200, {
             ok: true, upstream: UPSTREAM_BASE, port: LISTEN_PORT,
             mapping: getConfig().MODEL_MAP, stats,
-            keySource: 'header → vyceai/keys.txt → env OPENAI_API_KEY',
+            keySource: 'header → vyceai-active-key.txt → vyceai/keys.json → env OPENAI_API_KEY',
         });
     }
     if (req.method === 'GET' && url === '/v1/models') return handleModels(req, res);
@@ -549,6 +565,6 @@ server.listen(LISTEN_PORT, '127.0.0.1', () => {
     const map = cfg.MODEL_MAP;
     console.log(`[VyceAI OpenAI Proxy] :${LISTEN_PORT} → ${UPSTREAM_BASE}`);
     console.log(`  mapping: opus→${map.opus}, sonnet→${map.sonnet}, haiku→${map.haiku}`);
-    console.log(`  key: client header → vyceai/keys.txt → env OPENAI_API_KEY`);
+    console.log(`  key: client header → vyceai-active-key.txt → vyceai/keys.json → env OPENAI_API_KEY`);
     console.log(`  status: http://localhost:${LISTEN_PORT}/__vyceai/api/status`);
 });

@@ -1713,7 +1713,12 @@ function showTab(name) {
     fmAutoStartPolling();
     if (!state.loaded.freemodel) { state.loaded.freemodel = true; loadFreemodelSessions(false); }
   }
-  if (name === 'vyceai' && !state.loaded.vyceai) { state.loaded.vyceai = true; loadVyceaiKeys(); loadVyceaiModels(); }
+  if (name === 'vyceai') {
+    // Ключи/статус перечитываем всегда — "Активен" зависит от текущего
+    // провайдера (state.current), который мог смениться в другой вкладке.
+    loadVyceaiKeys();
+    if (!state.loaded.vyceai) { state.loaded.vyceai = true; loadVyceaiModels(); }
+  }
   if (name === 'notion' && !state.loaded.notion) {
     state.loaded.notion = true;
     loadNotionSessions();
@@ -6877,6 +6882,14 @@ async function loadVyceaiKeys() {
   if (!el) return;
   el.innerHTML = `<div class="p-12 text-center text-muted text-xs">загрузка…</div>`;
   try {
+    // state.current нужен для статуса "Активен/Выбран" — на первом заходе
+    // loadStatus() мог ещё не отработать.
+    if (!state.current) {
+      try {
+        const s = await fetch('/__switch/api/status');
+        if (s.ok) state.current = (await s.json()).current;
+      } catch {}
+    }
     const r = await fetch('/__switch/api/vyceai/keys');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
@@ -6884,16 +6897,30 @@ async function loadVyceaiKeys() {
     state.vyceaiKeys = keys;
     state.vyceaiActiveKey = d.activeKey || '';
     $('nav-count-vyceai').textContent = keys.length;
-    // Hero: показать активный ключ
+    // Hero: показать активный ключ. "Активен" — только если провайдер vyce
+    // реально выбран в settings.json (state.current); иначе ключ лишь выбран
+    // в пуле, а запросы идут в другой бэкенд.
+    const vyceLive = state.current === 'vyce_openai';
     const activeKey = d.activeKey || '';
     if (activeKey) {
       const hero = $('vyceai-active-hero');
-      if (hero) hero.classList.remove('hidden');
+      if (hero) {
+        hero.classList.remove('hidden');
+        hero.classList.toggle('border-emerald/40', vyceLive);
+        hero.classList.toggle('border-line-soft', !vyceLive);
+      }
       const nameEl = $('vyceai-active-name');
       const keyEl  = $('vyceai-active-key');
+      const modeEl = $('vyceai-active-mode');
       const active = keys.find(k => k.key === activeKey);
       if (nameEl) nameEl.textContent = active?.name || '—';
       if (keyEl)  keyEl.textContent = activeKey.substring(0,8) + '***' + activeKey.slice(-4);
+      if (modeEl) {
+        modeEl.textContent = vyceLive ? '🌟 Активен' : '⏸ выбран · провайдер сейчас ' + (LABELS[state.current] || state.current || '?');
+        modeEl.className = vyceLive
+          ? 'text-xs px-3 py-1.5 bg-emerald/10 border border-emerald/40 text-emerald rounded-lg font-medium'
+          : 'text-xs px-3 py-1.5 bg-elevated border border-line-soft text-muted rounded-lg font-medium';
+      }
     }
     try {
       const sr = await fetch('/__switch/api/vyceai/status');
@@ -6970,19 +6997,22 @@ function renderVyceaiKeys() {
   }
   const rows = list.map(k => {
     const isActive = k.status === 'active';
-    const rowCls = isActive ? 'bg-emerald/5 border-l-2 border-l-emerald' : '';
+    const vyceLive = state.current === 'vyce_openai';
+    const rowCls = isActive ? (vyceLive ? 'bg-emerald/5 border-l-2 border-l-emerald' : 'bg-elevated/30 border-l-2 border-l-line') : '';
     const mask = k.key ? k.key.substring(0, 8) + '***' + k.key.slice(-4) : '—';
     return `<tr class="hover:bg-elevated/40 transition ${rowCls}">
-      <td class="px-3 py-2.5 w-7">${isActive ? '<span class="text-emerald">✓</span>' : '<span class="text-faint">○</span>'}</td>
+      <td class="px-3 py-2.5 w-7">${isActive ? (vyceLive ? '<span class="text-emerald">✓</span>' : '<span class="text-muted">◐</span>') : '<span class="text-faint">○</span>'}</td>
       <td class="px-3 py-2.5 text-sm text-ink" title="${esc(k.name || k.key)}">${esc(k.name || k.key || '—')}</td>
       <td class="px-3 py-2.5 text-xs font-mono text-muted" title="${esc(k.key || '')}">${esc(mask)}</td>
       <td class="px-3 py-2.5 text-xs">${isActive
-        ? '<span class="inline-flex items-center text-[10px] px-2 py-0.5 rounded border bg-emerald/10 border-emerald/40 text-emerald font-medium">🌟 Активен</span>'
+        ? (vyceLive
+          ? '<span class="inline-flex items-center text-[10px] px-2 py-0.5 rounded border bg-emerald/10 border-emerald/40 text-emerald font-medium">🌟 Активен</span>'
+          : '<span class="inline-flex items-center text-[10px] px-2 py-0.5 rounded border bg-elevated border-line-soft text-muted font-medium" title="Ключ выбран, но в settings.json сейчас другой провайдер — нажми ⚡ чтобы переключиться на VyceAI">◐ Выбран · провайдер другой</span>')
         : '<span class="inline-flex items-center text-[10px] px-2 py-0.5 rounded border bg-elevated border-line-soft text-faint">○ Готов</span>'}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
-        ${isActive
+        ${isActive && vyceLive
           ? '<span class="text-[10px] px-2 py-1 rounded bg-emerald/10 border border-emerald/40 text-emerald font-medium cursor-default" title="Уже активен">✓ активен</span>'
-          : `<button onclick='activateVyceaiKey(${JSON.stringify(k.key || "")})' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-emerald/60 hover:text-emerald transition" title="Активировать ключ">⚡</button>`}
+          : `<button onclick='activateVyceaiKey(${JSON.stringify(k.key || "")})' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-emerald/60 hover:text-emerald transition" title="${isActive ? 'Переключить провайдера на VyceAI с этим ключом' : 'Активировать ключ'}">⚡</button>`}
         <button onclick='navigator.clipboard.writeText(${JSON.stringify(k.key || "")});toast("📋 скопировано","success",2000)' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-emerald/60 hover:text-emerald transition" title="Скопировать ключ">🗝</button>
         <button onclick='navigator.clipboard.writeText(${JSON.stringify(k.name || "")});toast("📋 скопировано","success",2000)' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-azure/60 hover:text-azure transition" title="Скопировать имя">✉</button>
         <button onclick='deleteVyceaiKey(${JSON.stringify(k.key || "")})' class="text-[10px] px-2 py-1 rounded bg-elevated border border-line-soft text-muted hover:border-crimson/60 hover:text-crimson transition" title="Удалить ключ">🗑</button>
@@ -7054,7 +7084,10 @@ async function activateVyceaiKey(key) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
-    toast('✓ Ключ активирован: ' + d.key, 'success');
+    toast('✓ Ключ активирован: ' + (d.name || d.key) + ' · перезапусти Claude Code', 'success');
+    // settings.json уже переписан на vyce — обновляем глобальный статус
+    state.current = 'vyce_openai';
+    try { paintStatus(); } catch {}
     loadVyceaiKeys();
   } catch (e) { toast('Ошибка: ' + e.message, 'error'); }
 }

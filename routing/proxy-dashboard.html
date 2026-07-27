@@ -46,6 +46,11 @@
     opacity: 0.55;
     animation: pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
+  .connect-on {
+    background: color-mix(in oklch, var(--color-emerald) 18%, transparent) !important;
+    border-color: color-mix(in oklch, var(--color-emerald) 60%, transparent) !important;
+    color: var(--color-emerald) !important;
+  }
 }
 
 @keyframes pulse-ring {
@@ -182,9 +187,9 @@
 
     <!-- Nav -->
     <nav id="main-nav" class="px-2 space-y-0.5 flex-1">
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="switcher">
-        <span class="text-base">🔀</span>
-        <span class="flex-1">Switcher</span>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="claude">
+        <span class="text-base">✳</span>
+        <span class="flex-1">Claude Code</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="freemodel">
         <span class="text-base">🆓</span>
@@ -328,20 +333,22 @@
     <!-- Toast container (above the log button / panel) -->
     <div id="toasts" class="fixed bottom-20 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
-    <!-- ═════════ TAB: SWITCHER ═════════ -->
-    <div data-tab-content="switcher" class="active">
+    <!-- Global energy gauge — виден на всех вкладках -->
+    <div class="px-6 pt-6">
+      <div class="rounded-xl bg-surface border border-line-soft p-5 relative overflow-hidden">
+        <div class="absolute -top-24 -right-24 size-56 rounded-full bg-emerald/10 blur-3xl pointer-events-none"></div>
+        <div id="global-energy" class="relative"></div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: CLAUDE CODE ═════════ -->
+    <div data-tab-content="claude" class="active">
       <div class="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
         <header>
-          <h1 class="text-2xl font-semibold tracking-tight">Switcher</h1>
-           <p class="text-sm text-muted mt-1">Прямое переключение ключа в <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>. Клик по пресету применяет его.</p>
+          <h1 class="text-2xl font-semibold tracking-tight">Claude Code</h1>
+          <p class="text-sm text-muted mt-1">Активный маршрут в <code class="font-mono text-emerald text-xs">~/.claude/settings.json</code> и официальный доступ по подписке.</p>
         </header>
-
-        <!-- Global energy gauge (free-tier capacity across counted modules) -->
-        <div class="rounded-xl bg-surface border border-line-soft p-5 relative overflow-hidden">
-          <div class="absolute -top-24 -right-24 size-56 rounded-full bg-emerald/10 blur-3xl pointer-events-none"></div>
-          <div id="global-energy" class="relative"></div>
-        </div>
 
         <!-- Hero: active config -->
         <div class="rounded-xl bg-surface border border-line-soft p-6 relative overflow-hidden">
@@ -356,18 +363,24 @@
           </div>
         </div>
 
-        <!-- Config presets -->
-        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-sm font-semibold flex items-center gap-2">
-               <span class="text-emerald">🔄</span> Simple API Switcher
-            </h2>
-            <button onclick="saveCurrentAsPreset()" class="text-xs px-2.5 py-1.5 bg-elevated border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald transition">
-              💾 Сохранить текущий
-            </button>
+        <!-- Официальный Claude по OAuth -->
+        <div class="rounded-xl bg-surface border border-amber/30 p-6 relative overflow-hidden">
+          <div class="absolute -top-24 -right-24 size-56 rounded-full bg-amber/10 blur-3xl pointer-events-none"></div>
+          <div class="relative space-y-4">
+            <div class="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h2 class="text-sm font-semibold flex items-center gap-2">
+                  <span class="text-amber">🎫</span> Официальный Claude · OAuth
+                </h2>
+                <p class="text-xs text-muted mt-1">api.anthropic.com по подписке. Зануляет все провайдерские переменные — OAuth-сессия из <code class="font-mono text-amber text-xs">/login</code> не трогается.</p>
+              </div>
+              <button id="claude-official-btn" onclick="applyPreset('official')"
+                      class="text-xs px-4 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium transition">
+                🎫 Подключить
+              </button>
+            </div>
+            <div id="claude-oauth-info" class="text-xs font-mono text-faint">проверяю OAuth-сессию…</div>
           </div>
-           <p class="text-xs text-muted">Нажми на пресет — он обновит ключ в <code class="font-mono text-emerald">~/.claude/settings.json</code>. Перед записью делается backup.</p>
-          <div id="switcher-presets" class="grid grid-cols-1 gap-2"></div>
         </div>
 
       </div>
@@ -569,6 +582,7 @@
             <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-azure text-xs">routing/al-sessions.json</code> · клик по ключу = активный (API Helper)</p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button data-connect-backend="aerolink" onclick="applyPreset('alHelper')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
             <button onclick="loadAlSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadAlSessions(true)" class="text-xs px-3 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">📡 Пинг статусов</button>
             <button onclick="alShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
@@ -609,6 +623,7 @@
             <p class="text-sm text-muted mt-1">Клик по модели → settings + txt · на лету в Claude: <code class="font-mono text-xs">/model &lt;id&gt;</code> · рег: GitHub/Google на <a href="https://www.cun.ai/" target="_blank" rel="noopener" class="text-violet hover:underline">cun.ai</a></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button data-connect-backend="cun" onclick="applyPreset('cunHelper')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
             <button onclick="loadCunSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadCunSessions(true)" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">📡 Пинг статусов</button>
             <button onclick="cunShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
@@ -704,6 +719,7 @@
             <p class="text-sm text-muted mt-1">ручной пул ключей — <code class="font-mono text-amber text-xs">routing/evomap-sessions.json</code> · клик по ключу = активный (API Helper)</p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button data-connect-backend="evomap" onclick="applyPreset('evHelper')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
             <button onclick="loadEvomapSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadEvomapSessions(true)" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">📡 Пинг статусов</button>
             <button onclick="evomapShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
@@ -743,6 +759,7 @@
             <p class="text-sm text-muted mt-1">OmniRoute импорт — <code class="font-mono text-cyan text-xs">routing/ourtoken-sessions.json</code> · клик по ключу = settings.json → OmniRoute · 🚀 = в OmniRoute</p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button data-connect-backend="omniroute,ourtoken" onclick="applyPreset('omniroute')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition" title="settings.json → OmniRoute (localhost:20128)">🔌 Подключить</button>
             <button onclick="loadOurtokenSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadOurtokenSessions(true)" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">📡 Пинг статусов</button>
             <div class="flex items-center gap-1">
@@ -1039,6 +1056,7 @@
             <p class="text-sm text-muted mt-1">ТГ-аккаунты <code class="font-mono text-violet text-xs">conduit.ozdoev.net</code> · клик по ключу = активный (API Helper) · реги из ТГ</p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button data-connect-backend="conduit" onclick="applyPreset('cdtHelper')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
             <button onclick="loadConduitSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadConduitSessions(true)" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🔄 Баланс/квоты</button>
             <input id="conduit-count" type="number" min="1" max="50" value="1" class="text-xs bg-surface border border-line-soft rounded-lg px-2 py-2 w-16 focus:outline-none focus:border-emerald/60" title="сколько аккаунтов зарегать">
@@ -1171,6 +1189,7 @@
             <p class="text-sm text-muted mt-1">кеш — <code class="font-mono text-amber text-xs">logs/.freemodel_quota_cache.json</code></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button data-connect-backend="apihelper,freemodel_rotator" onclick="applyPreset('fmHelper')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
             <button onclick="loadActiveFmKey()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Активный</button>
             <input id="freemodel-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-amber/60 focus:ring-2 focus:ring-amber/20">
             <label class="text-[10px] text-faint flex items-center gap-1 cursor-pointer select-none" title="Показывать аккаунты, помеченные 💀">
@@ -1377,6 +1396,7 @@
             <p class="text-sm text-muted mt-1">прокси <code class="font-mono text-emerald text-xs">:20131</code> · upstream <code class="font-mono text-faint text-xs">vyceai.com/v1</code> · кеш — <code class="font-mono text-faint text-xs">vyceai/keys.json</code></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <button data-connect-backend="vyce_openai" onclick="switchTo('vyce_openai')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition" title="settings.json → прокси :20131">🔌 Подключить</button>
             <button onclick="loadVyceaiKeys()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <input id="vyceai-filter" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-emerald/60 focus:ring-2 focus:ring-emerald/20">
             <select id="vyceai-sort" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-emerald/60">
@@ -1702,7 +1722,7 @@ function showTab(name) {
   document.querySelectorAll('[data-tab-content]').forEach(p => {
     p.classList.toggle('active', p.dataset.tabContent === name);
   });
-  if (name === 'switcher') { renderGlobalGauge(); }
+  renderGlobalGauge();   // энергобар глобальный — обновляем при каждой смене вкладки
   if (name === 'devin'     && !state.loaded.devin)     { state.loaded.devin = true; loadDevinSessions(false); }
   if (name === 'freemodel') {
     // Invites + TG-пул перечитываем всегда (вне кеша) — chain и пул меняются.
@@ -1759,14 +1779,15 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', official: 'Официальный Claude', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
     const res  = await fetch('/__switch/api/status');
     const data = await res.json();
     state.current = data.current;
+    state.oauth = data.oauth || { loggedIn: false };
     state.urls = {};
     for (const [k, v] of Object.entries(data.backends || {})) state.urls[k] = v.base_url;
     paintStatus();
@@ -1784,6 +1805,10 @@ function paintStatus() {
     if (t === 'cun') {
       modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-violet/10 border-violet/40 text-violet';
       modeEl.textContent = '🔑 Token';
+    } else if (t === 'official') {
+      const ok = state.oauth && state.oauth.loggedIn;
+      modeEl.className = `shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium ${ok ? 'bg-amber/10 border-amber/40 text-amber' : 'bg-crimson/10 border-crimson/40 text-crimson'}`;
+      modeEl.textContent = ok ? '🎫 OAuth' : '⛔ нет /login';
     } else if (t === 'apihelper' || t === 'aerolink' || t === 'conduit' || t === 'evomap' || t === 'ourtoken' || t === 'omniroute') {
       modeEl.className = 'shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium bg-azure/10 border-azure/40 text-azure';
       modeEl.textContent = '🤝 Helper';
@@ -1794,15 +1819,52 @@ function paintStatus() {
       modeEl.className = 'hidden';
     }
   }
-  if ($('side-url')) $('side-url').textContent = state.urls[t] || '';
+  const urlText = t === 'official'
+    ? (state.oauth && state.oauth.loggedIn
+        ? `api.anthropic.com · ${state.oauth.email || 'OAuth'}${state.oauth.subscriptionType ? ' (' + state.oauth.subscriptionType + ')' : ''}`
+        : 'нет OAuth-сессии — запусти claude и выполни /login')
+    : (state.urls[t] || '');
+  if ($('side-url')) $('side-url').textContent = urlText;
   if ($('side-dot')) $('side-dot').className = `relative inline-block size-2 rounded-full pulse-dot ${dotClass}`;
 
   if ($('hero-name')) $('hero-name').textContent = label;
-  if ($('hero-url')) $('hero-url').textContent = state.urls[t] || '';
+  if ($('hero-url')) $('hero-url').textContent = urlText;
   if ($('hero-pill')) $('hero-pill').textContent = t || '?';
 
   try { fmPaintProvider(); } catch (e) { console.warn('fmPaintProvider', e); }
-  try { renderPresets(); } catch (e) { console.warn('renderPresets', e); }
+  try { paintClaudeTab(); } catch (e) { console.warn('paintClaudeTab', e); }
+  try { paintConnectButtons(); } catch (e) { console.warn('paintConnectButtons', e); }
+}
+
+// Вкладка Claude Code: карточка OAuth-сессии + состояние кнопки «Подключить».
+function paintClaudeTab() {
+  const info = $('claude-oauth-info');
+  const btn  = $('claude-official-btn');
+  if (!info || !btn) return;
+  const o = state.oauth || {};
+  if (o.loggedIn) {
+    info.innerHTML = `🟢 залогинен: <span class="text-ink">${esc(o.email || '?')}</span>`
+      + (o.subscriptionType ? ` · подписка <span class="text-amber">${esc(o.subscriptionType)}</span>` : '');
+    btn.disabled = false;
+    btn.classList.remove('opacity-40', 'cursor-not-allowed');
+  } else {
+    info.innerHTML = '🔴 нет OAuth-сессии — запусти <code class="text-ink">claude</code> и выполни <code class="text-ink">/login</code>';
+    btn.disabled = true;
+    btn.classList.add('opacity-40', 'cursor-not-allowed');
+  }
+  const active = state.current === 'official';
+  btn.textContent = active ? '● Подключено' : '🎫 Подключить';
+  btn.classList.toggle('bg-amber/25', active);
+}
+
+// Кнопки «Подключить» на вкладках провайдеров: подсветка активной.
+// data-connect-backend = имя бэкенда из currentTarget().
+function paintConnectButtons() {
+  document.querySelectorAll('[data-connect-backend]').forEach(btn => {
+    const on = btn.dataset.connectBackend.split(',').includes(state.current);
+    btn.textContent = on ? '● Подключено' : '🔌 Подключить';
+    btn.classList.toggle('connect-on', on);
+  });
 }
 
 // FreeModel: какой провайдер активен сейчас (по state.current).
@@ -1860,8 +1922,42 @@ async function switchTo(target) {
 const PRESETS_KEY = 'opencode_switcher_presets';
 const ACTIVE_PRESET_KEY = 'opencode_active_preset';
 
+// Байт-в-байт с keyHelperCmd() из transparent-proxy.js. cat не годится: у Claude Code
+// шелл может быть без cat в PATH, кириллица в USERPROFILE ломает ~. Node всегда есть.
+function nodeKeyHelper(keyFile) {
+  return 'node -e "process.stdout.write(require(\'fs\').readFileSync('
+    + 'require(\'os\').homedir()+\'/.claude/' + keyFile + '\',\'utf8\').trim())"';
+}
+
 function getDefaultPresets() {
   return {
+    'official': {
+      label: 'Официальный Claude · OAuth',
+      desc: 'api.anthropic.com по подписке (/login). Зануляет все провайдерские переменные',
+      icon: '🎫',
+      color: 'amber',
+      settings: {
+        apiKeyHelper: '',
+        model: null,
+        // "" = «не задано» для Claude Code, но при этом перебивает export из шелла.
+        // null = выпилить ключ совсем (мусор от ourtoken/cun-маппингов).
+        env: {
+          ANTHROPIC_BASE_URL: '',
+          ANTHROPIC_AUTH_TOKEN: '',
+          ANTHROPIC_API_KEY: '',
+          ANTHROPIC_MODEL: '',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: '',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: null,
+          ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: null,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: null,
+          ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: null,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME: null,
+          ANTHROPIC_DEFAULT_FABLE_MODEL: null,
+          ANTHROPIC_DEFAULT_FABLE_MODEL_NAME: null,
+          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: null
+        }
+      }
+    },
     'fmDirect': {
       label: 'FreeModel · прямой ключ',
       desc: 'env.ANTHROPIC_API_KEY в settings.json (задаётся 🔴 Активировать)',
@@ -1877,11 +1973,11 @@ function getDefaultPresets() {
     },
     'fmHelper': {
       label: 'FreeModel · API Helper',
-      desc: 'apiKeyHelper → cat ~/.claude/fm-active-key.txt',
+      desc: 'apiKeyHelper → node readFileSync ~/.claude/fm-active-key.txt',
       icon: '🤝',
       color: 'emerald',
       settings: {
-        apiKeyHelper: 'cat ~/.claude/fm-active-key.txt',
+        apiKeyHelper: nodeKeyHelper('fm-active-key.txt'),
         model: null,  // сбросить залипшую model (напр. ComboWombo от OmniRoute)
         env: {
           ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev',
@@ -1907,11 +2003,11 @@ function getDefaultPresets() {
     },
     'alHelper': {
       label: 'Aerolink · API Helper',
-      desc: 'apiKeyHelper → cat ~/.claude/al-active-key.txt',
+      desc: 'apiKeyHelper → node readFileSync ~/.claude/al-active-key.txt',
       icon: '🔗',
       color: 'azure',
       settings: {
-        apiKeyHelper: 'cat ~/.claude/al-active-key.txt',
+        apiKeyHelper: nodeKeyHelper('al-active-key.txt'),
         model: null,
         env: {
           ANTHROPIC_BASE_URL: 'https://capi.aerolink.lat/',
@@ -1937,11 +2033,11 @@ function getDefaultPresets() {
     },
     'cdtHelper': {
       label: 'Conduit · API Helper',
-      desc: 'apiKeyHelper → cat ~/.claude/cdt-active-key.txt',
+      desc: 'apiKeyHelper → node readFileSync ~/.claude/cdt-active-key.txt',
       icon: '🚇',
       color: 'violet',
       settings: {
-        apiKeyHelper: 'cat ~/.claude/cdt-active-key.txt',
+        apiKeyHelper: nodeKeyHelper('cdt-active-key.txt'),
         model: null,
         env: {
           ANTHROPIC_BASE_URL: 'https://conduit.ozdoev.net/v1',
@@ -1952,11 +2048,11 @@ function getDefaultPresets() {
     },
     'evHelper': {
       label: 'Evomap · API Helper',
-      desc: 'apiKeyHelper → cat ~/.claude/ev-active-key.txt',
+      desc: 'apiKeyHelper → node readFileSync ~/.claude/ev-active-key.txt',
       icon: '🧭',
       color: 'amber',
       settings: {
-        apiKeyHelper: 'cat ~/.claude/ev-active-key.txt',
+        apiKeyHelper: nodeKeyHelper('ev-active-key.txt'),
         model: null,
         env: {
           ANTHROPIC_BASE_URL: 'https://api.evomap.ai/v1',
@@ -1981,11 +2077,11 @@ function getDefaultPresets() {
     },
     'omHelper': {
       label: 'OmniRoute · API Helper',
-      desc: 'apiKeyHelper → cat ~/.claude/om-active-key.txt',
+      desc: 'apiKeyHelper → node readFileSync ~/.claude/om-active-key.txt',
       icon: '🔀',
       color: 'azure',
       settings: {
-        apiKeyHelper: 'cat ~/.claude/om-active-key.txt',
+        apiKeyHelper: nodeKeyHelper('om-active-key.txt'),
         model: null,
         env: {
           ANTHROPIC_BASE_URL: 'http://localhost:20128/v1',
@@ -2005,104 +2101,36 @@ function getPresets() {
   } catch { return getDefaultPresets(); }
 }
 
-function savePresets(presets) {
-  const defaults = getDefaultPresets();
-  const toSave = {};
-  for (const [k, v] of Object.entries(presets)) {
-    if (!defaults[k]) toSave[k] = v;
-  }
-  localStorage.setItem(PRESETS_KEY, JSON.stringify(toSave));
-}
-
-function renderPresets() {
-  const box = $('switcher-presets');
-  if (!box) return;
-  const presets = getPresets();
-  // подсветка = пресет, чей бэкенд совпадает с реальным settings.json (state.current),
-  // а не последний клик из localStorage (иначе аэро показывало бы старый fmHelper).
-  const presetBackend = (p) => {
-    const h = p.settings?.apiKeyHelper || '';
-    if (h.includes('al-active-key')) return 'aerolink';
-    if (h.includes('cun-active-key')) return 'cun';
-    if (h.includes('cdt-active-key')) return 'conduit';
-    if (h.includes('ev-active-key')) return 'evomap';
-    if (h.includes('om-active-key')) return 'omniroute';
-    if (h.includes('fm-active-key')) return 'apihelper';
-    if (h.includes('vyceai-active-key')) return 'vyce_openai';
-    const url = p.settings?.env?.ANTHROPIC_BASE_URL || '';
-    if (url.includes('20128')) return 'omniroute';
-    if (url.includes('20130')) return 'fm_openai';
-    if (url.includes('20131')) return 'vyce_openai';
-    if (url.includes('cun.ai')) return 'cun';
-    if (url.includes('freemodel')) return state.current === 'apihelper' ? '' : 'freemodel_rotator';
-    return '';
-  };
-  const stored = localStorage.getItem(ACTIVE_PRESET_KEY);
-  const matches = Object.keys(presets).filter(k => presetBackend(presets[k]) === state.current);
-  const active = matches.includes(stored) ? stored : (matches[0] || '');
-  const rows = Object.entries(presets).map(([key, p]) => {
-    const isActive = active === key;
-    return `
-      <div class="group relative flex items-center gap-3 p-3 rounded-lg border transition cursor-pointer ${isActive ? 'border-emerald/60 bg-emerald/5' : 'border-line-soft hover:border-emerald/40 bg-elevated/30'}"
-           onclick="applyPreset('${key}')">
-        <span class="text-lg">${p.icon}</span>
-        <div class="flex-1 min-w-0">
-          <div class="text-sm font-medium ${isActive ? 'text-emerald' : 'text-ink'}">${esc(p.label)} ${isActive ? '●' : ''}</div>
-          <div class="text-[11px] text-muted truncate">${esc(p.desc)}</div>
-        </div>
-        ${!getDefaultPresets()[key] ? `<button onclick="event.stopPropagation(); deletePreset('${key}')" class="text-dim hover:text-crimson text-xs px-1">×</button>` : ''}
-      </div>
-    `;
-  }).join('');
-  box.innerHTML = rows;
-}
-
 async function applyPreset(key) {
   const presets = getPresets();
   const p = presets[key];
   if (!p) return toast('Пресет не найден', 'error');
+  if (key === 'official' && !(state.oauth && state.oauth.loggedIn)) {
+    return toast('Нет OAuth-сессии: запусти claude и выполни /login, потом переключайся', 'error', 9000);
+  }
+  // Полный набор провайдерских ключей: union env-ключей всех пресетов.
+  // Чего нет в выбранном — сносим (null), иначе залипший ANTHROPIC_AUTH_TOKEN
+  // или маппинги моделей от прошлого профиля перебьют новый. Только провайдерский
+  // неймспейс — глобальные env юзера (DISABLE_AUTOUPDATER и т.п.) не трогаем.
+  const PROVIDER_ENV_RE = /^ANTHROPIC_|^CLAUDE_CODE_API_KEY_HELPER_TTL_MS$/;
+  const allKeys = new Set();
+  for (const q of Object.values(presets)) {
+    Object.keys(q.settings?.env || {}).filter(k => PROVIDER_ENV_RE.test(k)).forEach(k => allKeys.add(k));
+  }
+  const env = { ...(p.settings.env || {}) };
+  for (const k of allKeys) if (!(k in env)) env[k] = null;
+  const patch = { ...p.settings, env };
   try {
     const res = await fetch('/__switch/api/settings/apply', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: p.settings }),
+      body: JSON.stringify({ settings: patch }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     localStorage.setItem(ACTIVE_PRESET_KEY, key);
     state.current = data.current || 'unknown'; paintStatus();
-    renderPresets();
     toast(`✓ Применён «${p.label}» — перезапусти Claude Code!`, 'success', 7000);
   } catch (e) { toast('Preset: ' + e.message, 'error'); }
-}
-
-async function saveCurrentAsPreset() {
-  const label = prompt('Название пресета:');
-  if (!label) return;
-  try {
-    const res = await fetch('/__switch/api/settings/current');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    const key = 'custom_' + Date.now();
-    const presets = getPresets();
-    presets[key] = {
-      label: label,
-      desc: 'Сохранённый вручную',
-      icon: '💾',
-      color: 'violet',
-      settings: data.settings
-    };
-    savePresets(presets);
-    renderPresets();
-    toast('Конфиг сохранён', 'success');
-  } catch (e) { toast('Save preset: ' + e.message, 'error'); }
-}
-
-function deletePreset(key) {
-  const presets = getPresets();
-  delete presets[key];
-  savePresets(presets);
-  if (localStorage.getItem(ACTIVE_PRESET_KEY) === key) localStorage.removeItem(ACTIVE_PRESET_KEY);
-  renderPresets();
 }
 
 // ═══════════════════ WHOAMI ══════════════════════════════════════════
@@ -6637,7 +6665,7 @@ async function loadSettings() {
     $('settings-cur-ttl').textContent = (s.env && s.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS) || '—';
     $('settings-key').value = key;
     $('settings-url-inp').value = (s.env && s.env.ANTHROPIC_BASE_URL) || 'https://cc.freemodel.dev';
-    $('settings-helper-inp').value = s.apiKeyHelper || 'cat ~/.claude/fm-active-key.txt';
+    $('settings-helper-inp').value = s.apiKeyHelper || nodeKeyHelper('fm-active-key.txt');
     $('settings-ttl-inp').value = (s.env && s.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS) || '1';
     fillSettingsFmDropdown();
   } catch(e) { toast('Settings load: '+e.message,'error'); }
@@ -6828,7 +6856,7 @@ function setAutoRefresh(on) {
 function autoRefreshTick() {
   if (document.hidden) return;
   if (!autoRefreshEnabled()) return;
-  const tab = localStorage.getItem('opencode_active_tab') || 'switcher';
+  const tab = localStorage.getItem('opencode_active_tab') || 'claude';
 
   // TG-пул: обновляем на любой TG-содержащей вкладке.
   if ((tab === 'freemodel' || tab === 'conduit') && Date.now() - _lastTgPoll > TG_POLL_MS - 500) {
@@ -7147,8 +7175,14 @@ $('vyceai-filter')?.addEventListener('input', () => renderVyceaiKeys());
 $('vyceai-sort')?.addEventListener('change', () => renderVyceaiKeys());
 
 applyTabsConfig();
-showTab(localStorage.getItem('opencode_active_tab') || 'switcher');
-toggleLogPanel(); // log panel open by default
+// switcher больше нет — старое сохранённое значение мигрируем на claude
+{
+  let _tab = localStorage.getItem('opencode_active_tab') || 'claude';
+  if (_tab === 'switcher') _tab = 'claude';
+  showTab(_tab);
+}
+// log panel open by default — панель объявлена ниже скрипта, ждём полного парсинга DOM
+document.addEventListener('DOMContentLoaded', toggleLogPanel);
 </script>
 <!-- TG bind modal -->
 <div id="tg-bind-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">

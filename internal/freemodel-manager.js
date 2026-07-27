@@ -495,20 +495,37 @@ async function extractFreemodelApiKey(session) {
             }
         }
 
-        // Dismiss any overlay that blocks clicks
-        try {
-            // Try clicking any visible button in the overlay
-            const anyBtn = page.locator(".modal-backdrop button, .fixed.inset-0 button").first();
-            if (await anyBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await anyBtn.click({ timeout: 3000 });
-                await page.waitForTimeout(800);
-            }
-        } catch {}
-        try { await page.keyboard.press("Escape"); await page.waitForTimeout(400); } catch {}
-        // Nuclear option: remove modal-backdrop via JS if still present
+        // Закрываем промо-модалки, которые freemodel показывает поверх страницы
+        // ("Connect WorkBuddy — Limited time" и т.п.). Раньше тут был слепой
+        // клик по первой кнопке любого оверлея — он попадал в "Bind phone
+        // number" модалки верификации и висел 3с, потому что промо перехватывало
+        // pointer events. Жмём именно дизмисс-кнопку промо, через JS (мимо
+        // перехвата), и НЕ трогаем модалку верификации — её наличие ниже
+        // распознаётся как понятная ошибка needsVerification.
         try {
             await page.evaluate(() => {
-                document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+                const DISMISS = /maybe later|not now|dismiss|später|close/i;
+                for (const m of document.querySelectorAll('.modal, [role="dialog"]')) {
+                    // Модалку создания ключа и верификацию не трогаем.
+                    if (m.querySelector('#newKeyName, #vf-phone')) continue;
+                    const btn = [...m.querySelectorAll('button')]
+                        .find(b => DISMISS.test(b.textContent || ''));
+                    if (btn) btn.click();
+                }
+            });
+            await page.waitForTimeout(600);
+        } catch {}
+        try { await page.keyboard.press("Escape"); await page.waitForTimeout(400); } catch {}
+        // Если промо всё ещё висит — удаляем ТОЛЬКО его backdrop. Прежний код
+        // сносил все .modal-backdrop подряд, включая контейнер, в который React
+        // рендерит модалку New key: клик по "Create key" потом проходил, но
+        // #newKeyName появиться было негде → "could not open Create key modal".
+        try {
+            await page.evaluate(() => {
+                for (const bd of document.querySelectorAll('.modal-backdrop')) {
+                    if (bd.querySelector('#newKeyName, #vf-phone')) continue;
+                    bd.remove();
+                }
             });
             await page.waitForTimeout(300);
         } catch {}
@@ -530,8 +547,12 @@ async function extractFreemodelApiKey(session) {
                     await page.locator('button').filter({ hasText: 'Create key' }).first().click({ force: true, timeout: 5000 });
                 }
                 await page.waitForTimeout(1500);
-                // Check if modal opened
-                const modalInput = page.locator('#newKeyName, .modal-input');
+                // Check if modal opened. .first() обязателен: freemodel держит в DOM
+                // несколько модалок сразу (New key + Account verification + промо
+                // WorkBuddy), у каждой свой .modal-input. Без .first() локатор
+                // матчит 2+ элемента → strict mode violation → .catch() глотает
+                // ошибку → ложное "could not open Create key modal".
+                const modalInput = page.locator('#newKeyName, .modal-input').first();
                 if (await modalInput.isVisible({ timeout: 2000 }).catch(() => false)) {
                     modalOpened = true;
                     break;
@@ -551,20 +572,26 @@ async function extractFreemodelApiKey(session) {
             throw new Error('could not open Create key modal');
         }
 
-        // Заполняем имя ключа в модалке
-        const nameInput = page.locator('#newKeyName, .modal-input');
+        // Заполняем имя ключа в модалке (.first() — см. коммент выше про
+        // несколько одновременных модалок с .modal-input)
+        const nameInput = page.locator('#newKeyName, .modal-input').first();
         await nameInput.waitFor({ state: 'visible', timeout: 8000 });
         const keyName = `autoreg-${Date.now().toString(36)}`;
         await nameInput.fill(keyName);
         await page.waitForTimeout(400);
 
-        // Submit — JS click for reliability
+        // Submit — JS click for reliability. Ищем кнопку ИМЕННО в модалке с
+        // полем имени: в DOM параллельно висят Account verification и промо
+        // WorkBuddy, и слепой querySelectorAll('.modal')[0] жал их primary-кнопку.
         await page.evaluate(() => {
-            const modals = document.querySelectorAll('.modal, [role="dialog"]');
-            for (const m of modals) {
-                const btn = m.querySelector('button[type="submit"], button.dbtn-primary');
-                if (btn) { btn.click(); return; }
-            }
+            const input = document.querySelector('#newKeyName');
+            const modal = input?.closest('.modal, [role="dialog"]');
+            if (!modal) return;
+            const btns = [...modal.querySelectorAll('button')];
+            const create = btns.find(b => /create key/i.test(b.textContent || ''));
+            const btn = create
+                || modal.querySelector('button[type="submit"], button.dbtn-primary');
+            if (btn) btn.click();
         });
         await page.waitForTimeout(2500);
 

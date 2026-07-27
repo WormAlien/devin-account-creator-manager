@@ -127,6 +127,12 @@ routing/ourtoken-sessions.json
 # Cun.ai ручной пул ключей (sk-*). cun-sessions.example.json IS committed.
 routing/cun-sessions.json
 
+# Cun.ai автореги: аккаунты, отладочные записи со скриншотами, логи.
+cun/accounts/
+cun/recordings/
+cun/recording_current/
+cun/logs/
+
 # Video API ключи (fal/Replicate/Veo/Kling/…). video-keys.example.json IS committed.
 routing/video-keys.json
 

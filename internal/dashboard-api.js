@@ -941,6 +941,34 @@ async function extractConduitApiKey(name) {
     return await extractKey(account);
 }
 
+// Добавить key-only аккаунт Conduit вручную (без сессии, без ТГ).
+// Создаёт папку вида manual_<ts>_<mask> с account_info.txt (API Key + username).
+function addConduitKey({ apiKey, username, tgPhone }) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safeName = (username || 'manual').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^@/, '');
+    const dirName = `manual_${ts}_${safeName}`;
+    const dir = path.join(conduitMod().ACCOUNTS_DIR, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const lines = [
+        `Ident: ${safeName}`,
+        `Saved: ${new Date().toISOString()}`,
+        `Username: ${username || '(?)'}`,
+        `Plan: (?)`,
+        `Balance: (?)`,
+        `API Key: ${apiKey}`,
+        `Base URL: https://conduit.ozdoev.net/v1`,
+        `Referral: (?)`,
+        tgPhone ? `TG Phone: ${tgPhone}` : '',
+    ].filter(Boolean);
+    fs.writeFileSync(path.join(dir, 'account_info.txt'), lines.join('\n') + '\n', 'utf8');
+    // Записываем в мету, чтобы activate сразу работал (ключ есть в meta.apiKey).
+    const meta = loadConduitMeta();
+    meta[dirName] = meta[dirName] || {};
+    meta[dirName].apiKey = apiKey;
+    saveConduitMeta(meta);
+    return { ok: true, ident: safeName, name: dirName, dir };
+}
+
 const CDT_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'cdt-active-key.txt');
 function getActiveConduitKey() {
     try { if (fs.existsSync(CDT_ACTIVE_KEY_FILE)) return fs.readFileSync(CDT_ACTIVE_KEY_FILE, 'utf-8').trim(); } catch {}
@@ -953,6 +981,7 @@ module.exports = {
     listConduitSessions,
     refreshOneConduitQuota,
     extractConduitApiKey,
+    addConduitKey,
     setConduitBanned,
     setConduitApiKey,
     getActiveConduitKey,

@@ -155,8 +155,37 @@ function writeSettings(obj) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const bakPath = SETTINGS_FILE + '.bak-' + stamp;
     fs.copyFileSync(SETTINGS_FILE, bakPath);
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(obj, null, 4) + '\n', 'utf8');
+    // атомарно: tmp + rename, чтобы Claude Code не прочитал полфайла
+    const tmpPath = SETTINGS_FILE + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(obj, null, 4) + '\n', 'utf8');
+    fs.renameSync(tmpPath, SETTINGS_FILE);
     logLine(`settings.json written, backup at ${path.basename(bakPath)}`);
+}
+
+// ---- OAuth-сессия официального Claude (после `claude` → /login) ------------
+// Токен лежит в credential store: macOS — Keychain, Windows/Linux —
+// ~/.claude/.credentials.json. Email/подписка — в ~/.claude.json → oauthAccount.
+// Истёкший accessToken ≠ разлогин: CC сам обновит его по refreshToken.
+const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
+function oauthStatus() {
+    let raw;
+    try {
+        raw = process.platform === 'darwin'
+            ? execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' }).trim()
+            : fs.readFileSync(CREDENTIALS_FILE, 'utf8');
+    } catch { return { loggedIn: false }; }
+    try {
+        const o = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw).claudeAiOauth;
+        if (!o || !o.accessToken) return { loggedIn: false };
+        let email = null;
+        try { email = (readClaudeJson().oauthAccount || {}).emailAddress || null; } catch {}
+        return {
+            loggedIn: true,
+            email,
+            subscriptionType: o.subscriptionType || null,
+            expiresAt: o.expiresAt || null,
+        };
+    } catch { return { loggedIn: false }; }
 }
 
 // ~/.claude.json — здесь живут MCP-серверы (mcpServers global + projects[*].mcpServers).
@@ -223,6 +252,13 @@ function currentTarget() {
         }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
+        }
+        // Официальный Claude: ничего провайдерского не выставлено (пустые строки
+        // CC трактует как «не задано») → работает OAuth-подписка из /login.
+        const env = s.env || {};
+        if (!url && !helper && !env.ANTHROPIC_AUTH_TOKEN && !env.ANTHROPIC_API_KEY
+            && !env.CLAUDE_CODE_USE_BEDROCK && !env.CLAUDE_CODE_USE_VERTEX && !env.CLAUDE_CODE_USE_FOUNDRY) {
+            return 'official';
         }
         return 'unknown';
     } catch (e) {
@@ -3336,6 +3372,7 @@ const server = http.createServer((req, res) => {
             backends: Object.fromEntries(
                 Object.entries(BACKENDS).map(([k, v]) => [k, { label: v.label, base_url: v.base_url }])
             ),
+            oauth: oauthStatus(),
             settings_file: SETTINGS_FILE,
         });
     }

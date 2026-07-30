@@ -312,18 +312,41 @@ fi
 
 # Статуслайн: [provider] provider/model + шкала остатка квоты (как в дашборде).
 # settings.json указывает на скрипт ПРЯМО в репо — обновления приезжают с git pull.
-if grep -q '"statusLine"' "$CLAUDE_DIR/settings.json" 2>/dev/null; then
-  warn "statusLine уже настроен в settings.json — не трогаю."
-elif [ -f "$CLAUDE_DIR/settings.json" ] && ask "Подключить статуслайн Claude Code (провайдер/модель + квота)?" Y; then
-  REPO_W="$(pwd -W 2>/dev/null || pwd)"
+# Старые установки держали копию в ~/.claude/statusline-autoreger.sh и окаменевали:
+# репа обновляется, а CC гоняет древний файл. Поэтому НАШ скрипт (любой путь,
+# кончающийся на statusline-autoreger.sh) молча перенаправляем в репо;
+# чужой кастомный statusLine не трогаем.
+sl_node() {  # $1 = probe|write → печатает ok|repointed|foreign|broken|absent|linked
   node -e '
     const fs = require("fs");
-    const [p, repo] = process.argv.slice(1);
-    const j = JSON.parse(fs.readFileSync(p, "utf8"));
-    const fwd = repo.split("\\").join("/");
-    j.statusLine = { type: "command", command: `bash "${fwd}/routing/statusline-autoreger.sh"` };
+    const [p, repo, mode] = process.argv.slice(1);
+    let j;
+    try { j = JSON.parse(fs.readFileSync(p, "utf8")); }
+    catch { console.log("broken"); process.exit(0); }
+    const want = "bash \"" + repo.split("\\").join("/") + "/routing/statusline-autoreger.sh\"";
+    const cur = (j.statusLine && j.statusLine.command) || "";
+    if (mode === "probe") {
+      if (cur === want) { console.log("ok"); process.exit(0); }
+      if (!cur) { console.log("absent"); process.exit(0); }
+      if (!cur.includes("statusline-autoreger.sh")) { console.log("foreign"); process.exit(0); }
+    }
+    j.statusLine = { type: "command", command: want };
     fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
-  ' "$CLAUDE_DIR/settings.json" "$REPO_W" && ok "statusLine подключён (routing/statusline-autoreger.sh)"
+    console.log(mode === "probe" ? "repointed" : "linked");
+  ' "$CLAUDE_DIR/settings.json" "$REPO_W" "$1"
+}
+if [ -f "$CLAUDE_DIR/settings.json" ]; then
+  REPO_W="$(pwd -W 2>/dev/null || pwd)"
+  case "$(sl_node probe)" in
+    ok)        ok "статуслайн уже из репо (routing/statusline-autoreger.sh)" ;;
+    repointed) ok "статуслайн перенаправлен на свежий routing/statusline-autoreger.sh (был старый путь)" ;;
+    foreign)   warn "в settings.json свой statusLine — не трогаю" ;;
+    broken)    warn "settings.json не парсится — статуслайн не подключён" ;;
+    absent)
+      if ask "Подключить статуслайн Claude Code (провайдер/модель + квота)?" Y; then
+        [ "$(sl_node write)" = "linked" ] && ok "statusLine подключён (routing/statusline-autoreger.sh)"
+      fi ;;
+  esac
 fi
 
 # ── 4. Локальные конфиги + секреты ──────────────────────────────────────────

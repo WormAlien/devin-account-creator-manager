@@ -43,6 +43,7 @@ if [ -z "$raw_target" ]; then
             *localhost:20128*)        raw_target="omniroute" ;;
             *localhost:20131*)        raw_target="vyce_openai" ;;
             *localhost:8190*)         raw_target="notion" ;;
+            *agentrouter.org*)        raw_target="agentrouter" ;;
             *cc.freemodel.dev*)       raw_target="apihelper" ;;
         esac
     fi
@@ -55,6 +56,7 @@ transport="${raw_target:-unknown}"
 case "$raw_target" in
     apihelper|freemodel_rotator) provider="freemodel" ;;
     omniroute)                   provider="omniroute" ;;
+    agentrouter)                 provider="agentrouter" ;;
     notion)                      provider="notion" ;;
     aerolink)                    provider="aerolink" ;;
     evomap)                      provider="evomap" ;;

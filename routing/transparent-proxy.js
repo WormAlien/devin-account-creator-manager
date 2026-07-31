@@ -32,6 +32,9 @@ loadEnv(path.join(__dirname, '.env'));
 // without restarting the proxy. Never freeze into a startup const.
 function omniBase() { return (process.env.OMNIROUTE_BASE_URL || 'http://localhost:20128').replace(/\/+$/, ''); }
 function omniKey()  { return process.env.OMNIROUTE_API_KEY || 'sk-local-dev-key'; }
+// AgentRouter: тоже LIVE из process.env, ключ лежит в routing/.env (gitignored).
+function agentRouterBase() { return (process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org').replace(/\/+$/, ''); }
+function agentRouterKey()  { return process.env.AGENTROUTER_API_KEY || 'sk-local-dev-key'; }
 const NOTION_KEY    = process.env.NOTION_API_KEY    || 'sk-local-dev-key';
 
 const ENV_FILE = path.join(__dirname, '.env');
@@ -92,6 +95,16 @@ const SQLITE_EXE = process.env.SQLITE3
     || path.join(os.homedir(), 'bin', 'sqlite3.exe');
 
 const BACKENDS = {
+    agentrouter: {
+        label: 'AgentRouter (opus-5 1M)',
+        base_url: 'https://agentrouter.org',
+        api_key: agentRouterKey(),
+        model: 'claude-opus-5[1m]',
+        clear_helper: true,
+        // Окно контекста — свойство ID модели, не апстрима: суффикс [1m] заставляет
+        // CC заявлять 1M вместо дефолтных 200k. Держим его здесь (settings.model),
+        // а НЕ в env.ANTHROPIC_MODEL — тот стирается clearOtEnv() при каждом switch.
+    },
     omniroute: {
         label: 'FreeModel (OmniRoute)',
         base_url: 'http://localhost:20128/v1',
@@ -281,6 +294,9 @@ async function applyTarget(target) {
     settings.env.ANTHROPIC_BASE_URL = backend.base_url;
 
     let apiKey = backend.api_key;
+    // agentrouter: ключ читаем LIVE — литерал BACKENDS фиксируется на старте,
+    // а POST /__switch/api/env меняет process.env без рестарта прокси.
+    if (target === 'agentrouter') apiKey = agentRouterKey();
     // For freemodel_rotator, fetch active key from rotator API
     if (target === 'freemodel_rotator') {
         try {
@@ -1766,7 +1782,13 @@ async function handleFreemodelActivate(req, res) {
             fs.copyFileSync(settingsFile, bakPath);
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = 'https://cc.freemodel.dev';
-            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute не работает на FreeModel)
+            // Чужая залипшая model (ComboWombo от OmniRoute) на FreeModel не работает —
+            // сбрасываем. Свою claude-* оставляем, но дотягиваем до [1m]: окно контекста
+            // Claude Code берёт из id модели, без суффикса считает 200k, автокомпактит
+            // рано и рисует 200k в статус-баре, хотя FreeModel даёт 1M.
+            const fmModel = String(settings.model || '');
+            if (!/^claude-(opus|sonnet)-/.test(fmModel)) delete settings.model;
+            else if (!fmModel.includes('[')) settings.model = fmModel + '[1m]';
             clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги, иначе перебьют freemodel
             if (helperMode) {
                 settings.apiKeyHelper = keyHelperCmd('fm-active-key.txt');

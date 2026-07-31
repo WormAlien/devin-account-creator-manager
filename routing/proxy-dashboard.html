@@ -1293,7 +1293,7 @@
               <span id="fm-models-count" class="text-[10px] text-faint font-mono">—</span>
               <button onclick="loadFmModels(true)" title="Обновить список моделей"
                       class="text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft rounded hover:border-line text-muted">↻</button>
-              <span class="text-[10px] text-faint ml-auto">клик = 📋 id · выбор — <code class="text-emerald">/model id</code> в Claude</span>
+              <span class="text-[10px] text-faint ml-auto">клик = 📋 id · выбор — <code class="text-emerald">/model id</code> в Claude · <code class="text-emerald">[1m]</code> = окно 1M вместо 200k</span>
             </div>
             <div id="fm-models-list" class="space-y-2">
               <span class="text-[10px] text-faint">загрузка…</span>
@@ -4124,6 +4124,18 @@ async function loadActiveFmKey(skipRender) {
 
 // ── FreeModel: доступные модели — claude (cc.) + gpt (api., через fm_openai :20130) ──
 let fmModelsLoading = false;
+// FreeModel держит 1M контекста на opus/sonnet, но /v1/models отдаёт голые id.
+// Окно — свойство id для самого Claude Code: без суффикса [1m] он считает окно
+// 200k, автокомпактит на ~78% от них и рисует 200k в статус-баре, хотя апстрим
+// принимает миллион (проба — routing/ctx-probe.sh). Дописываем суффикс тем, кто
+// 1M поддерживает: haiku/fable и gpt-модели — нет, им голый id.
+const FM_1M_RE = /^claude-(opus|sonnet)-/;
+function fmModelWithWindow(m) {
+  const id = String(m.id || '');
+  if (m.source === 'openai' || id.includes('[') || !FM_1M_RE.test(id)) return id;
+  return id + '[1m]';
+}
+
 async function loadFmModels(force) {
   const listEl = $('fm-models-list'), cntEl = $('fm-models-count');
   if (!listEl) return;
@@ -4144,9 +4156,10 @@ async function loadFmModels(force) {
     const claude = models.filter(m => m.source !== 'openai');
     const openai = models.filter(m => m.source === 'openai');
     const chip = (m, color) => {
-      const idJ = JSON.stringify(m.id);
-      return `<button onclick='fmCopyModel(${idJ})' title="Копировать /model ${esc(m.id)}"
-        class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-${color}/10 border-${color}/30 text-${color} hover:bg-${color}/20 transition">${esc(m.id)} <span class="opacity-50">📋</span></button>`;
+      const id = fmModelWithWindow(m);
+      const idJ = JSON.stringify(id);
+      return `<button onclick='fmCopyModel(${idJ})' title="Копировать /model ${esc(id)}"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-${color}/10 border-${color}/30 text-${color} hover:bg-${color}/20 transition">${esc(id)} <span class="opacity-50">📋</span></button>`;
     };
     const group = (label, badge, items, color, hint) => items.length ? `
       <div>

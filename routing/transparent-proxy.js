@@ -243,17 +243,29 @@ function currentTarget() {
         if (helper.includes('cdt-active-key.txt')) {
             return 'conduit';
         }
+        if (helper.includes('sr-active-key.txt')) {
+            return 'svrtr';
+        }
+        if (helper.includes('hc-active-key.txt')) {
+            return 'helpcoder';
+        }
         if (helper.includes('ev-active-key.txt')) {
             return 'evomap';
         }
         if (helper.includes('ot-active-key.txt')) {
             return 'ourtoken';
         }
+        if (helper.includes('custom-active-key.txt')) {
+            return 'custom';
+        }
         if (helper.includes('om-active-key.txt')) {
             return 'omniroute';
         }
         if (helper.includes('vyceai-active-key.txt')) {
             return 'vyce_openai';
+        }
+        if (helper.includes('ar-active-key.txt')) {
+            return 'agentrouter';
         }
         // ourtoken использует ANTHROPIC_AUTH_TOKEN (без helper) → детектим по base_url
         if (url === 'https://api.ourtoken.ai' || url.startsWith('https://api.ourtoken.ai')) {
@@ -481,48 +493,37 @@ function readJsonBody(req) {
     });
 }
 
-// ───── FreeModel auto-rotation (API Helper load balancer) ─────────────
+// ───── FreeModel авто-подмена мёртвого аккаунта ($0 → следующий) ───────
 // В режиме API Helper claude code на каждый запрос читает ключ из
-// ~/.claude/fm-active-key.txt (TTL=0). Значит ротация = переписывать этот
-// файл лучшим (наименее использованным) ключом. Перезапуск не нужен.
-// Цель: равномерно размазать нагрузку по всем аккаунтам с самого начала
-// (0%/1%), а не выкачивать один до потолка.
+// ~/.claude/fm-active-key.txt (TTL=0). Значит подмена = переписать этот файл
+// ключом другого аккаунта. Перезапуск не нужен.
+//
+// Логика намеренно тупая и предсказуемая (в отличие от прежнего
+// балансировщика «наименее использованный»): пока у активного есть деньги —
+// не трогаем его вообще. Как только баланс = $0.00 (акк мёртв, см.
+// fmIsZeroBalance) — берём СЛЕДУЮЩИЙ по списку аккаунт с деньгами, по кругу.
+// Порядок списка = порядок дашборда (getFreemodelSessions: date desc).
 const FM_ACTIVE_KEY_FILE   = path.join(os.homedir(), '.claude', 'fm-active-key.txt');
 const FM_AUTOROTATE_FILE   = path.join(__dirname, '..', 'logs', '.freemodel_autorotate.json');
 
 const fmAuto = {
     enabled: false,
-    intervalMs: 90000,    // как часто переоцениваем
-    ceiling: 0.70,        // жёсткий потолок used%: при достижении уступаем место
-    hysteresis: 0.10,     // свич только если кандидат свободнее текущего на >10%
-    quotaTtlMs: 5 * 60 * 1000, // не рефрешим квоту аккаунта чаще, чем раз в TTL (энергоэффективность)
+    intervalMs: 120000,   // как часто проверяем баланс активного
+    // TTL кэша для КАНДИДАТОВ при поиске замены. Активный не по нему — см.
+    // fmActiveTtl(): иначе при интервале меньше TTL тик крутил бы таймер
+    // вхолостую, ничего не обновляя (баг: «просто таймер хуячит»).
+    quotaTtlMs: 5 * 60 * 1000,
+    maxProbes: 3,         // сколько кандидатов максимум проверяем браузером за тик
     activeName: null,
     lastSwitch: 0,
     lastTickAt: 0,
     nextTickAt: 0,
     ticking: false,
     timer: null,
-    recent: [],           // [{ts, from, to, email, reason, used}]
+    wakeAt: 0,            // «раньше этого момента ничего не изменится» (весь пул остывает)
+    recent: [],           // [{ts, from, to, email, reason, balance}]
 };
 
-function fmParseDollars(s) {
-    if (s == null) return null;
-    const m = String(s).match(/[\d.,]+/);
-    if (!m) return null;
-    const n = parseFloat(m[0].replace(',', ''));
-    return isFinite(n) ? n : null;
-}
-// used% = среднее использования по окнам 5h и 7d (0..1). null если нет данных.
-function fmUsedFraction(q) {
-    if (!q) return null;
-    const u5 = fmParseDollars(q.h5), m5 = fmParseDollars(q.h5max);
-    const u7 = fmParseDollars(q.d7), m7 = fmParseDollars(q.d7max);
-    const parts = [];
-    if (u5 != null && m5 && m5 > 0) parts.push(u5 / m5);
-    if (u7 != null && m7 && m7 > 0) parts.push(u7 / m7);
-    if (!parts.length) return null;
-    return parts.reduce((a, b) => a + b, 0) / parts.length;
-}
 function fmReadKeyFromInfo(s) {
     try {
         const f = path.join(s.path, 'account_info.txt');
@@ -533,27 +534,85 @@ function fmReadKeyFromInfo(s) {
     } catch {}
     return null;
 }
-// Пригодные кандидаты: статус ✅, не banned, есть валидный ключ.
+// Пригодные кандидаты: статус ✅, не banned вручную, есть валидный ключ.
+// Порядок сохраняем как в списке — по нему и ищем «следующего соседа».
+// Авто-баненых ($0) не выкидываем: они остаются в списке как позиции, но
+// hasMoney=false, так что кандидатами не станут, пока баланс не капнет.
+//
+// «Перезарядка» (cooling): у аккаунта выжрано 5h/7d-окно, платить сейчас нечем,
+// но известно когда отпустит. Такой аккаунт НЕ мёртв — просто пропускаем его в
+// очереди кандидатов и просыпаемся к его cooldownUntil.
 async function fmGetUsable() {
     const sessions = await dashApi.listFreemodelSessions({ withQuotas: 'cache' });
     const out = [];
     for (const s of sessions) {
-        if (s.status !== '✅' || s.meta?.banned) continue;
-        const key = s.meta?.apiKey || fmReadKeyFromInfo(s);
+        const m = s.meta || {};
+        if (s.status !== '✅' || (m.banned && !m.autoBanned)) continue;
+        const key = m.apiKey || fmReadKeyFromInfo(s);
         if (!key) continue;
+        const state = s.quota?.state;
+        const cooling = dashApi.fmIsCooling(m) || state === 'cooldown';
         out.push({
             name: s.name,
             email: s.email || s.name,
             key,
-            used: fmUsedFraction(s.quota),
-            quotaAt: s.quota?.updatedAt || 0,   // для TTL-проверки свежести кэша
+            balance: s.quota?.available || '',
+            zero: dashApi.fmIsZeroBalance(s.quota),   // прямо сейчас платить нечем
+            // Годен ли кандидат: по новому state, с фолбэком на старый предикат
+            // для кеша, снятого до появления state.
+            hasMoney: state ? state === 'ok' : dashApi.fmHasMoney(s.quota),
+            cooling,
+            coolReason: m.coolReason || s.quota?.coolReason || '',
+            cooldownUntil: m.cooldownUntil || s.quota?.cooldownUntil || '',
+            quotaAt: s.quota?.updatedAt || 0,         // для TTL-проверки свежести кэша
         });
     }
     return out;
 }
+// "через 3ч 12м" — для логов и для причины свича.
+function fmFmtEta(until) {
+    const t = typeof until === 'number' ? until : Date.parse(until);
+    const ms = t - Date.now();
+    if (!Number.isFinite(ms) || ms <= 0) return 'сейчас';
+    const m = Math.round(ms / 60000);
+    if (m < 60) return `через ${m}м`;
+    return `через ${Math.floor(m / 60)}ч ${m % 60}м`;
+}
+// Человеческая причина, почему с аккаунта надо уйти прямо сейчас. Уход нужен в
+// любом случае (платить нечем), но перезарядка — временная, и это должно быть
+// видно в логе, иначе выглядит как смерть аккаунта.
+function fmZeroReason(q) {
+    if (q?.state === 'cooldown') {
+        const w = q.coolReason || '5h';
+        return q.cooldownUntil
+            ? `перезарядка окна ${w} (${fmFmtEta(q.cooldownUntil)})`
+            : `перезарядка окна ${w}`;
+    }
+    return 'баланс $0.00';
+}
+// Ближайший момент, когда хоть один остывающий аккаунт снова станет пригоден.
+// null — остывающих нет или ни у кого не распарсился дедлайн.
+function fmNearestCooldown(list) {
+    let best = null;
+    for (const s of list) {
+        if (!s.cooling || !s.cooldownUntil) continue;
+        const t = Date.parse(s.cooldownUntil);
+        if (!Number.isFinite(t) || t <= Date.now()) continue;
+        if (best === null || t < best) best = t;
+    }
+    return best;
+}
 // Кэш квоты протух? (нет данных или старше TTL)
 function fmStale(entry, ttlMs) {
     return !entry || !entry.quotaAt || (Date.now() - entry.quotaAt) > ttlMs;
+}
+// TTL для АКТИВНОГО аккаунта: чуть меньше интервала тика, чтобы каждый тик
+// реально перечитывал баланс, а не упирался в «ещё свежий» кэш. Раньше здесь
+// стоял общий TTL 5 мин: при интервале 30-60с большинство тиков не делали
+// ничего. Рефреш теперь идёт по JSON-API (~1.5с), а не через браузер (~38с),
+// так что экономить на нём больше незачем.
+function fmActiveTtl() {
+    return Math.max(15000, fmAuto.intervalMs - 5000);
 }
 // Кто реально активен по версии Claude Code: владелец ключа из fm-active-key.txt.
 // Это источник правды — на него и должен смотреть ротатор, иначе мониторит чужой акк.
@@ -564,9 +623,12 @@ function fmActiveFromFile(usable) {
         return usable.find(s => s.key === key) || null;
     } catch { return null; }
 }
-// Для сортировки неизвестную квоту трактуем как 0 (свежий аккаунт = полный запас),
-// чтобы новые аккаунты пробовались первыми, а затем рефрешились.
-const fmUsedSort = s => (s.used == null ? 0 : s.used);
+// Соседи по кругу: список кандидатов, начиная со следующего за idx.
+// idx = -1 (активного в списке нет) → просто весь список с начала.
+function fmNeighborsAfter(list, idx) {
+    if (idx < 0) return list.slice();
+    return list.slice(idx + 1).concat(list.slice(0, idx));
+}
 
 function fmWriteActiveKey(key) {
     try {
@@ -605,8 +667,14 @@ function fmEnsureHelperMode() {
 
 async function fmAutoTick() {
     if (fmAuto.ticking) return;
+    // Тумблер выключен — не трогаем активный ключ ни при каких условиях. Балансовый
+    // ноль не всегда значит непригодность (кредиты могут ещё отработать), поэтому
+    // решение остаётся за юзером. Проверка нужна и здесь, а не только в fmAutoKick:
+    // тик, запущенный до выключения, иначе доработал бы и переключил аккаунт.
+    if (!fmAuto.enabled) return;
     fmAuto.ticking = true;
     fmAuto.lastTickAt = Date.now();
+    fmAuto.wakeAt = 0;    // ставится заново, только если снова упрёмся в перезарядку
     const cwd = process.cwd();
     try {
         process.chdir(path.join(__dirname, '..'));
@@ -615,8 +683,8 @@ async function fmAutoTick() {
         if (!usable.length) { logLine('fm auto: нет пригодных аккаунтов'); return; }
 
         // (A) РЕКОНСИЛЯЦИЯ: активный = владелец ключа из fm-active-key.txt (источник
-        // правды). Без этого persist-activeName расходится с реальностью, и ротатор
-        // мониторит чужой простаивающий аккаунт, не видя нагрузку на рабочем.
+        // правды). Без этого persist-activeName расходится с реальностью, и мы
+        // сторожим чужой простаивающий аккаунт, не видя нуля на рабочем.
         const fileActive = fmActiveFromFile(usable);
         if (fileActive && fileActive.name !== fmAuto.activeName) {
             logLine(`fm auto: реконсиляция активного → ${fileActive.email} (из fm-active-key.txt)`);
@@ -624,42 +692,74 @@ async function fmAutoTick() {
             fmAutoSavePersist();
         }
 
-        // (B) Рефреш ТОЛЬКО активного и только если кэш протух (энергоэффективно —
-        // один Chrome максимум за тик, обычно ноль).
-        let active = usable.find(s => s.name === fmAuto.activeName) || null;
-        if (active && fmStale(active, fmAuto.quotaTtlMs)) {
-            try { await dashApi.refreshOneFreemodelQuota(active.name); } catch {}
+        // (B) Рефреш ТОЛЬКО активного, каждый тик (TTL привязан к интервалу).
+        // Стоит ~1.5с через JSON-API, браузер не поднимается.
+        let activeIdx = usable.findIndex(s => s.name === fmAuto.activeName);
+        if (activeIdx >= 0 && fmStale(usable[activeIdx], fmActiveTtl())) {
+            try { await dashApi.refreshOneFreemodelQuota(usable[activeIdx].name); } catch {}
             usable = await fmGetUsable();
-            active = usable.find(s => s.name === fmAuto.activeName) || null;
+            activeIdx = usable.findIndex(s => s.name === fmAuto.activeName);
+        }
+        const active = activeIdx >= 0 ? usable[activeIdx] : null;
+
+        // (C) Активный жив (на балансе есть деньги) — ничего не делаем. Это главное
+        // отличие от прежней ротации: пока акк платит, его не дёргаем.
+        if (active && !active.zero) return;
+
+        const reason = !active ? 'no-active' : (active.cooling ? 'cooldown' : 'dead');
+        if (active) {
+            const why = active.cooling
+                ? `окно ${active.coolReason || '5h'} выжрано${active.cooldownUntil ? `, нальётся ${fmFmtEta(active.cooldownUntil)}` : ''}`
+                : 'платить нечем';
+            logLine(`fm auto: у ${active.email} ${active.balance || '$0.00'} — ${why}, ищу замену`);
         }
 
-        // (C) Решение о свиче. Кандидатов ранжируем по КЭШУ (без массового скана).
-        usable.sort((a, b) => fmUsedSort(a) - fmUsedSort(b));
-        let target = null, reason = '';
-        if (!active) {
-            target = usable[0]; reason = 'no-active';            // активного нет — берём наименее использованного
-        } else if (fmUsedSort(active) >= fmAuto.ceiling) {
-            target = usable.find(s => s.name !== active.name) || null;  // упёрся в потолок — лучший кандидат
-            reason = 'ceiling';
-        }
-
-        if (target) {
-            // Перед свичем рефрешим ТОЛЬКО кандидата — подтверждаем, что он реально
-            // свободен (и не дохлый), не сканируя весь пул.
-            try { await dashApi.refreshOneFreemodelQuota(target.name); } catch {}
-            const fresh = (await fmGetUsable()).find(s => s.name === target.name) || target;
-            if (active && fmUsedSort(fresh) >= fmAuto.ceiling) {
-                logLine(`fm auto: кандидат ${fresh.email} тоже у потолка (${Math.round(fmUsedSort(fresh)*100)}%) — свич отменён`);
-            } else if (fmWriteActiveKey(fresh.key)) {
-                const from = fmAuto.activeName;
-                fmAuto.activeName = fresh.name;
-                fmAuto.lastSwitch = Date.now();
-                const usedPct = Math.round(fmUsedSort(fresh) * 100);
-                fmAuto.recent.unshift({ ts: Date.now(), from, to: fresh.name, email: fresh.email, reason, used: usedPct });
-                fmAuto.recent = fmAuto.recent.slice(0, 20);
-                fmAutoSavePersist();
-                logLine(`fm auto: ${reason} → ${fresh.email} (${usedPct}% used)`);
+        // (D) Ищем СЛЕДУЮЩЕГО по списку с деньгами (по кругу от активного).
+        // По кэшу — чтобы не сканировать пул; кандидата подтверждаем браузером
+        // перед свичем (кэш мог протухнуть и обещать деньги, которых уже нет).
+        const queue = fmNeighborsAfter(usable, activeIdx).filter(s => s.hasMoney && !s.cooling);
+        if (!queue.length) {
+            // Весь пул на перезарядке — это НЕ повод кого-то хоронить. Говорим когда
+            // отпустит и просыпаемся к этому моменту, а не через фиксированный тик.
+            const eta = fmNearestCooldown(usable);
+            if (eta) {
+                logLine(`fm auto: весь пул на перезарядке — ближайший освободится ${fmFmtEta(eta)}`);
+                fmAutoWakeAt(eta);
+            } else {
+                logLine('fm auto: свободных аккаунтов с балансом нет — остаёмся на месте');
             }
+            return;
+        }
+
+        let probes = 0;
+        for (const cand of queue) {
+            if (fmStale(cand, fmAuto.quotaTtlMs)) {
+                if (probes >= fmAuto.maxProbes) {
+                    logLine(`fm auto: лимит проверок (${fmAuto.maxProbes}) за тик — дожму на следующем`);
+                    break;
+                }
+                probes++;
+                try { await dashApi.refreshOneFreemodelQuota(cand.name); } catch {}
+                const fresh = (await fmGetUsable()).find(s => s.name === cand.name);
+                if (!fresh || !fresh.hasMoney) {
+                    logLine(`fm auto: кандидат ${cand.email} тоже пустой (${fresh?.balance || '—'}) — следующий`);
+                    continue;
+                }
+                cand.balance = fresh.balance;
+                cand.key = fresh.key;
+            }
+            // Между началом тика и этой строкой был сетевой запрос — тумблер мог
+            // успеть выключиться. Перепроверяем перед самой записью ключа.
+            if (!fmAuto.enabled) { logLine('fm auto: выключен по ходу тика — подмену отменяю'); return; }
+            if (!fmWriteActiveKey(cand.key)) break;
+            const from = fmAuto.activeName;
+            fmAuto.activeName = cand.name;
+            fmAuto.lastSwitch = Date.now();
+            fmAuto.recent.unshift({ ts: Date.now(), from, to: cand.name, email: cand.email, reason, balance: cand.balance });
+            fmAuto.recent = fmAuto.recent.slice(0, 20);
+            fmAutoSavePersist();
+            logLine(`fm auto: ${reason} → ${cand.email} (${cand.balance})`);
+            return;
         }
     } catch (e) {
         logLine(`fm auto tick error: ${e.message}`);
@@ -669,18 +769,33 @@ async function fmAutoTick() {
     }
 }
 
+// Тик просит проснуться не раньше указанного момента (весь пул остывает —
+// дёргать freemodel каждые 2 минуты бессмысленно). Расписание это учтёт.
+function fmAutoWakeAt(ts) {
+    fmAuto.wakeAt = ts || 0;
+}
+// Пауза до следующего тика: обычный интервал, но если известно что раньше
+// определённого момента ничего не изменится — спим до него. Потолок 15 минут,
+// чтобы ручной рефреш или новый аккаунт подхватились без перезапуска ротатора.
+const FM_WAKE_CAP_MS = 15 * 60 * 1000;
+function fmNextDelay() {
+    const base = fmAuto.intervalMs;
+    if (!fmAuto.wakeAt) return base;
+    const left = fmAuto.wakeAt - Date.now();
+    if (!(left > base)) { fmAuto.wakeAt = 0; return base; }
+    return Math.min(left, FM_WAKE_CAP_MS);
+}
 function fmAutoSchedule() {
     if (fmAuto.timer) clearTimeout(fmAuto.timer);
-    fmAuto.nextTickAt = Date.now() + fmAuto.intervalMs;
+    const delay = fmNextDelay();
+    fmAuto.nextTickAt = Date.now() + delay;
     fmAuto.timer = setTimeout(async () => {
         await fmAutoTick();
         if (fmAuto.enabled) fmAutoSchedule();
-    }, fmAuto.intervalMs);
+    }, delay);
 }
 function fmAutoStart(opts = {}) {
-    if (typeof opts.intervalMs === 'number' && opts.intervalMs >= 15000) fmAuto.intervalMs = opts.intervalMs;
-    if (typeof opts.ceiling === 'number' && opts.ceiling > 0 && opts.ceiling <= 1) fmAuto.ceiling = opts.ceiling;
-    if (typeof opts.hysteresis === 'number' && opts.hysteresis >= 0 && opts.hysteresis < 0.5) fmAuto.hysteresis = opts.hysteresis;
+    if (typeof opts.intervalMs === 'number' && opts.intervalMs >= 30000) fmAuto.intervalMs = opts.intervalMs;
     const helper = fmEnsureHelperMode();
     fmAuto.enabled = true;
     fmAutoSavePersist();
@@ -694,12 +809,18 @@ function fmAutoStop() {
     fmAuto.nextTickAt = 0;
     fmAutoSavePersist();
 }
+// Внеочередной тик: аккаунт выбыл (бан вручную или нулевой баланс) — подменяем
+// сразу, не дожидаясь таймера. Иначе Claude Code до следующего тика продолжает
+// ходить с ключом мёртвого аккаунта. Не await — вызывающему ответ не ждать.
+function fmAutoKick(name, why) {
+    if (!fmAuto.enabled || name !== fmAuto.activeName) return;
+    logLine(`fm auto: активный ${name} выбыл (${why}) — внеочередная подмена`);
+    fmAutoTick().catch(e => logLine(`fm auto kick error: ${e.message}`));
+}
 function fmAutoStatus() {
     return {
         enabled: fmAuto.enabled,
         intervalMs: fmAuto.intervalMs,
-        ceiling: fmAuto.ceiling,
-        hysteresis: fmAuto.hysteresis,
         activeName: fmAuto.activeName,
         lastSwitch: fmAuto.lastSwitch,
         lastTickAt: fmAuto.lastTickAt,
@@ -713,8 +834,7 @@ function fmAutoSavePersist() {
         const dir = path.dirname(FM_AUTOROTATE_FILE);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(FM_AUTOROTATE_FILE, JSON.stringify({
-            enabled: fmAuto.enabled, intervalMs: fmAuto.intervalMs,
-            ceiling: fmAuto.ceiling, hysteresis: fmAuto.hysteresis, activeName: fmAuto.activeName,
+            enabled: fmAuto.enabled, intervalMs: fmAuto.intervalMs, activeName: fmAuto.activeName,
         }, null, 2), 'utf-8');
     } catch {}
 }
@@ -722,9 +842,9 @@ function fmAutoLoadPersist() {
     try {
         if (fs.existsSync(FM_AUTOROTATE_FILE)) {
             const j = JSON.parse(fs.readFileSync(FM_AUTOROTATE_FILE, 'utf-8'));
-            if (typeof j.intervalMs === 'number') fmAuto.intervalMs = j.intervalMs;
-            if (typeof j.ceiling === 'number') fmAuto.ceiling = j.ceiling;
-            if (typeof j.hysteresis === 'number') fmAuto.hysteresis = j.hysteresis;
+            // Старый файл ротатора мог хранить интервал 90с/15с — поднимаем до
+            // минимума новой схемы (проверка баланса дешёвая, но не бесплатная).
+            if (typeof j.intervalMs === 'number' && j.intervalMs >= 30000) fmAuto.intervalMs = j.intervalMs;
             if (j.activeName) fmAuto.activeName = j.activeName;
             return !!j.enabled;
         }
@@ -757,6 +877,12 @@ async function handleFreemodelSessions(req, res) {
         try {
             const sessions = await dashApi.listFreemodelSessions({ withQuotas });
             jsonRes(res, 200, { sessions, refreshed: refresh });
+            // Массовый рефреш мог обнулить активного (выжранное окно или пустой
+            // кошелёк) — тогда подменяем сразу, не дожидаясь тика.
+            if (refresh) {
+                const act = sessions.find(s => s.name === fmAuto.activeName);
+                if (act && dashApi.fmIsZeroBalance(act.quota)) fmAutoKick(act.name, fmZeroReason(act.quota));
+            }
         } finally {
             process.chdir(cwd);
         }
@@ -819,6 +945,56 @@ async function handleFreemodelSetInvite(req, res) {
         jsonRes(res, 200, { ok: true, code });
     } catch (e) {
         jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// GET email-backend: текущий выбор (timeweb | tmailor) для autoreger.
+function handleFreemodelGetEmailBackend(req, res) {
+    try {
+        jsonRes(res, 200, { ok: true, backend: dashApi.getEmailBackend() });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// POST email-backend { backend: 'timeweb' | 'tmailor' } → persist в файл.
+async function handleFreemodelSetEmailBackend(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const backend = (body.backend || '').trim();
+        const r = dashApi.setEmailBackend(backend);
+        logLine(`freemodel email backend → ${backend}`);
+        jsonRes(res, 200, r);
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
+    }
+}
+
+// GET email-domain: текущий домен регистрации + список доступных.
+// Заодно отдаём apiBase для кнопки "скопировать export-блок" — он личный
+// (может быть RDP-хост), поэтому живёт в freemodel/.env, а не в коде дашборда.
+function handleFreemodelGetEmailDomain(req, res) {
+    try {
+        jsonRes(res, 200, {
+            ok: true,
+            ...dashApi.listEmailDomains(),
+            apiBase: process.env.FM_API_BASE || 'http://localhost:20130/v1',
+        });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// POST email-domain { domain } → persist. timeweb-imap-client берёт при старте.
+async function handleFreemodelSetEmailDomain(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const domain = (body.domain || '').trim();
+        const r = dashApi.setEmailDomain(domain);
+        logLine(`freemodel email domain → ${domain}`);
+        jsonRes(res, 200, r);
+    } catch (e) {
+        jsonRes(res, 400, { error: e.message });
     }
 }
 
@@ -885,6 +1061,10 @@ async function handleSessionRefreshQuota(req, res) {
             }
             logLine(`refresh quota: ${kind || 'freemodel'}/${name}`);
             jsonRes(res, 200, { ok: true, name, quota: q });
+            // Рефреш увидел $0 → платить нечем (перезарядка окна или пустой
+            // кошелёк). Подменяем сразу, а не через тик: иначе Claude Code
+            // продолжает бить в аккаунт, который сейчас не отвечает деньгами.
+            if (kind !== 'devin' && dashApi.fmIsZeroBalance(q)) fmAutoKick(name, fmZeroReason(q));
         } finally {
             process.chdir(cwd);
         }
@@ -1434,6 +1614,19 @@ function tgServicesMap(poolArr) {
         const used = require('../conduit/conduit_autoreger').loadTgUsed();
         for (const ph of used) set(String(ph), 'conduit');
     } catch {}
+    // AnyModel — по своему .tg_used.json
+    try {
+        const used = require('../anymodel/lib/tg-usage').loadUsed();
+        for (const ph of used) set(String(ph), 'anymodel');
+    } catch {}
+    // Svrtr — по своему .tg_used.json
+    try {
+        const svrtrUsedFile = path.join(__dirname, '..', 'svrtr', '.tg_used.json');
+        if (fs.existsSync(svrtrUsedFile)) {
+            const used = JSON.parse(fs.readFileSync(svrtrUsedFile, 'utf8'));
+            for (const ph of used) set(String(ph), 'svrtr');
+        }
+    } catch {}
     return map;
 }
 
@@ -1631,6 +1824,7 @@ async function handleFreemodelBan(req, res) {
         if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
         const m = dashApi.setFreemodelBanned(name, !!banned);
         logLine(`freemodel ban: ${name} → ${banned ? '💀' : 'unban'}`);
+        if (banned) fmAutoKick(name, 'ручной бан');
         jsonRes(res, 200, { ok: true, meta: m });
     } catch (e) {
         jsonRes(res, 400, { error: e.message });
@@ -1685,7 +1879,31 @@ async function handleFreemodelBindTelegram(req, res) {
             return jsonRes(res, 500, { ok: false, error: result.error, tgPhone: result.tgPhone });
         }
         logLine(`freemodel bind-telegram ok: ${name} tg=${result.tgPhone} key=${result.apiKey ? '***' + result.apiKey.slice(-6) : 'none'}`);
-        jsonRes(res, 200, { ok: true, tgPhone: result.tgPhone, apiKey: result.apiKey });
+        // Trial credit ($8) даётся именно за бинд TG, но freemodel рендерит его
+        // лениво: скрапер, пришедший слишком рано, видит пустую страницу и
+        // возвращает null — тогда refreshOneFreemodelQuota НИЧЕГО не пишет в кеш
+        // и карточка остаётся пустой до ручного 🔄. Поэтому не одна попытка,
+        // а несколько с нарастающей паузой, пока не увидим деньги.
+        let quota = null;
+        const cwd2 = process.cwd();
+        process.chdir(path.join(__dirname, '..'));
+        try {
+            for (const waitMs of [4000, 7000]) {
+                await new Promise(r => setTimeout(r, waitMs));
+                try {
+                    quota = await dashApi.refreshOneFreemodelQuota(name);
+                } catch (e) {
+                    logLine(`freemodel bind-telegram quota refresh failed: ${e.message}`);
+                    break;
+                }
+                if (quota && (quota.available || quota.trialCredit)) break;
+                logLine(`freemodel bind-telegram quota: ${name} ещё пусто — повтор`);
+            }
+            logLine(`freemodel bind-telegram quota: ${name} avail=${quota?.available || '?'} trial=${quota?.trialCredit || '—'}`);
+        } finally {
+            process.chdir(cwd2);
+        }
+        jsonRes(res, 200, { ok: true, tgPhone: result.tgPhone, apiKey: result.apiKey, quota });
     } catch (e) {
         logLine(`freemodel bind-telegram error: ${e.message}`);
         jsonRes(res, 500, { ok: false, error: e.message });
@@ -1782,12 +2000,13 @@ async function handleFreemodelActivate(req, res) {
             fs.copyFileSync(settingsFile, bakPath);
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = 'https://cc.freemodel.dev';
-            // Чужая залипшая model (ComboWombo от OmniRoute) на FreeModel не работает —
-            // сбрасываем. Свою claude-* оставляем, но дотягиваем до [1m]: окно контекста
-            // Claude Code берёт из id модели, без суффикса считает 200k, автокомпактит
-            // рано и рисует 200k в статус-баре, хотя FreeModel даёт 1M.
+            // Чужая залипшая model (ComboWombo от OmniRoute) на FreeModel не работает.
+            // Раньше её просто удаляли — и CC брал свой встроенный дефолт
+            // (claude-opus-5 БЕЗ суффикса) → окно 200k вместо 1M, ранний
+            // автокомпакт и «200k» в статус-баре. Поэтому не удаляем, а ставим
+            // явный дефолт с [1m]. Свою claude-* оставляем, дотягивая суффикс.
             const fmModel = String(settings.model || '');
-            if (!/^claude-(opus|sonnet)-/.test(fmModel)) delete settings.model;
+            if (!/^claude-(opus|sonnet)-/.test(fmModel)) settings.model = 'claude-opus-5[1m]';
             else if (!fmModel.includes('[')) settings.model = fmModel + '[1m]';
             clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги, иначе перебьют freemodel
             if (helperMode) {
@@ -2017,7 +2236,8 @@ async function handleAlActivate(req, res) {
             logLine(`aerolink activate: settings.json FAILED: ${e.message}`);
         }
         logLine(`aerolink activate: ${target.email} → ***${key.slice(-6)} (helper)`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+        await arProxySpawn();
+                jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -2387,6 +2607,443 @@ async function handleOtModels(req, res) {
             jsonRes(res, 200, { ok: true, models: [], note: e.message });
         }
     }
+}
+
+// ───── Custom (custom) — произвольные провайдеры (имя + baseUrl + пул ключей) ─────
+// Универсальное хранилище: routing/custom-providers.json. Пинг/модели — GET {baseUrl}/models
+// c Bearer-ключом (OpenAI-совместимый каталог). Активация — как Evomap/Ourtoken:
+// apiKeyHelper читает ~/.claude/custom-active-key.txt на каждый запрос.
+const CUSTOM_FILE = path.join(__dirname, 'custom-providers.json');
+const CUSTOM_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'custom-active-key.txt');
+const CUSTOM_ACTIVE_PROVIDER_FILE = path.join(os.homedir(), '.claude', 'custom-active-provider.json');
+const CUSTOM_MODELS_CACHE = new Map(); // baseUrl -> { data, ts }
+// Кеш моделей переживает рестарт дашборда: лежит на диске рядом с провайдерами.
+// Свежий (<5 мин) отдаём из памяти; устаревший (<24 ч, напр. после рестарта)
+// отдаём с пометкой stale, чтобы вкладка Custom не висла и не дёргала апстрим.
+const CUSTOM_MODELS_CACHE_FILE = path.join(__dirname, 'custom-models-cache.json');
+const CUSTOM_MODELS_FRESH_MS = 300_000;       // 5 мин — отдаём из памяти
+const CUSTOM_MODELS_STALE_MS = 24 * 3600_000; // 24 ч — отдаём устаревшее без лишнего запроса
+function customModelsCacheLoad() {
+    try {
+        const raw = fs.readFileSync(CUSTOM_MODELS_CACHE_FILE, 'utf8');
+        const obj = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (obj && typeof obj === 'object') {
+            for (const [k, v] of Object.entries(obj)) {
+                if (v && Array.isArray(v.data) && typeof v.ts === 'number') {
+                    CUSTOM_MODELS_CACHE.set(k, { data: v.data, ts: v.ts });
+                }
+            }
+        }
+    } catch {}
+}
+function customModelsCacheSave() {
+    try {
+        const obj = {};
+        for (const [k, v] of CUSTOM_MODELS_CACHE) obj[k] = { data: v.data, ts: v.ts };
+        const tmp = CUSTOM_MODELS_CACHE_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+        fs.renameSync(tmp, CUSTOM_MODELS_CACHE_FILE);
+    } catch {}
+}
+customModelsCacheLoad();
+
+const CUSTOM_PROXY_PORT_MIN = 20150;
+const CUSTOM_PROXY_PORT_MAX = 20250;
+
+function customLoad() {
+    try {
+        const raw = fs.readFileSync(CUSTOM_FILE, 'utf8');
+        const data = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!data || !Array.isArray(data.providers)) return { providers: [] };
+        return data;
+    } catch { return { providers: [] }; }
+}
+function customSave(data) {
+    fs.writeFileSync(CUSTOM_FILE, JSON.stringify(data, null, 2) + '\n', 'utf8');
+}
+function customFind(id) {
+    const data = customLoad();
+    const p = data.providers.find(x => x.id === id);
+    return { data, provider: p || null };
+}
+function customReadActiveProvider() {
+    try {
+        const j = JSON.parse(fs.readFileSync(CUSTOM_ACTIVE_PROVIDER_FILE, 'utf8'));
+        if (j && j.id && j.name && j.baseUrl) return j;
+    } catch {}
+    return null;
+}
+
+// Порты 20150–20250 под Anthropic→OpenAI прокси Custom-провайдеров.
+// Провайдер с заполненным modelMap (opus/sonnet/haiku) не умеет Anthropic API
+// напрямую → активация спавнит custom-openai-proxy.js и направляет CC на него.
+function customProxyConfigFile(id) {
+    return path.join(os.homedir(), '.claude', `custom-${id}-proxy.json`);
+}
+async function customFindFreePort() {
+    const used = new Set();
+    try {
+        for (const p of customLoad().providers) if (p.proxyPort) used.add(p.proxyPort);
+    } catch {}
+    for (let port = CUSTOM_PROXY_PORT_MIN; port <= CUSTOM_PROXY_PORT_MAX; port++) {
+        if (used.has(port)) continue;
+        try {
+            const net = require('net');
+            const sock = net.createServer();
+            const ok = await new Promise(resolve => {
+                sock.once('error', () => resolve(false));
+                sock.listen(port, '127.0.0.1', () => { sock.close(); resolve(true); });
+            });
+            if (ok) return port;
+        } catch { return null; }
+    }
+    return null;
+}
+async function customSpawnProxy(provider) {
+    try {
+        const { spawn } = require('child_process');
+        let port = provider.proxyPort;
+        if (port) {
+            // порт может держать старый/осиротевший прокси после рестарта стека — проверяем
+            const free = await new Promise(resolve => {
+                const net = require('net');
+                const sock = net.createServer();
+                sock.once('error', () => resolve(false));
+                sock.listen(port, '127.0.0.1', () => { sock.close(); resolve(true); });
+            });
+            if (!free) port = null;
+        }
+        if (!port) port = await customFindFreePort();
+        if (!port) return { ok: false, error: 'нет свободного порта 20150–20250' };
+        const cfg = {
+            port,
+            upstream: provider.baseUrl,
+            keyFile: CUSTOM_ACTIVE_KEY_FILE,
+            modelMap: provider.modelMap || {},
+            providerName: provider.name,
+        };
+        const cfgFile = customProxyConfigFile(provider.id);
+        fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+        const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), cfgFile], {
+            detached: true,
+            stdio: 'ignore',
+            env: process.env,
+        });
+        child.unref();
+        const { data } = customFind(provider.id);
+        if (data) {
+            const p = data.providers.find(x => x.id === provider.id);
+            if (p) { p.proxyPort = port; p.proxyPid = child.pid; customSave(data); }
+        }
+        logLine(`custom proxy spawn: ${provider.name} :${port} (pid ${child.pid})`);
+        return { ok: true, port, pid: child.pid };
+    } catch (e) {
+        logLine(`custom proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function customKillProxy(provider) {
+    let pid = provider && provider.proxyPid;
+    const port = provider && provider.proxyPort;
+    if (pid) {
+        try { process.kill(pid, 'SIGKILL'); } catch {}
+    }
+    // страховка: убить всё, что слушает proxyPort (ловит pid через netstat)
+    if (port) {
+        try {
+            const { execFileSync } = require('child_process');
+            const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
+            for (const line of out.split(/\r?\n/)) {
+                const m = line.match(new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`));
+                if (m) { try { execFileSync('taskkill', ['/F', '/PID', m[1]]); } catch {} }
+            }
+        } catch {}
+    }
+    try { fs.rmSync(customProxyConfigFile(provider.id), { force: true }); } catch {}
+    logLine(`custom proxy kill: ${provider.name}${port ? ' :' + port : ''}`);
+}
+
+// GET /__switch/api/custom/providers → список провайдеров + ключей + активный
+async function handleCustomProviders(req, res) {
+    try {
+        const data = customLoad();
+        jsonRes(res, 200, { providers: data.providers, active: customReadActiveProvider() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/provider { name, baseUrl } → создать провайдера
+async function handleCustomProviderCreate(req, res) {
+    try {
+        const { name, baseUrl } = await readJsonBody(req);
+        const n = String(name || '').trim();
+        const b = String(baseUrl || '').trim().replace(/\/+$/, '');
+        if (!n || !b) return jsonRes(res, 400, { error: 'name и baseUrl обязательны' });
+        if (!/^https?:\/\//.test(b)) return jsonRes(res, 400, { error: 'baseUrl должен начинаться с http(s)://' });
+        const data = customLoad();
+        if (data.providers.some(p => p.baseUrl === b)) {
+            return jsonRes(res, 400, { error: `провайдер с baseUrl ${b} уже есть (${data.providers.find(p => p.baseUrl === b).name})` });
+        }
+        const id = 'cp_' + Date.now();
+        data.providers.push({ id, name: n, baseUrl: b, createdAt: new Date().toISOString(), keys: [], modelMap: {}, proxyPort: null, proxyPid: null });
+        customSave(data);
+        logLine(`custom provider add: ${n} (${b})`);
+        jsonRes(res, 200, { ok: true, id });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/provider/delete { id } → удалить провайдера
+async function handleCustomProviderDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const { data, provider } = customFind(String(id || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        await customKillProxy(provider);
+        data.providers = data.providers.filter(p => p.id !== provider.id);
+        customSave(data);
+        const active = customReadActiveProvider();
+        if (active && active.id === provider.id) {
+            try { fs.rmSync(CUSTOM_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(CUSTOM_ACTIVE_PROVIDER_FILE, { force: true }); } catch {}
+        }
+        logLine(`custom provider delete: ${provider.name}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/key { providerId, apiKey } → добавить ключ
+async function handleCustomKeyAdd(req, res) {
+    try {
+        const { providerId, apiKey } = await readJsonBody(req);
+        const key = String(apiKey || '').trim();
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        if (!key) return jsonRes(res, 400, { error: 'apiKey обязателен' });
+        if (provider.keys.some(k => k.apiKey === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        provider.keys.push({ apiKey: key, active: false, status: null, addedAt: new Date().toISOString() });
+        customSave(data);
+        logLine(`custom key add: ${provider.name} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/key/delete { providerId, apiKey } → удалить ключ
+async function handleCustomKeyDelete(req, res) {
+    try {
+        const { providerId, apiKey } = await readJsonBody(req);
+        const key = String(apiKey || '').trim();
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        provider.keys = provider.keys.filter(k => k.apiKey !== key);
+        customSave(data);
+        let activeKey = '';
+        try { activeKey = fs.readFileSync(CUSTOM_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+        if (key === activeKey) {
+            await customKillProxy(provider);
+            try { fs.rmSync(CUSTOM_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(CUSTOM_ACTIVE_PROVIDER_FILE, { force: true }); } catch {}
+        }
+        logLine(`custom key delete: ${provider.name} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/custom/ping?providerId=...&apiKey=... → проверить один ключ
+async function handleCustomPing(req, res) {
+    try {
+        const q = new URL(req.url, 'http://localhost');
+        const providerId = q.searchParams.get('providerId');
+        const apiKey = q.searchParams.get('apiKey');
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        const status = await customProbe(provider, apiKey);
+        const target = provider.keys.find(k => k.apiKey === apiKey);
+        if (target) { target.status = status; customSave(data); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/custom/models?providerId=...&apiKey=...&force=1 → список моделей по ключу
+async function handleCustomModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const providerId = url.searchParams.get('providerId');
+        const apiKey = url.searchParams.get('apiKey');
+        const force = url.searchParams.get('force') === '1';
+        const { provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        if (!apiKey) return jsonRes(res, 400, { error: 'apiKey required' });
+
+        const now = Date.now();
+        const cache = CUSTOM_MODELS_CACHE.get(provider.baseUrl);
+        // свежий кеш — отдаём сразу, апстрим не дёргаем
+        if (cache && Array.isArray(cache.data) && now - cache.ts < CUSTOM_MODELS_FRESH_MS && !force) {
+            return jsonRes(res, 200, { ok: true, models: cache.data, cached: true, stale: false });
+        }
+        // устаревший кеш (или после рестарта) — отдаём с пометкой stale
+        if (cache && Array.isArray(cache.data) && now - cache.ts < CUSTOM_MODELS_STALE_MS && !force) {
+            return jsonRes(res, 200, { ok: true, models: cache.data, cached: true, stale: true });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const base = provider.baseUrl.replace(/\/+$/, '');
+        const resp = await fetch(base + '/models', {
+            signal: controller.signal,
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        clearTimeout(timeout);
+
+        // апстрим упал — отдаём последний кеш
+        if (!resp.ok) {
+            if (cache && Array.isArray(cache.data)) {
+                return jsonRes(res, 200, { ok: true, models: cache.data, cached: true, stale: true, note: `HTTP ${resp.status}` });
+            }
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({ id: m.id, owned_by: m.owned_by }));
+        CUSTOM_MODELS_CACHE.set(provider.baseUrl, { data: models, ts: now });
+        customModelsCacheSave();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        const provider = customFind(String(new URL(req.url, 'http://localhost').searchParams.get('providerId') || '').trim()).provider;
+        const cache = provider && CUSTOM_MODELS_CACHE.get(provider.baseUrl);
+        if (cache && Array.isArray(cache.data)) {
+            jsonRes(res, 200, { ok: true, models: cache.data, cached: true, stale: true, note: e.message });
+        } else {
+            jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        }
+    }
+}
+
+// POST /__switch/api/custom/activate { providerId, apiKey } → сделать активным в settings.json
+async function handleCustomActivate(req, res) {
+    try {
+        const { providerId, apiKey } = await readJsonBody(req);
+        const key = String(apiKey || '').trim();
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        const target = provider.keys.find(k => k.apiKey === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(CUSTOM_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        fs.writeFileSync(CUSTOM_ACTIVE_PROVIDER_FILE,
+            JSON.stringify({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl }, null, 2) + '\n', 'utf-8');
+        provider.keys.forEach(k => { k.active = k.apiKey === key; });
+        customSave(data);
+
+        // OpenAI-only провайдер (задан modelMap) → спавним Anthropic→OpenAI прокси.
+        // Anthropic-совместимый (modelMap пуст) → ходим напрямую на baseUrl.
+        const mm = provider.modelMap || {};
+        const needProxy = !!(mm.opus || mm.sonnet || mm.haiku);
+        let proxy = null;
+        if (needProxy) {
+            proxy = await customSpawnProxy(provider);
+            if (!proxy.ok) return jsonRes(res, 400, { error: 'не удалось поднять прокси: ' + (proxy.error || '?') });
+        }
+        const targetUrl = proxy && proxy.port ? `http://localhost:${proxy.port}` : provider.baseUrl;
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-custom');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = targetUrl;
+            settings.apiKeyHelper = keyHelperCmd('custom-active-key.txt');
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;
+            delete settings.env.ANTHROPIC_AUTH_TOKEN;
+            delete settings.env.ANTHROPIC_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME;
+            delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME;
+            delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+            delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME;
+            delete settings.model;
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`custom activate: settings.json FAILED: ${e.message}`);
+            if (proxy && proxy.ok) await customKillProxy(provider);
+        }
+        logLine(`custom activate: ${provider.name} → ***${key.slice(-6)} (helper${proxy ? ', via proxy :' + proxy.port : ''})`);
+        jsonRes(res, 200, { ok: true, provider: provider.name, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: !!proxy });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/modelmap { providerId, opus, sonnet, haiku } → сохранить маппинг claude-тиров
+async function handleCustomModelMap(req, res) {
+    try {
+        const { providerId, opus, sonnet, haiku } = await readJsonBody(req);
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        provider.modelMap = {
+            opus: String(opus || '').trim() || null,
+            sonnet: String(sonnet || '').trim() || null,
+            haiku: String(haiku || '').trim() || null,
+        };
+        customSave(data);
+        logLine(`custom modelmap: ${provider.name} opus→${provider.modelMap.opus || '-'} sonnet→${provider.modelMap.sonnet || '-'} haiku→${provider.modelMap.haiku || '-'}`);
+        // если провайдер активен и под ним крутится прокси — перезапускаем с новым конфигом
+        const active = customReadActiveProvider();
+        if (active && active.id === provider.id && provider.proxyPid) {
+            await customKillProxy(provider);
+            const res2 = await customSpawnProxy(provider);
+            logLine(`custom modelmap: proxy restarted ${res2.ok ? ': ' + res2.port : 'FAIL ' + (res2.error || '')}`);
+        }
+        jsonRes(res, 200, { ok: true, modelMap: provider.modelMap });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function customProbe(provider, apiKey) {
+    try {
+        const base = String(provider.baseUrl || '').replace(/\/+$/, '');
+        const r = await fetch(base + '/models', {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(12000),
+        });
+        return r.status === 401 ? 'dead' : (r.ok ? 'live' : 'unknown');
+    } catch { return 'unknown'; }
+}
+
+// POST /__switch/api/custom/deactivate → снять кастомного провайдера с активности
+async function handleCustomDeactivate(req, res) {
+    try {
+        const active = customReadActiveProvider();
+        if (active) {
+            const { provider } = customFind(active.id);
+            if (provider) await customKillProxy(provider);
+        }
+        try { fs.rmSync(CUSTOM_ACTIVE_KEY_FILE, { force: true }); } catch {}
+        try { fs.rmSync(CUSTOM_ACTIVE_PROVIDER_FILE, { force: true }); } catch {}
+        const data = customLoad();
+        data.providers.forEach(p => (p.keys || []).forEach(k => { k.active = false; }));
+        customSave(data);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            // только если кастомный провайдер действительно активен — не трогаем чужие настройки
+            if (String(settings.apiKeyHelper || '').includes('custom-active-key.txt')) {
+                makeSettingsBackup('settings-custom-deactivate');
+                delete settings.apiKeyHelper;
+                settings.env = settings.env || {};
+                delete settings.env.ANTHROPIC_BASE_URL;
+                delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+                fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+                settingsOk = true;
+            }
+        } catch (e) {
+            logLine(`custom deactivate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`custom deactivate (settingsUpdated=${settingsOk})`);
+        jsonRes(res, 200, { ok: true, settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 // ───── Cun (cun) — ручной пул ключей (cun.ai) ─────
@@ -3049,6 +3706,247 @@ async function handleImageTrialStatus(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── Svrtr — пул ТГ-аккаунтов, активация через API Helper ─────
+// api.svrtr.org — Anthropic-совместимый endpoint (x-api-key). Авторег через @svrtrbot.
+// Активация = ключ в sr-active-key.txt + apiKeyHelper в settings.json.
+const SR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'sr-active-key.txt');
+const SR_BASE_URL = 'https://api.svrtr.org';
+const SR_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+async function handleSvrtrSessions(req, res) {
+    try {
+        const refresh = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('refresh') === '1';
+        const sessions = await dashApi.listSvrtrSessions({ withQuotas: refresh ? 'refresh' : 'cache' });
+        jsonRes(res, 200, { sessions, activeKey: dashApi.getActiveSvrtrKey() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSvrtrRefreshQuota(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const quota = await dashApi.refreshOneSvrtrQuota(name);
+        logLine(`svrtr refresh quota: ${name}`);
+        jsonRes(res, 200, { ok: true, name, quota });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSvrtrActiveKey(req, res) {
+    const key = dashApi.getActiveSvrtrKey();
+    jsonRes(res, 200, { key: key || null, mask: key ? key.slice(0, 12) + '…' + key.slice(-4) : null });
+}
+
+async function handleSvrtrActivate(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const extract = await dashApi.extractSvrtrApiKey(name);
+        if (!extract.ok || !extract.apiKey) return jsonRes(res, 400, { error: extract.error || 'ключ не найден' });
+        const key = extract.apiKey;
+
+        fs.writeFileSync(SR_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        dashApi.setSvrtrApiKey(name, key);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-sr');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = SR_BASE_URL;
+            settings.apiKeyHelper = keyHelperCmd('sr-active-key.txt');
+            delete settings.model;
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`svrtr activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`svrtr activate: ${name} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, name, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSvrtrAdd(req, res) {
+    try {
+        const { apiKey, username, tgPhone } = await readJsonBody(req);
+        const key = String(apiKey || '').trim();
+        if (!key || !/^sk-sr-/.test(key)) return jsonRes(res, 400, { error: 'apiKey обязателен и должен начинаться с sk-sr-' });
+        const result = dashApi.addSvrtrKey({ apiKey: key, username: String(username || '').trim() || null, tgPhone: String(tgPhone || '').trim() || null });
+        logLine(`svrtr add: ${result.ident} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSvrtrAutoreg(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const count = Math.max(1, Math.min(50, parseInt(body.count, 10) || 1));
+        const result = dashApi.launchScript('svrtr-create', [String(count)]);
+        logLine(`svrtr autoreg launched: count=${count}`);
+        jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSvrtrModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (SR_MODELS_CACHE.data && Date.now() - SR_MODELS_CACHE.ts < SR_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: SR_MODELS_CACHE.data, cached: true });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const resp = await fetch(SR_BASE_URL + '/v1/models', {
+            signal: controller.signal,
+            headers: { 'x-api-key': api_key, 'Authorization': `Bearer ${api_key}` }
+        });
+        clearTimeout(timeout);
+
+        const rawText = await resp.text();
+        const textClean = rawText.charCodeAt(0) === 0xFEFF ? rawText.slice(1) : rawText;
+        logLine(`svrtr models: HTTP ${resp.status}, len=${textClean.length}, body=${textClean.slice(0, 200).replace(/\n/g, '\\n')}`);
+
+        if (!resp.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}: ${textClean.slice(0, 120)}` });
+
+        let data;
+        try { data = JSON.parse(textClean); } catch (e) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `JSON parse error: ${e.message}` });
+        }
+        const list = Array.isArray(data) ? data : (data.data || data.models || []);
+        const models = list.map(m => ({ id: m.id, owned_by: m.owned_by }));
+        SR_MODELS_CACHE.data = models;
+        SR_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (SR_MODELS_CACHE.data) {
+            jsonRes(res, 200, { ok: true, models: SR_MODELS_CACHE.data, cached: true, note: e.message });
+        } else {
+            jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        }
+    }
+}
+
+// ───── HelpCoder — New-API инстанс, авторег username+password, активация через API Helper ─────
+// helpcoder.cc — OpenAI-совместимый endpoint (Bearer sk-...). Авторег чистым HTTP.
+// Активация = записать ключ в hc-active-key.txt + apiKeyHelper в settings.json.
+const HC_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'hc-active-key.txt');
+const HC_BASE_URL = 'https://helpcoder.cc';
+const HC_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+async function handleHelpcoderSessions(req, res) {
+    try {
+        const refresh = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('refresh') === '1';
+        const sessions = await dashApi.listHelpcoderSessions({ withQuotas: refresh ? 'refresh' : 'cache' });
+        jsonRes(res, 200, { sessions, activeKey: dashApi.getActiveHelpcoderKey() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHelpcoderRefreshQuota(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const quota = await dashApi.refreshOneHelpcoderQuota(name);
+        logLine(`helpcoder refresh quota: ${name}`);
+        jsonRes(res, 200, { ok: true, name, quota });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHelpcoderActiveKey(req, res) {
+    const key = dashApi.getActiveHelpcoderKey();
+    jsonRes(res, 200, { key: key || null, mask: key ? key.slice(0, 12) + '…' + key.slice(-4) : null });
+}
+
+async function handleHelpcoderActivate(req, res) {
+    try {
+        const { name } = await readJsonBody(req);
+        if (!name) return jsonRes(res, 400, { error: 'name обязателен' });
+        const extract = await dashApi.extractHelpcoderApiKey(name);
+        if (!extract.ok || !extract.apiKey) return jsonRes(res, 400, { error: extract.error || 'ключ не найден' });
+        const key = extract.apiKey;
+
+        fs.writeFileSync(HC_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        dashApi.setHelpcoderApiKey(name, key);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-hc');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = HC_BASE_URL;
+            settings.apiKeyHelper = keyHelperCmd('hc-active-key.txt');
+            delete settings.model;
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`helpcoder activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`helpcoder activate: ${name} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, name, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHelpcoderAdd(req, res) {
+    try {
+        const { apiKey, username } = await readJsonBody(req);
+        const key = String(apiKey || '').trim();
+        if (!key || !/^sk-/.test(key)) return jsonRes(res, 400, { error: 'apiKey обязателен и должен начинаться с sk-' });
+        const result = dashApi.addHelpcoderKey({ apiKey: key, username: String(username || '').trim() || null });
+        logLine(`helpcoder add: ${result.ident} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHelpcoderAutoreg(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const count = Math.max(1, Math.min(50, parseInt(body.count, 10) || 1));
+        const result = dashApi.launchScript('helpcoder-create', [String(count)]);
+        logLine(`helpcoder autoreg launched: count=${count}`);
+        jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHelpcoderModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (HC_MODELS_CACHE.data && Date.now() - HC_MODELS_CACHE.ts < HC_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: HC_MODELS_CACHE.data, cached: true });
+        }
+
+        const hcApi = require('../helpcoder/lib/helpcoder-api');
+        const r = await hcApi.getModels(api_key);
+
+        if (!r.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${r.status}: ${(r.text || '').slice(0, 120)}` });
+
+        const list = Array.isArray(r.json) ? r.json : (r.json.data || r.json.models || []);
+        const models = list.map(m => ({ id: m.id, owned_by: m.owned_by }));
+        HC_MODELS_CACHE.data = models;
+        HC_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (HC_MODELS_CACHE.data) {
+            jsonRes(res, 200, { ok: true, models: HC_MODELS_CACHE.data, cached: true, note: e.message });
+        } else {
+            jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        }
+    }
+}
+
 // ───── Conduit (cdt) — пул ТГ-аккаунтов, активация через API Helper ─────
 // conduit.ozdoev.net — Anthropic-совместимый endpoint. Квоты/баланс читает
 // dashApi.listConduitSessions (cookie-fetch, не Playwright). Активация = записать
@@ -3143,6 +4041,31 @@ async function handleConduitAutoreg(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ---- AnyModel handlers ----
+function handleAmodelAccounts(res) {
+    try {
+        const accounts = dashApi.listAmodelAccounts();
+        jsonRes(res, 200, { ok: true, accounts });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сколько ТГ из общего пула ещё доступно именно AnyModel.
+function handleAmodelTgStats(res) {
+    try {
+        jsonRes(res, 200, { ok: true, ...require('../anymodel/lib/tg-usage').stats() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleAmodelLaunch(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const count = Math.max(1, Math.min(20, parseInt(body.count, 10) || 1));
+        const result = dashApi.launchAmodelAutoreger(count);
+        logLine(`anymodel autoreg launched: count=${count}`);
+        jsonRes(res, 200, { ok: true, ...result });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 async function handleConduitModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -3213,6 +4136,232 @@ async function handleConduitSetModel(req, res) {
         }
         logLine(`conduit set-model: ${m}`);
         jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, modelFile: CDT_ACTIVE_MODEL_FILE });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── AgentRouter (ar) — ручной пул ключей (agentrouter.org), активация через API Helper ─────
+// Дроп-ин для Claude Code: ANTHROPIC_BASE_URL=https://agentrouter.org (БЕЗ /v1), ключ sk-….
+// WAF отбивает запросы, которые не выглядят как Claude Code: все probe/models обязаны
+// нести CC-заголовки (user-agent claude-cli/, anthropic-version/beta, x-app). cs
+const AR_SESSIONS_FILE = path.join(__dirname, 'agentrouter-sessions.json');
+const AR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ar-active-key.txt');
+const AR_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'ar-active-model.txt');
+const AR_BASE_URL = 'https://agentrouter.org';
+const AR_PROXY_PORT = 20132;
+const AR_PROXY_URL = `http://localhost:${AR_PROXY_PORT}`;
+
+// ????????? agentrouter-proxy.js (:) ???? ???? ???????? ? ???????? ??? Claude Code:
+// claude-* ? pass-through ? agentrouter /v1/messages, gpt-* ? ??????????? ? OpenAI /v1/chat/completions.
+async function arProxySpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(AR_PROXY_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, 'agentrouter-proxy.js')], {
+            detached: true, stdio: 'ignore', env: process.env,
+        });
+        child.unref();
+        logLine(`agentrouter proxy spawn: :${AR_PROXY_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`agentrouter proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+const AR_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+const AR_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function arLoad() {
+    try {
+        const raw = fs.readFileSync(AR_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function arSave(arr) {
+    fs.writeFileSync(AR_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function arReadActiveModel() {
+    try { return fs.readFileSync(AR_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+async function arProbe(apiKey) {
+    try {
+        const r = await fetch(`${AR_BASE_URL}/v1/models`, {
+            method: 'GET',
+            headers: { ...AR_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+async function handleArSessions(req, res) {
+    try {
+        const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
+        const sessions = arLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await arProbe(s.api_key); }));
+            }
+            arSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: arReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
+async function handleArPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await arProbe(api_key);
+        const sessions = arLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; arSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleArAdd(req, res) {
+    try {
+        const { email, api_key, name } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = arLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({ email: mail, name: String(name || '').trim() || mail.split('@')[0], api_key: key, active: false, status: 'unknown', created: new Date().toISOString() });
+        arSave(sessions);
+        logLine(`agentrouter add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleArDelete(req, res) {
+    try {
+        const { api_key } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        arSave(arLoad().filter(s => s.api_key !== key));
+        logLine(`agentrouter delete: ***${key.slice(-6)}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Клик по ключу → активный: пишем ключ в ar-active-key.txt + apiKeyHelper в settings.json.
+async function handleArActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(AR_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        arSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ar');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AR_PROXY_URL;
+            settings.apiKeyHelper = keyHelperCmd('ar-active-key.txt');
+            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
+            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
+            clearOtEnv(settings);    // убрать наш AUTH_TOKEN/маппинги от other пулов
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`agentrouter activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`agentrouter activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу (каталог общий, WAF не пустит без ключа).
+async function handleArModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (AR_MODELS_CACHE.data && Date.now() - AR_MODELS_CACHE.ts < AR_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: AR_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${AR_BASE_URL}/v1/models`, {
+            signal: controller.signal,
+            headers: { ...AR_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        AR_MODELS_CACHE.data = models;
+        AR_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (AR_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: AR_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет ar-active-model.txt + settings.model.
+async function handleArSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        fs.writeFileSync(AR_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ar-model');
+            settings.model = m;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AR_PROXY_URL;
+            settings.apiKeyHelper = keyHelperCmd('ar-active-key.txt');
+            delete settings.env.ANTHROPIC_API_KEY;
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`agentrouter set-model: settings.json FAILED: ${e.message}`);
+        }
+        await arProxySpawn();
+        logLine(`agentrouter set-model: ${m} (base :${AR_PROXY_PORT})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, modelFile: AR_ACTIVE_MODEL_FILE });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -3668,6 +4817,22 @@ const server = http.createServer((req, res) => {
         return handleFreemodelSetInvite(req, res);
     }
 
+    if (req.method === 'GET' && req.url === '/__switch/api/freemodel/email-backend') {
+        return handleFreemodelGetEmailBackend(req, res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/email-backend') {
+        return handleFreemodelSetEmailBackend(req, res);
+    }
+
+    if (req.method === 'GET' && req.url === '/__switch/api/freemodel/email-domain') {
+        return handleFreemodelGetEmailDomain(req, res);
+    }
+
+    if (req.method === 'POST' && req.url === '/__switch/api/freemodel/email-domain') {
+        return handleFreemodelSetEmailDomain(req, res);
+    }
+
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/devin/sessions')) {
         return handleDevinSessions(req, res);
     }
@@ -3739,6 +4904,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tg/open')        return handleTgOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/health-check') return handleTgHealthCheck(req, res);
 
+    // ---- AnyModel accounts ----
+    if (req.method === 'GET'  && req.url === '/__switch/api/anymodel/accounts') return handleAmodelAccounts(res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/anymodel/tg-stats') return handleAmodelTgStats(res);
+    if (req.method === 'POST' && req.url === '/__switch/api/anymodel/launch')  return handleAmodelLaunch(req, res);
+
     // ---- FreeModel ban/unban marker ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/ban')      return handleFreemodelBan(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/set-tg')   return handleFreemodelSetTg(req, res);
@@ -3788,6 +4958,16 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ot/to-omni')   return handleOtToOmni(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ot/models')) return handleOtModels(req, res);
 
+    // ---- AgentRouter (ar) — ручной пул ключей (agentrouter.org), API Helper ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/sessions')) return handleArSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/ping'))     return handleArPing(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/add')       return handleArAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/delete')    return handleArDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/activate')  return handleArActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/set-model') return handleArSetModel(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
+
     // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/om/add')       return handleOmAdd(req, res);
@@ -3808,6 +4988,24 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/image/trials')) return handleImageTrials(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/image/trial-status')  return handleImageTrialStatus(req, res);
 
+    // ---- Svrtr — пул ТГ-аккаунтов, активация через API Helper ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/svrtr/sessions'))    return handleSvrtrSessions(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/svrtr/active-key')          return handleSvrtrActiveKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/svrtr/refresh-quota')       return handleSvrtrRefreshQuota(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/svrtr/activate')            return handleSvrtrActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/svrtr/autoreg')             return handleSvrtrAutoreg(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/svrtr/add')                 return handleSvrtrAdd(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/svrtr/models'))       return handleSvrtrModels(req, res);
+
+    // ---- HelpCoder — авторег username+password, активация через API Helper ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/helpcoder/sessions'))    return handleHelpcoderSessions(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/helpcoder/active-key')          return handleHelpcoderActiveKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/helpcoder/refresh-quota')       return handleHelpcoderRefreshQuota(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/helpcoder/activate')            return handleHelpcoderActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/helpcoder/autoreg')             return handleHelpcoderAutoreg(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/helpcoder/add')                 return handleHelpcoderAdd(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/helpcoder/models'))       return handleHelpcoderModels(req, res);
+
     // ---- Conduit (cdt) — пул ТГ-аккаунтов, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/conduit/sessions'))  return handleConduitSessions(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/conduit/active-key')          return handleConduitActiveKey(req, res);
@@ -3819,7 +5017,19 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/conduit/set-model')          return handleConduitSetModel(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/conduit/active-model')       return jsonRes(res, 200, { model: cdtReadActiveModel() || null });
 
-    // ---- FreeModel auto-rotation (API Helper load balancer) ----
+    // ---- Custom providers (произвольные провайдеры: имя + baseUrl + ключи) ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/providers'))       return handleCustomProviders(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/provider')                return handleCustomProviderCreate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/provider/delete')          return handleCustomProviderDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/key')                      return handleCustomKeyAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/key/delete')               return handleCustomKeyDelete(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/ping'))             return handleCustomPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/models'))           return handleCustomModels(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/modelmap')                 return handleCustomModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/activate')                 return handleCustomActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/deactivate')               return handleCustomDeactivate(req, res);
+
+    // ---- FreeModel авто-подмена мёртвого аккаунта ($0 → следующий) ----
     if (req.method === 'POST' && req.url === '/__switch/api/freemodel/auto/start') {
         (async () => {
             try {
@@ -4527,14 +5737,20 @@ server.listen(LISTEN_PORT, () => {
         if (orphans) console.log(`  tg-health: очистил ${orphans} осиротевших записей`);
     } catch (e) { console.log(`  tg-health prune skip: ${e.message}`); }
 
-    // Возобновляем авто-ротацию FreeModel, если она была включена до рестарта.
+    // Возобновляем авто-подмену FreeModel, если она была включена до рестарта.
     if (fmAutoLoadPersist()) {
-        console.log('  FreeModel auto-rotation: resuming (was enabled)');
+        console.log('  FreeModel auto-failover ($0): resuming (was enabled)');
         fmAutoStart();
     }
 
     // Автостарт Grok launcher — чтобы UI-вкладка «Grok Cookie Sessions» работала
     // сразу после запуска дашборда, без ручного `python launcher.py`.
     grokLauncherStart().catch(e => console.log('  Grok launcher start error:', e.message));
+
+    // AgentRouter-?????? (:20132) ? ???????? ??? claude-*/gpt-* ??????? agentrouter.
+    arProxySpawn().then(r => {
+        if (!r.ok) console.log('  ar proxy spawn error:', r.error || '?');
+        else if (!r.already) console.log('  ar proxy spawned');
+    }).catch(e => console.log('  ar proxy spawn error:', e.message));
 });
 

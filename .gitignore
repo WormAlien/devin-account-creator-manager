@@ -23,6 +23,11 @@ freemodel/sessions/
 freemodel/keys.txt
 freemodel/tg_pool.json
 
+# FreeModel email-backend: IMAP-креды и личные домены. .env.example IS committed.
+freemodel/.env
+freemodel/.email_domain
+freemodel/.email_backend
+
 # VyceAI приватные данные (ключи API)
 vyceai/keys.txt
 vyceai/keys.json
@@ -31,9 +36,21 @@ freemodel/.tg_health_cache.json
 freemodel/.email_blocklist.json
 freemodel/manual_email.txt
 freemodel/lib/camoufox_tmailor_profile_*/
+freemodel/lib/probe_profile*/
 freemodel/lib/camoufox_recordings/
 freemodel/logs/
 freemodel/.last_invite
+
+# TG-сессии из архивов магазина: .session = живой auth_key, .json = сайдкар с
+# app_id/app_hash. Плюс отчёты и одноразовые скрипты разбора — в них ключи
+# лежат открытым текстом.
+freemodel/_import_sessions/
+freemodel/_import_*.js
+freemodel/_import_*.json
+freemodel/_recheck_*.js
+freemodel/_recheck_*.json
+freemodel/_check_one.js
+freemodel/_do_import.js
 
 # Conduit приватные данные (сессии, sk-cdt- ключи, профили браузера, дампы).
 # Коммитим только КОД (conduit/*.js, conduit/lib/*.js).
@@ -127,6 +144,9 @@ routing/ourtoken-sessions.json
 # Cun.ai ручной пул ключей (sk-*). cun-sessions.example.json IS committed.
 routing/cun-sessions.json
 
+# AgentRouter ручной пул ключей (sk-*). AgentRouter-sessions.example.json — при необходимости.
+routing/agentrouter-sessions.json
+
 # Cun.ai автореги: аккаунты, отладочные записи со скриншотами, логи.
 cun/accounts/
 cun/recordings/
@@ -209,3 +229,31 @@ grok-launcher/sso_probe*.py
 # Автодампы схем MCP-тулов (генерируются инструментом, не наш код).
 mcps/
 doctor-report.txt
+
+# ── Custom providers (дашборд) ─────────────────────────────────────────────
+# Реальные ключи провайдеров вкладки Custom (BluesMinds, GoRouter, …) — НИКОГДА
+# не коммитить. Формат — custom-providers.json.example. Кеш моделей — runtime.
+routing/custom-providers.json
+routing/custom-models-cache.json
+
+# ── opencode: локальный конфиг с реальным ключом провайдера claude-popusk ─
+opencode.json
+
+# ── Профили Camoufox/FireFox для проб (cookies, logins, кеш) ───────────────
+_probe_prof/
+probe_reg_prof/
+freemodel/lib/camoufox_emailnator_profile_*/
+
+# ── Автореги: аккаунты и живые сессии ───────────────────────────────────────
+helpcoder/accounts/
+svrtr/accounts/
+svrtr/.tg_used.json
+
+# ── Отладочные дампы проб ───────────────────────────────────────────────────
+out_hc*
+probe*.txt
+tm_captcha_modal.html
+
+# ── Postman: локальная конфигурация workspace/globals ──────────────────────
+postman/
+.postman/

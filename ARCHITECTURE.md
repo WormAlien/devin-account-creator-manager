@@ -16,6 +16,7 @@
 | `20126`| **FreeModel Key Rotator** | `routing/freemodel-rotator.js` | Менеджер прямых ключей для backend `freemodel_rotator`. Пишет ключ в `settings.json`. |
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
+| `20150-20250`| **Custom OpenAI Proxies** (динамически) | `routing/custom-openai-proxy.js` | Anthropic→OpenAI конвертер для Custom-провайдеров с заполненным `modelMap`. Спавнится на активацию (детached), конфиг `~/.claude/custom-<id>-proxy.json`, ключ из `~/.claude/custom-active-key.txt`. Убивается при деактивации/удалении. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -57,6 +58,10 @@
 - **conduit** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/cdt-active-key.txt`,
   `ANTHROPIC_BASE_URL=https://conduit.ozdoev.net/v1`, TTL=0. Anthropic-совместимый
   endpoint (ключи `sk-cdt-`), реги из Telegram. То же, что aerolink, но для пула Conduit.
+- **svrtr** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/sr-active-key.txt`,
+  `ANTHROPIC_BASE_URL=https://api.svrtr.org`, TTL=0. Anthropic-совместимый endpoint
+  (ключи `sk-sr-v1-`), авторег через @svrtrbot (одна кнопка Login Start в боте).
+  Файлы: `svrtr/lib/svrtr-api.js`, `svrtr/svrtr_autoreger.js`.
 
 **⚠ Формат apiKeyHelper — только node-вариант** (`keyHelperCmd()` в transparent-proxy.js):
 `node -e "...readFileSync(os.homedir()+'/.claude/<xx>-active-key.txt'...).trim()"`.
@@ -85,7 +90,9 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **Aerolink**  | активна   | ручной пул email+ключ, статус (пинг `/v1/me`), активация через API Helper | `/api/al/*` |
 | **Evomap**    | активна   | ручной пул email+ключ (evomap.ai), статус (пинг `/v1/models`), активация через API Helper | `/api/ev/*` |
 | **Ourtoken**  | активна   | ручной пул email+ключ (ourtoken.ai), статус (пинг `/v1/models`), активация через API Helper | `/api/ot/*` |
+| **Custom**    | активна   | произвольные провайдеры: имя + baseUrl + пул ключей (`routing/custom-providers.json`), пинг/модели по `{baseUrl}/models`, активация через API Helper (`~/.claude/custom-active-key.txt`). Если задан `modelMap` (opus/sonnet/haiku) — активация поднимает Anthropic→OpenAI конвертер (`custom-openai-proxy.js`) и направляет CC на `localhost:<port>` | `/api/custom/*` |
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
+| **Svrtr**     | активна   | ТГ-аккаунты svrtr.org (api.svrtr.org), кредиты, реги через @svrtrbot, активация через API Helper | `/api/svrtr/*` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |
 | **Плагины / MCP** | активна | слева плагины Claude Code (тоггл `enabledPlugins`, ★ рекомендованные), справа MCP-серверы из `~/.claude.json` | `/api/plugins/list`, `/api/settings/apply`, `/api/mcp/list`, `/api/mcp/toggle` |
@@ -108,7 +115,41 @@ API-обвязка: `internal/dashboard-api.js`.
   TG сразу помечается `tgPhone='manual'`. Квоты не парсятся (нет браузерной сессии),
   refresh такие аккаунты пропускает; ключ участвует в активации и авто-ротации как обычный.
 - Квоты кеш: `logs/.freemodel_quota_cache.json`.
-- Мета (apiKey/banned/tgPhone): `logs/.freemodel_meta.json`.
+- Мета (apiKey/banned/cooldownUntil/tgPhone): `logs/.freemodel_meta.json`.
+
+### Состояние аккаунта: `ok` / `cooldown` / `dead`
+
+Считается в `fmClassify()` (`internal/freemodel-manager.js`), кладётся в квоту полями
+`state`, `coolReason`, `cooldownUntil` (+ машиночитаемые `h5resetAt`, `d7resetAt`,
+`money`, `planId`, `subActive`).
+
+**Главное, что надо знать про `available`:** при активном 5h-окне это НЕ деньги, а
+остаток окна — `availCents = min(money + headroom, headroom)`, а так как `money ≥ 0`,
+получается ровно `headroom`. Поэтому `"$0.00"` у аккаунта с окном означает
+«окно выжрано, нальётся в `resetsAt`», а не «аккаунт мёртв».
+
+| state | когда | что делаем |
+|---|---|---|
+| `ok` | есть headroom окна, либо окон нет но кошелёк не пуст | обычный кандидат ротации |
+| `cooldown` | окно 5h или 7d выбрано целиком | пропускаем в ротации, **не** баним, показываем ⏳ и обратный отсчёт |
+| `dead` | окон нет (подписка не `active`) **и** денег нет | помечаем 🪫 **исчерпан** (`bannedReason:'exhausted'`) — см. ниже про сроки |
+| нет поля | старый кеш или скрап без окон | не трогаем вообще |
+
+Скрап (`scrapeFreemodelQuota`) `dead` не ставит никогда: со страницы не видно
+кошелёк отдельно от headroom. Дефолт — «сомневаешься, не хорони».
+
+**Когда именно помечаем 🪫 исчерпан.** Решает поле `src` в квоте:
+- `src:'api'` **и** `subActive === false` → сразу. В `/api/billing` прямо видно
+  `subscription.status: canceled` и `creditCents: 0` — гадать не о чем.
+- всё остальное (скрап; либо подписка активна, но лимитов в `plans[]` не нашли) →
+  только со **2-го подтверждения ≥6ч спустя** (`deadStrikes` / `deadSince`).
+
+**🪫 ≠ 💀.** Исчерпанный аккаунт не забанен: он целый, просто на нём кончились
+кредиты. Флаг в мете общий (`banned`, по нему работают фильтры и ротатор), но
+различает их `autoBanned` + `bannedReason`, и UI показывает их раздельно —
+`🪫 исчерпан` (amber) против `💀` (crimson), и в счётчиках пула тоже отдельно.
+Ручной 💀 (`banned` без `autoBanned`) вечен; 🪫 снимается сам, как только рефреш
+увидел живое окно или деньги.
 - TG-пул для привязки: `freemodel/tg_pool.json` (либы в `freemodel/lib/`).
   **Пул общий** с Conduit (один ТГ можно регать на оба сервиса) — см. секцию Conduit.
 
@@ -123,6 +164,9 @@ API-обвязка: `internal/dashboard-api.js`.
   кандидат свободнее текущего более чем на гистерезис (10%).
 - **Эндпоинты:** `POST /api/freemodel/auto/start|stop`, `GET /api/freemodel/auto/status`.
 - **Персист:** `logs/.freemodel_autorotate.json` (возобновляется на старте прокси).
+- **Перезарядка:** кандидаты с `cooling` пропускаются. Если остывает весь пул — тик
+  не хоронит никого, а логирует ближайший `cooldownUntil` и спит до него
+  (`fmAutoWakeAt`/`fmNextDelay`, потолок 15 мин, чтобы ручной рефреш подхватился).
 - Ограничение: трафик helper идёт напрямую на cc.freemodel.dev, ротатор его не видит —
   реагирует только на опрошенную квоту, не на реальные 429.
 

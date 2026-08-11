@@ -32,6 +32,12 @@ module.exports = {
     PROXY: null,
 
     // ── Email ─────────────────────────────────────────────────
+    // Бэкенд получения OTP-писем:
+    //   'timeweb' — свой домен с catch-all + IMAP (см. freemodel/.env.example).
+    //               Рабочий, стабильный, без капчи. Дефолт.
+    //   'tmailor' — tmailor.com через Camoufox (legacy). Сейчас сервер отдаёт 500.
+    // Значение можно переопределить через дашборд (файл freemodel/.email_backend).
+    EMAIL_BACKEND: 'timeweb',
     EMAIL_POLL_MS: 5000,
     EMAIL_WAIT_MAX_MS: 50 * 1000,
     // tmailor.com ротирует домены (hetzez.com и др.). Пустой массив = любой домен.

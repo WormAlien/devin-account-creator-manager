@@ -6,34 +6,18 @@ REM Usage: double-click, or call from cmd.
 
 cd /d "%~dp0"
 
-REM Kill listener on :8200
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8200 " ^| findstr LISTENING') do (
-    echo Stopping PID %%P on :8200 ...
-    taskkill /F /PID %%P >nul 2>&1
-)
-REM Also kill the legacy :8300 zombie if it ever comes back
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8300 " ^| findstr LISTENING') do (
-    echo Stopping legacy PID %%P on :8300 ...
-    taskkill /F /PID %%P >nul 2>&1
-)
-REM Kill the FreeModel rotator on :20126 (else it fails with EADDRINUSE)
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20126 " ^| findstr LISTENING') do (
-    echo Stopping PID %%P on :20126 ...
-    taskkill /F /PID %%P >nul 2>&1
-)
-REM Kill the FreeModel OpenAI proxy on :20130
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20130 " ^| findstr LISTENING') do (
-    echo Stopping PID %%P on :20130 ...
-    taskkill /F /PID %%P >nul 2>&1
-)
-REM Kill the VyceAI OpenAI proxy on :20131
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20131 " ^| findstr LISTENING') do (
-    echo Stopping PID %%P on :20131 ...
-    taskkill /F /PID %%P >nul 2>&1
-)
+REM Гасим всё разом, потом даём ОС отпустить сокеты.
+REM Раньше пауза была ping -n 2 (~1с) — taskkill отрабатывает асинхронно,
+REM порт ещё в TIME_WAIT, и старт падал с EADDRINUSE. Теперь 4с.
+call :KILLPORT 8200  "switcher"
+call :KILLPORT 8300  "legacy"
+call :KILLPORT 20126 "FM rotator"
+call :KILLPORT 20130 "FM OpenAI proxy"
+call :KILLPORT 20131 "VyceAI proxy"
+call :KILLPORT 20132 "agentrouter proxy"
 
-REM Brief wait so the OS releases the port
-ping 127.0.0.1 -n 2 >nul
+echo Waiting for ports to be released ...
+ping 127.0.0.1 -n 5 >nul
 
 echo Starting Freemodel Key Rotator on :20126 ...
 start "FM Rotator" /B node freemodel-rotator.js
@@ -69,3 +53,14 @@ echo  Status API:                     http://localhost:8200/__switch/api/status
 echo.
 echo Window will close in 3 seconds...
 ping 127.0.0.1 -n 4 >nul
+exit /b 0
+
+REM ── Убить всех слушателей порта %1 (%2 — человекочитаемое имя) ──────────
+REM netstat отдаёт по строке на каждый сокет, поэтому один PID может
+REM встретиться дважды — второй taskkill просто ничего не находит, это норма.
+:KILLPORT
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%~1 " ^| findstr LISTENING') do (
+    echo Stopping PID %%P on :%~1 ^(%~2^) ...
+    taskkill /F /PID %%P >nul 2>&1
+)
+exit /b 0

@@ -1,0 +1,25 @@
+{
+  "providers": [
+    {
+      "id": "cp_example1",
+      "name": "MyProvider",
+      "baseUrl": "https://api.example.com/v1",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "keys": [
+        {
+          "apiKey": "sk-REPLACE_WITH_REAL_KEY",
+          "active": true,
+          "status": "live",
+          "addedAt": "2026-01-01T00:00:00.000Z"
+        }
+      ],
+      "modelMap": {
+        "opus": "my-model-opus",
+        "sonnet": "my-model-sonnet",
+        "haiku": "my-model-haiku"
+      },
+      "proxyPort": 20150,
+      "proxyPid": 0
+    }
+  ]
+}

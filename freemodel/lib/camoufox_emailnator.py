@@ -35,6 +35,42 @@ def out(obj: dict):
         print(json.dumps(obj, ensure_ascii=True), flush=True, file=sys.stdout)
 
 
+async def _configure_toggles(page):
+    """Выставляет галочки: только .Gmail ON, остальные OFF.
+    Все 4 тумблера делаем за один JS-вызов — меньше round-trip'ов и
+    не падаем если один label не найден."""
+    await page.evaluate("""() => {
+        const desired = {
+            'custom-switch-domain':     false,
+            'custom-switch-plusGmail':  false,
+            'custom-switch-dotGmail':   true,
+            'custom-switch-googleMail': false,
+        };
+        for (const [id, want] of Object.entries(desired)) {
+            try {
+                const el = document.getElementById(id);
+                if (!el || el.checked === want) continue;
+                const lbl = document.querySelector('label[for="' + id + '"]');
+                if (lbl) lbl.click(); else el.click();
+            } catch(e) {}
+        }
+    }""")
+    await asyncio.sleep(0.5)
+    # Логируем итоговое состояние
+    try:
+        states = await page.evaluate("""() => {
+            const ids = ['custom-switch-domain','custom-switch-plusGmail',
+                         'custom-switch-dotGmail','custom-switch-googleMail'];
+            return ids.map(id => {
+                const el = document.getElementById(id);
+                return el ? el.checked : null;
+            });
+        }""")
+        log("email", f"toggles after config: domain={states[0]} +gmail={states[1]} .gmail={states[2]} googlemail={states[3]}")
+    except Exception:
+        pass
+
+
 async def create_email(page):
     log("email", "открываю emailnator.com...")
     await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
@@ -44,98 +80,286 @@ async def create_email(page):
         pass
     await asyncio.sleep(1.5)
 
-    email = ""
-    for i in range(6):
+    # Иногда emailnator встречает Cloudflare-челленджем ("Just a moment...",
+    # ?__cf_chl_rt_tk в url). Camoufox проходит его сам за несколько секунд,
+    # но подождать надо — иначе читаем пустую страницу без единого input.
+    for _ in range(30):
         try:
-            email = await page.eval_on_selector("input", "el => el.value")
-            if email and "@gmail.com" in email:
+            st = await page.evaluate(
+                "() => ({t: document.title, n: document.querySelectorAll('input').length})"
+            )
+        except Exception:
+            await asyncio.sleep(1)
+            continue
+        if st["n"] > 0 and "just a moment" not in (st["t"] or "").lower():
+            break
+        log("email", "Cloudflare-челлендж, жду...")
+        await asyncio.sleep(2)
+
+    # Выставляем нужные переключатели: только .Gmail ON, остальные OFF.
+    # Это даёт уникальные dot-варианты вида cal.i.na.sam@gmail.com.
+    await _configure_toggles(page)
+
+    # Жмём кнопку генерации: Go! (если на главной) или Generate New (если уже
+    # на /mailbox/ после предыдущего вызова).
+    try:
+        clicked = await page.evaluate("""() => {
+            const btns = [...document.querySelectorAll('button')];
+            // "Generate New" приоритетнее — если мы уже на mailbox.
+            const genNew = btns.find(b => (b.innerText||'').trim().startsWith('Generate'));
+            if (genNew) { genNew.click(); return 'generate_new'; }
+            const go = btns.find(b => (b.innerText||'').trim().startsWith('Go'));
+            if (go) { go.click(); return 'go'; }
+            return null;
+        }""")
+        log("email", f"нажата кнопка: {clicked}")
+        try:
+            await page.wait_for_url("**mailbox**", timeout=8000)
+        except Exception:
+            await asyncio.sleep(3)
+    except Exception as e:
+        log("email", f"кнопка генерации: {e}")
+
+    def looks_like_gmail(v):
+        # googlemail.com — тот же Gmail, другой домен; anymodel принимает оба.
+        return "@" in v and v.strip().split("@")[-1].lower() in ("gmail.com", "googlemail.com")
+
+    email = ""
+    for i in range(10):
+        try:
+            email = await page.evaluate("""() => {
+                function isGmail(v) {
+                    const d = (v||'').trim().split('@')[1];
+                    return d === 'gmail.com' || d === 'googlemail.com';
+                }
+                // После Go! сайт редиректит на /mailbox/#email — адрес в хеше.
+                const hash = decodeURIComponent(location.hash.replace('#',''));
+                if (isGmail(hash)) return hash.trim();
+                // Fallback: поле input (до редиректа).
+                for (const el of document.querySelectorAll('input')) {
+                    if (isGmail(el.value)) return el.value.trim();
+                }
+                // Fallback: текст страницы.
+                const m = (document.body.innerText||'').match(/[a-zA-Z0-9.+_%\\-]+@(?:gmail|googlemail)\\.com/);
+                return m ? m[0] : '';
+            }""")
+            if looks_like_gmail(email):
                 break
+            email = ""
         except Exception:
             pass
         await asyncio.sleep(1)
 
-    if not email or "@gmail.com" not in email:
+    if not email:
+        try:
+            diag = await page.evaluate(
+                """() => ({u: location.href, t: document.title,
+                          n: document.querySelectorAll('input').length,
+                          v: [...document.querySelectorAll('input')].map(e=>(e.value||'').slice(0,30)),
+                          b: (document.body.innerText||'').slice(0,300)})"""
+            )
+            log("email", f"диагностика: url={diag['u']} title={diag['t']!r} inputs={diag['n']} vals={diag['v']}")
+            log("email", f"body: {diag['b']}")
+        except Exception as de:
+            log("email", f"диагностика не удалась: {de}")
         raise Exception("Не удалось получить email от emailnator")
 
     log("email", f"Gmail alias: {email}")
     return email
 
 
-async def poll_inbox(page, email, timeout=120, poll=8, from_hint=""):
-    max_attempts = int((timeout * 1000) / (poll * 1000))
-    log("inbox", f"проверяю {email} каждые {poll}s ({timeout}s макс)...")
+async def regenerate_email(page):
+    """Жмём "Generate New" на той же сессии — сайт подставит новый алиас."""
+    log("email", "генерирую новый адрес (Generate New)...")
 
-    await page.goto(f"{BASE_URL}/mailbox#{email}", wait_until="domcontentloaded", timeout=60000)
-    try:
-        await page.click('button:has-text("Consent")', timeout=3000)
-    except Exception:
-        pass
-    await asyncio.sleep(2)
+    # Кнопка может называться "Generate New" или быть с иконкой обновления.
+    btn = None
+    for name in ("Generate New", "Generate", "New"):
+        loc = page.get_by_role("button", name=name)
+        if await loc.count():
+            btn = loc.first
+            break
 
-    last_body_len = 0
-
-    for i in range(max_attempts):
+    if not btn:
+        # Если по роли не нашли — пробуем по тексту.
         try:
-            try:
-                refresh = await page.query_selector('button:has-text("Refresh"), button:has-text("Обновить")')
-                if refresh:
-                    await refresh.click(timeout=2000)
-                else:
-                    await page.reload(wait_until="domcontentloaded", timeout=30000)
-                    try:
-                        await page.click('button:has-text("Consent")', timeout=1500)
-                    except Exception:
-                        pass
-            except Exception:
-                await page.reload(wait_until="domcontentloaded", timeout=30000)
+            btn = page.get_by_text("Generate New", exact=False).first
+            if not await btn.count():
+                btn = None
+        except Exception:
+            btn = None
 
-            await asyncio.sleep(2.5)
+    if btn:
+        await btn.click(timeout=3000)
+        await asyncio.sleep(2)
+    else:
+        # Нет кнопки — перезагружаем страницу, это тоже даст новый адрес.
+        log("email", "кнопка Generate New не найдена — перезагружаю страницу")
+        await page.reload(wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(2)
 
-            body_text = await page.evaluate("() => document.body.innerText || ''")
+    # Ждём новый адрес (логика та же, что в create_email).
+    def looks_like_email(v):
+        v = (v or "").strip()
+        return "@" in v and v.split("@")[-1].lower() in ("gmail.com", "googlemail.com")
 
-            if len(body_text) > last_body_len + 50:
-                last_body_len = len(body_text)
-                log("inbox", f"📬 обновился ({len(body_text)} символов)")
+    email = ""
+    for i in range(10):
+        try:
+            vals = await page.evaluate(
+                "() => [...document.querySelectorAll('input')].map(e => e.value || '')"
+            )
+            for v in vals:
+                if looks_like_email(v):
+                    email = v.strip()
+                    break
+            if email:
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(1)
 
-                # Кликаем первое не-системное письмо
-                links = await page.query_selector_all('a, [role="link"], li.message, div.message')
-                for j, ml in enumerate(links[:10]):
-                    try:
-                        t = (await ml.inner_text() or "").lower()
-                        if len(t) < 5:
-                            continue
-                        if "emailnator" in t or "refresh" in t or "consent" in t:
-                            continue
-                        await ml.click(timeout=2000)
-                        await asyncio.sleep(1.5)
-                        break
-                    except Exception:
-                        pass
+    if not email:
+        raise Exception("Не удалось получить новый email от emailnator")
 
-                msg_text = await page.evaluate("() => document.body.innerText || ''")
+    log("email", f"новый Gmail alias: {email}")
+    return email
 
-                if from_hint and from_hint.lower() not in msg_text.lower():
-                    pass  # письмо есть, но не от нужного отправителя
-                else:
-                    patterns = [
-                        r"(?:code|код|verify|verification|otp|pin)[^\d]{0,40}(\d{4,8})",
-                        r"\b(\d{6})\b",
-                        r"\b(\d{8})\b",
-                        r"\b(\d{5})\b",
-                        r"\b(\d{4})\b",
-                    ]
-                    for pat in patterns:
-                        m = re.search(pat, msg_text, re.I)
-                        if m:
-                            code = m.group(1)
-                            log("inbox", f"🎉 КОД: {code}")
-                            return {"ok": True, "code": code}
+
+async def _js_click_by_text(page, *texts):
+    """Находит элемент с нужным текстом через JS и кликает мышью. Возвращает текст или None."""
+    info = await page.evaluate(f"""() => {{
+        const candidates = {list(texts)};
+        for (const txt of candidates) {{
+            for (const el of document.querySelectorAll('button, a, span, div, input[type="submit"]')) {{
+                if ((el.innerText||el.value||'').trim() === txt) {{
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 0 && r.height > 0)
+                        return {{x: r.x+r.width/2, y: r.y+r.height/2, txt}};
+                }}
+            }}
+        }}
+        return null;
+    }}""")
+    if info:
+        await page.mouse.click(info["x"], info["y"])
+    return info["txt"] if info else None
+
+
+async def _fill_input_native(page, selector, value):
+    """Заполняет инпут через native setter — не вызывает зависания."""
+    await page.evaluate(f"""() => {{
+        const el = document.querySelector({repr(selector)});
+        if (!el) return;
+        const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        set.call(el, {repr(value)});
+        el.dispatchEvent(new Event('input', {{bubbles:true}}));
+        el.dispatchEvent(new Event('change', {{bubbles:true}}));
+    }}""")
+
+
+async def poll_inbox(page, email, timeout=120, poll=10, from_hint=""):
+    log("inbox", f"проверяю {email} каждые {poll}s ({timeout}s макс)...")
+    await page.goto(f"{BASE_URL}/mailbox#{email}", wait_until="domcontentloaded", timeout=30000)
+    await asyncio.sleep(3)
+
+    seen_ids = set()
+    deadline = asyncio.get_event_loop().time() + timeout
+
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            result = await page.evaluate("""async (email) => {
+                const csrf = decodeURIComponent(
+                    document.cookie.split(';').map(c=>c.trim())
+                    .find(c=>c.startsWith('XSRF-TOKEN='))?.split('=')[1] || ''
+                );
+                const r = await fetch('/message-list', {
+                    method: 'POST',
+                    headers: {
+                        'content-type': 'application/json',
+                        'X-XSRF-TOKEN': csrf,
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({email})
+                });
+                const text = await r.text();
+                if (!r.ok) return {error: r.status, body: text.slice(0,200)};
+                try { return JSON.parse(text); } catch(e) { return {error: 'parse', body: text.slice(0,200)}; }
+            }""", email)
+
+            log("inbox", f"list: {str(result)[:300]}")
+
+            if isinstance(result, dict) and result.get("error") in (419, 403):
+                log("inbox", f"{result.get('error')} — перезагружаю mailbox...")
+                await page.goto(f"{BASE_URL}/mailbox#{email}", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(5)
+                continue
+
+            if isinstance(result, dict) and result.get("error"):
+                await asyncio.sleep(poll)
+                continue
+
+            msgs = (result or {}).get("messageData", [])
+            for msg in msgs:
+                mid = msg.get("messageID", "")
+                if mid == "ADSVPN" or mid in seen_ids:
+                    continue
+
+                frm = msg.get("from", "")
+                subj = msg.get("subject", "")
+
+                # Если задан from_hint — пропускаем письма не от нужного отправителя
+                if from_hint and from_hint.lower() not in frm.lower():
+                    seen_ids.add(mid)
+                    continue
+
+                log("inbox", f"новое письмо: from={frm!r} subj={subj!r}")
+
+                body_res = await page.evaluate("""async (args) => {
+                    const csrf = decodeURIComponent(
+                        document.cookie.split(';').map(c=>c.trim())
+                        .find(c=>c.startsWith('XSRF-TOKEN='))?.split('=')[1] || ''
+                    );
+                    const r = await fetch('/message-list', {
+                        method: 'POST',
+                        headers: {
+                            'content-type': 'application/json',
+                            'X-XSRF-TOKEN': csrf,
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        body: JSON.stringify(args)
+                    });
+                    const text = await r.text();
+                    if (!r.ok) return {error: r.status, raw: text.slice(0,100)};
+                    try { return {ok: true, data: JSON.parse(text)}; } catch(e) { return {ok: true, raw: text}; }
+                }""", {"email": email, "messageID": mid})
+
+                log("inbox", f"body_res: {str(body_res)[:400]}")
+                seen_ids.add(mid)
+
+                text = ""
+                if isinstance(body_res, dict) and body_res.get("ok"):
+                    data = body_res.get("data")
+                    if isinstance(data, dict):
+                        text = data.get("mail_body", "") or data.get("body", "") or str(data)
+                    else:
+                        text = body_res.get("raw", "")
+
+                for pat in [
+                    r"(?:code|verify|otp|pin|token)[^\d]{0,40}(\d{6,8})",
+                    r"\b(\d{6})\b",
+                ]:
+                    m = re.search(pat, text, re.I)
+                    if m:
+                        log("inbox", f"КОД: {m.group(1)}")
+                        return {"ok": True, "code": m.group(1)}
+
         except Exception as e:
             log("inbox", f"⚠️ {e}")
 
         await asyncio.sleep(poll)
 
-    log("inbox", f"❌ Письмо не пришло за {timeout}s")
+    log("inbox", f"❌ timeout {timeout}s")
     return {"ok": False, "error": "timeout"}
 
 

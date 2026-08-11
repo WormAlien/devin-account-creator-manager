@@ -87,7 +87,13 @@ async function createClient(entry, { logger = () => {} } = {}) {
 async function sendStartWithToken(client, botUsername, token, { timeoutMs = 30_000, logger = () => {} } = {}) {
     const target = botUsername.startsWith('@') ? botUsername.slice(1) : botUsername;
     logger(`[tg] resolve bot @${target}`);
-    const entity = await client.getEntity(target);
+
+    // getEntity может зависнуть — добавляем таймаут
+    const entityPromise = client.getEntity(target);
+    const entityTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('getEntity timeout')), 10_000)
+    );
+    const entity = await Promise.race([entityPromise, entityTimeout]);
 
     let firstReply = null;
     let resolver;

@@ -127,19 +127,29 @@ class CamoufoxTmailor {
     }
   }
 
-  async _send(cmd) {
+  async _send(cmd, timeoutMs = 120000) {
     if (!this.proc || this.proc.killed) {
       throw new Error("camoufox python process not running");
     }
     return new Promise((resolve, reject) => {
       const line = JSON.stringify(cmd);
       this.log(`[camoufox-tmailor/in] ${line}`);
+      const timer = setTimeout(() => {
+        this.ready = null;
+        reject(new Error(`camoufox timeout: python не ответил за ${Math.round(timeoutMs / 1000)}с`));
+      }, timeoutMs);
       this.ready = (res) => {
+        clearTimeout(timer);
+        this.ready = null;
         if (res && res.ok) resolve(res);
         else reject(new Error((res && res.error) || "unknown error"));
       };
       this.proc.stdin.write(line + "\n", (err) => {
-        if (err) reject(err);
+        if (err) {
+          clearTimeout(timer);
+          this.ready = null;
+          reject(err);
+        }
       });
     });
   }

@@ -341,4 +341,6 @@ module.exports = {
     normalizeHex,
     parseBulk,
     addBulk,
+    isDead,
+    loadHealthCache,
 };

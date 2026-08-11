@@ -62,7 +62,7 @@ const conduitActivate = (name) => req('POST', '/conduit/activate', { name });
 const conduitActiveKey = () => req('GET', '/conduit/active-key');
 const conduitRefreshQuota = (name) => req('POST', '/conduit/refresh-quota', { name });
 
-// --- Авто-ротация FreeModel (балансировщик наименее-использованного) -------
+// --- Авто-подмена FreeModel ($0 → следующий по списку с балансом) ---------
 
 const autoStart = () => req('POST', '/freemodel/auto/start');
 const autoStop = () => req('POST', '/freemodel/auto/stop');

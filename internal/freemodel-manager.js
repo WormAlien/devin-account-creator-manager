@@ -10,7 +10,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright');
+// playwright грузится лениво: require стоил ~7с на первом обращении к модулю,
+// и этим платил даже быстрый путь через JSON-API, которому браузер не нужен.
+const chromium = () => require('playwright').chromium;
 
 const SESSIONS_DIR = 'manual_sessions';
 const V3_ACCOUNTS_DIR = path.join('freemodel', 'accounts');
@@ -162,13 +164,198 @@ const EN_CONTEXT_OPTS = {
     extraHTTPHeaders: { 'accept-language': 'de-DE,de;q=0.9,en;q=0.5' },
 };
 
-// ─── Парсинг /dashboard/usage ────────────────────────────────────
-async function checkFreemodelQuota(session) {
+// ─── Квота через JSON-API ────────────────────────────────────────
+// freemodel.dev отдаёт те же данные обычным JSON по cookie из session.json:
+//   /api/usage   — window5h / windowWeek {usedCents, limitCents, resetsAt}
+//   /api/billing — subscription.planId/status, creditCents, signupCredit*, plans[]
+//   /api/referral — count / credits / used / pendingCents
+// ~1.5с на аккаунт против ~20с у браузерного скрапа (React + ожидания
+// стабилизации). Скрап остался фолбэком: см. checkFreemodelQuota.
+const FM_API = 'https://freemodel.dev';
+
+function fmCookieHeader(sessionFile) {
+    const st = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
+    return (st.cookies || [])
+        .filter(c => /(^|\.)freemodel\.dev$/.test(c.domain || ''))
+        .map(c => `${c.name}=${c.value}`)
+        .join('; ');
+}
+
+const cents = c => `$${(c / 100).toFixed(2)}`;
+
+// "$4.31" / "4,31" → 4.31, иначе null. Нужна для скрапа: оттуда суммы приходят
+// строками, а сравнивать их надо числами.
+function fmDollars(s) {
+    if (s == null) return null;
+    const m = String(s).match(/[\d.,]+/);
+    if (!m) return null;
+    const n = parseFloat(m[0].replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+}
+
+// Даты в /api/billing приходят строкой "2026-08-31 23:31:23" (UTC, без зоны),
+// а в /api/usage — epoch-секундами. Возвращаем ISO или '' — никогда не бросаем:
+// исключение здесь раньше уводило весь рефреш в браузерный фолбэк (+6с).
+function fmToIso(v) {
+    if (v == null || v === '') return '';
+    const d = typeof v === 'number' ? new Date(v * 1000)
+                                    : new Date(String(v).replace(' ', 'T') + 'Z');
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+// "in 4h 38m" / "in 2d 5h" — формат совпадает со скрапом (свободная строка).
+function fmResetsIn(epochSec) {
+    const sec = epochSec * 1000 - Date.now();
+    if (!(sec > 0)) return '';
+    const m = Math.round(sec / 60000);
+    if (m < 60) return `in ${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `in ${h}h ${m % 60}m`;
+    return `in ${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+// Обратная к fmResetsIn: "in 4h 38m" / "через 2д 5ч" / "43m" → ISO-момент.
+// Нужна скраперу — он видит только человеческую строку, а потребителям нужен
+// машинный дедлайн. Возвращает '' если распарсить не вышло.
+function fmParseResetsIn(str) {
+    const s = String(str || '').trim();
+    if (!s) return '';
+    let ms = 0;
+    const grab = (re, mult) => {
+        const m = s.match(re);
+        if (m) ms += parseFloat(m[1].replace(',', '.')) * mult;
+    };
+    grab(/([\d.,]+)\s*(?:d|д|дн)/i, 86400000);
+    grab(/([\d.,]+)\s*(?:h|ч|час)/i, 3600000);
+    grab(/([\d.,]+)\s*(?:m|м|мин)(?!s*(?:onth|ес))/i, 60000);
+    if (!(ms > 0)) return '';
+    return new Date(Date.now() + ms).toISOString();
+}
+
+// ─── Состояние аккаунта: ok / cooldown / dead ────────────────────
+// ГЛАВНОЕ отличие от прежней логики: "$0.00" в available НЕ равно "акк мёртв".
+// При активном 5h-окне available == headroom этого окна (см. fmApiQuota), т.е.
+// ноль означает «окно выжрано, нальётся в resetsAt» — это перезарядка, а не
+// смерть. Мёртвым аккаунт делает только отсутствие окон И отсутствие денег.
+//
+//   cooldown — временно нечем платить, известно когда отпустит (cooldownUntil)
+//   dead     — окон нет (подписка не active / план без лимитов) и кошелёк пуст
+//   ok       — можно слать трафик прямо сейчас
+//
+// Недельное окно проверяем ПЕРВЫМ: если упёрлись в 7d, свободное 5h ничего не
+// даёт, и ждать надо до недельного reset, а не до пятичасового.
+function fmClassify({ lim5, used5, limWk, usedWk, money, h5resetAt, d7resetAt }) {
+    if (limWk > 0 && usedWk >= limWk) {
+        return { state: 'cooldown', coolReason: '7d', cooldownUntil: d7resetAt || '' };
+    }
+    if (lim5 > 0) {
+        return used5 < lim5
+            ? { state: 'ok', coolReason: '', cooldownUntil: '' }
+            : { state: 'cooldown', coolReason: '5h', cooldownUntil: h5resetAt || '' };
+    }
+    return money > 0
+        ? { state: 'ok', coolReason: '', cooldownUntil: '' }
+        : { state: 'dead', coolReason: '', cooldownUntil: '' };
+}
+
+async function fmApiQuota(session) {
+    const sessionFile = path.join(session.path, 'session.json');
+    if (!fs.existsSync(sessionFile)) return null;
+    const cookie = fmCookieHeader(sessionFile);
+    if (!cookie) return null;
+
+    const get = async (ep) => {
+        const res = await fetch(FM_API + ep, {
+            headers: { cookie, accept: 'application/json', 'user-agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) throw new Error(`${ep} → ${res.status}`);
+        return res.json();
+    };
+
+    const [usage, billing, referral] = await Promise.all([
+        get('/api/usage'), get('/api/billing'), get('/api/referral').catch(() => null),
+    ]);
+
+    const sub = billing.subscription || {};
+    const planRow = (billing.plans || []).find(p => p.id === sub.planId);
+    // Активная подписка задаёт окна; на free planId='free' с нулевыми лимитами
+    // (проверено на живом /api/billing: free → l5=0/lw=0, pro → $5.00/$33.00 —
+    // те самые «$5 каждые 5 часов» живут на плане pro, не на free).
+    // 'trialing' считаем живым: Stripe так помечает триал, а окна при нём работают.
+    // Иначе триальный Pro получил бы нулевые лимиты и уехал бы в state='dead'.
+    const active = sub.status === 'active' || sub.status === 'trialing';
+    const lim5 = active ? (planRow?.limit5hCents ?? 0) : 0;
+    const limWk = active ? (planRow?.limitWeekCents ?? 0) : 0;
+    const used5 = usage.window5h?.usedCents ?? 0;
+    const usedWk = usage.windowWeek?.usedCents ?? 0;
+
+    // "AVAILABLE NOW" на сайте = min(деньги, остаток 5h-окна). Деньги — кредит
+    // плюс не истёкший signup-кредит (он же trial из UI).
+    const signupExpIso = fmToIso(billing.signupExpiresAt);
+    const signupAlive = billing.signupCreditCents > 0 &&
+        (!signupExpIso || new Date(signupExpIso).getTime() > Date.now());
+    const money = (billing.creditCents || 0) + (signupAlive ? billing.signupCreditCents : 0);
+    const headroom = lim5 > 0 ? Math.max(0, lim5 - used5) : 0;
+    const availCents = lim5 > 0 ? Math.min(money + headroom, headroom) : money;
+
+    const h5resetAt = fmToIso(usage.window5h?.resetsAt || 0);
+    const d7resetAt = fmToIso(usage.windowWeek?.resetsAt || 0);
+
+    const out = {
+        available: cents(availCents),
+        plan: planRow?.name || (sub.planId ? sub.planId : ''),
+        bonus: cents(billing.creditCents || 0),
+        renews: fmToIso(sub.currentPeriodEnd),
+        referralBonus: '', referralBonusUsed: null, referralBonusMax: null,
+        referralCount: referral?.count ?? null,
+        h5: '', h5max: '', h5resets: '', h5pct: null,
+        d7: '', d7max: '', d7resets: '', d7pct: null,
+        tgBound: null,
+        // Машиночитаемая часть: строки h5resets/d7resets рисует UI, а решения
+        // (ротация, авто-бан) принимаются по этим полям.
+        src: 'api',              // вердикт авторитетный: статус подписки и кошелёк видны явно
+        planId: sub.planId || '',
+        subActive: active,
+        moneyCents: money,
+        money: cents(money),
+        h5resetAt, d7resetAt,
+    };
+    if (lim5 > 0) {
+        out.h5 = cents(used5); out.h5max = cents(lim5);
+        out.h5resets = fmResetsIn(usage.window5h?.resetsAt || 0);
+        out.h5pct = Math.round((used5 / lim5) * 100) || null;
+    }
+    if (limWk > 0) {
+        out.d7 = cents(usedWk); out.d7max = cents(limWk);
+        out.d7resets = fmResetsIn(usage.windowWeek?.resetsAt || 0);
+        out.d7pct = Math.round((usedWk / limWk) * 100) || null;
+    }
+    Object.assign(out, fmClassify({ lim5, used5, limWk, usedWk, money, h5resetAt, d7resetAt }));
+    if (signupAlive) {
+        out.trialCredit = cents(billing.signupCreditCents);
+        if (signupExpIso) {
+            out.trialExpires = signupExpIso;
+            out.trialDaysLeft = Math.max(0, Math.ceil((new Date(signupExpIso) - Date.now()) / 86400000));
+        }
+    }
+    if (referral && referral.credits != null) {
+        out.referralBonusUsed = (referral.used || 0) / 100;
+        out.referralBonusMax = (referral.credits || 0) / 100;
+        if (referral.credits) out.referralBonus = `${cents(referral.used || 0)} / ${cents(referral.credits)}`;
+    }
+
+    if (!out.available && !out.h5 && !out.d7 && !out.trialCredit) return null;
+    return out;
+}
+
+// ─── Парсинг /dashboard/usage (фолбэк, если API недоступен) ──────
+async function scrapeFreemodelQuota(session) {
     let browser = null;
     try {
         const sessionFile = path.join(session.path, 'session.json');
         if (!fs.existsSync(sessionFile)) return null;
-        browser = await chromium.launch({ headless: true });
+        browser = await chromium().launch({ headless: true });
         const context = await browser.newContext({ storageState: sessionFile, ...EN_CONTEXT_OPTS });
         const page = await context.newPage();
 
@@ -332,13 +519,9 @@ async function checkFreemodelQuota(session) {
             () => /AVAILABLE NOW|ДОСТУПНО СЕЙЧАС|VERFÜGBAR/i.test(document.body?.innerText || ''),
             { timeout: 15000 }
         ).catch(() => {});
-        // Ждём пока сумма подтянется (не $0.00 placeholder). Если реально 0 — не
-        // ждём вечность: max 4с.
-        await page.waitForFunction(() => {
-            const t = document.body?.innerText || '';
-            const m = t.match(/(?:AVAILABLE NOW|ДОСТУПНО СЕЙЧАС|VERFÜGBAR)[\s\S]{0,80}?\$([\d.,]+)/i);
-            return m && parseFloat(m[1].replace(',', '')) > 0;
-        }, { timeout: 4000 }).catch(() => {});
+        // Раньше здесь стояло ожидание «сумма > 0» — оно работало наоборот
+        // задуманного: недорисованный кадр с завышенной суммой проходил условие
+        // мгновенно, а настоящий $0.00 впустую жёг таймаут. Стабилизация — ниже.
         // Блок окон 5h/7d рендерится ~2с ПОЗЖЕ, чем "AVAILABLE NOW" (отдельный
         // fetch). Причём сначала мелькает плейсхолдер "No active limits", который
         // потом ЗАМЕНЯЕТСЯ окнами — поэтому его нельзя принимать за терминальное
@@ -349,6 +532,25 @@ async function checkFreemodelQuota(session) {
             return /5-Hour window|Окно 5 часов/i.test(t);
         }, { timeout: 8000 }).catch(() => {});
         await page.waitForTimeout(600);
+
+        // Стабилизация суммы: два совпадающих чтения подряд (как для плана выше,
+        // race Free→Pro). "AVAILABLE NOW" = min(деньги, остаток 5h-окна), и пока
+        // окна не подъехали, страница показывает голый headroom — у нас это ровно
+        // h5max ($5.00), из-за чего пустой акк выглядел заряженным. Дожидаемся,
+        // когда значение перестанет меняться; настоящий $0.00 стабилен сразу.
+        try {
+            let prev = null;
+            for (let i = 0; i < 6; i++) {
+                const cur = await page.evaluate(() => {
+                    const t = document.body?.innerText || '';
+                    const m = t.match(/(?:AVAILABLE NOW|ДОСТУПНО СЕЙЧАС|VERFÜGBAR)[\s\S]{0,80}?\$([\d.,]+)/i);
+                    return m ? m[1] : '';
+                });
+                if (cur !== '' && cur === prev) break;
+                prev = cur;
+                await page.waitForTimeout(700);
+            }
+        } catch {}
 
         const data = await page.evaluate(() => {
             const text = (document.body?.innerText || '').replace(/\r/g, '');
@@ -448,12 +650,45 @@ async function checkFreemodelQuota(session) {
         // Возвращаем null только если ВООБЩЕ ничего не подтянулось. На Free есть
         // available но нет окон — это норма, данные валидные.
         if (!data.available && !data.h5 && !data.d7 && !data.trialCredit) return null;
+
+        // Состояние по скрапу — только когда окна реально распарсились. Со страницы
+        // не видно, сколько денег в кошельке отдельно от headroom окна, поэтому
+        // 'dead' отсюда не ставим НИКОГДА: пустой state означает «не знаем», и
+        // потребители в этом случае аккаунт не трогают. Дефолт сознательно
+        // перевёрнут — раньше сомнительный $0.00 приводил к вечному бану.
+        const d5 = fmDollars(data.h5), m5 = fmDollars(data.h5max);
+        const d7 = fmDollars(data.d7), m7 = fmDollars(data.d7max);
+        if (m7 > 0 && d7 != null && d7 >= m7) {
+            data.state = 'cooldown';
+            data.coolReason = '7d';
+            data.cooldownUntil = fmParseResetsIn(data.d7resets);
+        } else if (m5 > 0 && d5 != null) {
+            const spent = d5 >= m5;
+            data.state = spent ? 'cooldown' : 'ok';
+            data.coolReason = spent ? '5h' : '';
+            data.cooldownUntil = spent ? fmParseResetsIn(data.h5resets) : '';
+        }
+        if (data.h5resets) data.h5resetAt = fmParseResetsIn(data.h5resets);
+        if (data.d7resets) data.d7resetAt = fmParseResetsIn(data.d7resets);
+        data.src = 'scrape';     // вердикт ненадёжный: со страницы не видно кошелёк
         return data;
     } catch (e) {
         return null;
     } finally {
         if (browser) { try { await browser.close(); } catch {} }
     }
+}
+
+async function checkFreemodelQuota(session) {
+    try {
+        const q = await fmApiQuota(session);
+        if (q) return q;
+    } catch (e) {
+        // Не глотаем молча: баг в разборе ответа выглядит как «просто медленно»
+        // (уходим в браузерный фолбэк, +6с на аккаунт вместо ~1.5с).
+        console.error(`[fm] API quota failed for ${session.name}: ${e.message} — fallback to scrape`);
+    }
+    return scrapeFreemodelQuota(session);
 }
 
 // ─── Извлечение API ключа ───────────────────────────────────────
@@ -463,15 +698,30 @@ async function checkFreemodelQuota(session) {
 const KEY_RE = /(?:fe[_-]|sk-)[A-Za-z0-9_-]{20,}/;
 const KEY_PAGE_URL = 'https://freemodel.dev/dashboard/keys';
 
-async function extractFreemodelApiKey(session) {
+// opts.context — переиспользовать уже открытый браузер вызывающего (авторега),
+// вместо третьего Chromium на тот же аккаунт. Свой браузер закрываем, чужой нет.
+async function extractFreemodelApiKey(session, opts = {}) {
     let browser = null;
+    let page = null;
     try {
         const sessionFile = path.join(session.path, 'session.json');
         if (!fs.existsSync(sessionFile)) return { ok: false, error: 'session.json not found' };
 
-        browser = await chromium.launch({ headless: true });
-        const context = await browser.newContext({ storageState: sessionFile, ...EN_CONTEXT_OPTS });
-        const page = await context.newPage();
+        let context;
+        if (opts.context) {
+            context = opts.context;
+        } else {
+            browser = await chromium().launch({ headless: true, args: ['--mute-audio'] });
+            context = await browser.newContext({ storageState: sessionFile, ...EN_CONTEXT_OPTS });
+        }
+        page = await context.newPage();
+
+        // Закрываем только то, что открыли сами: чужой контекст (авторега)
+        // продолжает жить после нас — закрыть его = уронить весь прогон.
+        const closeOwn = async () => {
+            if (browser) { await browser.close(); browser = null; }
+            else if (page) { await page.close().catch(() => {}); page = null; }
+        };
 
         await page.goto(KEY_PAGE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
         await page.waitForTimeout(2000);
@@ -480,7 +730,7 @@ async function extractFreemodelApiKey(session) {
         const bodyText = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
         const limitMatch = bodyText.match(/(\d+)\s*\/\s*5/);
         if (limitMatch && parseInt(limitMatch[1], 10) >= 5) {
-            await browser.close();
+            await closeOwn();
             return { ok: false, error: 'key limit reached (5/5)' };
         }
 
@@ -490,7 +740,7 @@ async function extractFreemodelApiKey(session) {
             const infoText = fs.readFileSync(infoFile, 'utf-8');
             const m = infoText.match(KEY_RE);
             if (m) {
-                await browser.close();
+                await closeOwn();
                 return { ok: true, apiKey: m[0], source: 'account_info.txt' };
             }
         }
@@ -566,7 +816,7 @@ async function extractFreemodelApiKey(session) {
             // credit). Ловим это и отдаём понятную ошибку вместо "could not open".
             const gateText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
             if (/complete account verification|bind a phone number|bind telegram|buy api credit|top up \$?\d|before creating an api key/i.test(gateText)) {
-                await browser.close(); browser = null;
+                await closeOwn();
                 return { ok: false, error: 'account not verified — bind Telegram/phone first', needsVerification: true };
             }
             throw new Error('could not open Create key modal');
@@ -606,14 +856,14 @@ async function extractFreemodelApiKey(session) {
             // привязал телефон/Telegram и не пополнил $10, сайт показывает это
             // вместо ключа. Возвращаем понятную ошибку, а не ".secret-val not found".
             if (/complete account verification|bind a phone number|top up \$?\d|before creating an api key/i.test(bodyText)) {
-                await browser.close(); browser = null;
+                await closeOwn();
                 return { ok: false, error: 'account not verified — bind Telegram/phone first', needsVerification: true };
             }
             const m = bodyText.match(KEY_RE);
             if (m) {
                 const apiKey = m[0];
                 try { await page.keyboard.press("Escape"); } catch {}
-                await browser.close(); browser = null;
+                await closeOwn();
                 // Сохраняем
                 try {
                     let infoText = '';
@@ -635,8 +885,7 @@ async function extractFreemodelApiKey(session) {
         } catch {}
 
         await page.waitForTimeout(500);
-        await browser.close();
-        browser = null;
+        await closeOwn();
 
         if (!KEY_RE.test(apiKey)) {
             return { ok: false, error: `unexpected key format: ${apiKey.substring(0, 16)}...` };
@@ -670,6 +919,7 @@ async function extractFreemodelApiKey(session) {
         return { ok: false, error: e.message };
     } finally {
         if (browser) { try { await browser.close(); } catch {} }
+        else if (page) { try { await page.close(); } catch {} }
     }
 }
 
@@ -831,7 +1081,7 @@ async function freemodelSessionsMenu({ clearScreen, setKeypressListener }) {
         setKeypressListener(null);
         if (process.stdin.isTTY && process.stdin.setRawMode) try { process.stdin.setRawMode(false); } catch {}
         try {
-            const browser = await chromium.launch({ headless: false });
+            const browser = await chromium().launch({ headless: false });
             const context = await browser.newContext({ storageState: path.join(s.path, 'session.json'), ...EN_CONTEXT_OPTS });
             const page = await context.newPage();
             await page.goto(USAGE_URL, { waitUntil: 'domcontentloaded' });
@@ -937,4 +1187,9 @@ async function freemodelSessionsMenu({ clearScreen, setKeypressListener }) {
     return new Promise(res => { resolveOuter = res; setKeypressListener(onKey); });
 }
 
-module.exports = { freemodelSessionsMenu, getFreemodelSessions, checkFreemodelQuota, extractFreemodelApiKey };
+module.exports = {
+    freemodelSessionsMenu, getFreemodelSessions, checkFreemodelQuota, extractFreemodelApiKey,
+    // Классификатор и разбор дедлайнов — нужны дашборду и ротатору, чтобы
+    // считать «перезарядку» одинаково с источником данных.
+    fmClassify, fmParseResetsIn, fmDollars,
+};

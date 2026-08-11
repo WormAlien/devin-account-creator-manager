@@ -31,6 +31,11 @@ echo Starting VyceAI OpenAI Proxy on :20131 ...
 start "Vyce OpenAI Proxy" /B node vyceai-openai-proxy.js
 timeout /t 1 /nobreak >nul
 
+REM Kill agentrouter proxy (:20132) ? ??????????? boot-spawn'?? transparent-proxy.js
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20132 " ^| findstr LISTENING') do (
+    taskkill /F /PID %%P >nul 2>&1
+)
+
 echo Starting Backend Switcher on :8200 ...
 start "Backend Switcher" node transparent-proxy.js
 timeout /t 2 /nobreak >nul

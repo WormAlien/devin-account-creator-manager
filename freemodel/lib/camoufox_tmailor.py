@@ -99,55 +99,106 @@ def extract_magic_link(text):
     return m.group(0) if m else None
 
 
-async def handle_turnstile(page):
-    log("turnstile", "проверяю...")
-    await asyncio.sleep(1.5)
+SERVER_ERROR_PATTERNS = [
+    "an error occurred on the server",
+    "please try again later",
+    "server error",
+    "internal server error",
+    "service unavailable",
+    "gateway timeout",
+    "bad gateway",
+]
 
+
+def _is_server_error_api(result):
+    if not result or not isinstance(result, dict):
+        return False
+    msg = str(result.get("msg", "") or result.get("error", "") or result.get("message", ""))
+    msg_lower = msg.lower()
+    return any(p in msg_lower for p in SERVER_ERROR_PATTERNS)
+
+
+async def _is_server_error_page(page):
     try:
-        await page.click("body", position={"x": 100, "y": 100}, timeout=2000)
+        body = await page.evaluate("() => document.body?.innerText || ''")
+        body_lower = body.lower()
+        return any(p in body_lower for p in SERVER_ERROR_PATTERNS)
     except Exception:
-        pass
-    await asyncio.sleep(0.3)
+        return False
 
-    for attempt in range(5):
-        try:
-            await page.click("iframe[src*='cloudflare'], iframe[src*='turnstile'], .cf-turnstile", timeout=3000)
-            log("turnstile", f"клик по iframe (попытка {attempt+1})")
-        except Exception:
-            frame = None
-            for f in page.frames:
-                if "challenges.cloudflare.com" in f.url:
-                    frame = f
-                    break
-            if frame:
-                try:
-                    await frame.click("body", position={"x": 30, "y": 30}, timeout=3000)
-                    log("turnstile", "клик внутри iframe")
-                except Exception as e:
-                    log("turnstile", f"iframe err: {e}")
 
-        await asyncio.sleep(2)
-        try:
-            token = await page.eval_on_selector('input[name="cf-turnstile-response"]', "el => el.value")
-            if token and len(token) > 10:
-                log("turnstile", "PASSED!")
-                return True
-        except Exception:
-            pass
+async def _safe_fetch_json(page, api_url, body_data):
+    """Fetch API и возвращает JSON, но не падает если ответ не JSON (HTML-страница с ошибкой)."""
+    return await page.evaluate(
+        """async ({ apiUrl, bodyData }) => {
+            try {
+                const res = await fetch(apiUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify(bodyData),
+                });
+                const text = await res.text();
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    return { _fetchError: true, _status: res.status, _text: text.slice(0, 500) };
+                }
+            } catch (e) {
+                return { _fetchError: true, _message: e.message };
+            }
+        }""",
+        {"apiUrl": api_url, "bodyData": body_data},
+    )
 
-    log("turnstile", "не удалось автоматически; жду ручного прохождения")
-    # В Camoufox Cloudflare обычно решается сам благодаря fingerprint.
-    # Если не решился — даём 15 сек добровольного прохождения.
-    for _ in range(15):
-        await asyncio.sleep(1)
+
+# Реальный endpoint создания email (не общий /api).
+WEBAPP_API_URL = "https://tmailor.com/api/webapp-newemail"
+
+
+async def _get_turnstile_token(page, timeout=15):
+    """Ждёт cf-turnstile-response токен на странице. Camoufox обычно решает
+    Cloudflare Turnstile сам за ~5с (fingerprint), токен появляется в скрытом input.
+    Возвращает строку токена или '' если не появился."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
-            token = await page.eval_on_selector('input[name="cf-turnstile-response"]', "el => el.value")
-            if token and len(token) > 10:
-                log("turnstile", "PASSED!")
-                return True
+            tok = await page.eval_on_selector(
+                'input[name="cf-turnstile-response"]', "el => el.value"
+            )
         except Exception:
-            pass
-    return False
+            tok = ""
+        if tok and len(tok) > 20:
+            return tok
+        await asyncio.sleep(0.5)
+    return ""
+
+
+async def _request_new_email(page, wait_token_timeout=30):
+    """Правильный флоу создания email (актуальный API tmailor 2026):
+    1) взять turnstile-токен; если его нет — АКТИВНО решить капчу (клик мышью);
+    2) POST webapp-newemail с cf_turnstile_response + choose_domain:"1".
+    Возвращает dict ответа сервера (или None)."""
+    # Быстрая проверка: токен уже есть? (2с, не ждём долго — Turnstile сам не решается)
+    token = await _get_turnstile_token(page, timeout=2)
+    if not token:
+        # Токена нет → капча ждёт клика. Решаем АКТИВНО мышью, без ожидания.
+        log("email", "токена нет — решаю капчу кликом мыши")
+        token = await _auto_solve_turnstile(page, timeout=min(wait_token_timeout + 30, 60))
+    if not token:
+        log("email", "turnstile-токен получить не удалось")
+        return None
+    log("email", f"turnstile-токен получен ({len(token)} симв), шлю newemail")
+    result = await _safe_fetch_json(page, WEBAPP_API_URL, {
+        "action": "newemail",
+        "curentToken": "",
+        "choose_domain": "1",
+        "cf_turnstile_response": token,
+    })
+    if isinstance(result, dict) and result.get("_fetchError"):
+        log("email", f"newemail fetch error: {result.get('_text') or result.get('_message')}")
+        return None
+    return result
 
 
 async def create_email(page):
@@ -158,7 +209,6 @@ async def create_email(page):
     async def on_response(res):
         try:
             url = res.url
-            # Не требуем exact match: tmailor может использовать /api, /api/, /api/newemail и т.п.
             if not url.startswith(API_URL.rstrip("/")):
                 return
             method = res.request.method if res.request else "GET"
@@ -174,267 +224,404 @@ async def create_email(page):
 
     page.on("response", lambda res: asyncio.create_task(on_response(res)))
 
-    await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+    for page_attempt in range(1, 4):
+        log("email", f"загрузка страницы (попытка {page_attempt}/3)...")
+        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(2)
 
-    # Ждём, пока страница сама вызовет newemail (обычно происходит сразу после прохождения CF).
-    deadline = time.time() + 30
-    while time.time() < deadline:
+        # tmailor САМ создаёт email при загрузке страницы — просто ждём его ответ.
+        # Никакой капчи для первого адреса не нужно.
+        early_deadline = time.time() + 20
+        while time.time() < early_deadline:
+            if captured.get("email") and captured.get("accesstoken"):
+                log("email", f"email готов при загрузке: {captured['email']}")
+                return {"email": captured["email"], "accesstoken": captured["accesstoken"]}
+            await asyncio.sleep(0.3)
+
+        # ОСНОВНОЙ ПУТЬ (актуальный API 2026): дождаться turnstile-токена и послать
+        # newemail с cf_turnstile_response + choose_domain. Camoufox решает CF сам.
+        result = await _request_new_email(page, wait_token_timeout=30)
+        if result and result.get("msg") == "ok" and result.get("email") and result.get("accesstoken"):
+            log("email", f"email создан: {result['email']}")
+            return {"email": result["email"], "accesstoken": result["accesstoken"]}
+
+        # Проверяем — не перехватили ли ответ через listener параллельно.
         if captured.get("email") and captured.get("accesstoken"):
             return {"email": captured["email"], "accesstoken": captured["accesstoken"]}
-        await asyncio.sleep(0.5)
 
-    # Fallback: вызываем API вручную изнутри страницы.
-    log("email", "не перехватил авто-ответ, вызываю API вручную...")
-    result = await page.evaluate(
-        """async (apiUrl) => {
-            const currentToken = (window.currentEmail && window.currentEmail.accesstoken) || "";
-            const res = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({ action: "newemail", curentToken: currentToken }),
-            });
-            return res.json();
-        }""",
-        API_URL,
-    )
-    if result and result.get("msg") == "ok" and result.get("email") and result.get("accesstoken"):
-        log("email", f"получен вручную: {result['email']}")
-        return {"email": result["email"], "accesstoken": result["accesstoken"]}
+        # Серверная ошибка tmailor — перезагрузка и повтор.
+        if _is_server_error_api(result) or await _is_server_error_page(page):
+            log("email", f"tmailor серверная ошибка (попытка {page_attempt}/3), перезагружаю...")
+            await asyncio.sleep(2)
+            continue
 
-    # Логируем полный API-ответ — чтобы понимать какие msg-варианты возвращает tmailor.
-    log("email", f"api result: {json.dumps(result, ensure_ascii=False) if result else 'None'}")
+        log("email", f"api result: {json.dumps(result, ensure_ascii=False) if result else 'None'}")
 
-    # ВАЖНО: страница могла УЖЕ получить email сама (через свой встроенный fetch,
-    # который наш on_response пропустил — URL mismatch и т.п.). Проверяем window.currentEmail
-    # ПЕРЕД показом MessageBox — иначе задалбываем пользователя когда email уже готов.
-    try:
-        current = await page.evaluate("() => window.currentEmail || null")
-        if current and current.get("email") and current.get("accesstoken"):
-            log("email", f"взял из window.currentEmail: {current['email']} (fallback ушёл во второй запрос → errorcaptcha, но email на UI есть)")
-            return {"email": current["email"], "accesstoken": current["accesstoken"]}
-    except Exception as e:
-        log("email", f"window.currentEmail probe err: {e}")
-
-    # Детектим блокировку двумя способами:
-    #   1) API msg (errorcaptcha / client-block / verify / etc.)
-    #   2) UI-баннер на странице ("Please verify that you are not a robot" — самый надёжный)
-    is_captcha_api = bool(
-        result
-        and (
-            result.get("msg") == "errorcaptcha"
-            or result.get("captcha") == 1
-            or result.get("client-block") == 1
-            or "verify" in str(result.get("msg", "")).lower()
-            or "block" in str(result.get("msg", "")).lower()
+        # errorcaptcha/client-block: токен не получен (Camoufox не решил CF) —
+        # даём пройти капчу вручную, потом снова шлём newemail с токеном.
+        is_block = bool(
+            result
+            and (
+                result.get("msg") == "errorcaptcha"
+                or result.get("captcha") == 1
+                or result.get("client-block") == 1
+            )
         )
-    )
-    is_captcha_ui = False
-    try:
-        body_text = await page.evaluate("() => document.body.innerText || ''")
-        if body_text and any(
-            marker in body_text.lower()
-            for marker in ("verify that you are not a robot", "not a robot", "please verify", "cloudflare")
-        ):
-            is_captcha_ui = True
-            log("captcha", f"UI-баннер обнаружен на странице")
-    except Exception:
-        pass
-    is_captcha = is_captcha_api or is_captcha_ui
-    if is_captcha:
-        max_retries = 5
-        for attempt in range(1, max_retries + 1):
-            # Проверяем что окно ещё живо (пользователь мог закрыть).
-            if page.is_closed():
-                raise Exception("окно Camoufox закрыто — прервано пользователем")
-            log("captcha", f"tmailor заблокировал IP (попытка {attempt}/{max_retries}) — жду смены VPN")
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _prompt_change_ip_and_wait, attempt)
-            if page.is_closed():
-                raise Exception("окно Camoufox закрыто — прервано пользователем")
-            log("captcha", "OK нажат, перезагружаю tmailor.com...")
-            # Полная перезагрузка страницы: после смены VPN старые запросы могут
-            # висеть в failed-state, sw/cookies тоже нужно освежить.
-            try:
-                await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
-                await asyncio.sleep(2)  # дать странице подхватить cookies/CF
-            except Exception as e:
-                log("captcha", f"reload err: {e}")
-                continue
-            try:
-                r = await page.evaluate(
-                    """async (apiUrl) => {
-                        const currentToken = (window.currentEmail && window.currentEmail.accesstoken) || "";
-                        const res = await fetch(apiUrl, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            credentials: "include",
-                            body: JSON.stringify({ action: "newemail", curentToken: currentToken }),
-                        });
-                        return res.json();
-                    }""",
-                    API_URL,
-                )
-            except Exception as e:
-                log("captcha", f"retry err: {e}")
-                continue
-            if r and r.get("msg") == "ok" and r.get("email") and r.get("accesstoken"):
-                log("captcha", f"разблокировано, email получен: {r['email']}")
-                return {"email": r["email"], "accesstoken": r["accesstoken"]}
-            log("captcha", f"всё ещё блок: {r}")
-        raise Exception(f"captcha: {max_retries} попыток исчерпаны")
+        if is_block or result is None:
+            log("email", "create: нужен turnstile-токен — переключаюсь на ручное прохождение капчи")
+            return await _manual_captcha_recover(page)
 
-    raise Exception(f"failed to create email: {result}")
+    # Все попытки исчерпаны
+    raise Exception("tmailor.com не дал создать email после 3 попыток (возможно, Camoufox детектится)")
 
-
-def _prompt_change_ip_and_wait(attempt: int):
-    """Нативный Windows MessageBox: блокирует поток пока пользователь не нажмёт OK.
-    Плюс winsound.MessageBeep для звонка. Ловит ошибку — просто ждёт 30с если не Windows."""
-    title = "tmailor: смени VPN"
-    body = (
-        f"tmailor заблокировал IP (попытка {attempt}).\n\n"
-        f"Переключи VPN / смени IP.\n"
-        f"Затем нажми OK — реги продолжатся."
-    )
-    try:
-        import ctypes
-        # звук предупреждения
-        try:
-            import winsound
-            winsound.MessageBeep(0x30)  # MB_ICONWARNING
-        except Exception:
-            pass
-        MB_OK = 0x00
-        MB_ICONWARNING = 0x30
-        MB_SETFOREGROUND = 0x10000
-        MB_TOPMOST = 0x40000
-        MB_SYSTEMMODAL = 0x1000
-        flags = MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST | MB_SYSTEMMODAL
-        ctypes.windll.user32.MessageBoxW(0, body, title, flags)
-    except Exception as e:
-        log("captcha", f"MessageBox недоступен ({e}), fallback: пауза 30с")
-        time.sleep(30)
 
 
 async def regenerate_email(page):
-    result = await page.evaluate(
-        """async (apiUrl) => {
-            const currentToken = (window.currentEmail && window.currentEmail.accesstoken) || "";
-            const res = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({ action: "newemail", curentToken: currentToken }),
-            });
-            return res.json();
-        }""",
-        API_URL,
-    )
-    if result and result.get("msg") == "ok" and result.get("email") and result.get("accesstoken"):
-        log("email", f"перегенерирован: {result['email']}")
-        return {"email": result["email"], "accesstoken": result["accesstoken"]}
+    # Токен Turnstile ОДНОРАЗОВЫЙ: после создания первого email он сгорает,
+    # поэтому для регенерации сразу проходим капчу заново и жмём Create.
+    return await _manual_captcha_recover(page)
 
-    log("email", f"regenerate api result: {json.dumps(result, ensure_ascii=False) if result else 'None'}")
 
-    # Тот же captcha-handler что в create_email: MessageBox → OK → reload → retry.
-    is_captcha_api = bool(
-        result
-        and (
-            result.get("msg") == "errorcaptcha"
-            or result.get("captcha") == 1
-            or result.get("client-block") == 1
-            or "verify" in str(result.get("msg", "")).lower()
-            or "block" in str(result.get("msg", "")).lower()
-        )
-    )
-    is_captcha_ui = False
+async def _human_click(page, x, y, label=""):
+    """Мгновенный прямой клик мышью: сразу в точку и нажатие."""
+    await page.mouse.move(x, y)
+    await asyncio.sleep(0.02)
+    await page.mouse.down()
+    await asyncio.sleep(0.03)
+    await page.mouse.up()
+    log("captcha", f"клик мышью [{label}] ({round(x)},{round(y)})")
+
+
+async def _cf_widget_box(page):
+    """bbox отрисованного Turnstile-виджета (или None)."""
     try:
-        body_text = await page.evaluate("() => document.body.innerText || ''")
-        if body_text and any(
-            marker in body_text.lower()
-            for marker in ("verify that you are not a robot", "not a robot", "please verify", "cloudflare")
-        ):
-            is_captcha_ui = True
+        return await page.evaluate(
+            """() => { const el=document.querySelector('.cf-turnstile'); if(!el) return null;
+               const r=el.getBoundingClientRect();
+               return r.width>0 && r.height>0 ? {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)} : null; }"""
+        )
     except Exception:
-        pass
+        return None
 
-    if is_captcha_api or is_captcha_ui:
-        max_retries = 5
-        for attempt in range(1, max_retries + 1):
-            if page.is_closed():
-                raise Exception("окно Camoufox закрыто — прервано пользователем")
-            log("captcha", f"regenerate: блок IP (попытка {attempt}/{max_retries}) — жду смены VPN")
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _prompt_change_ip_and_wait, attempt)
-            if page.is_closed():
-                raise Exception("окно Camoufox закрыто — прервано пользователем")
-            log("captcha", "OK нажат, перезагружаю tmailor.com...")
+
+FIND_VERIFY_JS = """
+() => {
+  const RE = /not a robot|verify that you|подтвердите|не робот|я не робот|verify you are human|подтвердите, что вы человек/i;
+  const els = Array.from(document.querySelectorAll('button,div,span,a,p,label'));
+  const cand = els.filter(x => {
+    const r = x.getBoundingClientRect();
+    if (r.width < 60 || r.height < 12 || r.height > 120) return false;
+    if (x.offsetParent === null) return false;   // невидимый
+    const txt = (x.textContent || '');
+    if (!RE.test(txt)) return false;
+    // отбрасываем контейнеры, у которых слишком много текста (значит это родитель)
+    return txt.trim().length < 120;
+  }).sort((a,b) => {
+    const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
+    return (ra.width*ra.height) - (rb.width*rb.height);   // самый маленький = сама плашка
+  });
+  const b = cand[0];
+  if (!b) return null;
+  b.scrollIntoView({block:'center'});
+  const r = b.getBoundingClientRect();
+  return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2),
+          box:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)},
+          text:(b.textContent||'').trim().slice(0,60)};
+}
+"""
+
+
+async def _click_verify_trigger(page, retries=6, delay=0.3):
+    """Красная плашка 'Please verify that you are not a robot' — триггер показа
+    Turnstile. На свежей странице она появляется НЕ СРАЗУ, поэтому ищем с ретраями."""
+    for attempt in range(1, retries + 1):
+        try:
+            info = await page.evaluate(FIND_VERIFY_JS)
+        except Exception as e:
+            log("captcha", f"verify-trigger err: {e}")
+            info = None
+
+        if info:
+            log("captcha", f"нашёл кнопку 'не робот' {info.get('box')} «{info.get('text')}» — жму")
+            await _human_click(page, info["x"], info["y"], "verify-not-a-robot")
+            return True
+
+        # виджет мог отрисоваться и без плашки — тогда триггер не нужен
+        if await _cf_widget_box(page):
+            log("captcha", "виджет уже отрисован, плашка не нужна")
+            return True
+
+        if attempt == 1 or attempt % 3 == 0:
+            log("captcha", f"жду появления кнопки 'не робот' ({attempt}/{retries})")
+        await asyncio.sleep(delay)
+
+    log("captcha", "кнопка 'не робот' не найдена")
+    return False
+
+
+async def _click_create_button(page):
+    """Жмём кнопку Create в модалке (после прохождения капчи)."""
+    try:
+        info = await page.evaluate(
+            """() => {
+              const b = Array.from(document.querySelectorAll('button')).find(x => {
+                const r = x.getBoundingClientRect();
+                return r.width > 0 && r.height > 0 && /^\\s*create\\s*$/i.test((x.textContent||'').trim());
+              });
+              if (!b) return null;
+              b.scrollIntoView({block:'center'});
+              const r = b.getBoundingClientRect();
+              return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)};
+            }"""
+        )
+    except Exception as e:
+        log("captcha", f"create-btn err: {e}")
+        return False
+    if not info:
+        log("captcha", "кнопка Create не найдена")
+        return False
+    await _human_click(page, info["x"], info["y"], "Create")
+    return True
+
+
+async def _auto_solve_turnstile(page, timeout=30, reset_token=True):
+    """АВТО-прохождение Turnstile: жмём красный триггер, ждём рендер виджета,
+    кликаем мышью по чекбоксу (левая часть, x+30, центр по высоте), ждём токен.
+    Возвращает токен или None. Никаких MessageBox — всё само."""
+    # ВАЖНО: токен Turnstile ОДНОРАЗОВЫЙ. После создания email в input остаётся
+    # сгоревший токен — если его не сбросить, мы примем его за валидный,
+    # получим errorcaptcha и потеряем ~25с на лишний круг капчи.
+    if reset_token:
+        try:
+            await page.evaluate(
+                """() => { const el=document.querySelector('input[name="cf-turnstile-response"]');
+                   if (el) el.value = '';
+                   if (window.turnstile && window.turnstile.reset) { try { window.turnstile.reset(); } catch(e){} } }"""
+            )
+        except Exception:
+            pass
+
+    # 1) триггерим показ виджета (один раз — достаточно, чтобы Turnstile
+    #    инициализировался). Повторные клики по плашке «не робот» только
+    #    сбрасывают виджет и залипают в цикле.
+    await _click_verify_trigger(page)
+
+    deadline = time.time() + timeout
+    clicked = False
+    last_trigger = time.time()  # момент последнего клика на триггер
+    trigger_count = 1           # уже кликнули один раз на входе
+    while time.time() < deadline:
+        tok = await _get_turnstile_token(page, timeout=1)
+        if tok:
+            log("captcha", f"turnstile решён, токен {len(tok)} симв")
+            return tok
+
+        box = await _cf_widget_box(page)
+        if box and not clicked:
             try:
-                await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
-                await asyncio.sleep(2)
-            except Exception as e:
-                log("captcha", f"reload err: {e}")
-                continue
-            try:
-                r = await page.evaluate(
-                    """async (apiUrl) => {
-                        const currentToken = (window.currentEmail && window.currentEmail.accesstoken) || "";
-                        const res = await fetch(apiUrl, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            credentials: "include",
-                            body: JSON.stringify({ action: "newemail", curentToken: currentToken }),
-                        });
-                        return res.json();
-                    }""",
-                    API_URL,
+                await page.evaluate(
+                    "() => { const el=document.querySelector('.cf-turnstile'); if(el) el.scrollIntoView({block:'center'}); }"
                 )
-            except Exception as e:
-                log("captcha", f"retry err: {e}")
-                continue
-            if r and r.get("msg") == "ok" and r.get("email") and r.get("accesstoken"):
-                log("captcha", f"регенерация после разблока: {r['email']}")
-                return {"email": r["email"], "accesstoken": r["accesstoken"]}
-            log("captcha", f"всё ещё блок: {r}")
-        raise Exception(f"regenerate captcha: {max_retries} попыток исчерпаны")
+            except Exception:
+                pass
+            await asyncio.sleep(0.2)
+            box = await _cf_widget_box(page)
+            if box:
+                cx = box["x"] + 30                 # чекбокс слева
+                cy = box["y"] + box["h"] / 2
+                log("captcha", f"виджет найден {box}, кликаю чекбокс ({cx},{round(cy)})")
+                await _human_click(page, cx, cy, "turnstile-checkbox")
+                clicked = True
+                await asyncio.sleep(0.5)
+        elif not box and not clicked:
+            # Виджет не появился — даём ему шанс инициализироваться, но
+            # НЕ кликаем триггер снова через 3с после первого. Ретриггер
+            # только если вообще виджет НИКОГДА не рендерился (10с пауза).
+            now = time.time()
+            if trigger_count < 2 and now - last_trigger >= 10.0:
+                last_trigger = now
+                trigger_count += 1
+                log("captcha", "виджет не появился через 10с — пробую триггер ещё раз")
+                await _click_verify_trigger(page)
 
-    raise Exception(f"regenerate failed: {result.get('msg') if result else 'no result'}")
+        await asyncio.sleep(0.3)
+
+    log("captcha", "turnstile не решён за отведённое время (триггер был нажат один раз, виджет не появился)")
+    return None
+
+
+
+async def _click_new_email_button(page, retries=10, delay=0.5):
+    """Нажимаем кнопку 'New Email' в UI tmailor — открывает модалку создания.
+    Без этого клика скрипт копирует уже существующий email вместо создания нового."""
+    RE = r"new\s*e-?mail|create\s*e-?mail"
+    for attempt in range(1, retries + 1):
+        try:
+            clicked = await page.evaluate(
+                """async (reStr) => {
+                   const RE = new RegExp(reStr, 'i');
+                   const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+                   const b = btns.find(x => {
+                     const r = x.getBoundingClientRect();
+                     return r.width > 0 && r.height > 0 && RE.test((x.textContent||'').trim());
+                   });
+                   if (!b) return false;
+                   b.scrollIntoView({block:'center'});
+                   const r = b.getBoundingClientRect();
+                   const cx = r.x + r.width/2, cy = r.y + r.height/2;
+                   const hit = document.elementFromPoint(cx, cy);
+                   (hit || b).click();
+                   return true;
+                 }""",
+                RE,
+            )
+            if clicked:
+                log("email", "нажата кнопка New Email — модалка создания открыта")
+                return True
+        except Exception as e:
+            log("email", f"new-email-btn err: {e}")
+
+        if attempt == 1 or attempt % 3 == 0:
+            log("email", f"ищу кнопку 'New Email' ({attempt}/{retries})")
+        await asyncio.sleep(delay)
+    log("email", "кнопка 'New Email' не найдена")
+    return False
+
+
+async def _manual_captcha_recover(page, poll_timeout=60, poll=2):
+    """АВТО-прохождение капчи (имя оставлено для совместимости вызовов).
+    Скрипт сам: нажимает New Email -> жмёт красный триггер 'not a robot' ->
+    кликает чекбокс Turnstile -> получает токен -> создаёт email.
+    Никаких всплывающих окон и участия пользователя."""
+    if page.is_closed():
+        raise Exception("окно Camoufox закрыто — прервано пользователем")
+
+    log("captcha", "капча — прохожу автоматически (клик по чекбоксу Turnstile)")
+
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        if page.is_closed():
+            raise Exception("окно Camoufox закрыто — прервано пользователем")
+
+        # Ловим email из ответа сервера на нажатие Create.
+        got = {}
+
+        async def _catch(res):
+            try:
+                if "webapp-newemail" not in res.url:
+                    return
+                b = await res.json()
+                if b and b.get("msg") == "ok" and b.get("email") and b.get("accesstoken"):
+                    got["email"] = b["email"]
+                    got["accesstoken"] = b["accesstoken"]
+            except Exception:
+                pass
+
+        handler = lambda res: asyncio.create_task(_catch(res))
+        page.on("response", handler)
+        try:
+            # Сначала ЖМЁМ "New Email" — открывает модалку создания с капчей.
+            # Без этого скрипт копирует уже существующий email вместо создания нового.
+            if not await _click_new_email_button(page, retries=12, delay=0.5):
+                if got.get("email"):
+                    log("captcha", f"email пришёл из API пока искали кнопку: {got['email']}")
+                    return {"email": got["email"], "accesstoken": got["accesstoken"]}
+                log("captcha", f"попытка {attempt}/{attempts}: кнопка New Email не найдена")
+                await asyncio.sleep(1)
+                continue
+
+            # В модалке капчи нет — сразу жмём Create. Turnstile появляется
+            # только если сервер ответит errorcaptcha.
+            await asyncio.sleep(0.6)   # модалка дорисовывается
+            if await _click_create_button(page):
+                for _ in range(15):
+                    if got.get("email"):
+                        log("captcha", f"email создан кликом Create: {got['email']}")
+                        return {"email": got["email"], "accesstoken": got["accesstoken"]}
+                    await asyncio.sleep(0.4)
+
+            # Create не дал email — значит нужен turnstile-токен.
+            tok = await _auto_solve_turnstile(page, timeout=30)
+            if got.get("email"):
+                log("captcha", f"email пришёл из API: {got['email']}")
+                return {"email": got["email"], "accesstoken": got["accesstoken"]}
+            if not tok:
+                log("captcha", f"попытка {attempt}/{attempts}: токен не получен")
+            else:
+                if await _click_create_button(page):
+                    for _ in range(10):
+                        if got.get("email"):
+                            log("captcha", f"email создан после капчи: {got['email']}")
+                            return {"email": got["email"], "accesstoken": got["accesstoken"]}
+                        await asyncio.sleep(0.4)
+
+                # Если Create ничего не дал — пробуем API с этим токеном.
+                r = await _safe_fetch_json(page, WEBAPP_API_URL, {
+                    "action": "newemail",
+                    "curentToken": "",
+                    "choose_domain": "1",
+                    "cf_turnstile_response": tok,
+                })
+                if isinstance(r, dict) and r.get("msg") == "ok" and r.get("email") and r.get("accesstoken"):
+                    log("captcha", f"капча пройдена, email: {r['email']}")
+                    return {"email": r["email"], "accesstoken": r["accesstoken"]}
+                if got.get("email"):
+                    return {"email": got["email"], "accesstoken": got["accesstoken"]}
+                log("captcha", f"попытка {attempt}/{attempts}: ответ {(r or {}).get('msg')}")
+        finally:
+            try:
+                page.remove_listener("response", handler)
+            except Exception:
+                pass
+
+    raise Exception("captcha: автопрохождение не удалось за 3 попытки")
+
 
 
 async def fetch_inbox(page, email, accesstoken):
-    return await page.evaluate(
-        """async ({ address, accesstoken, apiUrl }) => {
-            const res = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({ action: "listinbox", listToken: { [address]: accesstoken } }),
-            });
-            return res.json();
-        }""",
-        {"address": email, "accesstoken": accesstoken, "apiUrl": API_URL},
+    return await _safe_fetch_json(
+        page, API_URL,
+        {"action": "listinbox", "listToken": {email: accesstoken}},
     )
 
 
 async def fetch_email_body(page, email, accesstoken, email_code, email_token):
-    return await page.evaluate(
-        """async ({ accesstoken, email_code, email_token, apiUrl }) => {
-            const res = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({ action: "read", accesstoken, email_code, email_token }),
-            });
-            return res.json();
-        }""",
-        {"accesstoken": accesstoken, "email_code": email_code, "email_token": email_token, "apiUrl": API_URL},
+    return await _safe_fetch_json(
+        page, API_URL,
+        {"action": "read", "accesstoken": accesstoken, "email_code": email_code, "email_token": email_token},
     )
+
+
+async def _ensure_page_alive(page):
+    """tmailor иногда закрывает вкладку (Target page closed). Тогда fetch изнутри
+    страницы падает. Переоткрываем tmailor.com на том же page, чтобы credentials
+    (cookies) и fetch снова работали."""
+    try:
+        if page.is_closed():
+            return False  # сам объект page закрыт — восстановить нельзя
+        # cheap-пинг: если контекст жив, evaluate вернёт значение
+        await page.evaluate("() => 1")
+        return True
+    except Exception:
+        # страница/контекст в непригодном состоянии — пробуем перезагрузить
+        try:
+            await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(2)
+            log("inbox", "страница восстановлена (reload tmailor.com)")
+            return True
+        except Exception as e:
+            log("inbox", f"не смог восстановить страницу: {e}")
+            return False
 
 
 async def wait_for_otp(page, email, accesstoken, timeout=120, poll=4, from_hint="freemodel"):
     deadline = time.time() + timeout
     seen_ids = set()
     while time.time() < deadline:
+        if not await _ensure_page_alive(page):
+            log("inbox", "страница мертва, жду и пробую снова")
+            await asyncio.sleep(poll)
+            continue
         try:
             result = await fetch_inbox(page, email, accesstoken)
         except Exception as e:
@@ -489,7 +676,7 @@ async def main():
             persistent_context=True,
             user_data_dir=str(PROFILE_DIR),
             disable_coop=True,
-            humanize=10.0,
+            humanize=True,
             main_world_eval=True,
             i_know_what_im_doing=True,
         ) as browser:

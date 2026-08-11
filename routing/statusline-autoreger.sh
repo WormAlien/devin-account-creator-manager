@@ -10,6 +10,8 @@ SETTINGS="$HOME/.claude/settings.json"
 
 # ---- stdin from Claude Code: model info -----------------------------------
 payload="$(cat 2>/dev/null || true)"
+# отладка: `touch logs/.statusline-debug` → сырой payload от CC копится в .jsonl
+[ -f "$LOGS/.statusline-debug" ] && printf '%s\n' "$payload" >> "$LOGS/.statusline-debug.jsonl"
 model_id="$(printf '%s' "$payload" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 [ -z "$model_id" ] && model_id="$(printf '%s' "$payload" | sed -n 's/.*"display_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 [ -z "$model_id" ] && model_id="unknown"
@@ -36,12 +38,15 @@ if [ -z "$raw_target" ]; then
         *ot-active-key.txt*)             raw_target="ourtoken" ;;
         *om-active-key.txt*)             raw_target="omniroute" ;;
         *vyceai-active-key.txt*)         raw_target="vyce_openai" ;;
+        *ar-active-key.txt*)             raw_target="agentrouter" ;;
     esac
     if [ -z "$raw_target" ]; then
         case "$base_url" in
             https://api.ourtoken.ai*) raw_target="ourtoken" ;;
             *localhost:20128*)        raw_target="omniroute" ;;
             *localhost:20131*)        raw_target="vyce_openai" ;;
+            *localhost:20132*)        raw_target="agentrouter" ;;
+
             *localhost:8190*)         raw_target="notion" ;;
             *agentrouter.org*)        raw_target="agentrouter" ;;
             *cc.freemodel.dev*)       raw_target="apihelper" ;;
@@ -71,6 +76,7 @@ esac
 pct=0
 avail_sum=0
 have_gauge=0
+cool_str=""     # непустая = аккаунт на перезарядке, тут остаток времени
 
 parse_dollars_sum() {  # print sum of "$X.XX" values in file
     grep -oE '"available"[[:space:]]*:[[:space:]]*"\$[0-9]+\.[0-9]+"' "$1" 2>/dev/null \
@@ -113,20 +119,46 @@ if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] &
             h5="$(printf '%s' "$block"  | grep -oE '"h5"[^0-9]*\$[0-9]+\.[0-9]+'    | grep -oE '[0-9]+\.[0-9]+' | head -n1)"
             h5m="$(printf '%s' "$block" | grep -oE '"h5max"[^0-9]*\$[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -n1)"
             upd="$(printf '%s' "$block" | grep -oE '"updatedAt"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -n1)"
+            # Баланс ("AVAILABLE NOW") = min(деньги, остаток 5h-окна) — источник
+            # правды. Окно без денег непригодно, поэтому остаток режем балансом.
+            av="$(printf '%s' "$block"  | grep -oE '"available"[^0-9]*\$[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -n1)"
             [ -z "$h5" ]  && h5=0
             [ -z "$h5m" ] && h5m=0
             [ -z "$upd" ] && upd=0
+            [ -z "$av" ]  && av=-1     # -1 = баланс не спарсился, идём по окну
 
-            avail_sum="$(awk -v u="$h5" -v m="$h5m" 'BEGIN { r=m-u; if (r<0) r=0; printf "%.2f", r }')"
-            pct="$(awk -v u="$h5" -v m="$h5m" 'BEGIN { if (m>0) printf "%d",(1-u/m)*100; else print "100" }')"
+            # Перезарядка: $0.00 при живом окне — это не смерть аккаунта, а ожидание
+            # налива. Показываем сколько ждать, иначе шкала в нуле выглядит как «всё».
+            fm_state="$(printf '%s' "$block" | grep -oE '"state"[[:space:]]*:[[:space:]]*"[a-z]+"' | grep -oE '(ok|cooldown|dead)' | head -n1)"
+            cool_until="$(printf '%s' "$block" | grep -oE '"cooldownUntil"[[:space:]]*:[[:space:]]*"[^"]+"' | sed 's/.*"\([^"]*\)"$/\1/' | head -n1)"
+            if [ "$fm_state" = "cooldown" ]; then
+                cool_str="?"
+                if [ -n "$cool_until" ]; then
+                    cool_ts="$(date -d "$cool_until" +%s 2>/dev/null || echo 0)"
+                    now_s="$(date +%s)"
+                    if [ "$cool_ts" -gt "$now_s" ]; then
+                        cool_left=$(( cool_ts - now_s ))
+                        if [ "$cool_left" -lt 3600 ]; then cool_str="$((cool_left/60))м"
+                        else cool_str="$((cool_left/3600))ч$(( (cool_left%3600)/60 ))м"
+                        fi
+                    else
+                        cool_str="вот-вот"
+                    fi
+                fi
+            fi
+
+            avail_sum="$(awk -v u="$h5" -v m="$h5m" -v a="$av" 'BEGIN { r=m-u; if (r<0) r=0; if (a>=0 && a<r) r=a; printf "%.2f", r }')"
+            pct="$(awk -v u="$h5" -v m="$h5m" -v a="$av" 'BEGIN { r=m-u; if (r<0) r=0; if (a>=0 && a<r) r=a; if (m>0) printf "%d",(r/m)*100; else print (a==0 ? "0" : "100") }')"
 
             # свежесть по updatedAt (ms)
             now_ms="$(date +%s%3N 2>/dev/null || echo 0)"
             [ "$upd" -gt 0 ] && stale_age_s=$(( (now_ms - upd) / 1000 ))
             [ "$stale_age_s" -lt 0 ] && stale_age_s=0
 
-            # lazy refresh: если >180с — асинхронный дёрг рефреша (пишет в общий кэш)
-            if [ "$stale_age_s" -gt 180 ]; then
+            # lazy refresh: асинхронный дёрг рефреша (пишет в общий кэш).
+            # Порог 30с, а не 180: рефреш идёт по JSON-API (~1.5с), браузер не
+            # поднимается, поэтому держать три минуты устаревшую цифру незачем.
+            if [ "$stale_age_s" -gt 30 ]; then
                 stale=1
                 (curl -s -m 0.5 -X POST -H 'content-type: application/json' \
                     --data "{\"kind\":\"freemodel\",\"name\":\"$active_name\"}" \
@@ -192,6 +224,11 @@ if [ "$have_gauge" = "1" ]; then
         "$pct_col" "$pct" "$RESET" \
         "$money_col" "$avail_sum" "$RESET"
 
+    # ⏳ перезарядка: окно выжрано, аккаунт живой и ждёт налива
+    if [ -n "$cool_str" ]; then
+        printf ' %s⏳%s%s' $'\033[38;5;220m' "$cool_str" "$RESET"
+    fi
+
     # маркер возраста для freemodel если >60с (stale уже подсвечен цветом)
     if [ "$stale" = "1" ] && [ "$stale_age_s" -gt 0 ]; then
         if   [ "$stale_age_s" -lt 60 ];   then age_str="${stale_age_s}s"
@@ -238,6 +275,17 @@ if [ -n "$ctx_pct" ]; then
         else                                max_h="$((ctx_max/1000))k"
         fi
         ctx_tok_str="$tok_h/$max_h"
+
+        # Бэкенд даёт 1M, а CC считает 200k → в id модели потерялся суффикс [1m].
+        # Цифры НЕ подменяем (CC автокомпактит по своему числу, оверрайд давал
+        # ложные 16% при реальных 90%) — только помечаем, что окно урезано зря.
+        ctx_warn=""
+        if [ "$provider" = "freemodel" ] && [ "$ctx_max" -lt 1000000 ]; then
+            case "$model_id" in
+                *"[1m]"*) ;;            # суффикс на месте — окно урезал не он
+                *) ctx_warn="⚠" ;;
+            esac
+        fi
     fi
 
     printf ' %s│%s %s⧉%s %s%s%s%s%s %s%d%%%s' \
@@ -246,4 +294,6 @@ if [ -n "$ctx_pct" ]; then
         "$ctx_col" "$ctx_fill" "$DIM" "$ctx_emp" "$RESET" \
         "$LABEL" "$ctx_pct" "$RESET"
     [ -n "$ctx_tok_str" ] && printf ' %s%s%s' "$DIM" "$ctx_tok_str" "$RESET"
+    # ⚠ = окно урезано до 200k из-за модели без [1m]; лечится /model <id>[1m]
+    [ -n "$ctx_warn" ] && printf '%s%s%s' $'\033[38;5;220m' "$ctx_warn" "$RESET"
 fi

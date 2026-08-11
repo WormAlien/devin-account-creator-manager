@@ -74,7 +74,7 @@ function backendKeyboard(status) {
     Markup.button.callback('🪙 Ourtoken', 'poollist:ot'),
     Markup.button.callback('🔵 Conduit', 'poollist:cdt'),
   ]);
-  rows.push([Markup.button.callback('🔄 авто-ротация FM', 'auto:toggle')]);
+  rows.push([Markup.button.callback('💸 авто-подмена FM ($0)', 'auto:toggle')]);
   rows.push([Markup.button.callback('‹ в меню', 'menu:home')]);
   return Markup.inlineKeyboard(rows);
 }
@@ -245,7 +245,7 @@ async function statusText() {
   let extra = '';
   try {
     const a = await dash.autoStatus();
-    extra = `\nАвто-ротация FM: ${a.running ? '🟢 вкл' : '⚪ выкл'}`;
+    extra = `\nАвто-подмена FM ($0): ${a.running ? '🟢 вкл' : '⚪ выкл'}`;
   } catch {}
   return { st, text: `🔀 Активный бэкенд: *${st.current}*${extra}` };
 }
@@ -276,7 +276,7 @@ async function buildMainMenu(chatId) {
     '🤖 *Claude Code — пульт*\n\n' +
     `🔌 Бэкенд: ${cur}\n` +
     (acct ? `👤 Аккаунт: \`${acct.split('_')[0]}…\`\n` : '') +
-    `🔄 Авто-ротация: ${autoOn ? '🟢 вкл' : '⚪ выкл'}\n` +
+    `💸 Авто-подмена: ${autoOn ? '🟢 вкл' : '⚪ выкл'}\n` +
     `📁 Папка: \`${path.basename(s.cwd)}\`\n` +
     `💬 Разговор: ${s.fresh ? 'новый' : 'продолжается'}\n\n` +
     '_Напиши текст — он уйдёт в claude. Или жми кнопки:_';
@@ -284,7 +284,7 @@ async function buildMainMenu(chatId) {
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback('🔌 Сменить бэкенд', 'menu:backends')],
     [Markup.button.callback('📁 Папка', 'menu:cd'), Markup.button.callback('🆕 Новый чат', 'do:new')],
-    [Markup.button.callback('🔄 Авто-ротация', 'auto:toggle'), Markup.button.callback('🛑 Стоп', 'do:stop')],
+    [Markup.button.callback('💸 Авто-подмена', 'auto:toggle'), Markup.button.callback('🛑 Стоп', 'do:stop')],
     [Markup.button.callback('🔃 Обновить', 'menu:home')],
   ]);
   return { header, kb };
@@ -440,8 +440,8 @@ bot.action(/^qref:(fm|cdt)$/, async ctx => {
 bot.action('auto:toggle', async ctx => {
   try {
     const a = await dash.autoStatus().catch(() => ({ running: false }));
-    if (a.running) { await dash.autoStop(); await ctx.answerCbQuery('авто-ротация выкл'); }
-    else { await dash.autoStart(); await ctx.answerCbQuery('авто-ротация вкл'); }
+    if (a.running) { await dash.autoStop(); await ctx.answerCbQuery('авто-подмена выкл'); }
+    else { await dash.autoStart(); await ctx.answerCbQuery('авто-подмена вкл'); }
     const { st, text } = await statusText();
     await safeEditText(ctx, text, { parse_mode: 'Markdown', ...backendKeyboard(st) });
   } catch (e) { await ctx.answerCbQuery('⚠️ ' + e.message, { show_alert: true }); }

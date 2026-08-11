@@ -18,14 +18,36 @@ const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
 const config = require("./config");
+const { TimewebImap } = require("./lib/timeweb-imap-client");
 const { CamoufoxTmailor } = require("./lib/camoufox-tmailor-client");
 const fmTgBind = require("./lib/fm-tg-bind");
 const tgPool = require("./lib/tg-pool");
 const dashApi = require("../internal/dashboard-api");
 
-// Уведомление о капче делает сам camoufox_tmailor.py через нативный Windows MessageBox
-// (ctypes.user32.MessageBoxW) — блокирующий диалог с кнопкой OK, ждёт пока пользователь
-// сменит VPN и нажмёт OK, затем ретраит create_email.
+// Email backend (переключается в дашборде, вкладка FreeModel):
+//   'timeweb' — свой домен с catch-all: любой адрес *@ДОМЕН падает в один
+//               ящик-ридер, читаем по IMAP. Без капчи/VPN/ротации доменов.
+//               Настройка — freemodel/.env (шаблон в .env.example). Дефолт.
+//   'tmailor' — tmailor.com через Camoufox (legacy, сервер сейчас 500).
+// Значение берётся из freemodel/.email_backend (override) или config.EMAIL_BACKEND.
+const EMAIL_BACKEND_FILE = path.join(__dirname, ".email_backend");
+function getEmailBackend() {
+  try {
+    const v = fs.readFileSync(EMAIL_BACKEND_FILE, "utf8").trim();
+    if (v === "timeweb" || v === "tmailor") return v;
+  } catch {}
+  return config.EMAIL_BACKEND || "timeweb";
+}
+function makeEmailClient(backend, log) {
+  if (backend === "tmailor") {
+    return new CamoufoxTmailor({
+      headless: config.HEADLESS !== false,
+      log,
+      onCaptcha: () => log("🧩 tmailor показал Turnstile — python проходит капчу сам, вмешательство не нужно"),
+    });
+  }
+  return new TimewebImap({ log });
+}
 
 // Постоянный блок-лист email-доменов, которые FreeModel отверг по signup-лимиту.
 // Растёт во время работы и переживает рестарты — следующие реги не тратят на них
@@ -161,7 +183,7 @@ Email: ${email}
 API Key: ${apiKey || "(создаётся вручную после привязки Telegram)"}
 Invite Code (мой реф): ${inviteCode || "(не получен)"}
 Status: ${success ? "✅ OK" : "❌ ERROR"}
-Backend: tmailor (v4)
+Backend: ${getEmailBackend()}
 Created: ${new Date().toISOString()}
 `;
   fs.writeFileSync(path.join(dir, "account_info.txt"), info);
@@ -484,7 +506,7 @@ async function registerOne(index, inviteCode) {
 
   const launchOpts = {
     headless: config.HEADLESS,
-    args: ["--disable-blink-features=AutomationControlled"],
+    args: ["--disable-blink-features=AutomationControlled", "--mute-audio"],
   };
   const proxy = parseProxy(config.PROXY);
   if (proxy) launchOpts.proxy = proxy;
@@ -497,7 +519,11 @@ async function registerOne(index, inviteCode) {
   let email = null;
   let accesstoken = null;
   let tmailorClient = null;
-  let sessionFile = path.join(config.ACCOUNTS_DIR, `_tmp_session_${index}.json`);
+  // Temp-файлы уникализируем по PID: два параллельных процесса автореги с
+  // одинаковым index раньше делили один _tmp_session_*.json — первый удалял
+  // чужую сессию в finally, и аккаунт экспортился без session.json.
+  const runTag = process.pid;
+  let sessionFile = path.join(config.ACCOUNTS_DIR, `_tmp_session_${index}_${runTag}.json`);
   let boundTgPhone = null;
   let bindFailedPhone = null;
 
@@ -533,21 +559,17 @@ async function registerOne(index, inviteCode) {
       expires: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
     }]);
 
-    // Стартуем Camoufox-демон для tmailor.
+    // Email backend выбирается в дашборде: timeweb (IMAP) или tmailor (Camoufox).
+    const emailBackend = getEmailBackend();
+    log(`[#${index}] email backend: ${emailBackend}`);
     try {
-      tmailorClient = new CamoufoxTmailor({
-        headless: config.HEADLESS !== false,
-        log,
-        onCaptcha: () => {
-          log("🧩 tmailor заблокировал IP — python показал MessageBox, ждёт смены VPN + OK");
-        },
-      });
+      tmailorClient = makeEmailClient(emailBackend, log);
       await tmailorClient.start();
       const initialMailbox = await tmailorClient.create();
       email = initialMailbox.email;
       accesstoken = initialMailbox.accesstoken;
     } catch (e) {
-      throw new Error(`tmailor (Camoufox) не отвечает: ${e.message}`);
+      throw new Error(`email backend '${emailBackend}' не отвечает: ${e.message}`);
     }
 
     // Домены, на которые FreeModel молча НЕ доставляет OTP (форма принимается,
@@ -575,6 +597,12 @@ async function registerOne(index, inviteCode) {
           email = newEmail.email;
           accesstoken = newEmail.accesstoken;
         } catch (e) {
+          // Закрытое окно/мёртвый процесс — не временная ошибка: следующие
+          // попытки гарантированно упадут так же. Раньше это давало 15 циклов
+          // по 5с с одинаковым спамом в лог вместо немедленного выхода.
+          if (/окно Camoufox закрыто|прервано пользователем|process exited|browser has been closed/i.test(e.message)) {
+            throw new Error(`почтовый браузер закрыт — прерываю рег: ${e.message}`);
+          }
           log(`[#${index}] tmailor regenerate error: ${e.message}, жду 5с...`);
           await sleep(5000);
           continue;
@@ -618,7 +646,7 @@ async function registerOne(index, inviteCode) {
       }
 
       const domain = email.split("@")[1];
-      log(`[#${index}] email (попытка ${attempt + 1}): ${email}  [backend=tmailor]`);
+      log(`[#${index}] email (попытка ${attempt + 1}): ${email}  [backend=${emailBackend}]`);
 
       page = await context.newPage();
       const signupUrl = config.SIGNUP_URL_TPL.replace("{CODE}", inviteCode);
@@ -680,7 +708,7 @@ async function registerOne(index, inviteCode) {
         continue;
       }
 
-      // Жду OTP — через Camoufox tmailor.
+      // Жду OTP — через Timeweb IMAP (catch-all).
       log(`[#${index}] жду OTP (макс ${Math.round(otpWaitMs / 1000)}с)...`);
       const got = await tmailorClient.waitOtp({
         fromHint: config.EMAIL_FROM_HINT || "freemodel",
@@ -732,42 +760,63 @@ async function registerOne(index, inviteCode) {
     // API-ключ автоматом не создаём — пользователь сделает руками
     // после привязки Telegram. v3: success = получили реф-код.
     refCode = await grabReferralCode(dashPage);
-
-    await context.storageState({ path: sessionFile });
+    // success ДО повторного storageState: аккаунт уже зареган, сессия и куки
+    // сняты выше. Если браузер отвалится на дозаписи — не теряем готовый акк.
     success = !!refCode;
+
+    try {
+      await context.storageState({ path: sessionFile });
+    } catch (e) {
+      log(`[#${index}] ⚠️ финальный storageState не удался: ${e.message}`);
+    }
 
     // Автопривязка Telegram из пула + автосоздание API-ключа.
     if (success && config.AUTO_BIND_TELEGRAM !== false) {
-      try {
-        log(`[#${index}] привязываю Telegram из пула...`);
-        // fm-tg-bind ожидает папку с файлом session.json.
-        const bindSessionDir = path.join(path.dirname(sessionFile), `_tmp_bind_${index}`);
-        if (!fs.existsSync(bindSessionDir)) fs.mkdirSync(bindSessionDir, { recursive: true });
-        fs.copyFileSync(sessionFile, path.join(bindSessionDir, "session.json"));
-        const bindRes = await fmTgBind.bindTelegram(bindSessionDir, null, {
-          headless: config.HEADLESS !== false,
-          log: (m) => log(m),
-        });
-        if (bindRes.ok) {
-          boundTgPhone = bindRes.tgPhone || null;
-          if (bindRes.apiKey) {
-            apiKey = bindRes.apiKey;
-            log(`[#${index}] 🔑 API-ключ: ${apiKey.slice(0, 16)}...`);
+      const poolStats = tgPool.stats();
+      if (poolStats.usable === 0) {
+        log(`[#${index}] ⏭ TG-пул пуст (free=${poolStats.free}, из них dead=${poolStats.deadFree}) — привязку пропускаю`);
+      } else {
+        try {
+          log(`[#${index}] привязываю Telegram из пула (свободных: ${poolStats.usable})...`);
+          // Привязка идёт в УЖЕ открытом браузере (opts.context) — второй
+          // Chromium не поднимаем. Папка нужна лишь как «имя аккаунта» для
+          // меты и пула; куки bind пишет в наш sessionFile (opts.sessionFile).
+          const bindSessionDir = path.join(path.dirname(sessionFile), `_tmp_bind_${index}_${runTag}`);
+          if (!fs.existsSync(bindSessionDir)) fs.mkdirSync(bindSessionDir, { recursive: true });
+          fs.copyFileSync(sessionFile, path.join(bindSessionDir, "session.json"));
+          const bindRes = await fmTgBind.bindTelegram(bindSessionDir, null, {
+            headless: config.HEADLESS !== false,
+            log: (m) => log(m),
+            context,
+            sessionFile,
+          });
+          if (bindRes.ok) {
+            boundTgPhone = bindRes.tgPhone || null;
+            if (bindRes.apiKey) {
+              apiKey = bindRes.apiKey;
+              log(`[#${index}] 🔑 API-ключ: ${apiKey.slice(0, 16)}...`);
+            } else {
+              log(`[#${index}] ⚠️ TG привязан, но API-ключ не получен`);
+            }
           } else {
-            log(`[#${index}] ⚠️ TG привязан, но API-ключ не получен`);
+            bindFailedPhone = bindRes.tgPhone || null;
+            log(`[#${index}] ⚠️ TG не привязан: ${bindRes.error}`);
           }
-        } else {
-          bindFailedPhone = bindRes.tgPhone || null;
-          log(`[#${index}] ⚠️ TG не привязан: ${bindRes.error}`);
+        } catch (e) {
+          log(`[#${index}] ⚠️ ошибка TG bind: ${e.message}`);
         }
-      } catch (e) {
-        log(`[#${index}] ⚠️ ошибка TG bind: ${e.message}`);
       }
     }
   } catch (e) {
     log(`[#${index}] ❌ ${e.message}`);
+    // Реф-код есть → рега прошла, упало уже на послерегистрационном хвосте
+    // (TG-bind, дозапись сессии). Такой аккаунт рабочий — сохраняем.
+    if (refCode && !success) {
+      success = true;
+      log(`[#${index}] ✅ рега прошла (реф ${refCode}) — сохраняю несмотря на ошибку выше`);
+    }
     try {
-      const shot = path.join(config.ACCOUNTS_DIR, `_error_${index}_${ts()}.png`);
+      const shot = path.join(config.ACCOUNTS_DIR, `_error_${index}_${runTag}_${ts()}.png`);
       if (page) {
         await page.screenshot({ path: shot });
         log(`[#${index}] 📸 ${shot}`);
@@ -837,7 +886,7 @@ async function registerOne(index, inviteCode) {
         fs.unlinkSync(sessionFile);
       } catch {}
     }
-    const bindSessionDir = path.join(path.dirname(sessionFile), `_tmp_bind_${index}`);
+    const bindSessionDir = path.join(path.dirname(sessionFile), `_tmp_bind_${index}_${runTag}`);
     if (fs.existsSync(bindSessionDir)) {
       try {
         fs.rmSync(bindSessionDir, { recursive: true, force: true });
@@ -859,7 +908,7 @@ async function registerOne(index, inviteCode) {
   let currentInvite = cliInvite || lastInvite || config.INITIAL_INVITE;
 
   log("════════════════════════════════════════");
-  log(`  FREEMODEL AUTOREG v5 (tmailor + Camoufox) — ${count} акк(а)`);
+  log(`  FREEMODEL AUTOREG v6 (email: ${getEmailBackend()}) — ${count} акк(а)`);
   log(
     `  Старт инвайт: ${currentInvite}` +
       (cliInvite
@@ -869,6 +918,12 @@ async function registerOne(index, inviteCode) {
           : "  (config.INITIAL_INVITE)"),
   );
   log(`  Прокси: ${config.PROXY || "(нет)"}`);
+  if (config.AUTO_BIND_TELEGRAM !== false) {
+    const ps = tgPool.stats();
+    log(ps.usable
+      ? `  TG-пул: ${ps.usable} свободных${ps.deadFree ? ` (+${ps.deadFree} 🔴 dead)` : ""}`
+      : `  TG-пул: ПУСТ — привязка TG и автосоздание ключей будут пропущены`);
+  }
   log("════════════════════════════════════════");
 
   let ok = 0,

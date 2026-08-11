@@ -103,6 +103,31 @@ function listNotionSessions() {
 const PROJECT_ROOT = path.join(__dirname, '..');
 const FREEMODEL_QUOTA_CACHE = path.join(PROJECT_ROOT, 'logs', '.freemodel_quota_cache.json');
 
+// ── freemodel/.env (gitignored: IMAP-креды, личные домены) ──────────────
+// Тот же крошечный парсер, что в routing/transparent-proxy.js. Уже выставленные
+// переменные окружения имеют приоритет над файлом.
+(function loadFreemodelEnv() {
+    try {
+        const raw = fs.readFileSync(path.join(PROJECT_ROOT, 'freemodel', '.env'), 'utf8');
+        for (const line of raw.split(/\r?\n/)) {
+            if (line.trimStart().startsWith('#')) continue;
+            const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
+            if (!m) continue;
+            if (!(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+        }
+    } catch {}
+})();
+
+// Атомарная запись JSON: temp в той же папке + rename. Без этого читатели ловят
+// недописанный файл — statusline парсит .freemodel_quota_cache.json грепом на
+// каждую отрисовку, а он под 80КБ, и попасть в середину writeFileSync реально.
+function writeJsonAtomic(file, data) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tmp, file);   // на Windows тоже перезаписывает (MOVEFILE_REPLACE_EXISTING)
+}
+
 function loadFreemodelQuotaCache() {
     try {
         if (fs.existsSync(FREEMODEL_QUOTA_CACHE)) {
@@ -114,9 +139,19 @@ function loadFreemodelQuotaCache() {
 
 function saveFreemodelQuotaCache(cache) {
     try {
-        fs.mkdirSync(path.dirname(FREEMODEL_QUOTA_CACHE), { recursive: true });
-        fs.writeFileSync(FREEMODEL_QUOTA_CACHE, JSON.stringify(cache, null, 2), 'utf-8');
+        writeJsonAtomic(FREEMODEL_QUOTA_CACHE, cache);
     } catch {}
+}
+
+// Точечная запись: перечитать файл и обновить ТОЛЬКО свои ключи. Обязательна для
+// всего, что писалось после await — иначе снапшот, снятый до долгого запроса,
+// затирает чужие записи, доехавшие в это время. Проверять несколько квот подряд
+// раньше означало терять часть результатов.
+function patchFreemodelQuotaCache(entries) {
+    const cache = loadFreemodelQuotaCache();
+    Object.assign(cache, entries);
+    saveFreemodelQuotaCache(cache);
+    return cache;
 }
 
 // ───── FreeModel meta (banned-маркер + связь с TG-пулом) ──────────
@@ -135,9 +170,17 @@ function loadFreemodelMeta() {
 
 function saveFreemodelMeta(meta) {
     try {
-        fs.mkdirSync(path.dirname(FREEMODEL_META_FILE), { recursive: true });
-        fs.writeFileSync(FREEMODEL_META_FILE, JSON.stringify(meta, null, 2), 'utf-8');
+        writeJsonAtomic(FREEMODEL_META_FILE, meta);
     } catch {}
+}
+
+// Обновить мету одного аккаунта, не затирая параллельные правки соседей:
+// перечитываем файл, применяем мутатор к своей записи, пишем. Возвращаем запись.
+function patchFreemodelMeta(name, mutate) {
+    const meta = loadFreemodelMeta();
+    const changed = mutate(meta);
+    if (changed) saveFreemodelMeta(meta);
+    return meta[name] || {};
 }
 
 function setFreemodelBanned(name, banned) {
@@ -146,13 +189,117 @@ function setFreemodelBanned(name, banned) {
     if (banned) {
         meta[name].banned = true;
         meta[name].bannedAt = new Date().toISOString();
+        // Ручной бан перебивает авто: снимаем autoBanned, иначе первый же скрап
+        // с деньгами вернул бы аккаунт, который юзер похоронил намеренно.
+        delete meta[name].autoBanned;
+        delete meta[name].bannedReason;
     } else {
         delete meta[name].banned;
         delete meta[name].bannedAt;
+        delete meta[name].autoBanned;
+        delete meta[name].bannedReason;
     }
     saveFreemodelMeta(meta);
     return meta[name];
 }
+
+// Авто-бан по нулевому балансу. freemodel иногда выдаёт разовые $5, а иногда
+// аккаунт капает по 5h-окну — поэтому авто-бан помечается отдельным флагом
+// autoBanned и снимается сам, как только скрап увидит деньги. Ручной 💀
+// (banned без autoBanned) вечен: авто-возврат его не трогает.
+//
+// Безопасность предиката: available — это распарсенная строка вида "$0.00".
+// checkFreemodelQuota инициализирует поле пустой строкой и возвращает null,
+// если не подтянулось вообще ничего, поэтому "$0.00" означает именно
+// прочитанный с сайта ноль, а не сорванный скрап. Пустое/отсутствующее
+// значение НЕ считаем нулём — иначе неудачный парс выкосил бы живые акки.
+const FM_ZERO_BALANCE = /^\$0(?:[.,]0+)?$/;
+
+function fmIsZeroBalance(quota) {
+    const raw = String(quota?.available ?? '').trim();
+    return raw !== '' && FM_ZERO_BALANCE.test(raw);
+}
+
+function fmHasMoney(quota) {
+    const raw = String(quota?.available ?? '').trim();
+    return raw !== '' && !FM_ZERO_BALANCE.test(raw);
+}
+
+// Аккаунт на перезарядке считается остывшим, если дедлайн прошёл. Дедлайна может
+// не быть (скрап не смог распарсить "Sun 8:29 AM") — тогда ждём следующего
+// рефреша, а не держим аккаунт в морозилке вечно.
+function fmIsCooling(m) {
+    if (!m?.cooldownUntil) return false;
+    const t = Date.parse(m.cooldownUntil);
+    return Number.isFinite(t) && t > Date.now();
+}
+
+// Мёртвым признаём только после двух подтверждений, разнесённых больше чем на
+// одно 5h-окно (+запас). Одиночный ответ «нет окон и нет денег» бывает у гонки
+// рендера и у сорванного скрапа — раньше именно он хоронил живые аккаунты.
+const FM_DEAD_CONFIRM_MS = 6 * 60 * 60 * 1000;
+
+// Свести свежую квоту с метками состояния. Мутирует переданный meta-объект,
+// возвращает true если что-то изменилось (чтобы вызывающий знал про save).
+//
+// Ключевое: 'cooldown' НЕ банит. При активном 5h-окне available == остаток окна,
+// поэтому "$0.00" означает «окно выжрано, нальётся в cooldownUntil», а не смерть
+// аккаунта. Старая логика (бан по любому $0.00) выкашивала пул на ровном месте.
+function syncFmAccountState(meta, name, quota) {
+    const m = meta[name] || (meta[name] = {});
+    const before = JSON.stringify(m);
+    const state = quota?.state;
+
+    if (state === 'cooldown') {
+        m.cooldownUntil = quota.cooldownUntil || '';
+        m.coolReason = quota.coolReason || '';
+        delete m.deadStrikes;
+        delete m.deadSince;
+        // Самолечение: аккаунт, похороненный старой логикой, оживает при первом
+        // же рефреше, который показал живое окно. Ручной 💀 не трогаем.
+        if (m.autoBanned) {
+            delete m.banned; delete m.autoBanned; delete m.bannedAt; delete m.bannedReason;
+        }
+    } else if (state === 'ok') {
+        delete m.cooldownUntil;
+        delete m.coolReason;
+        delete m.deadStrikes;
+        delete m.deadSince;
+        if (m.autoBanned) {
+            delete m.banned; delete m.autoBanned; delete m.bannedAt; delete m.bannedReason;
+        }
+    } else if (state === 'dead') {
+        delete m.cooldownUntil;
+        delete m.coolReason;
+        m.deadStrikes = (m.deadStrikes || 0) + 1;
+        if (!m.deadSince) m.deadSince = new Date().toISOString();
+        // JSON-API — источник авторитетный: там прямо видно subscription.status
+        // и creditCents, гадать не о чем. Подписки нет и кошелёк пуст → аккаунт
+        // исчерпан прямо сейчас, ждать второго подтверждения бессмысленно.
+        // Двухфазность оставлена скрапу и случаю «подписка активна, но лимитов
+        // не нашли» — там ноль может быть артефактом, а не приговором.
+        const certain = quota.src === 'api' && quota.subActive === false;
+        const enough = certain || (m.deadStrikes >= 2 &&
+            (Date.now() - Date.parse(m.deadSince)) >= FM_DEAD_CONFIRM_MS);
+        // Аккаунт без привязанного TG НИКОГДА не помечаем исчерпанным: trial-кредит
+        // выдаётся именно за бинд, поэтому до привязки $0 и отсутствие окон — это
+        // нормальное состояние недорегистрированного аккаунта, а не приговор.
+        // Иначе свежие акки прятались бы из списка ещё до того, как их довели.
+        const noTg = !m.tgPhone;
+        if (enough && !noTg && !m.banned) {
+            m.banned = true;           // флаг общий с ручным 💀 — по нему фильтры и ротатор
+            m.autoBanned = true;       // но это НЕ бан: аккаунт цел, просто кончились кредиты
+            m.bannedAt = new Date().toISOString();
+            m.bannedReason = 'exhausted';
+        }
+    }
+    // state отсутствует (старый кеш, скрап без окон) — не знаем, не трогаем.
+
+    return JSON.stringify(m) !== before;
+}
+
+// Старое имя оставлено: его зовут внешние точки (ротатор, ручной рефреш).
+const syncFmAutoBan = syncFmAccountState;
 
 // Привязать TG-phone к freemodel-аккаунту (вызывается из автореги после
 // успешной привязки бота — для UI-карточки).
@@ -191,11 +338,18 @@ async function extractFreemodelApiKey(name) {
 // через React с задержкой (окна 5h/7d — отдельный fetch, ~2с позже остального).
 // При неудачном wait поля приходят пустыми и раньше затирали валидный кеш —
 // UI сваливался на trial/реф-бонус fallback и ломал полосу пула.
+//
+// state/cooldownUntil липкими НЕ делаем сознательно: протухший «на перезарядке»
+// держал бы аккаунт вне ротации после того, как окно уже налилось.
 function mergeStickyFmQuota(prev, q) {
     const merged = { ...q };
     if (!merged.plan && prev.plan) merged.plan = prev.plan;
     if (!merged.renews && prev.renews) merged.renews = prev.renews;
     if (!merged.tgPhone && prev.tgPhone) merged.tgPhone = prev.tgPhone;
+    // Окна тянем из кеша только когда источник — скрап (гонка рендера). У JSON-API
+    // пустые окна означают именно «окон нет», и подмена кешем нарисовала бы
+    // фантомный запас у аккаунта, который на самом деле слетел с плана.
+    if (merged.state) return merged;
     if (!merged.h5 && merged.h5pct == null && prev.h5) {
         merged.h5 = prev.h5; merged.h5max = prev.h5max;
         merged.h5resets = prev.h5resets; merged.h5pct = prev.h5pct;
@@ -208,9 +362,12 @@ function mergeStickyFmQuota(prev, q) {
 }
 
 // withQuotas behavior:
-//   'cache'   — return cached quotas only (instant, no Playwright)
-//   'refresh' — refresh via Playwright in parallel, update cache, return new values
+//   'cache'   — return cached quotas only (instant, no network)
+//   'refresh' — refresh via freemodel JSON-API in parallel, update cache
 //   false     — no quota info at all (fastest, list only)
+// concurrency 3: рефреш ходит обычным fetch (~1.5с/акк) вместо браузера, но
+// параллельность НЕ поднимаем. 2026-08-02 прогон пула в 12 потоков с одного IP
+// совпал со слётом акка с Pro на free/canceled — залпом по freemodel не ходим.
 async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } = {}) {
     const { getFreemodelSessions, checkFreemodelQuota } = freemodelMod();
     const sessions = getFreemodelSessions();
@@ -246,9 +403,12 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
     // «дешёвый» refresh — используй withQuotas:'cache' или отдельный endpoint.
     // manual-аккаунты (имя+ключ, stub session.json) пропускаем — браузерной
     // сессии нет, Playwright упрётся в логин-страницу.
+    // Авто-баненых (нулевой баланс) сканируем — они кандидаты на возврат, если
+    // 5h-окно капнуло денег. Исключается только ручной 💀: он вечен.
     const eligible = sessions.filter(s => {
         const m = meta[s.name] || {};
-        return s.status === '✅' && !m.banned && s.backend !== 'manual';
+        const manualBan = m.banned && !m.autoBanned;
+        return s.status === '✅' && !manualBan && s.backend !== 'manual';
     });
     if (eligible.length === 0) return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
 
@@ -270,23 +430,36 @@ async function listFreemodelSessions({ withQuotas = 'cache', concurrency = 3 } =
                     const merged = mergeStickyFmQuota(prev, q);
                     if (origIdx >= 0) out[origIdx].quota = { ...merged, updatedAt: Date.now() };
                     cache[eligible[i].name] = out[origIdx >= 0 ? origIdx : i].quota;
-                    // TG-привязка — локальная мета (ставится при bind) авторитетна.
-                    // Скан freemodel.dev может ДОБАВИТь номер, если локально пусто,
-                    // но НИКОГДА не удаляет: tgBound===false на ненадёжном скане раньше
-                    // стирал привязки (оставался осиротевший tgLinkedAt).
-                    if (q.tgBound === true) {
-                        meta[eligible[i].name] = meta[eligible[i].name] || {};
-                        if (!meta[eligible[i].name].tgPhone) {
-                            meta[eligible[i].name].tgPhone = q.tgPhone || 'connected';
+                    // Мету правим точечно и сразу, а не копим снапшот до конца скана:
+                    // иначе ручной 💀, поставленный посреди прогона пула, затирался
+                    // устаревшей записью в финальном сохранении.
+                    const nm = eligible[i].name;
+                    const metaEntry = patchFreemodelMeta(nm, mm => {
+                        let ch = syncFmAccountState(mm, nm, merged);
+                        // TG-привязка — локальная мета (ставится при bind) авторитетна.
+                        // Скан freemodel.dev может ДОБАВИТЬ номер, если локально пусто,
+                        // но НИКОГДА не удаляет: tgBound===false на ненадёжном скане
+                        // раньше стирал привязки (оставался осиротевший tgLinkedAt).
+                        if (q.tgBound === true) {
+                            mm[nm] = mm[nm] || {};
+                            if (!mm[nm].tgPhone) { mm[nm].tgPhone = q.tgPhone || 'connected'; ch = true; }
                         }
-                    }
+                        return ch;
+                    });
+                    if (origIdx >= 0) out[origIdx].meta = { ...(out[origIdx].meta || {}), ...metaEntry };
                 }
             } catch { /* keep cached value */ }
         }
     });
     await Promise.all(workers);
-    saveFreemodelQuotaCache(cache);
-    saveFreemodelMeta(meta);
+    // Пишем ТОЛЬКО отсканированные ключи в свежеперечитанный файл. Снапшот `cache`
+    // снят до скана — за это время (десятки секунд на пул) одиночный 🔄 или ленивый
+    // рефреш статуслайна успевают записаться, и запись снапшотом их сносила.
+    const touched = {};
+    for (const s of eligible) if (cache[s.name]) touched[s.name] = cache[s.name];
+    patchFreemodelQuotaCache(touched);
+    // Мета уже записана точечно внутри воркеров — финального сохранения нет
+    // намеренно, оно бы вернуло устаревший снапшот.
     return out;
 }
 
@@ -455,6 +628,26 @@ async function openSessionInBrowser(kind, name) {
             gotoUrl: 'https://conduit.ozdoev.net/#cabinet',
         });
     }
+    if (kind === 'svrtr') {
+        const account = svrtrMod().getSvrtrAccounts().find(s => s.name === name);
+        if (!account) throw new Error(`svrtr account not found: ${name}`);
+        if (!account.sessionFile || !fs.existsSync(account.sessionFile)) throw new Error(`svrtr session.json gone: ${name}`);
+        return _openOrFocusSession({
+            kind, name,
+            storageState: account.sessionFile,
+            gotoUrl: 'https://svrtr.org/profile',
+        });
+    }
+    if (kind === 'helpcoder') {
+        const account = helpcoderMod().getHelpcoderAccounts().find(s => s.name === name);
+        if (!account) throw new Error(`helpcoder account not found: ${name}`);
+        if (!account.sessionFile || !fs.existsSync(account.sessionFile)) throw new Error(`helpcoder session.json gone: ${name}`);
+        return _openOrFocusSession({
+            kind, name,
+            storageState: account.sessionFile,
+            gotoUrl: 'https://helpcoder.cc/token',
+        });
+    }
     if (kind === 'devin') {
         const session = devinMod().getDevinSessions().find(s => s.name === name);
         if (!session) throw new Error(`devin session not found: ${name}`);
@@ -469,6 +662,19 @@ async function openSessionInBrowser(kind, name) {
             gotoUrl: url,
         });
     }
+    if (kind === 'anymodel') {
+        const accounts = listAmodelAccounts();
+        const account = accounts.find(a => a.email === name);
+        if (!account) throw new Error(`anymodel account not found: ${name}`);
+        if (!account.session_dir) throw new Error(`anymodel account has no saved session`);
+        const sessionFile = path.join(AMODEL_ACCOUNTS_DIR, account.session_dir, 'session.json');
+        if (!fs.existsSync(sessionFile)) throw new Error(`anymodel session.json not found: ${sessionFile}`);
+        return _openOrFocusSession({
+            kind, name,
+            storageState: sessionFile,
+            gotoUrl: 'https://anymodel.org/app',
+        });
+    }
     throw new Error(`unknown kind: ${kind}`);
 }
 
@@ -477,21 +683,29 @@ async function refreshOneFreemodelQuota(name) {
     const { getFreemodelSessions, checkFreemodelQuota } = freemodelMod();
     const session = getFreemodelSessions().find(s => s.name === name);
     if (!session) throw new Error(`session not found: ${name}`);
-    const cache = loadFreemodelQuotaCache();
     // manual-аккаунт: браузерной сессии нет, Playwright упрётся в логин.
     // Ставим updatedAt, чтобы авто-ротация не считала кэш вечно протухшим
     // и не дёргала этот no-op каждый тик.
     if (session.backend === 'manual') {
-        cache[name] = { ...(cache[name] || {}), updatedAt: Date.now() };
-        saveFreemodelQuotaCache(cache);
-        return cache[name];
+        const prev = loadFreemodelQuotaCache()[name] || {};
+        const entry = { ...prev, updatedAt: Date.now() };
+        patchFreemodelQuotaCache({ [name]: entry });
+        return entry;
     }
     const q = await checkFreemodelQuota(session);
-    if (q) {
-        cache[name] = { ...mergeStickyFmQuota(cache[name] || {}, q), updatedAt: Date.now() };
-        saveFreemodelQuotaCache(cache);
-    }
-    return cache[name] || null;
+    // Кеш читаем ТОЛЬКО здесь, после await. Снапшот, снятый до запроса, за это
+    // время устаревает: параллельный рефреш соседа успевает записаться, и запись
+    // из старого снапшота его сносит. Именно так терялись квоты, когда несколько
+    // аккаунтов проверялись подряд.
+    if (!q) return loadFreemodelQuotaCache()[name] || null;
+
+    const prev = loadFreemodelQuotaCache()[name] || {};
+    const entry = { ...mergeStickyFmQuota(prev, q), updatedAt: Date.now() };
+    patchFreemodelQuotaCache({ [name]: entry });
+    // Точечный рефреш — основной путь возврата из авто-бана: юзер жмёт 🔄
+    // на строке и аккаунт всплывает, если окно налилось или появились деньги.
+    patchFreemodelMeta(name, meta => syncFmAccountState(meta, name, entry));
+    return entry;
 }
 
 function deleteSession(kind, name) {
@@ -588,6 +802,59 @@ function launchBatFile(batName) {
     return { ok: true, bat: batName };
 }
 
+// ── Email backend для FreeModel autoreger (timeweb | tmailor) ─────────
+// Persist в freemodel/.email_backend; autoreger читает его при старте.
+const EMAIL_BACKEND_FILE = path.join(PROJECT_ROOT, 'freemodel', '.email_backend');
+const EMAIL_BACKENDS = ['timeweb', 'tmailor'];
+
+function getEmailBackend() {
+    try {
+        const v = fs.readFileSync(EMAIL_BACKEND_FILE, 'utf8').trim();
+        if (EMAIL_BACKENDS.includes(v)) return v;
+    } catch {}
+    return 'timeweb'; // дефолт = config.EMAIL_BACKEND
+}
+
+function setEmailBackend(backend) {
+    if (!EMAIL_BACKENDS.includes(backend)) {
+        throw new Error(`unknown email backend: ${backend} (allowed: ${EMAIL_BACKENDS.join(', ')})`);
+    }
+    fs.writeFileSync(EMAIL_BACKEND_FILE, backend, 'utf8');
+    return { ok: true, backend };
+}
+
+// ── Домен регистрации для timeweb-backend ─────────────────────────────
+// Persist в freemodel/.email_domain; timeweb-imap-client читает при старте.
+// Все домены через catch-all льют в один ящик-ридер (см. freemodel/.env.example).
+// Список для дропдауна — из env FM_EMAIL_DOMAINS (через запятую), т.к. домены
+// личные и в репо им не место.
+const EMAIL_DOMAIN_FILE = path.join(PROJECT_ROOT, 'freemodel', '.email_domain');
+const EMAIL_DOMAINS = String(process.env.FM_EMAIL_DOMAINS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+
+function getEmailDomain() {
+    try {
+        const v = fs.readFileSync(EMAIL_DOMAIN_FILE, 'utf8').trim();
+        if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(v)) return v;
+    } catch {}
+    return process.env.TW_MAIL_DOMAIN || EMAIL_DOMAINS[0] || '';
+}
+
+function setEmailDomain(domain) {
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(String(domain || ''))) {
+        throw new Error(`invalid domain: ${domain}`);
+    }
+    fs.writeFileSync(EMAIL_DOMAIN_FILE, String(domain).trim(), 'utf8');
+    return { ok: true, domain: String(domain).trim() };
+}
+
+function listEmailDomains() {
+    const cur = getEmailDomain();
+    // cur может быть пустым, если freemodel/.env не заполнен — не пихаем "" в дропдаун.
+    const set = new Set([...EMAIL_DOMAINS, cur].filter(Boolean));
+    return { current: cur, domains: [...set] };
+}
+
 function launchScript(kind, extraArgs = []) {
     const node = process.execPath; // current Node binary
     const TARGETS = {
@@ -603,6 +870,9 @@ function launchScript(kind, extraArgs = []) {
         'conduit-login':   { title: 'Conduit: Save Session',  args: [path.join(PROJECT_ROOT, 'conduit', 'record_conduit.js')] },
         'tokenrouter-create': { title: 'TokenRouter Autoreg', cmd: 'python', args: [path.join(PROJECT_ROOT, 'routing', 'tokenrouter', 'camoufox_autoreg.py')] },
         'ourtoken-create':   { title: 'Ourtoken Autoreg',     cmd: 'python', args: [path.join(PROJECT_ROOT, 'ourtoken', 'camoufox_autoreg.py')] },
+        'anymodel-create':   { title: 'AnyModel Autoreg',     args: [path.join(PROJECT_ROOT, 'anymodel', 'anymodel_autoreger.js')] },
+        'svrtr-create':      { title: 'Svrtr Autoreg',        args: [path.join(PROJECT_ROOT, 'svrtr', 'svrtr_autoreger.js')] },
+        'helpcoder-create':  { title: 'HelpCoder Autoreg',    args: [path.join(PROJECT_ROOT, 'helpcoder', 'helpcoder_autoreg.js')] },
     };
     const t = TARGETS[kind];
     if (!t) throw new Error(`unknown launch kind: ${kind}`);
@@ -975,6 +1245,251 @@ function getActiveConduitKey() {
     return null;
 }
 
+// ───── Svrtr sessions + cached quotas ────────────────────────────────
+let _svrtr = null;
+function svrtrMod() {
+    if (!_svrtr) _svrtr = require('../svrtr/lib/svrtr-manager');
+    return _svrtr;
+}
+
+const SVRTR_QUOTA_CACHE = path.join(PROJECT_ROOT, 'logs', '.svrtr_quota_cache.json');
+const SVRTR_META_FILE   = path.join(PROJECT_ROOT, 'logs', '.svrtr_meta.json');
+
+function loadSvrtrQuotaCache() {
+    try { if (fs.existsSync(SVRTR_QUOTA_CACHE)) return JSON.parse(fs.readFileSync(SVRTR_QUOTA_CACHE, 'utf-8')) || {}; } catch {}
+    return {};
+}
+function saveSvrtrQuotaCache(cache) {
+    try { fs.mkdirSync(path.dirname(SVRTR_QUOTA_CACHE), { recursive: true }); fs.writeFileSync(SVRTR_QUOTA_CACHE, JSON.stringify(cache, null, 2), 'utf-8'); } catch {}
+}
+function loadSvrtrMeta() {
+    try { if (fs.existsSync(SVRTR_META_FILE)) return JSON.parse(fs.readFileSync(SVRTR_META_FILE, 'utf-8')) || {}; } catch {}
+    return {};
+}
+function saveSvrtrMeta(meta) {
+    try { fs.mkdirSync(path.dirname(SVRTR_META_FILE), { recursive: true }); fs.writeFileSync(SVRTR_META_FILE, JSON.stringify(meta, null, 2), 'utf-8'); } catch {}
+}
+function setSvrtrBanned(name, banned) {
+    const meta = loadSvrtrMeta();
+    meta[name] = meta[name] || {};
+    if (banned) { meta[name].banned = true; meta[name].bannedAt = new Date().toISOString(); }
+    else { delete meta[name].banned; delete meta[name].bannedAt; }
+    saveSvrtrMeta(meta);
+    return meta[name];
+}
+function setSvrtrApiKey(name, apiKey) {
+    const meta = loadSvrtrMeta();
+    meta[name] = meta[name] || {};
+    if (apiKey) meta[name].apiKey = String(apiKey); else delete meta[name].apiKey;
+    saveSvrtrMeta(meta);
+    return meta[name];
+}
+
+async function listSvrtrSessions({ withQuotas = 'cache', concurrency = 6 } = {}) {
+    const { getSvrtrAccounts, checkSvrtrQuota } = svrtrMod();
+    const sessions = getSvrtrAccounts();
+    const meta = loadSvrtrMeta();
+    const withMeta = (s, extra) => ({ ...s, ...extra, meta: meta[s.name] || {} });
+    if (withQuotas === false) return sessions.map(s => withMeta(s, { quota: null }));
+
+    const cache = loadSvrtrQuotaCache();
+    if (withQuotas === 'cache') return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
+
+    const eligible = sessions.filter(s => !(meta[s.name] || {}).banned);
+    const out = sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
+    let idx = 0;
+    const workers = Array.from({ length: Math.min(concurrency, eligible.length || 1) }, async () => {
+        while (true) {
+            const i = idx++;
+            if (i >= eligible.length) return;
+            try {
+                const q = await checkSvrtrQuota(eligible[i]);
+                if (q) {
+                    const origIdx = sessions.indexOf(eligible[i]);
+                    const val = { ...q, updatedAt: Date.now() };
+                    if (origIdx >= 0) out[origIdx].quota = val;
+                    cache[eligible[i].name] = val;
+                    if (q.dead) setSvrtrBanned(eligible[i].name, true);
+                    else if (q.apiKey) { meta[eligible[i].name] = meta[eligible[i].name] || {}; meta[eligible[i].name].apiKey = q.apiKey; }
+                }
+            } catch { /* keep cached */ }
+        }
+    });
+    await Promise.all(workers);
+    saveSvrtrQuotaCache(cache);
+    saveSvrtrMeta(meta);
+    return out;
+}
+
+async function refreshOneSvrtrQuota(name) {
+    if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
+    const { getSvrtrAccounts, checkSvrtrQuota } = svrtrMod();
+    const account = getSvrtrAccounts().find(s => s.name === name);
+    if (!account) throw new Error(`svrtr account not found: ${name}`);
+    const q = await checkSvrtrQuota(account);
+    const cache = loadSvrtrQuotaCache();
+    if (q) { cache[name] = { ...q, updatedAt: Date.now() }; saveSvrtrQuotaCache(cache); }
+    return cache[name] || null;
+}
+
+async function extractSvrtrApiKey(name) {
+    if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
+    const { getSvrtrAccounts, extractSvrtrApiKey: extractKey } = svrtrMod();
+    const account = getSvrtrAccounts().find(s => s.name === name);
+    if (!account) throw new Error(`svrtr account not found: ${name}`);
+    return await extractKey(account);
+}
+
+function addSvrtrKey({ apiKey, username, tgPhone }) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safeName = (username || 'manual').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^@/, '');
+    const dirName = `manual_${ts}_${safeName}`;
+    const dir = path.join(svrtrMod().ACCOUNTS_DIR, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const lines = [
+        `Ident: ${safeName}`,
+        `Saved: ${new Date().toISOString()}`,
+        `Username: ${username || '(?)'}`,
+        `API Key: ${apiKey}`,
+        `Base URL: https://api.svrtr.org`,
+        tgPhone ? `TG Phone: ${tgPhone}` : '',
+    ].filter(Boolean);
+    fs.writeFileSync(path.join(dir, 'account_info.txt'), lines.join('\n') + '\n', 'utf8');
+    const meta = loadSvrtrMeta();
+    meta[dirName] = meta[dirName] || {};
+    meta[dirName].apiKey = apiKey;
+    saveSvrtrMeta(meta);
+    return { ok: true, ident: safeName, name: dirName, dir };
+}
+
+const SR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'sr-active-key.txt');
+function getActiveSvrtrKey() {
+    try { if (fs.existsSync(SR_ACTIVE_KEY_FILE)) return fs.readFileSync(SR_ACTIVE_KEY_FILE, 'utf-8').trim(); } catch {}
+    return null;
+}
+
+// ───── HelpCoder sessions + cached quotas ────────────────────────────
+let _helpcoder = null;
+function helpcoderMod() {
+    if (!_helpcoder) _helpcoder = require('../helpcoder/lib/helpcoder-manager');
+    return _helpcoder;
+}
+
+const HC_QUOTA_CACHE = path.join(PROJECT_ROOT, 'logs', '.helpcoder_quota_cache.json');
+const HC_META_FILE   = path.join(PROJECT_ROOT, 'logs', '.helpcoder_meta.json');
+
+function loadHelpcoderQuotaCache() {
+    try { if (fs.existsSync(HC_QUOTA_CACHE)) return JSON.parse(fs.readFileSync(HC_QUOTA_CACHE, 'utf-8')) || {}; } catch {}
+    return {};
+}
+function saveHelpcoderQuotaCache(cache) {
+    try { fs.mkdirSync(path.dirname(HC_QUOTA_CACHE), { recursive: true }); fs.writeFileSync(HC_QUOTA_CACHE, JSON.stringify(cache, null, 2), 'utf-8'); } catch {}
+}
+function loadHelpcoderMeta() {
+    try { if (fs.existsSync(HC_META_FILE)) return JSON.parse(fs.readFileSync(HC_META_FILE, 'utf-8')) || {}; } catch {}
+    return {};
+}
+function saveHelpcoderMeta(meta) {
+    try { fs.mkdirSync(path.dirname(HC_META_FILE), { recursive: true }); fs.writeFileSync(HC_META_FILE, JSON.stringify(meta, null, 2), 'utf-8'); } catch {}
+}
+function setHelpcoderBanned(name, banned) {
+    const meta = loadHelpcoderMeta();
+    meta[name] = meta[name] || {};
+    if (banned) { meta[name].banned = true; meta[name].bannedAt = new Date().toISOString(); }
+    else { delete meta[name].banned; delete meta[name].bannedAt; }
+    saveHelpcoderMeta(meta);
+    return meta[name];
+}
+function setHelpcoderApiKey(name, apiKey) {
+    const meta = loadHelpcoderMeta();
+    meta[name] = meta[name] || {};
+    if (apiKey) meta[name].apiKey = String(apiKey); else delete meta[name].apiKey;
+    saveHelpcoderMeta(meta);
+    return meta[name];
+}
+
+async function listHelpcoderSessions({ withQuotas = 'cache', concurrency = 6 } = {}) {
+    const { getHelpcoderAccounts, checkHelpcoderQuota } = helpcoderMod();
+    const sessions = getHelpcoderAccounts();
+    const meta = loadHelpcoderMeta();
+    const withMeta = (s, extra) => ({ ...s, ...extra, meta: meta[s.name] || {} });
+    if (withQuotas === false) return sessions.map(s => withMeta(s, { quota: null }));
+
+    const cache = loadHelpcoderQuotaCache();
+    if (withQuotas === 'cache') return sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
+
+    const eligible = sessions.filter(s => !(meta[s.name] || {}).banned);
+    const out = sessions.map(s => withMeta(s, { quota: cache[s.name] || null }));
+    let idx = 0;
+    const workers = Array.from({ length: Math.min(concurrency, eligible.length || 1) }, async () => {
+        while (true) {
+            const i = idx++;
+            if (i >= eligible.length) return;
+            try {
+                const q = await checkHelpcoderQuota(eligible[i]);
+                if (q) {
+                    const origIdx = sessions.indexOf(eligible[i]);
+                    const val = { ...q, updatedAt: Date.now() };
+                    if (origIdx >= 0) out[origIdx].quota = val;
+                    cache[eligible[i].name] = val;
+                    if (q.dead) setHelpcoderBanned(eligible[i].name, true);
+                    else if (q.apiKey) { meta[eligible[i].name] = meta[eligible[i].name] || {}; meta[eligible[i].name].apiKey = q.apiKey; }
+                }
+            } catch { /* keep cached */ }
+        }
+    });
+    await Promise.all(workers);
+    saveHelpcoderQuotaCache(cache);
+    saveHelpcoderMeta(meta);
+    return out;
+}
+
+async function refreshOneHelpcoderQuota(name) {
+    if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
+    const { getHelpcoderAccounts, checkHelpcoderQuota } = helpcoderMod();
+    const account = getHelpcoderAccounts().find(s => s.name === name);
+    if (!account) throw new Error(`helpcoder account not found: ${name}`);
+    const q = await checkHelpcoderQuota(account);
+    const cache = loadHelpcoderQuotaCache();
+    if (q) { cache[name] = { ...q, updatedAt: Date.now() }; saveHelpcoderQuotaCache(cache); }
+    return cache[name] || null;
+}
+
+async function extractHelpcoderApiKey(name) {
+    if (!name || /[\\/]/.test(name)) throw new Error('bad session name');
+    const { getHelpcoderAccounts, extractHelpcoderApiKey: extractKey } = helpcoderMod();
+    const account = getHelpcoderAccounts().find(s => s.name === name);
+    if (!account) throw new Error(`helpcoder account not found: ${name}`);
+    return await extractKey(account);
+}
+
+function addHelpcoderKey({ apiKey, username }) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safeName = (username || 'manual').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^@/, '');
+    const dirName = `manual_${ts}_${safeName}`;
+    const dir = path.join(helpcoderMod().ACCOUNTS_DIR, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const lines = [
+        `Ident: ${safeName}`,
+        `Saved: ${new Date().toISOString()}`,
+        `Username: ${username || '(?)'}`,
+        `API Key: ${apiKey}`,
+        `Base URL: https://helpcoder.cc`,
+    ].filter(Boolean);
+    fs.writeFileSync(path.join(dir, 'account_info.txt'), lines.join('\n') + '\n', 'utf8');
+    const meta = loadHelpcoderMeta();
+    meta[dirName] = meta[dirName] || {};
+    meta[dirName].apiKey = apiKey;
+    saveHelpcoderMeta(meta);
+    return { ok: true, ident: safeName, name: dirName, dir };
+}
+
+const HC_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'hc-active-key.txt');
+function getActiveHelpcoderKey() {
+    try { if (fs.existsSync(HC_ACTIVE_KEY_FILE)) return fs.readFileSync(HC_ACTIVE_KEY_FILE, 'utf-8').trim(); } catch {}
+    return null;
+}
+
 module.exports = {
     listNotionSessions,
     listFreemodelSessions,
@@ -991,11 +1506,21 @@ module.exports = {
     toggleOmniAccount,
     openSessionInBrowser,
     refreshOneFreemodelQuota,
+    fmIsZeroBalance,
+    fmHasMoney,
+    fmIsCooling,
+    syncFmAutoBan,
+    syncFmAccountState,
     refreshOneDevinQuota,
     deleteSession,
     getNotionCards,
     setNotionCardIndex,
     launchScript,
+    getEmailBackend,
+    setEmailBackend,
+    getEmailDomain,
+    setEmailDomain,
+    listEmailDomains,
     launchBatFile,
     sqliteJson,
     setFreemodelBanned,
@@ -1008,6 +1533,43 @@ module.exports = {
     getActiveFreemodelKey,
     openTokenrouterSession,
     loadFreemodelMeta,
+    listAmodelAccounts,
+    launchAmodelAutoreger,
+    listSvrtrSessions,
+    refreshOneSvrtrQuota,
+    extractSvrtrApiKey,
+    addSvrtrKey,
+    setSvrtrBanned,
+    setSvrtrApiKey,
+    getActiveSvrtrKey,
+    loadSvrtrMeta,
+    listHelpcoderSessions,
+    refreshOneHelpcoderQuota,
+    extractHelpcoderApiKey,
+    addHelpcoderKey,
+    setHelpcoderBanned,
+    setHelpcoderApiKey,
+    getActiveHelpcoderKey,
+    loadHelpcoderMeta,
 };
+
+// ───── AnyModel accounts ──────────────────────────────────────
+// anymodel/accounts/account_*.json — результат anymodel_autoreger.js
+const AMODEL_ACCOUNTS_DIR = path.join(PROJECT_ROOT, 'anymodel', 'accounts');
+
+function listAmodelAccounts() {
+    try {
+        if (!fs.existsSync(AMODEL_ACCOUNTS_DIR)) return [];
+        const files = fs.readdirSync(AMODEL_ACCOUNTS_DIR).filter(f => /^account_\d+\.json$/.test(f));
+        return files.map(f => {
+            try { return JSON.parse(fs.readFileSync(path.join(AMODEL_ACCOUNTS_DIR, f), 'utf-8')); }
+            catch { return null; }
+        }).filter(Boolean).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    } catch { return []; }
+}
+
+function launchAmodelAutoreger(count) {
+    return launchScript('anymodel-create', [String(count)]);
+}
 
 

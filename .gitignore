@@ -248,6 +248,10 @@ freemodel/lib/camoufox_emailnator_profile_*/
 helpcoder/accounts/
 svrtr/accounts/
 svrtr/.tg_used.json
+anymodel/accounts/
+anymodel/.tg_used.json
+anymodel/logs/
+anymodel/lib/camoufox_anymodel_profile_*/
 
 # ── Отладочные дампы проб ───────────────────────────────────────────────────
 out_hc*

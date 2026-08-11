@@ -51,6 +51,7 @@ freemodel/_recheck_*.js
 freemodel/_recheck_*.json
 freemodel/_check_one.js
 freemodel/_do_import.js
+freemodel/_sample.js
 
 # Conduit приватные данные (сессии, sk-cdt- ключи, профили браузера, дампы).
 # Коммитим только КОД (conduit/*.js, conduit/lib/*.js).
@@ -240,8 +241,7 @@ routing/custom-models-cache.json
 opencode.json
 
 # ── Профили Camoufox/FireFox для проб (cookies, logins, кеш) ───────────────
-_probe_prof/
-probe_reg_prof/
+*probe*_prof/
 freemodel/lib/camoufox_emailnator_profile_*/
 
 # ── Автореги: аккаунты и живые сессии ───────────────────────────────────────

@@ -187,6 +187,11 @@
 
     <!-- Nav -->
     <nav id="main-nav" class="px-2 space-y-0.5 flex-1 min-h-0 overflow-y-auto">
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="health">
+        <span class="w-5 text-center text-[14px]">🩺</span>
+        <span class="flex-1">Health</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-health-badge">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="claude">
         <span class="text-base">✳</span>
         <span class="flex-1">Claude Code</span>
@@ -426,6 +431,35 @@
           </div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: HEALTH ═════════ -->
+    <div data-tab-content="health">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-emerald">🩺</span> Health
+            </h1>
+            <p class="text-sm text-muted mt-1">что запущено и что упало — клик по строке = статус детальнее</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadHealth(true)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          </div>
+        </header>
+
+        <div id="health-wired" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="text-xs text-faint">загрузка…</div>
+        </div>
+
+        <div id="health-git" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="text-xs text-faint">загрузка…</div>
+        </div>
+
+        <div id="health-services" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
       </div>
     </div>
 
@@ -1968,6 +2002,7 @@
 // ═══════════════════ STATE ═══════════════════════════════════════════
 const state = {
   current: null,
+  health:  null,
   urls:    {},
   devin:   [],
   tgCollapsed: true,
@@ -2164,6 +2199,7 @@ function showTab(name) {
   }
   if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); }
   if (name === 'plugins') { loadPlugins(); loadMcp(); }
+  if (name === 'health') { loadHealth(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -2237,6 +2273,133 @@ function paintStatus() {
   try { fmPaintProvider(); } catch (e) { console.warn('fmPaintProvider', e); }
   try { paintClaudeTab(); } catch (e) { console.warn('paintClaudeTab', e); }
   try { paintConnectButtons(); } catch (e) { console.warn('paintConnectButtons', e); }
+}
+
+// ═══════════════════ HEALTH ═════════════════════════════════
+async function loadHealth() {
+  try {
+    const res = await fetch('/__switch/api/health');
+    state.health = await res.json();
+    renderHealth();
+  } catch (e) {
+    const el = $('health-services');
+    if (el) el.innerHTML = `<div class="p-8 text-center text-xs text-crimson">health: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderHealth() {
+  const d = state.health;
+  if (!d) return;
+  const svc = d.services || [];
+
+  const downs = svc.filter(s => s.status === 'down');
+  const badge = $('nav-health-badge');
+  if (badge) {
+    badge.textContent = downs.length ? `${downs.length}↓` : `${svc.length}✓`;
+    badge.className = `text-[10px] font-mono ${downs.length ? 'text-crimson font-semibold' : 'text-emerald'}`;
+  }
+
+  const w = d.wired || {};
+  const wiredEl = $('health-wired');
+  if (wiredEl) {
+    const cur = LABELS[d.current] || d.current;
+    let html = `<div class="flex flex-wrap items-center gap-2 text-xs">
+        <span class="text-muted">Текущий бэкенд:</span>
+        <span class="font-semibold text-ink">${esc(cur)}</span>
+        <span class="opacity-40 mx-1">·</span>
+        <span class="text-muted">Claude Code →</span>
+        <code class="font-mono text-ink">${esc(w.base || '—')}</code>
+        ${w.port ? `<span class="text-[10px] text-faint">:${w.port}</span>` : ''}
+      </div>`;
+    if (w.port) {
+      const up = w.up;
+      const svcName = w.service || 'неизвестный сервис';
+      html += `<div class="mt-2 text-xs flex items-center gap-2">
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${up ? 'border-emerald/40 bg-emerald/10 text-emerald' : 'border-crimson/40 bg-crimson/10 text-crimson'}">
+          <span class="size-1.5 rounded-full ${up ? 'bg-emerald' : 'bg-crimson'}"></span>
+          ${up ? 'сервис на этом порту ЖИВ' : 'сервис на этом порту МЁРТВ — Claude Code будет падать'}
+        </span>
+        <span class="text-faint">${esc(svcName)}</span>
+      </div>`;
+    }
+    wiredEl.innerHTML = html;
+  }
+
+  const g = d.git || {};
+  const gitEl = $('health-git');
+  if (gitEl) {
+    const behind = g.behind || 0;
+    gitEl.innerHTML = `<div class="flex flex-wrap items-center gap-2 text-xs">
+        <span class="text-muted">Код дашборда:</span>
+        <span class="font-mono text-ink">${esc(g.branch || '?')}</span>
+        <span class="text-faint font-mono">${esc(g.local || '?')} → ${esc(g.remote || '?')}</span>
+        ${behind > 0
+          ? `<span class="px-2 py-0.5 rounded-full border border-amber/40 bg-amber/10 text-amber">отстал на ${behind} комм. — сделай git pull</span>`
+          : `<span class="px-2 py-0.5 rounded-full border border-emerald/40 bg-emerald/10 text-emerald">актуально</span>`}
+        <span class="ml-auto text-faint">аптайм дашборда: ${fmtUptime(d.uptime_s)}</span>
+      </div>`;
+  }
+
+  const listEl = $('health-services');
+  if (listEl) {
+    if (!svc.length) { listEl.innerHTML = `<div class="p-8 text-center text-xs text-faint">нет данных</div>`; return; }
+    const rows = svc.map(s => {
+      const up = s.status === 'up';
+      const warn = s.warn && up;
+      const badgeCls = up
+        ? (warn ? 'bg-amber/10 border-amber/40 text-amber'
+              : (s.orphan ? 'bg-amber/10 border-amber/40 text-amber' : 'bg-emerald/10 border-emerald/40 text-emerald'))
+        : 'bg-crimson/10 border-crimson/40 text-crimson';
+      const dotCls = up ? (warn ? 'bg-amber' : (s.orphan ? 'bg-amber' : 'bg-emerald')) : 'bg-crimson';
+      const extra = s.custom
+        ? `<span class="hidden lg:block text-[10px] text-faint font-mono shrink-0">opus→${esc(s.custom.modelMap.opus)} · sonnet→${esc(s.custom.modelMap.sonnet)} · haiku→${esc(s.custom.modelMap.haiku)}</span>`
+        : '';
+      return `<div class="flex items-center gap-3 px-4 py-2.5 border-b border-line-soft/60 last:border-0">
+        <span class="relative inline-block size-2 rounded-full ${dotCls} ${up ? 'pulse-dot' : ''} shrink-0"></span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm font-medium ${up ? '' : 'text-crimson'}">${esc(s.name)}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${badgeCls}">${up ? (warn ? 'внимание' : (s.orphan ? 'осиротел' : 'жив')) : 'упал'}</span>
+            ${s.orphan ? `<span class="text-[10px] text-faint">слушает, но не в конфиге</span>` : ''}
+            ${s.omni ? `<span class="text-[10px] text-faint">порт 20128 · localhost/v1</span>` : ''}
+            ${s.orphan ? `<button onclick="killHealthPort(${s.port})" title="Убить всё, что слушает :${s.port}" class="text-[10px] px-2 py-1 rounded border border-crimson/40 text-crimson hover:bg-crimson/15 transition">💀 убить</button>` : ''}
+          </div>
+          <div class="text-[11px] text-faint mt-0.5 flex items-center gap-2 flex-wrap">
+            <span class="font-mono">:${s.port}</span>
+            ${s.pid ? `<span class="font-mono">pid ${s.pid}</span>` : ''}
+            <span>${s.ms}мс</span>
+            ${s.detail ? `<span class="text-muted">${esc(s.detail)}</span>` : ''}
+          </div>
+        </div>
+        ${extra}
+      </div>`;
+    }).join('');
+    listEl.innerHTML = `<div class="p-2">${rows}</div>`;
+  }
+}
+
+function fmtUptime(sec) {
+  if (sec == null) return '—';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h ? `${h}ч ${m}м` : `${m}м`;
+}
+
+async function killHealthPort(port) {
+  if (!confirm(`Убить всё, что слушает :${port}?`)) return;
+  try {
+    const r = await fetch('/__switch/api/health/kill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port }),
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      toast(`Убито на :${port} (${d.killed} процесс(ов))`, 'success');
+      loadHealth();
+    } else {
+      toast('Ошибка: ' + (d.error || r.status), 'error');
+    }
+  } catch (e) { toast('kill: ' + e.message, 'error'); }
 }
 
 // Вкладка Claude Code: карточка OAuth-сессии + состояние кнопки «Подключить».
@@ -2465,16 +2628,16 @@ function getDefaultPresets() {
       }
     },
     'agentRouter': {
-      label: 'AgentRouter · API Helper',
-      desc: 'apiKeyHelper → node readFileSync ~/.claude/ar-active-key.txt',
+      label: 'AgentRouter · AUTH_TOKEN',
+      desc: 'ANTHROPIC_AUTH_TOKEN = ключ из ar-active-key.txt (прямой режим, без helper)',
       icon: '🧭',
       color: 'sky',
       settings: {
-        apiKeyHelper: nodeKeyHelper('ar-active-key.txt'),
+        apiKeyHelper: null,
         model: null,
         env: {
-          ANTHROPIC_BASE_URL: 'http://localhost:20132',
-          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_BASE_URL: 'https://agentrouter.org',
+          ANTHROPIC_AUTH_TOKEN: null,
           ANTHROPIC_API_KEY: null
         }
       }
@@ -4344,7 +4507,7 @@ async function arSelectModel(id) {
     const data = await res.json();
     if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
     state.arActiveModel = data.model || id;
-    toast('✓ Модель ' + (data.model || id) + ' применена (base :20132)', 'success', 4000);
+    toast('✓ Модель ' + (data.model || id) + ' применена (base ' + (data.base || 'agentrouter.org') + ')', 'success', 4000);
     renderArModels(state.arModels);
   } catch (e) { toast('arSelectModel: ' + e.message, 'error'); }
 }
@@ -8587,6 +8750,11 @@ function autoRefreshTick() {
 // ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
+// Health — опрос только когда вкладка открыта (проба всех портов дороже)
+setInterval(() => {
+  const el = document.querySelector('[data-tab-content="health"]');
+  if (el && el.classList.contains('active') && !document.hidden) loadHealth();
+}, 15000);
 
 // Тик перезапускается сам после каждого прохода, а не висит на setInterval:
 // в фоне браузер душит таймеры (до ~1/мин), и накопленные тики после возврата

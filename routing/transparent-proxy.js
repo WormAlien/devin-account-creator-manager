@@ -382,6 +382,19 @@ async function handleSettingsApply(req, res) {
             }
         }
         writeSettings(next);
+        // AgentRouter: пресет не знает ключ — подставляем активный из ar-active-key.txt,
+        // а helper убираем (WAF agentrouter пускает только AUTH_TOKEN-путь).
+        if ((next.env && next.env.ANTHROPIC_BASE_URL || '').startsWith(AR_BASE_URL)) {
+            next.env = next.env || {};
+            delete next.apiKeyHelper;
+            delete next.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete next.env.ANTHROPIC_API_KEY;
+            let activeKey = '';
+            try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+            if (activeKey) next.env.ANTHROPIC_AUTH_TOKEN = activeKey;
+            else delete next.env.ANTHROPIC_AUTH_TOKEN;
+            writeSettings(next);
+        }
         return jsonRes(res, 200, { ok: true, current: currentTarget() });
     } catch (e) {
         return jsonRes(res, 400, { error: e.message });
@@ -2763,6 +2776,150 @@ async function customKillProxy(provider) {
     logLine(`custom proxy kill: ${provider.name}${port ? ' :' + port : ''}`);
 }
 
+// ── Health: проба всех сервисов (что запущено / что упало) ──────────────────
+function summarizeStatus(data) {
+    if (!data || typeof data !== 'object') return '';
+    const parts = [];
+    if (typeof data.usableCount === 'number' && typeof data.totalCount === 'number')
+        parts.push(`${data.usableCount}/${data.totalCount} ключей`);
+    if (data.activeKeyId) parts.push(`актив:${String(data.activeKeyId).slice(0, 12)}`);
+    if (data.modelMap) parts.push(`opus→${data.modelMap.opus} · sonnet→${data.modelMap.sonnet} · haiku→${data.modelMap.haiku}`);
+    if (data.mapping && typeof data.mapping === 'object')
+        parts.push(`map:${Object.keys(data.mapping).length} моделей`);
+    if (data.stats) parts.push(`req:${data.stats.requests ?? '?'} err:${data.stats.errors ?? '?'}`);
+    if (data.provider) parts.push(data.provider);
+    if (Array.isArray(data.models) && data.models.length) parts.push(`${data.models.length} моделей`);
+    if (data.ok && !parts.length) parts.push('ok');
+    return parts.slice(0, 4).join(' · ');
+}
+
+async function handleHealth(res) {
+    // порт → [pid, …] всех слушателей разом (один netstat)
+    const listening = new Map();
+    try {
+        const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
+        for (const line of out.split(/\r?\n/)) {
+            const m = line.match(/:(\d{4,5})\s+\S+\s+LISTENING\s+(\d+)/);
+            if (m) {
+                const p = +m[1];
+                if (!listening.has(p)) listening.set(p, []);
+                listening.get(p).push(m[2]);
+            }
+        }
+    } catch {}
+
+    const checks = [
+        { name: 'Дашборд (switcher)', port: LISTEN_PORT, path: '/__switch/api/status' },
+        { name: 'FreeModel ротатор',  port: 20126, path: '/__fmrot/api/status' },
+        { name: 'FreeModel OpenAI',   port: 20130, path: '/__fmoai/api/status' },
+        { name: 'VyceAI',             port: 20131, path: '/__vyceai/api/status' },
+        { name: 'AgentRouter',        port: 20132, path: '/__agentrouter/api/status' },
+    ];
+    const knownPorts = new Set(checks.map(c => c.port));
+
+    // Custom-конвертеры из конфига (не забыть их, даже если порт не в диапазоне)
+    for (const p of (customLoad().providers || [])) {
+        if (p.proxyPort) {
+            knownPorts.add(p.proxyPort);
+            checks.push({ name: `Custom: ${p.name}`, port: p.proxyPort, path: '/__custom/api/status', custom: p });
+        }
+    }
+    // Осиротевшие конвертеры 20150–20250 (слушают, но не в конфиге) — полезно знать
+    for (const port of listening.keys()) {
+        if (port >= 20150 && port <= 20250 && !knownPorts.has(port))
+            checks.push({ name: `Порт :${port} (осиротел)`, port, path: '/__custom/api/status', orphan: true });
+    }
+
+    const probe = async (c) => {
+        const t0 = Date.now();
+        let status = 'down', data = null;
+        try {
+            const r = await fetch(`http://127.0.0.1:${c.port}${c.path}`, { signal: AbortSignal.timeout(1500) });
+            if (r.ok) {
+                status = 'up';
+                try { data = await r.json(); } catch {}
+            }
+        } catch {}
+        const pids = listening.get(c.port) || [];
+        return {
+            name: c.name,
+            port: c.port,
+            pid: pids[0] || null,
+            status,
+            ms: Date.now() - t0,
+            orphan: !!c.orphan,
+            custom: c.custom ? { id: c.custom.id, modelMap: c.custom.modelMap } : undefined,
+            detail: summarizeStatus(data),
+        };
+    };
+    const services = await Promise.all(checks.map(probe));
+
+    // OmniRoute (local :20128) — отдельная проба по ключу: 200 = жив+ключ ок,
+    // 401 = сервер жив, но ключ невалиден, сеть упала = сервис лежит.
+    {
+        const t0 = Date.now();
+        const om = { name: 'OmniRoute', port: 20128, pid: (listening.get(20128) || [null])[0], status: 'down', ms: 0, omni: true, warn: false, detail: 'порт 20128 не слушает' };
+        if (listening.has(20128)) {
+            try {
+                let key = '';
+                try { key = fs.readFileSync(OM_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+                if (!key) key = omniKey();
+                const r = await fetch('http://localhost:20128/v1/models', {
+                    headers: { 'Authorization': `Bearer ${key}` },
+                    signal: AbortSignal.timeout(2500),
+                });
+                om.ms = Date.now() - t0;
+                om.status = 'up';
+                if (r.status === 401) { om.warn = true; om.detail = 'сервер жив, ключ невалиден (401)'; }
+                else if (r.ok) { om.detail = 'жив, ключ валиден'; }
+                else { om.detail = `жив, http ${r.status}`; }
+            } catch { om.status = 'down'; om.detail = 'порт слушает, но /v1/models не отвечает'; }
+        }
+        services.push(om);
+    }
+
+    services.sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'down' ? -1 : 1; // упавшие сверху
+        return a.port - b.port;
+    });
+
+    // Куда смотрит Claude Code сейчас
+    let wired = { base: null, port: null, up: false, service: null };
+    try {
+        const s = readSettings();
+        const base = (s.env && s.env.ANTHROPIC_BASE_URL) || '';
+        const pm = base.match(/:(\d+)/);
+        wired.base = base;
+        wired.port = pm ? +pm[1] : null;
+        wired.up = wired.port ? listening.has(wired.port) : false;
+        const svc = services.find(x => x.port === wired.port);
+        wired.service = svc ? svc.name : null;
+    } catch {}
+
+    // Обновления кода дашборда
+    let git = { branch: null, behind: null, local: null, remote: null };
+    try {
+        const repo = path.join(__dirname, '..');
+        const g = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+        const branch = g('rev-parse', '--abbrev-ref', 'HEAD');
+        g('fetch', '--quiet', 'origin', branch);
+        git = {
+            branch,
+            local: g('rev-parse', '--short', 'HEAD'),
+            remote: g('rev-parse', '--short', `origin/${branch}`),
+            behind: parseInt(g('rev-list', '--count', `HEAD..origin/${branch}`) || '0', 10),
+        };
+    } catch {}
+
+    return jsonRes(res, 200, {
+        services,
+        wired,
+        git,
+        current: currentTarget(),
+        uptime_s: Math.round(process.uptime()),
+    });
+}
+
 // GET /__switch/api/custom/providers → список провайдеров + ключей + активный
 async function handleCustomProviders(req, res) {
     try {
@@ -4265,6 +4422,15 @@ async function handleArDelete(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// Прямой режим: claude-* → agentrouter.org напрямую (WAF пустит реальный Claude Code,
+// apiKeyHelper отдаёт ключ); gpt-* → через локальный прокси :20132 (нужна конвертация в OpenAI).
+function arTargetFor(model) {
+    const isGpt = /(^|[-_.\/])?(gpt|o[0-9]|davinci|chatgpt)/i.test(String(model || ''))
+        || String(model || '').toLowerCase().includes('gpt');
+    return isGpt ? { base: AR_PROXY_URL, needProxy: true }
+                 : { base: AR_BASE_URL, needProxy: false };
+}
+
 // Клик по ключу → активный: пишем ключ в ar-active-key.txt + apiKeyHelper в settings.json.
 async function handleArActivate(req, res) {
     try {
@@ -4285,18 +4451,22 @@ async function handleArActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-ar');
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = AR_PROXY_URL;
-            settings.apiKeyHelper = keyHelperCmd('ar-active-key.txt');
+            const curModel = arReadActiveModel() || settings.model || '';
+            const target = arTargetFor(curModel);
+            settings.env.ANTHROPIC_BASE_URL = target.base;
+            delete settings.apiKeyHelper;   // agentrouter-WAF не пускает helper-путь
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
-            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
-            delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
-            clearOtEnv(settings);    // убрать наш AUTH_TOKEN/маппинги от other пулов
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;   // токен рулит авторизацией
+            clearOtEnv(settings);    // снести AUTH_TOKEN/маппинги от other пулов — потом ставим свой
+            settings.env.ANTHROPIC_AUTH_TOKEN = key;   // прямой режим: ключ литералом, как у друга
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
+            if (target.needProxy) await arProxySpawn();
         } catch (e) {
             logLine(`agentrouter activate: settings.json FAILED: ${e.message}`);
         }
-        logLine(`agentrouter activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        logLine(`agentrouter activate: ${target.email} → ***${key.slice(-6)} (token, base ${arTargetFor(arReadActiveModel() || '').base})`);
         jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -4349,19 +4519,27 @@ async function handleArSetModel(req, res) {
             const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-ar-model');
+            const target = arTargetFor(m);
             settings.model = m;
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = AR_PROXY_URL;
-            settings.apiKeyHelper = keyHelperCmd('ar-active-key.txt');
+            settings.env.ANTHROPIC_BASE_URL = target.base;
+            delete settings.apiKeyHelper;   // agentrouter-WAF не пускает helper-путь
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            let activeKey = '';
+            try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+            if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = activeKey;   // прямой режим
+            else delete settings.env.ANTHROPIC_AUTH_TOKEN;
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`agentrouter set-model: settings.json FAILED: ${e.message}`);
         }
-        await arProxySpawn();
-        logLine(`agentrouter set-model: ${m} (base :${AR_PROXY_PORT})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, modelFile: AR_ACTIVE_MODEL_FILE });
+        const target = arTargetFor(m);
+        if (target.needProxy) await arProxySpawn();
+        logLine(`agentrouter set-model: ${m} (base ${target.base})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, modelFile: AR_ACTIVE_MODEL_FILE, base: target.base });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -4546,6 +4724,42 @@ const server = http.createServer((req, res) => {
             oauth: oauthStatus(),
             settings_file: SETTINGS_FILE,
         });
+    }
+
+    // ── Health: что запущено / что упало ──────────────────────────────────────
+    if (req.method === 'GET' && req.url === '/__switch/api/health') {
+        return handleHealth(res);
+    }
+
+    // POST /__switch/api/health/kill { port } → убить всё, что слушает порт.
+    // Безопасно: работает только с портами, которых нет среди служебных и
+    // зарегистрированных custom-провайдеров (иначе можно случайно погасить ядро).
+    if (req.method === 'POST' && req.url === '/__switch/api/health/kill') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                const { port } = JSON.parse(body || '{}');
+                const p = Number(port);
+                if (!p || !Number.isInteger(p) || p < 1024 || p > 65535)
+                    return jsonRes(res, 400, { error: 'port required' });
+                const protected = new Set([
+                    LISTEN_PORT, 20126, 20130, 20131, 20132,
+                    ...(customLoad().providers || []).map(x => x.proxyPort).filter(Boolean),
+                ]);
+                if (protected.has(p))
+                    return jsonRes(res, 400, { error: `:${p} — конфигурируемый сервис, не дам убить` });
+                const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
+                let killed = 0;
+                for (const line of out.split(/\r?\n/)) {
+                    const m = line.match(new RegExp(`:${p}\\s+\\S+\\s+LISTENING\\s+(\\d+)`));
+                    if (m) { try { execFileSync('taskkill', ['/F', '/PID', m[1]]); killed++; } catch {} }
+                }
+                logLine(`health kill: killed ${killed} listener(s) on :${p}`);
+                jsonRes(res, 200, { ok: true, killed, port: p });
+            } catch (e) { jsonRes(res, 400, { error: e.message }); }
+        });
+        return;
     }
 
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/logs')) {

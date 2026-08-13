@@ -187,6 +187,11 @@
 
     <!-- Nav -->
     <nav id="main-nav" class="px-2 space-y-0.5 flex-1 min-h-0 overflow-y-auto">
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="health">
+        <span class="w-5 text-center text-[14px]">🩺</span>
+        <span class="flex-1">Health</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-health-badge">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="claude">
         <span class="text-base">✳</span>
         <span class="flex-1">Claude Code</span>
@@ -358,7 +363,7 @@
       <div class="px-5 py-4 border-b border-line-soft flex items-center justify-between">
         <div>
           <div class="text-sm font-semibold text-ink">Настроить вкладки</div>
-          <div class="text-[11px] text-faint mt-0.5">Перетаскивай ≡ · клик по 👁 скрывает</div>
+          <div class="text-[11px] text-faint mt-0.5">Перетащи строку в нужное место · 👁 скрывает/показывает</div>
         </div>
         <button onclick="closeTabsManager()" class="text-faint hover:text-ink text-xl leading-none px-2">✕</button>
       </div>
@@ -426,6 +431,35 @@
           </div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: HEALTH ═════════ -->
+    <div data-tab-content="health">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-emerald">🩺</span> Health
+            </h1>
+            <p class="text-sm text-muted mt-1">что запущено и что упало — клик по строке = статус детальнее</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadHealth(true)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          </div>
+        </header>
+
+        <div id="health-wired" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="text-xs text-faint">загрузка…</div>
+        </div>
+
+        <div id="health-git" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="text-xs text-faint">загрузка…</div>
+        </div>
+
+        <div id="health-services" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
       </div>
     </div>
 
@@ -1430,6 +1464,7 @@
             <button data-connect-backend="agentrouter" onclick="applyPreset('agentRouter')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
             <button onclick="loadArSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadArSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+            <button onclick="arCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
             <button onclick="arShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
           </div>
         </header>
@@ -1468,7 +1503,7 @@
         </div>
 
         <div class="text-xs text-faint">
-          <span>base → <code class="text-ink">https://agentrouter.org</code> (БЕЗ /v1)</span>
+          <span>base → <code class="text-ink">claude-*</code> :20133 keepalive · <code class="text-ink">gpt-*</code> :20132 proxy → <code class="text-ink">agentrouter.org</code> (БЕЗ /v1)</span>
           <span class="mx-2 opacity-40">·</span>
           <span>ключи <code class="text-ink">sk-…</code> — бери на <a href="https://agentrouter.org/console/token" target="_blank" class="text-sky hover:underline">console/token</a></span>
           <span class="mx-2 opacity-40">·</span>
@@ -1968,6 +2003,7 @@
 // ═══════════════════ STATE ═══════════════════════════════════════════
 const state = {
   current: null,
+  health:  null,
   urls:    {},
   devin:   [],
   tgCollapsed: true,
@@ -2164,6 +2200,7 @@ function showTab(name) {
   }
   if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); }
   if (name === 'plugins') { loadPlugins(); loadMcp(); }
+  if (name === 'health') { loadHealth(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -2237,6 +2274,133 @@ function paintStatus() {
   try { fmPaintProvider(); } catch (e) { console.warn('fmPaintProvider', e); }
   try { paintClaudeTab(); } catch (e) { console.warn('paintClaudeTab', e); }
   try { paintConnectButtons(); } catch (e) { console.warn('paintConnectButtons', e); }
+}
+
+// ═══════════════════ HEALTH ═════════════════════════════════
+async function loadHealth() {
+  try {
+    const res = await fetch('/__switch/api/health');
+    state.health = await res.json();
+    renderHealth();
+  } catch (e) {
+    const el = $('health-services');
+    if (el) el.innerHTML = `<div class="p-8 text-center text-xs text-crimson">health: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderHealth() {
+  const d = state.health;
+  if (!d) return;
+  const svc = d.services || [];
+
+  const downs = svc.filter(s => s.status === 'down');
+  const badge = $('nav-health-badge');
+  if (badge) {
+    badge.textContent = downs.length ? `${downs.length}↓` : `${svc.length}✓`;
+    badge.className = `text-[10px] font-mono ${downs.length ? 'text-crimson font-semibold' : 'text-emerald'}`;
+  }
+
+  const w = d.wired || {};
+  const wiredEl = $('health-wired');
+  if (wiredEl) {
+    const cur = LABELS[d.current] || d.current;
+    let html = `<div class="flex flex-wrap items-center gap-2 text-xs">
+        <span class="text-muted">Текущий бэкенд:</span>
+        <span class="font-semibold text-ink">${esc(cur)}</span>
+        <span class="opacity-40 mx-1">·</span>
+        <span class="text-muted">Claude Code →</span>
+        <code class="font-mono text-ink">${esc(w.base || '—')}</code>
+        ${w.port ? `<span class="text-[10px] text-faint">:${w.port}</span>` : ''}
+      </div>`;
+    if (w.port) {
+      const up = w.up;
+      const svcName = w.service || 'неизвестный сервис';
+      html += `<div class="mt-2 text-xs flex items-center gap-2">
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${up ? 'border-emerald/40 bg-emerald/10 text-emerald' : 'border-crimson/40 bg-crimson/10 text-crimson'}">
+          <span class="size-1.5 rounded-full ${up ? 'bg-emerald' : 'bg-crimson'}"></span>
+          ${up ? 'сервис на этом порту ЖИВ' : 'сервис на этом порту МЁРТВ — Claude Code будет падать'}
+        </span>
+        <span class="text-faint">${esc(svcName)}</span>
+      </div>`;
+    }
+    wiredEl.innerHTML = html;
+  }
+
+  const g = d.git || {};
+  const gitEl = $('health-git');
+  if (gitEl) {
+    const behind = g.behind || 0;
+    gitEl.innerHTML = `<div class="flex flex-wrap items-center gap-2 text-xs">
+        <span class="text-muted">Код дашборда:</span>
+        <span class="font-mono text-ink">${esc(g.branch || '?')}</span>
+        <span class="text-faint font-mono">${esc(g.local || '?')} → ${esc(g.remote || '?')}</span>
+        ${behind > 0
+          ? `<span class="px-2 py-0.5 rounded-full border border-amber/40 bg-amber/10 text-amber">отстал на ${behind} комм. — сделай git pull</span>`
+          : `<span class="px-2 py-0.5 rounded-full border border-emerald/40 bg-emerald/10 text-emerald">актуально</span>`}
+        <span class="ml-auto text-faint">аптайм дашборда: ${fmtUptime(d.uptime_s)}</span>
+      </div>`;
+  }
+
+  const listEl = $('health-services');
+  if (listEl) {
+    if (!svc.length) { listEl.innerHTML = `<div class="p-8 text-center text-xs text-faint">нет данных</div>`; return; }
+    const rows = svc.map(s => {
+      const up = s.status === 'up';
+      const warn = s.warn && up;
+      const badgeCls = up
+        ? (warn ? 'bg-amber/10 border-amber/40 text-amber'
+              : (s.orphan ? 'bg-amber/10 border-amber/40 text-amber' : 'bg-emerald/10 border-emerald/40 text-emerald'))
+        : 'bg-crimson/10 border-crimson/40 text-crimson';
+      const dotCls = up ? (warn ? 'bg-amber' : (s.orphan ? 'bg-amber' : 'bg-emerald')) : 'bg-crimson';
+      const extra = s.custom
+        ? `<span class="hidden lg:block text-[10px] text-faint font-mono shrink-0">opus→${esc(s.custom.modelMap.opus)} · sonnet→${esc(s.custom.modelMap.sonnet)} · haiku→${esc(s.custom.modelMap.haiku)}</span>`
+        : '';
+      return `<div class="flex items-center gap-3 px-4 py-2.5 border-b border-line-soft/60 last:border-0">
+        <span class="relative inline-block size-2 rounded-full ${dotCls} ${up ? 'pulse-dot' : ''} shrink-0"></span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm font-medium ${up ? '' : 'text-crimson'}">${esc(s.name)}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${badgeCls}">${up ? (warn ? 'внимание' : (s.orphan ? 'осиротел' : 'жив')) : 'упал'}</span>
+            ${s.orphan ? `<span class="text-[10px] text-faint">слушает, но не в конфиге</span>` : ''}
+            ${s.omni ? `<span class="text-[10px] text-faint">порт 20128 · localhost/v1</span>` : ''}
+            ${s.orphan ? `<button onclick="killHealthPort(${s.port})" title="Убить всё, что слушает :${s.port}" class="text-[10px] px-2 py-1 rounded border border-crimson/40 text-crimson hover:bg-crimson/15 transition">💀 убить</button>` : ''}
+          </div>
+          <div class="text-[11px] text-faint mt-0.5 flex items-center gap-2 flex-wrap">
+            <span class="font-mono">:${s.port}</span>
+            ${s.pid ? `<span class="font-mono">pid ${s.pid}</span>` : ''}
+            <span>${s.ms}мс</span>
+            ${s.detail ? `<span class="text-muted">${esc(s.detail)}</span>` : ''}
+          </div>
+        </div>
+        ${extra}
+      </div>`;
+    }).join('');
+    listEl.innerHTML = `<div class="p-2">${rows}</div>`;
+  }
+}
+
+function fmtUptime(sec) {
+  if (sec == null) return '—';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h ? `${h}ч ${m}м` : `${m}м`;
+}
+
+async function killHealthPort(port) {
+  if (!confirm(`Убить всё, что слушает :${port}?`)) return;
+  try {
+    const r = await fetch('/__switch/api/health/kill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port }),
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      toast(`Убито на :${port} (${d.killed} процесс(ов))`, 'success');
+      loadHealth();
+    } else {
+      toast('Ошибка: ' + (d.error || r.status), 'error');
+    }
+  } catch (e) { toast('kill: ' + e.message, 'error'); }
 }
 
 // Вкладка Claude Code: карточка OAuth-сессии + состояние кнопки «Подключить».
@@ -2465,16 +2629,16 @@ function getDefaultPresets() {
       }
     },
     'agentRouter': {
-      label: 'AgentRouter · API Helper',
-      desc: 'apiKeyHelper → node readFileSync ~/.claude/ar-active-key.txt',
+      label: 'AgentRouter · AUTH_TOKEN',
+      desc: 'ANTHROPIC_AUTH_TOKEN = ключ из ar-active-key.txt (прямой режим, без helper)',
       icon: '🧭',
       color: 'sky',
       settings: {
-        apiKeyHelper: nodeKeyHelper('ar-active-key.txt'),
+        apiKeyHelper: null,
         model: null,
         env: {
-          ANTHROPIC_BASE_URL: 'http://localhost:20132',
-          CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '0',
+          ANTHROPIC_BASE_URL: 'https://agentrouter.org',
+          ANTHROPIC_AUTH_TOKEN: null,
           ANTHROPIC_API_KEY: null
         }
       }
@@ -2593,6 +2757,19 @@ function renderWhoami(matches, prefixes) {
 }
 
 // ═══════════════════ TABLE HELPERS ═══════════════════════════════════
+// Единый бейдж пинг-статуса ключа (live/dead/неизвестно) для всех провайдеров.
+function liveBadge(st) {
+  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
+  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
+  return '<span class="text-faint">⚪ —</span>';
+}
+// «Скопировать /model <id>» — общая для всех провайдерских чипов моделей.
+async function copyModelCmd(id) {
+  try {
+    await navigator.clipboard.writeText('/model ' + id);
+    toast('📋 /model ' + id, 'success', 2500);
+  } catch (e) { toast('copy: ' + e.message, 'error'); }
+}
 function table(headers, rows, footer) {
   return `
     <table class="min-w-full text-sm">
@@ -2794,12 +2971,6 @@ async function loadAlSessions(probe) {
   }
 }
 
-function alStatusBadge(st) {
-  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
-  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
-  return '<span class="text-faint">⚪ —</span>';
-}
-
 function renderAerolink() {
   const rows = state.aerolink;
   if (!rows.length) {
@@ -2816,7 +2987,7 @@ function renderAerolink() {
         <button onclick='alActivate(${kJ})' title="Сделать активным (API Helper)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-azure hover:border-azure/50'} transition">${esc(keyMask)}</button>
       </td>
-      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${alStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${liveBadge(s.status)}</td>
       <td class="px-4 py-2.5 text-xs text-faint">—</td>
       <td class="px-4 py-2.5 text-right">
         <button onclick='alDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
@@ -3033,7 +3204,7 @@ function cunModelChip(id, tone) {
   return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border ${activeCls}">
     <button onclick='cunSelectModel(${idJ})' title="Выбрать модель → settings (ANTHROPIC_MODEL)"
       class="hover:underline text-left">${active ? '🌟 ' : ''}${esc(id)}</button>
-    <button onclick='cunCopyModel(${idJ})' title="Копировать /model &lt;id&gt;"
+    <button onclick='copyModelCmd(${idJ})' title="Копировать /model &lt;id&gt;"
       class="text-faint hover:text-ink px-1">📋</button>
   </span>`;
 }
@@ -3073,17 +3244,8 @@ function renderCunModels(models) {
   }
 }
 
-async function cunCopyModel(id) {
-  try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
-}
-
 function cunShortPath(p) {
   if (!p) return '—';
-  const home = (typeof navigator !== 'undefined' && /Win/.test(navigator.platform))
-    ? null : null;
   // показываем ~\.claude\... если путь внутри .claude
   const m = String(p).replace(/\\/g, '/').match(/\.claude\/(.+)$/i);
   return m ? '~/.claude/' + m[1] : p;
@@ -3176,12 +3338,6 @@ async function cunApplyFromFile() {
   } catch (e) { toast('from-file: ' + e.message, 'error'); }
 }
 
-function cunStatusBadge(st) {
-  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
-  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
-  return '<span class="text-faint">⚪ —</span>';
-}
-
 function renderCun() {
   const rows = state.cun;
   if (!rows.length) {
@@ -3198,7 +3354,7 @@ function renderCun() {
         <button onclick='cunActivate(${kJ})' title="Активировать: AUTH_TOKEN + https://www.cun.ai"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-violet hover:border-violet/50'} transition">${esc(keyMask)}</button>
       </td>
-      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${cunStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${liveBadge(s.status)}</td>
       <td class="px-4 py-2.5 text-right whitespace-nowrap space-x-1">
         <button onclick='cunCopyKey(${kJ})' title="Скопировать API-ключ" class="text-xs text-faint hover:text-violet px-1">📋</button>
         <button onclick='cunPing(${kJ})' title="Проверить ключ" class="text-xs text-faint hover:text-violet px-1">🩺</button>
@@ -3305,12 +3461,6 @@ async function loadEvomapSessions(probe) {
   }
 }
 
-function evomapStatusBadge(st) {
-  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
-  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
-  return '<span class="text-faint">⚪ —</span>';
-}
-
 function renderEvomap() {
   const rows = state.evomap;
   if (!rows.length) {
@@ -3327,7 +3477,7 @@ function renderEvomap() {
         <button onclick='evomapActivate(${kJ})' title="Сделать активным (API Helper)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-amber hover:border-amber/50'} transition">${esc(keyMask)}</button>
       </td>
-      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${evomapStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${liveBadge(s.status)}</td>
       <td class="px-4 py-2.5 text-xs text-faint">—</td>
       <td class="px-4 py-2.5 text-right">
         <button onclick='evomapDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
@@ -3410,12 +3560,6 @@ async function loadOmSessions(probe) {
   }
 }
 
-function omStatusBadge(st) {
-  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
-  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
-  return '<span class="text-faint">⚪ —</span>';
-}
-
 function renderOmniRoute() {
   const rows = state.omniroutePool;
   if (!rows.length) {
@@ -3432,7 +3576,7 @@ function renderOmniRoute() {
         <button onclick='omActivate(${kJ})' title="Сделать активным (API Helper)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-azure hover:border-azure/50'} transition">${esc(keyMask)}</button>
       </td>
-      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${omStatusBadge(s.status)}</td>
+      <td class="px-4 py-2.5 text-xs whitespace-nowrap">${liveBadge(s.status)}</td>
       <td class="px-4 py-2.5 text-xs text-faint">—</td>
       <td class="px-4 py-2.5 text-right">
         <button onclick='omDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
@@ -3707,23 +3851,10 @@ function renderOtModels(models) {
     const full = 'ourtoken/' + m.id;
     return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono bg-cyan/10 border border-cyan/30 text-cyan">
       ${esc(full)}
-      <button onclick='otCopyModel(${JSON.stringify(full)})' title="Копировать /model ourtoken/…"
+      <button onclick='copyModelCmd(${JSON.stringify(full)})' title="Копировать /model ourtoken/…"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
-}
-
-async function otCopyModel(full) {
-  try {
-    await navigator.clipboard.writeText('/model ' + full);
-    toast('📋 /model ' + full, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
-}
-
-function ourtokenStatusBadge(st) {
-  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
-  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
-  return '<span class="text-faint">⚪ —</span>';
 }
 
 function renderOurtoken() {
@@ -4013,7 +4144,7 @@ function renderCustomModels(providerId, fromCache) {
   holder.innerHTML = models.map(m =>
     `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono bg-violet/10 border border-violet/30 text-violet">
       ${esc(m.id)}
-      <button onclick='customCopyModel(${JSON.stringify(m.id)})' title="Копировать /model …"
+      <button onclick='copyModelCmd(${JSON.stringify(m.id)})' title="Копировать /model …"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`).join('');
 }
@@ -4028,13 +4159,6 @@ function customAutoLoadModels() {
     if (state.customLoading[p.id]) continue;
     customLoadModels(p.id, key, false);
   }
-}
-
-async function customCopyModel(full) {
-  try {
-    await navigator.clipboard.writeText('/model ' + full);
-    toast('📋 /model ' + full, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 
 async function customCopyKey(apiKey) {
@@ -4245,12 +4369,20 @@ function customRender() {
 // ═══════════════════ AGENTROUTER ═══════════════════════════════════
 function arPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
     else if (s.status === 'dead') dead++;
+    if (typeof s.balance === 'number') {
+      sumBalance += s.balance;
+      const g = s.grant || 175;
+      sumGrant += g;
+      withBalance++;
+    }
   }
-  return { live, dead, total, remPct: total ? Math.round((live / total) * 100) : 0 };
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct };
 }
 
 function renderArGauge() {
@@ -4262,8 +4394,12 @@ function renderArGauge() {
       `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
       `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
       st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
     ].filter(Boolean).join(''),
-    note: 'WAF пропускает только Claude Code запросы (CC-заголовки) — пинг со стороны прокси работает, обычный curl — нет.',
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'WAF пропускает только Claude Code запросы (CC-заголовки) — пинг со стороны прокси работает, обычный curl — нет.',
   });
 }
 
@@ -4320,19 +4456,16 @@ async function renderArModels(models) {
       onclick='arSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + ar-active-model.txt · без /model) · 📋 = копия">
       ${esc(id)}
-      <button onclick='event.stopPropagation();arCopyModel(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
 }
-async function arCopyModel(id) {
-  try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
-}
 
 
+// Выбор модели пишет settings.json + ar-active-model.txt. ВАЖНО: Claude Code читает
+// settings.model ОДИН РАЗ при старте процесса — на живую сессию запись не влияет.
+// Поэтому тост прямо говорит: нужен рестарт CC (или /model в самой сессии).
 async function arSelectModel(id) {
   if (!id) return toast('нет model id', 'warn');
   try {
@@ -4344,14 +4477,12 @@ async function arSelectModel(id) {
     const data = await res.json();
     if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
     state.arActiveModel = data.model || id;
-    toast('✓ Модель ' + (data.model || id) + ' применена (base :20132)', 'success', 4000);
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
     renderArModels(state.arModels);
   } catch (e) { toast('arSelectModel: ' + e.message, 'error'); }
-}
-function arStatusBadge(st) {
-  if (st === 'live') return '<span class="text-emerald">🟢 LIVE</span>';
-  if (st === 'dead') return '<span class="text-crimson">🔴 DEAD</span>';
-  return '<span class="text-faint">⚪ —</span>';
 }
 
 function renderAr() {
@@ -4378,6 +4509,7 @@ function renderAr() {
       : '<span class="text-faint text-[11px]">⚪ —</span>';
     const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
     const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = arBalanceCell(s, kJ);
     return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
         ${activeTag}${esc(email)}
@@ -4387,10 +4519,12 @@ function renderAr() {
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-sky hover:border-sky/50'} transition">${esc(keyMask)}</button>
       </td>
       <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${actBtn(`arCopyKey(${kJ})`,    'Скопировать API-ключ',   '📋', 'sky')}
         ${actBtn(`arActivate(${kJ})`,   'Сделать активным',       '🤝', 'amber')}
         ${actBtn(`arPing(${kJ})`,       'Проверить ключ',         '🩺', 'sky')}
+        ${actBtn(`arOpenLk(${kJ})`,     'Открыть ЛК (GitHub-сессия, чек-ин +$25)', '🌐', 'violet')}
         ${actBtn(`arDelete(${kJ})`,     'Удалить',                '🗑', 'crimson')}
       </td>
     </tr>`;
@@ -4401,11 +4535,39 @@ function renderAr() {
       { label: 'Email' },
       { label: 'API Key' },
       { label: 'Status', align: 'center', w: 'w-16' },
+      { label: 'Баланс', align: 'center', w: 'w-24' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
     `${all.length} ключей`
   );
+}
+
+// Ячейка баланса. Данные берём из самого объекта сессии (персистентный кеш из sessions.json).
+// dead → 🔴; есть balance → $XX.XX цветом по доле остатка; иначе кнопка 💰 для чека.
+// Вторая строка — кликабельная выдача «из $175»: у разных аккаунтов она разная (125/175/личный
+// больше), поэтому её можно вписать руками. Показываем цифру, а не иконку — иконку не видно.
+function arBalanceCell(s, kJ) {
+  if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
+  const manual = s.grantSource === 'manual';
+  const gLabel = typeof s.grant === 'number' ? `из $${s.grant.toFixed(0)}` : 'задать выдачу';
+  const gTip = manual
+    ? `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — вписана вручную. Клик = изменить.`
+    : `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — угадана автоматически. Клик = вписать точную.`;
+  const edit = `<button onclick='arSetGrant(${kJ})' title="${esc(gTip)}"
+    class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
+    ${manual ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
+    hover:bg-sky/25 hover:border-sky/70 hover:text-sky">✏️ ${gLabel}</button>`;
+
+  if (typeof s.balance === 'number') {
+    const grant = s.grant || 175;
+    const frac = grant > 0 ? s.balance / grant : 0;
+    const color = frac > 0.3 ? 'text-emerald' : frac >= 0.1 ? 'text-amber' : 'text-crimson';
+    const tip = `остаток $${s.balance.toFixed(2)} = выдано $${(s.grant ?? 0).toFixed(0)} (${manual ? 'вручную' : 'авто'}) − потрачено $${(s.spent ?? 0).toFixed(2)} · клик = пересчитать`;
+    return `<span class="inline-flex flex-col items-center"><button onclick='arCheckBalance(${kJ})' title="${esc(tip)}"
+      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${edit}</span>`;
+  }
+  return `<span class="inline-flex flex-col items-center">${actBtn(`arCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
 }
 
 function arShowAdd(show = true) {
@@ -4470,6 +4632,102 @@ async function arPing(api_key) {
     renderArGauge();
     toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
   } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+// Чек баланса одного ключа. Бэк считает spent/grant/balance и пишет в sessions.json (кеш).
+async function arCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/ar/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.agentrouter.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) {
+      const s = state.agentrouter[idx];
+      s.status = data.status;
+      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; s.accessUntil = data.accessUntil; }
+    }
+    renderAr();
+    renderArGauge();
+    if (data.status === 'live') toast(`💰 баланс $${data.balance.toFixed(2)} (выдано $${data.grant} · потрачено $${data.spent.toFixed(2)})`, 'success', 4000);
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+
+// Балансы всех ключей одним прогоном (бэк считает чанками по 3).
+async function arCheckAllBalances() {
+  $('ar-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/ar/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.agentrouter = data.sessions || [];
+    renderAr();
+    renderArGauge();
+    const withBal = state.agentrouter.filter(s => typeof s.balance === 'number').length;
+    toast(`✓ балансы посчитаны (${withBal})`, 'success');
+  } catch (e) {
+    $('ar-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+// Задать изначальную выдачу вручную (у разных акков разная: 125/175/личный больше).
+// Пустая строка → сброс на авто-угадывание. Бэк сразу пересчитывает баланс.
+// Текст промпта показывает реальные цифры этого аккаунта, чтобы не гадать что вписывать.
+async function arSetGrant(api_key) {
+  const cur = state.agentrouter.find(x => x.api_key === api_key);
+  const now = cur && cur.grantManual ? String(cur.grantManual) : '';
+  const spent = cur && typeof cur.spent === 'number' ? cur.spent.toFixed(2) : '?';
+  const grantNow = cur && typeof cur.grant === 'number' ? cur.grant.toFixed(0) : '?';
+  const isManual = cur && cur.grantSource === 'manual';
+
+  const msg = [
+    'Сколько денег было НА АККАУНТЕ ИЗНАЧАЛЬНО (когда его зарегали)?',
+    '',
+    `Сейчас: выдано $${grantNow} (${isManual ? 'вписано тобой' : 'дашборд угадал сам'}), потрачено $${spent}.`,
+    'Остаток = выдано − потрачено. Поэтому если выдача указана неверно — врёт и остаток.',
+    '',
+    'Впиши число: 125, 175, или сколько реально дали (личный акк — больше).',
+    'Оставь поле пустым и нажми OK — дашборд снова будет угадывать сам.',
+  ].join('\n');
+
+  const val = prompt(msg, now);
+  if (val === null) return; // отмена
+  const grant = val.trim() === '' ? null : Number(val.trim());
+  if (grant !== null && !(grant > 0)) return toast('выдача должна быть числом больше 0', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ar/set-grant', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key, grant }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const idx = state.agentrouter.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) {
+      const s = state.agentrouter[idx];
+      if (grant === null) delete s.grantManual; else s.grantManual = grant;
+      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; s.grantSource = data.grantSource; }
+    }
+    renderAr();
+    renderArGauge();
+    toast(grant === null ? '↩ выдача сброшена на авто' : `✓ выдача $${grant}` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
+  } catch (e) { toast('set-grant: ' + e.message, 'error'); }
+}
+
+// Открыть ЛК (консоль agentrouter) под GitHub-сессией этого аккаунта — для чек-ина +$25.
+// Бэк спавнит видимый Chromium (open-session.js). Первый раз просит залогиниться и сохраняет сессию.
+async function arOpenLk(api_key) {
+  try {
+    const res = await fetch('/__switch/api/ar/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already ? '🌐 браузер уже открыт' : '🌐 браузер открыт (первый раз — залогинься в GitHub; чек-ин +$25)', 'success', 5000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
 }
 
 async function arCopyKey(api_key) {
@@ -5050,7 +5308,7 @@ async function loadSvrtrModels(force) {
         if (cntEl) cntEl.textContent = String(data.models.length);
         listEl.innerHTML = data.models.map(m => {
           const idJ = JSON.stringify(m.id);
-          return `<button onclick='svrtrCopyModel(${idJ})' title="Копировать /model ${esc(m.id)}"
+          return `<button onclick='copyModelCmd(${idJ})' title="Копировать /model ${esc(m.id)}"
             class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-azure/10 border-azure/30 text-azure hover:bg-azure/20 transition">${esc(m.id)} <span class="opacity-50">📋</span></button>`;
         }).join('');
         srModelsLoading = false;
@@ -5060,12 +5318,6 @@ async function loadSvrtrModels(force) {
   }
   listEl.innerHTML = '<span class="text-[10px] text-faint">модели не найдены</span>';
   srModelsLoading = false;
-}
-async function svrtrCopyModel(id) {
-  try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ HELPCODER ════════════════════════════════════════
@@ -5210,7 +5462,7 @@ async function loadHelpcoderModels(force) {
         if (cntEl) cntEl.textContent = String(data.models.length);
         listEl.innerHTML = data.models.map(m => {
           const idJ = JSON.stringify(m.id);
-          return `<button onclick='helpcoderCopyModel(${idJ})' title="Копировать /model ${esc(m.id)}"
+          return `<button onclick='copyModelCmd(${idJ})' title="Копировать /model ${esc(m.id)}"
             class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-azure/10 border-azure/30 text-azure hover:bg-azure/20 transition">${esc(m.id)} <span class="opacity-50">📋</span></button>`;
         }).join('');
         hcModelsLoading = false;
@@ -5220,12 +5472,6 @@ async function loadHelpcoderModels(force) {
   }
   listEl.innerHTML = '<span class="text-[10px] text-faint">модели не найдены</span>';
   hcModelsLoading = false;
-}
-async function helpcoderCopyModel(id) {
-  try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ ANYMODEL ═════════════════════════════════════════
@@ -5394,7 +5640,7 @@ function cdtModelChip(id, tone) {
   return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border ${activeCls}">
     <button onclick='cdtSelectModel(${idJ})' title="Выбрать модель → settings"
       class="hover:underline text-left">${active ? '🌟 ' : ''}${esc(id)}</button>
-    <button onclick='cdtCopyModel(${idJ})' title="Копировать /model &lt;id&gt;"
+    <button onclick='copyModelCmd(${idJ})' title="Копировать /model &lt;id&gt;"
       class="text-faint hover:text-ink px-1">📋</button>
   </span>`;
 }
@@ -5488,13 +5734,6 @@ async function cdtSelectModel(id) {
   } catch (e) { toast('set-model: ' + e.message, 'error'); }
 }
 
-async function cdtCopyModel(id) {
-  try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
-}
-
 async function loadCdtActiveModel() {
   try {
     const res = await fetch('/__switch/api/conduit/active-model');
@@ -5570,7 +5809,7 @@ async function loadFmModels(force) {
     const chip = (m, color) => {
       const id = fmModelWithWindow(m);
       const idJ = JSON.stringify(id);
-      return `<button onclick='fmCopyModel(${idJ})' title="Копировать /model ${esc(id)}"
+      return `<button onclick='copyModelCmd(${idJ})' title="Копировать /model ${esc(id)}"
         class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-${color}/10 border-${color}/30 text-${color} hover:bg-${color}/20 transition">${esc(id)} <span class="opacity-50">📋</span></button>`;
     };
     const group = (label, badge, items, color, hint) => items.length ? `
@@ -5592,12 +5831,6 @@ async function loadFmModels(force) {
   } catch (e) {
     listEl.innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
   } finally { fmModelsLoading = false; }
-}
-async function fmCopyModel(id) {
-  try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 
 // ═══════════════════ ENERGY GAUGE (батарея «сколько осталось») ════════
@@ -5810,69 +6043,76 @@ function trLiveStats(accounts, usageMap) {
   return { live, dead, withKey, total: (accounts || []).length, remSum, remKnown };
 }
 
-// Главный счётчик. Полоса = запас квоты FreeModel (живой пул). Отдельной строкой —
-// живые (≤24ч) ключи TokenRouter ($1/день). Notion/Devin — архив, не учитываются.
+// Главный счётчик. В «Общий запас» входят ТОЛЬКО провайдеры с правдиво считаемым
+// балансом (реальные $ по ключам). Сейчас это один AgentRouter. Протухшие
+// (FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin) — не считаются:
+// их баланс не является деньгами или уже не начисляется.
 async function renderGlobalGauge() {
-  let sessions = state.freemodel;
-  if (!sessions || !sessions.length) {
-    try {
-      const res = await fetch('/__switch/api/freemodel/sessions');
-      const data = await res.json();
-      if (res.ok) { sessions = data.sessions || []; state.freemodel = sessions; }
-    } catch {}
-  }
-  const st = fmPoolStats(sessions);
-  let auto = (fmAutoLast && typeof fmAutoLast.enabled === 'boolean') ? fmAutoLast.enabled : null;
-  if (auto == null) {
-    try { const r = await fetch('/__switch/api/freemodel/auto/status'); const j = await r.json(); auto = !!j.enabled; } catch {}
-  }
-  if (auto != null) updateSideAuto(auto);
+  // Правдивые провайдеры. Добавить нового = одна запись. fetchData возвращает
+  // массив аккаунтов вида { api_key, status, balance, grant }.
+  const truthfulProviders = [
+    {
+      id: 'agentrouter', label: 'AgentRouter', icon: '🌐', color: 'violet',
+      fetchData: async () => {
+        if (state.agentrouter && state.agentrouter.length) return state.agentrouter;
+        const res = await fetch('/__switch/api/ar/sessions');
+        const data = await res.json();
+        if (res.ok) { state.agentrouter = data.sessions || []; return state.agentrouter; }
+        return [];
+      },
+      stat: (accounts) => {
+        let live = 0, dead = 0, total = 0;
+        let sumBalance = 0, sumGrant = 0, withBalance = 0;
+        for (const s of (accounts || [])) {
+          total++;
+          if (s.status === 'live') live++;
+          else if (s.status === 'dead') dead++;
+          if (typeof s.balance === 'number') {
+            sumBalance += s.balance;
+            sumGrant += (s.grant || 175);
+            withBalance++;
+          }
+        }
+        return { total, live, dead, withBalance, sumBalance, sumGrant };
+      },
+    },
+  ];
 
-  // TokenRouter живые ключи (отдельная строка).
-  let trStats = null;
-  try {
-    const [accRes, useRes] = await Promise.all([
-      fetch('/__switch/api/tokenrouter/accounts'),
-      fetch('/__switch/api/tokenrouter/usage-cache'),
-    ]);
-    const accData = await accRes.json();
-    const useData = useRes.ok ? await useRes.json().catch(() => ({})) : {};
-    if (accRes.ok) trStats = trLiveStats(accData.accounts || [], useData || {});
-  } catch {}
-
-  let trLine = '';
-  if (trStats && trStats.withKey > 0) {
-    trLine = `<div class="mt-2 pt-2 border-t border-line-soft/50 flex items-center gap-x-4 gap-y-1 text-xs font-mono flex-wrap">
-      <span class="text-azure">🔑 TokenRouter</span>
-      <span><span class="text-ink font-semibold">${trStats.live}</span> живых ≤24ч</span>
-      ${trStats.dead > 0 ? `<span class="text-crimson/80">${trStats.dead} ⌛ мертв</span>` : ''}
-      ${trStats.remKnown ? `<span class="text-emerald">$${trStats.remSum.toFixed(2)} ост. ($1/день)</span>` : '<span class="text-faint">баланс не опрошен</span>'}
+  let sumBalance = 0, sumGrant = 0, accounts = 0, providers = 0;
+  let extra = '';
+  for (const p of truthfulProviders) {
+    let acc;
+    try { acc = await p.fetchData(); } catch { acc = []; }
+    const st = p.stat(acc);
+    if (!st.total) continue;
+    providers++;
+    accounts += st.withBalance;
+    sumBalance += st.sumBalance;
+    sumGrant += st.sumGrant;
+    extra += `<div class="mt-2 pt-2 border-t border-line-soft/50 flex items-center gap-x-4 gap-y-1 text-xs font-mono flex-wrap">
+      <span class="text-${p.color}">${p.icon} ${p.label}</span>
+      <span><span class="text-ink font-semibold">${st.total}</span> ключей</span>
+      ${st.live > 0 ? `<span class="text-emerald">${st.live} 🟢 LIVE</span>` : ''}
+      ${st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : ''}
+      ${st.withBalance ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '<span class="text-faint">баланс не опрошен</span>'}
     </div>`;
   }
 
-  // Ourtoken живые ключи (отдельная строка, $1 за LIVE ключ).
-  let otLine = '';
-  try {
-    const otSessions = state.ourtoken && state.ourtoken.length ? state.ourtoken
-      : await fetch('/__switch/api/ot/sessions').then(r => r.json()).then(j => j.sessions || []).catch(() => []);
-    if (otSessions.length) {
-      const otSt = otPoolStats(otSessions);
-      otLine = `<div class="mt-2 pt-2 border-t border-line-soft/50 flex items-center gap-x-4 gap-y-1 text-xs font-mono flex-wrap">
-        <span class="text-cyan">🪙 Ourtoken</span>
-        <span><span class="text-ink font-semibold">${otSt.live}</span> 🟢 LIVE</span>
-        ${otSt.dead > 0 ? `<span class="text-crimson/80">${otSt.dead} 🔴 DEAD</span>` : ''}
-        <span class="text-emerald">$${otSt.balanceSum.toFixed(2)} баланс</span>
-      </div>`;
-    }
-  } catch {}
+  const pct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : 0;
+  const sub = providers > 0
+    ? [
+        `<span><span class="text-ink font-semibold">${accounts}</span> акк</span>`,
+        `<span>${providers} ${providers === 1 ? 'провайдер' : 'провайдера'}</span>`,
+        sumBalance > 0 ? `<span class="text-emerald">$${sumBalance.toFixed(2)} доступно из $${sumGrant.toFixed(0)}</span>` : '',
+      ].filter(Boolean).join('')
+    : '<span class="text-faint">правдивых провайдеров нет</span>';
 
   renderEnergyGauge($('global-energy'), {
     title: 'Общий запас free-tier',
-    pct: st.remPct,
-    auto,
-    sub: fmSubLine(st),
-    extra: trLine + otLine,
-    note: 'Полоса — запас квоты FreeModel (5h/7d). TokenRouter: живые ключи ≤24ч. Ourtoken: $1 за LIVE ключ. Notion/Devin — архив.',
+    pct,
+    sub,
+    extra,
+    note: 'В запас входят только провайдеры с реальным балансом (сейчас — AgentRouter). FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin — протухли, не считаются.',
   });
 }
 
@@ -7561,7 +7801,6 @@ async function loadTokenrouterAccounts() {
     if (!res.ok) throw new Error(data.error);
     state.tokenrouter = data.accounts || [];
     $('nav-count-tokenrouter').textContent = state.tokenrouter.length;
-    renderTokenrouter();
     await loadTokenrouterOmnirouteConnections();
     renderTokenrouter();
   } catch (e) {
@@ -7982,7 +8221,10 @@ function renderLogPanel() {
     box.innerHTML = '<div class="text-[11px] text-dim text-center py-8 font-sans">Уведомлений пока нет</div>';
     return;
   }
-  box.innerHTML = state.toastLog.map(e => {
+  // toastLog хранится newest-first (unshift) — рисуем в обратном порядке,
+  // чтобы актуальные были внизу, как в обычном логе.
+  const lines = state.toastLog.slice().reverse();
+  box.innerHTML = lines.map(e => {
     const t = new Date(e.t).toLocaleTimeString('ru-RU', { hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
     const cls = map[e.kind] || map.info;
     return `<div class="text-[11px] border-l-2 pl-2 py-1 pr-2 rounded-r ${cls}">
@@ -8483,20 +8725,56 @@ function renderTabsManagerList() {
       </button>
     </li>
   `).join('');
-  // SortableJS для drag-reorder (если загружен).
-  if (window.Sortable && !list._sortable) {
+  wireTabsReorder(list);
+}
+function commitTabsOrder(list) {
+  const newOrder = Array.from(list.children).map(li => li.dataset.tab);
+  const cur = loadTabsConfig();
+  saveTabsConfig({ ...cur, order: newOrder });
+  applyTabsConfig();
+  renderTabsManagerList();
+}
+function wireTabsReorder(list) {
+  // Повторный вызов (re-render модалки) НЕ должен перенавешивать события.
+  if (list._wired) return;
+  list._wired = true;
+  // SortableJS — если CDN (cdn.jsdelivr.net) недоступен, откатываемся на
+  // нативный HTML5 drag&drop ниже. Тащим за всю строку (не только за ≡),
+  // кнопка 👁 исключена фильтром.
+  if (window.Sortable) {
     list._sortable = Sortable.create(list, {
-      handle: '.handle',
       animation: 150,
       ghostClass: 'opacity-30',
-      onEnd: () => {
-        const newOrder = Array.from(list.children).map(li => li.dataset.tab);
-        const cur = loadTabsConfig();
-        saveTabsConfig({ ...cur, order: newOrder });
-        applyTabsConfig();
-      },
+      filter: 'button',
+      onEnd: () => commitTabsOrder(list),
     });
+    return;
   }
+  list.addEventListener('dragstart', e => {
+    const li = e.target.closest('li[data-tab]');
+    if (!li || e.target.closest('button')) { e.preventDefault(); return; }
+    list._dragFrom = li;
+    li.classList.add('opacity-30');
+    try { e.dataTransfer.setData('text/plain', li.dataset.tab); } catch {}
+  });
+  list.addEventListener('dragover', e => {
+    const li = e.target.closest('li[data-tab]');
+    if (li && li !== list._dragFrom) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; }
+  });
+  list.addEventListener('drop', e => {
+    e.preventDefault();
+    const from = list._dragFrom;
+    const to = e.target.closest('li[data-tab]');
+    if (from && to && from !== to) {
+      const after = (from.compareDocumentPosition(to) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      to.insertAdjacentElement(after ? 'afterend' : 'beforebegin', from);
+    }
+  });
+  list.addEventListener('dragend', () => {
+    if (list._dragFrom) list._dragFrom.classList.remove('opacity-30');
+    list._dragFrom = null;
+    commitTabsOrder(list);
+  });
 }
 function toggleTabHidden(name) {
   const cfg = loadTabsConfig();
@@ -8587,6 +8865,11 @@ function autoRefreshTick() {
 // ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
+// Health — опрос только когда вкладка открыта (проба всех портов дороже)
+setInterval(() => {
+  const el = document.querySelector('[data-tab-content="health"]');
+  if (el && el.classList.contains('active') && !document.hidden) loadHealth();
+}, 15000);
 
 // Тик перезапускается сам после каждого прохода, а не висит на setInterval:
 // в фоне браузер душит таймеры (до ~1/мин), и накопленные тики после возврата
@@ -8854,9 +9137,9 @@ async function loadVyceaiModels(force) {
     const chip = (m, color) => {
       const idJ = JSON.stringify(m);
       return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border bg-${color}/10 border-${color}/30 text-${color}">
-        <button onclick='vyceaiCopyModel(${idJ})' title="Копировать /model ${esc(m)}"
+        <button onclick='copyModelCmd(${idJ})' title="Копировать /model ${esc(m)}"
           class="hover:underline text-left">${esc(m)}</button>
-        <button onclick='vyceaiCopyModel(${idJ})' title="Копировать /model id"
+        <button onclick='copyModelCmd(${idJ})' title="Копировать /model id"
           class="text-faint hover:text-ink px-1">📋</button>
       </span>`;
     };
@@ -8877,13 +9160,6 @@ async function loadVyceaiModels(force) {
   } catch (e) {
     listEl.innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
   }
-}
-
-async function vyceaiCopyModel(id) {
-  try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
-  } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 
 $('vyceai-filter')?.addEventListener('input', () => renderVyceaiKeys());
@@ -9179,7 +9455,7 @@ async function grokLaunch() {
   status.classList.remove('hidden');
 
   try {
-    const res = await fetch('http://localhost:8765/launch', {
+    const res = await fetch('/__switch/api/grok/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cookies, target: 'grok.com' }),
@@ -9722,25 +9998,25 @@ async function grokLaunchSession(index) {
   status.classList.remove('hidden');
 
   try {
-    const res = await fetch('http://localhost:8765/launch', {
+    const res = await fetch('/__switch/api/grok/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cookies, target: 'grok.com' }),
+      body: JSON.stringify({ name: session.name }),
     });
     const data = await res.json();
     if (res.ok) {
-      status.textContent = '✓ ' + session.name + ' — Chrome opened';
+      status.textContent = '✓ ' + session.name + ' — ' + (data.message || 'Chrome opened');
       status.className = 'text-xs p-3 rounded-lg border border-emerald/50 bg-emerald/5 text-emerald';
       toast('🤖 ' + session.name + ' opened', 'success');
     } else {
-      status.textContent = 'Launch failed: ' + (data.detail || 'unknown error');
+      status.textContent = 'Launch failed: ' + (data.error || data.detail || 'unknown error');
       status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
-      toast('✗ Launch: ' + (data.detail || 'unknown error'), 'error', 6000);
+      toast('✗ Launch: ' + (data.error || data.detail || 'unknown error'), 'error', 6000);
     }
   } catch (e) {
-    status.textContent = 'Connection failed: ' + e.message + ' (launcher :8765 не отвечает — проверь бейдж launcher сверху)';
+    status.textContent = 'Connection failed: ' + e.message;
     status.className = 'text-xs p-3 rounded-lg border border-crimson/50 bg-crimson/5 text-crimson';
-    toast('✗ launcher :8765 не отвечает', 'error', 6000);
+    toast('✗ switcher API не отвечает', 'error', 6000);
   }
 }
 
@@ -9784,7 +10060,8 @@ async function grokDeleteSession(index) {
 })();
 
 // ---- Grok launcher supervisor UI ----
-// Дашборд бьёт напрямую в http://localhost:8765/launch (у launcher.py CORS *).
+// Launch происходит в node-эндпоинте /__switch/api/grok/launch (transparent-proxy),
+// python-launcher :8765 для запуска браузера больше не используется.
 // Здесь мы только показываем статус supervisor'а из :8200 и умеем его пнуть.
 async function grokLauncherRefresh() {
   const el = $('grok-launcher-state');

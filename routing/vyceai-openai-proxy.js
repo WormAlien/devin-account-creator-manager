@@ -520,10 +520,8 @@ function writeJSON(res, code, obj) {
     res.end(JSON.stringify(obj));
 }
 
-function logLine(s) {
-    const t = new Date().toISOString().substring(11, 23);
-    console.log(`[${t}] ${s}`);
-}
+const { createLogger } = require('./proxy-logger.js');
+const { logLine } = createLogger('vyce');
 
 const server = http.createServer((req, res) => {
     if (req.method === 'OPTIONS') {

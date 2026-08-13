@@ -17,6 +17,7 @@
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
 | `20150-20250`| **Custom OpenAI Proxies** (динамически) | `routing/custom-openai-proxy.js` | Anthropic→OpenAI конвертер для Custom-провайдеров с заполненным `modelMap`. Спавнится на активацию (детached), конфиг `~/.claude/custom-<id>-proxy.json`, ключ из `~/.claude/custom-active-key.txt`. Убивается при деактивации/удалении. |
+| `20132`| **AgentRouter Proxy** | `routing/agentrouter-proxy.js` | Фронтенд для agentrouter.org: `claude-*` → pass-through в `/v1/messages`, `gpt-*` → конвертер Anthropic→OpenAI `/v1/chat/completions` **с Cyrillic-bypass** (обход WAF «sensitive words detected»). Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки от клиента. Спавнится автоматически при выборе gpt-модели. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -62,6 +63,18 @@
   `ANTHROPIC_BASE_URL=https://api.svrtr.org`, TTL=0. Anthropic-совместимый endpoint
   (ключи `sk-sr-v1-`), авторег через @svrtrbot (одна кнопка Login Start в боте).
   Файлы: `svrtr/lib/svrtr-api.js`, `svrtr/svrtr_autoreger.js`.
+- **agentrouter** (прямой режим) — `ANTHROPIC_BASE_URL=https://agentrouter.org` (БЕЗ `/v1`),
+  ключ пишется **литералом** в `ANTHROPIC_AUTH_TOKEN` (не apiKeyHelper — WAF agentrouter
+  не пускает helper-путь). `apiKeyHelper` удаляется, модель из `~/.claude/ar-active-model.txt`.
+  Роутинг моделей: `claude-*` → `agentrouter.org` напрямую, `gpt-*` → локальный прокси
+  `http://localhost:20132` (нужна конвертация в OpenAI). Пул: `routing/agentrouter-sessions.json`.
+- **helpcoder** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/hc-active-key.txt`,
+  `ANTHROPIC_BASE_URL=https://helpcoder.cc`, TTL=0. OpenAI-совместимый New-API инстанс
+  (ключи `sk-`), понимает и Anthropic-формат `/v1/messages`. Все модели `gpt-*`
+  (11 шт: gpt-5 … gpt-5.4, codex). WAF нет — Cyrillic-bypass не нужен. Авторег чистым
+  HTTP: `helpcoder/helpcoder_autoreg.js` (новый акк = $200 виртуальных кредитов).
+  Аккаунты: `helpcoder/accounts/<dir>/`. Файлы: `helpcoder/lib/helpcoder-api.js`,
+  `helpcoder/lib/helpcoder-manager.js`.
 
 **⚠ Формат apiKeyHelper — только node-вариант** (`keyHelperCmd()` в transparent-proxy.js):
 `node -e "...readFileSync(os.homedir()+'/.claude/<xx>-active-key.txt'...).trim()"`.
@@ -71,8 +84,8 @@
 cat без файла виснет на stdin. Выяснено на чистой установке 2026-07-19.
 
 Режим определяется по `settings.json` (`currentTarget`): apiKeyHelper с `fm-active-key.txt`
-→ `apihelper`; с `al-active-key.txt` → `aerolink`; с `ev-active-key.txt` → `evomap`; с `ot-active-key.txt` → `ourtoken`; с `cdt-active-key.txt` → `conduit`;
-прямой ключ → backend по URL.
+→ `apihelper`; с `al-active-key.txt` → `aerolink`; с `ev-active-key.txt` → `evomap`; с `ot-active-key.txt` → `ourtoken`; с `cdt-active-key.txt` → `conduit`; с `hc-active-key.txt` → `helpcoder`;
+прямой ключ → backend по URL (base agentrouter.org → `agentrouter`).
 
 > ⚠️ Для `apiKeyHelper`-режимов нужен Claude Code **2.1.153** + отключённый авто-апдейт
 > (`DISABLE_AUTOUPDATER=1`, `autoUpdates:false`). Новее ломает `apiKeyHelper`.
@@ -93,6 +106,8 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **Custom**    | активна   | произвольные провайдеры: имя + baseUrl + пул ключей (`routing/custom-providers.json`), пинг/модели по `{baseUrl}/models`, активация через API Helper (`~/.claude/custom-active-key.txt`). Если задан `modelMap` (opus/sonnet/haiku) — активация поднимает Anthropic→OpenAI конвертер (`custom-openai-proxy.js`) и направляет CC на `localhost:<port>` | `/api/custom/*` |
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
 | **Svrtr**     | активна   | ТГ-аккаунты svrtr.org (api.svrtr.org), кредиты, реги через @svrtrbot, активация через API Helper | `/api/svrtr/*` |
+| **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js для чек-ина +$25), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132 | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model}` |
+| **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |
 | **Плагины / MCP** | активна | слева плагины Claude Code (тоггл `enabledPlugins`, ★ рекомендованные), справа MCP-серверы из `~/.claude.json` | `/api/plugins/list`, `/api/settings/apply`, `/api/mcp/list`, `/api/mcp/toggle` |
@@ -208,6 +223,102 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
   открыть в браузере (🌐, только для аккаунтов с session.json), пресет «Conduit ·
   API Helper» на главной. ТГ-пул — **зеркало** блока из FreeModel (общий пул:
   `renderTgPool` рисует во все `.tg-list`/`.tg-stats`).
+
+---
+
+## AgentRouter (ar) — WAF, Cyrillic-bypass, gpt через прокси
+
+Пул в `routing/agentrouter-sessions.json` (`[{email, name, api_key, active, status}]`),
+клик по ключу = активный. **Особенность agentrouter.org — WAF**, который пускает только
+«настоящие» запросы Claude Code:
+
+- Все probe/models обязаны нести CC-заголовки (`AR_CC_HEADERS`: `user-agent claude-cli/…`,
+  `anthropic-version/beta`, `x-app: cli`) + `Authorization: Bearer <ключ>`. Без них — 401.
+  Внутри самого Claude Code заголовки шлёт клиент, прокси их прокидывает как есть.
+- **apiKeyHelper-путь WAF не пускает** — при активации `apiKeyHelper` удаляется,
+  ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN` (как в конфиге, который работает
+  «как у друга»). `ANTHROPIC_API_KEY` чистится.
+- **Маршрутизация моделей** (`arTargetFor`): `claude-*` → `agentrouter.org` напрямую
+  (pass-through, работает как есть); `gpt-*` → локальный прокси `:20132`, т.к. gpt-модели
+  у agentrouter живут на OpenAI-эндпоинте и нужна конвертация Anthropic→OpenAI.
+
+### WAF «sensitive words detected» и Cyrillic-bypass
+
+На OpenAI-эндпоинте WAF agentrouter **сканирует контент запроса** и режет его
+ответом `500 sensitive words detected` (полное CC-тело: большой system + 91 тул —
+падало всегда; минимальные запросы проходили). Обход (механика из lolz.team,
+подтверждена на полном CC-запросе → 200):
+
+- **В кодирование:** все английские `c` в *тексте* промпта (system, содержимое
+  сообщений, tool-дескрипшены, tool_result) заменяются на кириллическую `с`
+  (U+0441, визуально идентична) → сигнатуры WAF не матчатся.
+- **Наружу не влияет:** имена тулзов, аргументы, JSON-структура и ключи полей
+  НЕ трогаются (иначе сломается парсинг).
+- **В декодирование:** на ответе `с`→`c` обратно в `delta.content`, имени тулза
+  и `partial_json` аргументах — код приходит синтаксически корректным.
+
+Реализовано в `routing/agentrouter-proxy.js` (`cyrEncode`/`cyrDecode`), только на
+OpenAI-пути; claude pass-through bypass не использует (там WAF не триггерится).
+
+### Статус прокси
+
+- Спавн: `arProxySpawn()` — проверяет свободу `:20132`, поднимает
+  `agentrouter-proxy.js` detached (stdio: ignore). Уже запущен → `{already:true}`.
+- Статус/статистика: `GET http://localhost:20132/__agentrouter/api/status`
+  (`stats: requests/streamed/errors/lastModel`). Логи в консоли процесса
+  (при ручном запуске — в `%TEMP%\arpx_foreground*.log`).
+- В `start-switcher.bat` / `restart-dashboard.bat` порт `:20132` в списке KILLPORT.
+
+### Баланс ключа (продажа на FunPay)
+
+Сервис **не отдаёт остаток** по ключу — только потраченное. Считаем `balance = grant − spent`:
+
+- `spent` = `GET /dashboard/billing/usage?start_date=…&end_date=…` (400 дней назад → сегодня),
+  поле `total_usage` **в центах** → делим на 100. CC-заголовки + `Bearer` (WAF), таймаут 15с.
+- `grant` (изначальная выдача) — у разных аккаунтов разная (125 / 175 / личный больше):
+  либо **задана вручную** (`grantManual` в сессии, роут `set-grant`), либо угадывается
+  `max(175, ceil(spent/25)*25)`. `hard_limit_usd` (= sentinel 100M у безлимитных) **НЕ баланс**.
+- Результат кешируется прямо в `agentrouter-sessions.json` (`spent/grant/balance/grantSource/
+  balanceCheckedAt`) — переживает F5 и рестарт. `arBalance()` / `arApplyBalance()`.
+- UI: колонка «Баланс» (цвет по доле остатка: >30% emerald, 10–30% amber, <10% crimson),
+  Кнопка «✏️ из $175» под суммой = задать изначальную выдачу вручную (голубая = вписана
+  руками, серая = дашборд угадал), «💳 Балансы всех» = пакетный прогон (чанки по 3).
+
+### Кнопка «🌐 ЛК» (вход в сессию для чек-ина +$25)
+
+- `POST /api/ar/session/open {api_key}` → `handleArSessionOpen`: спавнит
+  `agentrouter/open-session.js <label>` (label = sanitized name/email) detached + `unref()`,
+  видимый Chromium под сохранённой GitHub-сессией. Первый раз сессии нет → ждёт ручного
+  GitHub-логина, автосохраняет в `agentrouter/sessions/<label>.json`; дальше — с ней.
+- Dedup: `arLkPids` (label → pid), повторный клик при живом pid → `{already:true}`, второй
+  браузер не плодится. **Только `open-session.js`** (не `login_and_save_session.js` — тот ждёт Enter).
+
+---
+
+## HelpCoder (hc) — New-API, авторег чистым HTTP
+
+`helpcoder.cc` — **New-API инстанс, OpenAI-совместимый** (`/v1/chat/completions`,
+Bearer `sk-…`), при этом понимает и Anthropic-формат `/v1/messages` (ответил
+`503 model_not_found` на несуществующую модель → запрос прошёл). **WAF нет** —
+полное CC-тело (53KB, 91 тул) доходит до сервера, Cyrillic-bypass не нужен.
+
+- Модели (11): `gpt-5`, `gpt-5-codex`, `gpt-5-codex-mini`, `gpt-5.1`, `gpt-5.1-codex`,
+  `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`,
+  `gpt-5.4`.
+- **Активация** — как остальные API Helper пулы: `~/.claude/hc-active-key.txt` +
+  `apiKeyHelper` + `ANTHROPIC_BASE_URL=https://helpcoder.cc`, `CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0`.
+- **Авторег** `helpcoder/helpcoder_autoreg.js [N]`: чистый HTTP без email/капчи —
+  `POST /api/user/register?turnstile=` (пустой turnstile → новый акк), сессия cookie,
+  `GET /api/user/self`, `POST /api/token/<id>/key` → ключ `sk-`. Новый акк = **$200**
+  виртуальных кредитов (`quota 100 000 000`, `USD = quota / 500000`). Аккаунты —
+  `helpcoder/accounts/<idx>_<ts>_ok_<username>/{session.json, account_info.txt}`.
+- **Квоты** — cookie-fetch `GET /api/user/self` (`Cookie: session` + заголовок
+  `New-Api-User: <id>`); 401/403 = мёртвый аккаунт. Кеш `logs/.helpcoder_quota_cache.json`.
+- **Статус на 2026-08-12:** endpoint отвечает (`/v1/models` 200), но реальные вызовы
+  моделей на всех аккаунтах дают `503 Service temporarily unavailable` / таймаут —
+  upstream-каналы лежат/перегружены.
+
+---
 
 ## Статуслайн Claude Code (`routing/statusline-autoreger.sh`)
 

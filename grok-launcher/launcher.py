@@ -68,16 +68,38 @@ async def get_cdp_ws_url() -> str | None:
 def launch_chrome_window(debug_port: int) -> str:
     """Launch fully isolated Chrome instance with debugging port.
 
-    Uses Popen + DETACHED_PROCESS so a running Chrome doesn't hijack the new
-    window into an existing instance (which would ignore --user-data-dir and
-    --remote-debugging-port, leaving the user in their main profile).
+    Prefers asking the switcher (transparent-proxy.js, node) to spawn Chrome
+    via SWITCHER_BASE: on this machine/Chrome, a GUI chrome.exe spawned from a
+    python process dies silently (CDP never binds), while the same spawn from
+    a node process lives fine. So we delegate the actual spawn to the switcher.
+    Falls back to direct Popen spawn (old behavior) when run standalone.
     Returns the user_data_dir path so caller can verify isolation.
     """
+    user_data = tempfile.mkdtemp(prefix="cookie-session-")
+
+    switcher = (os.environ.get("SWITCHER_BASE") or "").rstrip("/")
+    if switcher:
+        try:
+            resp = httpx.post(
+                f"{switcher}/__switch/api/grok/launch-chrome",
+                json={"port": debug_port, "profile": user_data},
+                timeout=10,
+            )
+            data = resp.json()
+        except Exception as e:
+            raise RuntimeError(f"switcher spawn request failed: {e}")
+        if not data.get("ok"):
+            raise RuntimeError(f"switcher chrome spawn rejected: {data.get('error')}")
+        print(f"[launcher] Chrome spawned via switcher: port={debug_port} profile={user_data}", flush=True)
+        return user_data
+
+    return _spawn_chrome_direct(debug_port, user_data)
+
+
+def _spawn_chrome_direct(debug_port: int, user_data: str) -> str:
     chrome_path = find_chrome()
     if not chrome_path:
         raise RuntimeError("Chrome not found")
-
-    user_data = tempfile.mkdtemp(prefix="cookie-session-")
     args = [
         chrome_path,
         f"--remote-debugging-port={debug_port}",
@@ -102,7 +124,7 @@ def launch_chrome_window(debug_port: int) -> str:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    print(f"[launcher] Spawned Chrome: port={debug_port} profile={user_data}", flush=True)
+    print(f"[launcher] Spawned Chrome (direct): port={debug_port} profile={user_data}", flush=True)
     return user_data
 
 

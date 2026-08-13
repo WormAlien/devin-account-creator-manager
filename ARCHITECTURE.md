@@ -17,7 +17,7 @@
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
 | `20150-20250`| **Custom OpenAI Proxies** (динамически) | `routing/custom-openai-proxy.js` | Anthropic→OpenAI конвертер для Custom-провайдеров с заполненным `modelMap`. Спавнится на активацию (детached), конфиг `~/.claude/custom-<id>-proxy.json`, ключ из `~/.claude/custom-active-key.txt`. Убивается при деактивации/удалении. |
-| `20132`| **AgentRouter Proxy** | `routing/agentrouter-proxy.js` | Фронтенд для agentrouter.org: `claude-*` → pass-through в `/v1/messages`, `gpt-*` → конвертер Anthropic→OpenAI `/v1/chat/completions` **с Cyrillic-bypass** (обход WAF «sensitive words detected»). Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки от клиента. Спавнится автоматически при выборе gpt-модели. |
+| `20132`| **AgentRouter Proxy** | `routing/agentrouter-proxy.js` | Фронтенд для agentrouter.org: `claude-*` → pass-through в `/v1/messages`, `gpt-*` → конвертер Anthropic→OpenAI `/v1/chat/completions` **с Cyrillic-bypass** (обход WAF «sensitive words detected»). **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки от клиента. Спавнится автоматически при выборе gpt-модели. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -25,6 +25,23 @@
 Запуск: `routing/start-switcher.bat` (поднимает :20126 + :20130 + :8200, открывает UI).
 Рестарт: `routing/restart-dashboard.bat` (убивает все три, перезапускает).
 ТГ-бот: `npm run tgbot` (нужен `tgbot/.env`, см. `tgbot/README.md`).
+
+## Obsidian RAG on-demand (D:\WORMALIENAIGIGANT) + свипер зомби-браузеров
+
+Стек (Ollama + Docker Desktop + контейнер `obsidian-rag` :8082) не живёт в фоне —
+поднимается **по требованию** при первом поиске и сам гасится после 15 мин простоя.
+
+| Что | Где | Поведение |
+|---|---|---|
+| Подъём | `D:\WORMALIENAIGIGANT\app\rag-on.bat` | Идемпотентно: Ollama → модель `snowflake-arctic-embed2` → Docker → `docker compose --profile app up -d obsidian-rag` → ждёт `/status`. Heartbeat в `app\.rag-idle.txt` пишется **сразу после старта контейнера**, до ожидания `/status` (холодный старт после реиндекса vault может превысить таймаут). |
+| Гашение | `D:\WORMALIENAIGIGANT\app\rag-off.bat` | Стоп контейнера + kill Ollama. Docker Desktop гасится **только если нет других контейнеров** (OmniRoute в Docker — НЕ трогаем). Удаляет heartbeat. |
+| Idle-стоп | `D:\WORMALIENAIGIGANT\scripts\rag-idle-stop.ps1` | Task Scheduler «Autoreger RAG idle-stop», каждые 5 мин: `:8082` жив, heartbeat старше 15 мин (или отсутствует) → rag-off. |
+| Env | `OLLAMA_KEEP_ALIVE=2m` (User) | Модель выгружается из RAM через 2 мин после последнего запроса. |
+| Авто-подъём из поиска | `D:\WORMALIENAIGIGANT\scripts\wiki_patch.py` `cmd_search` | `:8082` лежит → сам запускает `rag-on.bat` → повторный `/status` → `# index: N chunks`. В конце `hb.touch()` heartbeat. |
+| Свипер зомби | `routing/cleanup-reg-procs.ps1` | Убивает `chrome/camoufox` с маркером `ms-playwright\|github\\profiles\|agentrouter\\sessions\|camoufox\\Cache`, если родитель мёртв или = `explorer.exe`. Живые LK-сессии — skip. Вызывается из `start-switcher.bat` при каждом старте дашборда. |
+| Команда `/wiki` | `C:\Users\WormAlien\.config\opencode\command\wiki.md` | Глобальная для opencode; RAG поднимает через `search`. Видна в TUI после рестарта opencode. |
+
+Живой цикл проверен 2026-08-13: rag-on → `/status` (4433 chunks) → `search` авто-подъём с хитами → idle-стоп (heartbeat состарен на 20 мин) → rag-off. Детали и оставшиеся пункты — `docs/RAG-ONDEMAND-HANDOFF.md`.
 
 ---
 
@@ -106,7 +123,9 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **Custom**    | активна   | произвольные провайдеры: имя + baseUrl + пул ключей (`routing/custom-providers.json`), пинг/модели по `{baseUrl}/models`, активация через API Helper (`~/.claude/custom-active-key.txt`). Если задан `modelMap` (opus/sonnet/haiku) — активация поднимает Anthropic→OpenAI конвертер (`custom-openai-proxy.js`) и направляет CC на `localhost:<port>` | `/api/custom/*` |
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
 | **Svrtr**     | активна   | ТГ-аккаунты svrtr.org (api.svrtr.org), кредиты, реги через @svrtrbot, активация через API Helper | `/api/svrtr/*` |
-| **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js для чек-ина +$25), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132 | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model}` |
+| **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js для чек-ина +$25), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap}` |
+| **GoRouter** | активна   | ручной пул ключей gorouter.app (прямой base, без прокси), GitHub-вход в консоль, баланс, маппинг моделей | `/api/go/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
+| **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную | `/api/gh/{keys,add,import,delete,update,open}` |
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |
@@ -241,6 +260,12 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
 - **Маршрутизация моделей** (`arTargetFor`): `claude-*` → `agentrouter.org` напрямую
   (pass-through, работает как есть); `gpt-*` → локальный прокси `:20132`, т.к. gpt-модели
   у agentrouter живут на OpenAI-эндпоинте и нужна конвертация Anthropic→OpenAI.
+- **Маппинг claude-тиров** (`routing/ar-modelmap.json`, `{opus, sonnet, haiku}`): правится
+  на вкладке AgentRouter (`GET/POST /__switch/api/ar/modelmap`). Прокси `:20132` и keepalive
+  `:20133` перечитывают файл по mtime на каждый запрос — правка применяется **без рестарта**.
+  Модель запроса (в т.ч. `claude-haiku-4-5` от Explore-агента) матчится по тиру → подменяется
+  на целевую модель agentrouter; gpt-цель уходит через OpenAI-конвертер, claude-цель — pass-through.
+  Дефолт: `haiku → gpt-5.6-sol` (закрывает сабагентов, у agentrouter своих haiku-моделей нет).
 
 ### WAF «sensitive words detected» и Cyrillic-bypass
 
@@ -278,20 +303,26 @@ OpenAI-пути; claude pass-through bypass не использует (там WA
 - `grant` (изначальная выдача) — у разных аккаунтов разная (125 / 175 / личный больше):
   либо **задана вручную** (`grantManual` в сессии, роут `set-grant`), либо угадывается
   `max(175, ceil(spent/25)*25)`. `hard_limit_usd` (= sentinel 100M у безлимитных) **НЕ баланс**.
-- Результат кешируется прямо в `agentrouter-sessions.json` (`spent/grant/balance/grantSource/
+- Результат кешируется прямо в `agentrouter-sessions.json` (`spent/grant/balance/bonus/grantSource/
   balanceCheckedAt`) — переживает F5 и рестарт. `arBalance()` / `arApplyBalance()`.
 - UI: колонка «Баланс» (цвет по доле остатка: >30% emerald, 10–30% amber, <10% crimson),
   Кнопка «✏️ из $175» под суммой = задать изначальную выдачу вручную (голубая = вписана
   руками, серая = дашборд угадал), «💳 Балансы всех» = пакетный прогон (чанки по 3).
+- **Бонус чек-ина «+25»**: `POST /api/ar/add-bonus {api_key}` → `handleArAddBonus`: поле
+  `bonus` (копится, отдельно от выдачи), `balance = grant + bonus − spent`, grant НЕ трогается.
+  UI — кнопка «+25» справа от суммы (confirm → пересчёт; зелёная, если бонус уже есть).
+  `arBalance(apiKey, grantOverride, bonusOverride)` — bonus идёт третьим аргументом.
 
 ### Кнопка «🌐 ЛК» (вход в сессию для чек-ина +$25)
 
 - `POST /api/ar/session/open {api_key}` → `handleArSessionOpen`: спавнит
-  `agentrouter/open-session.js <label>` (label = sanitized name/email) detached + `unref()`,
-  видимый Chromium под сохранённой GitHub-сессией. Первый раз сессии нет → ждёт ручного
-  GitHub-логина, автосохраняет в `agentrouter/sessions/<label>.json`; дальше — с ней.
+  `agentrouter/open-session.js <label>` detached + `unref()`, видимый Chromium
+  с **персональным профилем** `agentrouter/profiles/<label>/` (label = `ar_` +
+  хэш(api_key) — стабильный, переименование аккаунта не рвёт профиль).
+  `launchPersistentContext` сам пишет куки+localStorage+GitHub-OAuth на диск.
 - Dedup: `arLkPids` (label → pid), повторный клик при живом pid → `{already:true}`, второй
-  браузер не плодится. **Только `open-session.js`** (не `login_and_save_session.js` — тот ждёт Enter).
+  браузер не плодится.
+- `stdio: 'pipe'` + ретрансляция stdout/stderr скрипта в `logLine()` — ошибки видны в Server Logs.
 
 ---
 
@@ -322,7 +353,7 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 
 ## Статуслайн Claude Code (`routing/statusline-autoreger.sh`)
 
-Скрипт-строка снизу CLI: `[transport] provider/model │ $ ▰▰▰▰▱▱ 60% $9.26 │ ⧉ ▰▱▱▱▱ 11% 110k/1M`.
+Скрипт-cтрока cнизу CLI: `provider/model │ $217.33~ │ ⧉ 139k/1M`.
 Лежит **в репо** (обновления приезжают с `git pull`), `install.sh` (шаг 3)
 прописывает его в `~/.claude/settings.json` → `statusLine.command`.
 `ROOT` определяет сам по своему расположению (`<repo>/routing/`).
@@ -334,12 +365,14 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
   (`apiKey`) → блок в `.freemodel_quota_cache.json`. Метрика — 5h окно:
   `pct = (1 − h5/h5max)·100`, `$ = h5max − h5` (остаток до reset).
 - **Квота для `ourtoken`** — `live/total` из `ourtoken-sessions.json`.
-- **Контекстное окно** (`⧉ ▰▱▱▱▱ 11% 110k/1M`) — из stdin-payload Claude Code
-  (`context_window.used_percentage` + `total_input_tokens`/`context_window_size`,
-  CC ≥2.1.132). Цвет по занятости: <50% зелёный → <80% жёлтый → красный.
-  Нет поля — шкала не рисуется. На 1M-окне процент ползёт медленно
-  (1% = 10k токенов), поэтому рядом токены — по ним видно живое движение;
-  ~105k на старте сессии = системный промпт + CLAUDE.md + memory, это норма.
+- **Денежный блок** — доcтупная cумма активного аккаунта. `~` означает уcтаревший
+  кеш; `⏳` c оcтавшимcя временем означает cooldown FreeModel.
+- **Контекcтное окно** (`⧉ 139k/1M`) — из stdin-payload Claude Code
+  (`total_input_tokens`/`context_window_size`, CC ≥2.1.132). Токены показываютcя
+  вмеcто cломанного `0%`. Еcли gateway не передал input usage (ноль при ненулевом
+  `context_window_size`), statusline выводит `⧉ ?`, а не ложное `0/<окно>`.
+  Еcли токены отcутcтвуют, но Claude Code дал ненулевой процент, иcпользуетcя
+  fallback `⧉ N%`. `⚠` означает, что FreeModel получил урезанное до 200k окно без `[1m]`.
 - **Реальные окна vs вера CC**: CC ставит `context_window_size` по model id
   (opus без `[1m]` → 200k), а бэкенд может держать больше. В скрипте таблица
   `real_max` по провайдерам (freemodel → 1M, проба 2026-07-19: «prompt is too
@@ -358,9 +391,8 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 Если `updatedAt` активного > **180с** — статуслайн шлёт fire-and-forget
 `POST /__switch/api/session/refresh-quota {kind:'freemodel', name:<dir>}` с
 `-m 0.5 &` → `refreshOneFreemodelQuota` в `internal/dashboard-api.js` пишет в
-`.freemodel_quota_cache.json` → **шкалы дашборда обновляются автоматически**
-(тот же файл). Пока свежие данные не пришли — цифры рисуются `DIM` + возраст
-`(10m)` в конце.
+`.freemodel_quota_cache.json` → **данные дашборда обновляютcя автоматичеcки**
+(тот же файл). Пока cвежие данные не пришли — cумма приглушаетcя и помечаетcя `~`.
 
 ### AFK
 
@@ -401,6 +433,30 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 заметка), маска ключа с 👁 показать / 📋 копировать, триал-каталог (seed-список
 зашит в код, пользовательские статусы working/dead в `*-trials.json`, gitignored).
 Реальные `*-keys.json` / `*-trials.json` — gitignored; закоммичены `*-keys.example.json`.
+
+## GitHub аккаунты (🐙) — карточки с локальным TOTP
+
+Хранилище **купленных** GitHub-аккаунтов. Вставка строкой
+`Логин:Пароль:2FA-секрет:Recovery codes:Ник` (импорт пакетом или один вручную).
+
+- Данные: `routing/github-accounts.json` (gitignored, пример `github-accounts.example.json`).
+  Поле аккаунта: `{id, login, password, totpSecret, recoveryCodes[], nickname, status, note, added}`.
+- Роуты: `/__switch/api/gh/{keys,add,import,delete,update,open}`. Хендлеры `handleGh*` +
+  `ghLoad/ghSave` в `transparent-proxy.js`. Пароль/секрет/коды **никогда не логируются**.
+- **TOTP — локально в браузере** (`ghComputeTotp` в `proxy-dashboard.html`):
+  base32-декод + `crypto.subtle` HMAC-SHA1, 6 цифр, период 30с (RFC 6238).
+  Никаких сайтов двухфакторки. Кеш на окно (`ghTotpCache`), тик 1с перерисовывает
+  countdown-бар (teal → amber <10s → crimson <3s) и подменяет код на перевале окна.
+  Проверено против 2fa.online — коды совпали (секрет — стандартный base32 TOTP).
+- **Парсер строки** устойчив к `:` внутри пароля: последние 3 части справа =
+  ник / recovery (`,` или пробелы) / 2FA-секрет, остаток между логином и секретом —
+  пароль. Ошибка → crimson-блок с указанием поля, пароль/секрет в диагностику не выводятся.
+- **Статус** — ручной (меню карточки: live/cooldown/dead), авто `error` при битом
+  секрете. Авто-проверки живости GitHub нет (безопасного способа нет).
+- **Профиль браузера на аккаунт:** «Открыть GitHub» → `POST /api/gh/open {id}` спавнит
+  `github/open-session.js <label>` (`label = acct_<id>`, стабильный — переименование не
+  рвёт сессию), персистентный профиль `github/profiles/acct_<id>/`. Dedup по pid
+  (`ghLkPids`), второй клик при живом браузере → `{already:true}`. Профили gitignored.
 
 ## Плагины / MCP — вкл/выкл
 

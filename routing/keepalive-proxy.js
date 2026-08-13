@@ -34,6 +34,7 @@
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const path = require('path');
 const { PassThrough } = require('stream');
 
 const PORT = Number(process.env.PORT || 8787);
@@ -49,9 +50,38 @@ const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
 // Ремап claude-haiku* (CC шлёт для быстрых подзадач) на gpt-модель через локальный
 // agentrouter-proxy :20132 (у agentrouter gpt через /v1/messages сломан — нужен
 // Anthropic→OpenAI конвертер; эмулируем gpt-прокси, не меняя claude-путь).
+// Приоритет маппинга: routing/ar-modelmap.json (правится на вкладке AgentRouter,
+// перечитывается по mtime) → env HAIKU_TO_MODEL.
 const HAIKU_REMAP = process.env.HAIKU_REMAP !== '0';
 const HAIKU_TO_MODEL = process.env.HAIKU_TO_MODEL || 'gpt-5.6-sol';
 const HAIKU_GPT_PROXY = process.env.HAIKU_GPT_PROXY || 'http://127.0.0.1:20132';
+const AR_MODELMAP_FILE = path.join(__dirname, 'ar-modelmap.json');
+
+const modelMapCache = { data: null, mtime: 0 };
+function readModelMap() {
+    try {
+        const st = fs.statSync(AR_MODELMAP_FILE);
+        if (modelMapCache.data && st.mtimeMs === modelMapCache.mtime) return modelMapCache.data;
+        const raw = fs.readFileSync(AR_MODELMAP_FILE, 'utf8');
+        const data = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        modelMapCache.data = { opus: '', sonnet: '', haiku: '', ...data };
+        modelMapCache.mtime = st.mtimeMs;
+        return modelMapCache.data;
+    } catch { return { opus: '', sonnet: '', haiku: '' }; }
+}
+
+// Маппинг claude-тира → целевая модель (как в agentrouter-proxy.js).
+const TIER_RE = [{ tier: 'opus', re: /(^|[-_.\/])?opus([-\/]|$)/i }, { tier: 'sonnet', re: /(^|[-_.\/])?sonnet([-\/]|$)/i }, { tier: 'haiku', re: /(^|[-_.\/])?haiku([-\/]|$)/i }];
+function tierTargetFor(model) {
+    const mm = readModelMap();
+    for (const { tier, re } of TIER_RE) {
+        if (mm[tier] && re.test(String(model || ''))) return { tier, target: mm[tier] };
+    }
+    return null;
+}
+function isGptLike(model) {
+    return /gpt|o[0-9]|davinci|chatgpt/i.test(String(model || ''));
+}
 
 const upstream = new URL(UPSTREAM);
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
@@ -138,7 +168,10 @@ function wantsStream(method, reqPath, body) {
 }
 
 // Ремап маршрутизации для POST /v1/messages:
-//   • claude-haiku*  → HAIKU_TO_MODEL (gpt) на gpt-прокси (у agentrouter haiku нет);
+//   • claude-haiku/opus/sonnet с замапленным тиром в ar-modelmap.json →
+//     переписываем модель на целевую; gpt-цель → gpt-прокси :20132,
+//     claude-цель → agentrouter как есть (pass-through);
+//   • claude-haiku* без маппинга в файле → fallback env HAIKU_TO_MODEL (gpt);
 //   • gpt-*/прочие   → gpt-прокси как есть (у agentrouter gpt через /v1/messages сломан —
 //                      нужен Anthropic→OpenAI конвертер :20132);
 //   • claude-* с суффиксом контекста ([1m], [200k] и т.п.) → срезаем суффикс,
@@ -162,6 +195,23 @@ function remapHaiku(method, reqPath, body) {
   const bare = model.replace(/\s*\[[^\]]*\]\s*$/, '');
   let newBody = null;
   let label = null;
+
+  // Маппинг из ar-modelmap.json (вкладка AgentRouter) — приоритетнее env.
+  const tm = tierTargetFor(model);
+  if (tm && tm.target && tm.target !== model) {
+    const target = tm.target;
+    if (isGptLike(target)) {
+      newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
+      label = `${tm.tier}→${target} (map, gpt)`;
+      log(`${method} ${reqPath} ${label} via ${HAIKU_GPT_PROXY}`);
+      return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
+    }
+    newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
+    label = `${tm.tier}→${target} (map, claude)`;
+    log(`${method} ${reqPath} ${label} via ${upstream.host}`);
+    return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+  }
+
   if (/haiku/i.test(model)) {
     newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: HAIKU_TO_MODEL })), 'utf8');
     label = `haiku→${HAIKU_TO_MODEL}`;

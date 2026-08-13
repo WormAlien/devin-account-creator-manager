@@ -166,6 +166,9 @@ routing/image-keys.json
 # Image trial-сайты — пользовательские статусы (working/dead). Seed-список в коде.
 routing/image-trials.json
 
+# GitHub-аккаунты (купленные: логин/пароль/2FA-секрет/recovery). github-accounts.example.json IS committed.
+routing/github-accounts.json
+
 # Операционные системы
 .DS_Store
 Thumbs.db
@@ -271,3 +274,16 @@ _debug_garbage_*/
 gorouter/profiles/
 gorouter/sessions/
 routing/gorouter-sessions.json
+
+# ── AgentRouter (вкладка дашборда) ───────────────────────────────────────────
+# Сессии storageState (старая схема, не используется с 2026-08-13).
+agentrouter/sessions/
+
+# Профили браузера AgentRouter (куки GitHub/agentrouter, логины, кеш) — НИКОГДА
+# не коммитить. open-session.js держит профиль на диск на аккаунт.
+agentrouter/profiles/
+
+# ── GitHub-аккаунты (вкладка дашборда): приватные данные ──────────────────────
+# Профили браузера (куки/сессии GitHub на аккаунт) — НИКОГДА не коммитить.
+# github-accounts.json уже закрыт выше, github-accounts.example.json коммитим.
+github/profiles/

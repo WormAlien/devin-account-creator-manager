@@ -1,0 +1,14 @@
+[
+  {
+    "id": "gh_0000000000000_example",
+    "login": "user@example.com",
+    "password": "example-password",
+    "totpSecret": "AAAAAAAAAAAAAAAA",
+    "apiToken": "ghp_exampletoken",
+    "recoveryCodes": ["00000-00000", "11111-11111"],
+    "nickname": "example_nick",
+    "status": "live",
+    "note": "2FA-секрет — base32, из него TOTP считается в браузере",
+    "added": "2026-08-13"
+  }
+]

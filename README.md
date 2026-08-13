@@ -154,6 +154,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 Пул ключей `agentrouter.org`. **WAF пускает только реальный Claude Code**: probe/models обязаны нести CC-заголовки, `apiKeyHelper` не работает — ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN` (прямой режим, base `https://agentrouter.org` БЕЗ `/v1`).
 
 - **Выбор модели** — клик по модели → `ar-active-model.txt` + `settings.model`. `claude-*` → напрямую в agentrouter; `gpt-*` → через локальный прокси `:20132` (конвертация Anthropic→OpenAI).
+- **Маппинг claude-тиров** — блок «Маппинг claude-тиров» на вкладке AgentRouter: `opus`/`sonnet`/`haiku` → модель agentrouter. Применяется в прокси `:20132` и keepalive `:20133` на каждый запрос по mtime (БЕЗ рестарта). Закрывает сабагентов (`claude-haiku-4-5` от Explore и т.п.) — дефолт `haiku → gpt-5.6-sol`; пустой тир = не маппить.
 - **Cyrillic-bypass** — WAF на OpenAI-эндпоинте режет запросы с «чувствительными словами» (`500 sensitive words detected`, падал весь реальный CC). Прокси заменяет английскую `c` → кириллическую `с` (U+0441) в тексте промпта, WAF не видит сигнатуру, на ответе — обратная замена. Полный CC-запрос (91 тул) теперь проходит 200.
 - Прокси спавнится автоматически при выборе gpt-модели; статус — `/__agentrouter/api/status` на `:20132`.
 
@@ -296,7 +297,8 @@ node routing/transparent-proxy.js        # switcher вручную
 | :--- | :--- |
 | `install.sh` | Интерактивный установщик с нуля |
 | `routing/transparent-proxy.js` | Switcher :8200 + HTTP API дашборда |
-| `routing/agentrouter-proxy.js` | AgentRouter-прокси :20132 (claude passthrough + gpt конвертер с Cyrillic-bypass) |
+| `routing/agentrouter-proxy.js` | AgentRouter-прокси :20132 (claude passthrough + gpt конвертер с Cyrillic-bypass + маппинг claude-тиров) |
+| `routing/ar-modelmap.json` | Маппинг claude-тиров AgentRouter (редактируется на вкладке) |
 | `routing/proxy-dashboard.html` | UI (Tailwind) |
 | `routing/freemodel-rotator.js` | Ротатор FreeModel-ключей :20126 |
 | `routing/{video,image}-keys.json` | Хранилища ключей провайдеров (gitignored, есть `*.example`) |

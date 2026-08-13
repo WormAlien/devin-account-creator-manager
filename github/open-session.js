@@ -1,33 +1,33 @@
-// agentrouter/open-session.js
+// github/open-session.js
 //
-// Открывает консоль agentrouter.org в видимом Chromium с ПЕРСОНАЛЬНЫМ ПРОФИЛЕМ
-// на аккаунт (полный профиль на диск: куки, localStorage, сессия GitHub).
+// Открывает видимый Chromium с ПЕРСОНАЛЬНЫМ ПРОФИЛЕМ на аккаунт GitHub
+// (полный профиль на диск: куки, localStorage, сессия GitHub).
 //
 // Сценарий:
-//   1. В дашборде нажимаешь 🌐 «Открыть браузер» на карточке аккаунта.
-//   2. Открывается Chromium с профилем agentrouter/profiles/<label>/ (на аккаунт).
-//   3. Если залогинен раньше — консоль уже открыта. Если нет — войди через GitHub.
-//   4. Профиль сохраняется автоматически — при следующих открытиях agentrouter
-//      уже залогинен (можно сразу жать чек-ин +$25).
+//   1. В дашборде нажимаешь «Открыть GitHub» на карточке аккаунта.
+//   2. Открывается Chromium с профилем github/profiles/<label>/ (на аккаунт).
+//   3. Если залогинен раньше — GitHub уже входит. Если нет — вводи логин,
+//      пароль и 2FA-код с карточки (TOTP в дашборде).
+//   4. Профиль сохраняется автоматически — при следующих открытиях GitHub
+//      уже залогинен.
 //
 // Использование:
-//   node agentrouter/open-session.js <label>
-//     label — имя профиля (папка agentrouter/profiles/<label>/)
+//   node github/open-session.js <label>
+//     label — идентификатор аккаунта (папка github/profiles/<label>/)
 //
-// Код возврата 0 = профиль открыт, 1 = ошибка.
+// Код возврата 0 = открыт, 1 = ошибка.
 
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const CONSOLE_URL = 'https://agentrouter.org/';
+const GITHUB_LOGIN_URL = 'https://github.com/login';
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 
 const labelArg = process.argv[2];
-const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
+const label = (labelArg || `gh_${Date.now()}`).replace(/[^\w-]/g, '_');
 const profileDir = path.join(PROFILES_DIR, label);
 
-// Первый ли запуск профиля: нет файла Default/Preferences → чистый профиль, ждём логин.
 function isFreshProfile() {
   try {
     const prefs = path.join(profileDir, 'Default', 'Preferences');
@@ -52,16 +52,16 @@ async function main() {
   const page = context.pages()[0] || await context.newPage();
 
   try {
-    await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(GITHUB_LOGIN_URL, { waitUntil: 'domcontentloaded' });
 
     if (!fresh) {
-      console.log('✅ Профиль восстановлен (agentrouter уже залогинен, если заходил раньше).');
+      console.log('✅ Профиль восстановлен (GitHub уже залогинен, если заходил раньше).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {}); // держим открытым, закрытие — вручную
       return;
     }
 
-    console.log('⚠️  Первый вход. Залогинься через GitHub в открывшемся браузере.');
+    console.log('⚠️  Первый вход. Введи логин, пароль и 2FA-код (код — в дашборде).');
     console.log('   Профиль сохранится автоматически.');
     await new Promise(() => {});
   } finally {

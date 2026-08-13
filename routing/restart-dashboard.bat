@@ -72,15 +72,21 @@ echo.
 echo  Switcher / Accounts dashboard:  http://localhost:8200/__switch
 echo  Status API:                     http://localhost:8200/__switch/api/status
 echo.
-echo Window will close in 3 seconds...
-ping 127.0.0.1 -n 4 >nul
-exit /b 0
+choice /c Fn /n /t 3 /d n /m "Window will close in 3 s... press F to keep it open. "
+if errorlevel 2 exit 0
+echo.
+echo  Keeping window open. Press any key to close.
+pause >nul
+exit 0
 
 :FAILED
 echo.
 echo  *** RESTART FAILED - ports could not be freed, see messages above. ***
-ping 127.0.0.1 -n 5 >nul
-exit /b 1
+choice /c Fn /n /t 5 /d n /m "Window will close in 5 s... press F to keep it open. "
+if errorlevel 2 exit 1
+echo  Keeping window open. Press any key to close.
+pause >nul
+exit 1
 
 REM ----------------------------------------------------------------------------
 REM Kill all LISTENING PIDs on port %1 ("%2" = friendly name).

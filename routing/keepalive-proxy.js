@@ -7,19 +7,26 @@
  * Канонический исходник: https://github.com/v1tusha/sse-keepalive-proxy (MIT).
  * Дополнение для дашборда: GET /__keepalive/api/status → 200 {"ok":true,...}.
  *
+ * ФИКСЫ (2026-08-13), все под env-флагами:
+ *   1. count_tokens fallback (COUNT_TOKENS_FALLBACK=1): шлюз 404-ит
+ *      POST /v1/messages/count_tokens, CC читает input_tokens с тела ошибки и
+ *      падает "Unable to validate model... z.usage.input_tokens", /model не
+ *      переключается. Прокси отвечает сам локальной оценкой.
+ *   2. Ранний SSE (EARLY_SSE=1): для POST /v1/messages со stream:true открываем
+ *      SSE-ответ клиенту СРАЗУ и запускаем keepalive ДО обращения к upstream.
+ *      Один таймер покрывает и TTFB-дыру (шлюз долго думает до первого байта),
+ *      и retry-паузы. Финальные ошибки уходят in-band как `event: error`.
+ *   3. Upstream-таймаут (UPSTREAM_TIMEOUT_MS): каждая попытка ограничена по
+ *      времени — устраняет висящие минутами запросы (в логах были 129с).
+ *   4. Не ретраить после отмены клиентом (проверка aborted перед retry).
+ *
  * Запуск:
  *   node keepalive-proxy.js
  *   PORT=20133 UPSTREAM=https://agentrouter.org IDLE_MS=5000 node keepalive-proxy.js
  *
- * Переключение Claude Code (редактируем ~/.claude/settings.json, на Windows:
- * C:\Users\<you>\.claude\settings.json):
+ * Переключение Claude Code (~/.claude/settings.json):
  *   "ANTHROPIC_BASE_URL": "http://127.0.0.1:20133"
- * ANTHROPIC_AUTH_TOKEN и ANTHROPIC_MODEL оставить как есть. Рестарт Claude Code.
- *
- * Заголовки запроса релеятся БЕЗ изменений (шлюз фингерпринтит клиента:
- * user-agent, x-app, x-stainless-*, anthropic-version, anthropic-beta,
- * authorization), переписывается только Host на хост апстрима.
- * Значение authorization нигде не логируется.
+ * Заголовки запроса релеятся БЕЗ изменений. authorization нигде не логируется.
  */
 
 'use strict';
@@ -36,6 +43,8 @@ const LOG_FILE = process.env.LOG_FILE || '';
 const MAX_RETRIES = Number(process.env.MAX_RETRIES || 3);
 const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 1500);
 const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
+const EARLY_SSE = process.env.EARLY_SSE !== '0';
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
 
 const upstream = new URL(UPSTREAM);
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
@@ -106,6 +115,18 @@ function estimateTokens(body) {
   }
 }
 
+// stream:true в теле POST /v1/messages? Только такие запросы кандидаты на ранний SSE.
+function wantsStream(method, reqPath, body) {
+  if (method !== 'POST') return false;
+  const p = reqPath.replace(/\?.*$/, '');
+  if (p !== '/v1/messages') return false;
+  try {
+    return JSON.parse(body.toString('utf8') || '{}').stream === true;
+  } catch (e) {
+    return false;
+  }
+}
+
 const server = http.createServer((req, res) => {
   const reqPath = req.url;
   const started = Date.now();
@@ -113,18 +134,34 @@ const server = http.createServer((req, res) => {
   let sseTimer = null;
   let keepalives = 0;
   let aborted = false;
+  let clientSSE = false;          // мы уже открыли SSE-ответ клиенту (ранний SSE)
+  let tail = Buffer.alloc(0);     // последние ≤4 байта отправленного клиенту (для формата keepalive)
 
   // Статус для дашборда (:8200 health-check).
   if (req.method === 'GET' && req.url === '/__keepalive/api/status') {
-    const h = http.STATUS_CODES[200] || '';
     log(`GET /__keepalive/api/status -> 200`);
-    if (active) { /* noop */ }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: true, port: PORT, upstream: UPSTREAM, idle_ms: IDLE_MS, retries: MAX_RETRIES }));
     return;
   }
 
   log(`>> ${req.method} ${reqPath} start`);
+
+  // ФИКС 1 — count_tokens fallback: шлюз обычно 404-ит этот endpoint, CC читает
+  // input_tokens с тела ошибки и падает на валидации модели (/model не работает).
+  if (COUNT_TOKENS_FALLBACK && isCountTokens(req.method, reqPath)) {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      if (aborted) return;
+      const tokens = estimateTokens(Buffer.concat(chunks));
+      log(`${req.method} ${reqPath} -> 200 (local estimate ${tokens})`);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ input_tokens: tokens }));
+    });
+    req.on('error', () => { aborted = true; if (!res.writableEnded) res.destroy(); });
+    return;
+  }
 
   const stopTimer = () => {
     if (sseTimer !== null) {
@@ -133,10 +170,92 @@ const server = http.createServer((req, res) => {
     }
   };
 
+  // keepalive-тик на уровне запроса — работает и ДО прихода заголовков upstream,
+  // и во время retry-пауз (в этом всё лечение TTFB/retry-дыр).
+  const tick = () => {
+    sseTimer = null;
+    if (aborted || res.writableEnded) return;
+    const t = tail.toString('utf8');
+    if (t.length === 0 || t.endsWith('\n\n')) {
+      res.write(KEEPALIVE);
+      tail = Buffer.concat([tail, Buffer.from(KEEPALIVE)]).slice(-4);
+      keepalives += 1;
+      log(`${req.method} ${reqPath} keepalive #${keepalives}`);
+    } else if (t.endsWith('\n')) {
+      res.write(KEEPALIVE_COMMENT);
+      tail = Buffer.concat([tail, Buffer.from(KEEPALIVE_COMMENT)]).slice(-4);
+      keepalives += 1;
+      log(`${req.method} ${reqPath} keepalive mid-event #${keepalives}`);
+    }
+    sseTimer = setTimeout(tick, IDLE_MS);
+  };
+  const armTimer = () => {
+    if (sseTimer !== null) clearTimeout(sseTimer);
+    sseTimer = setTimeout(tick, IDLE_MS);
+  };
+  const noteBytes = (chunk) => {
+    tail = Buffer.concat([tail, chunk.length > 4 ? chunk.subarray(chunk.length - 4) : chunk]).slice(-4);
+  };
+
+  // Открываем клиенту SSE-ответ ДО обращения к upstream и запускаем keepalive.
+  const startClientSSE = () => {
+    clientSSE = true;
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      'connection': 'keep-alive',
+    });
+    if (res.socket) res.socket.setNoDelay(true);
+    res.flushHeaders();
+    armTimer();
+  };
+
+  // Ошибка, когда клиенту уже отправлены SSE-заголовки: отдаём in-band `event: error`.
+  const inbandError = (status, buf) => {
+    stopTimer();
+    if (aborted || res.writableEnded) return;
+    let obj;
+    try {
+      obj = JSON.parse((buf || Buffer.alloc(0)).toString('utf8'));
+      if (!obj || !obj.error) throw 0;
+    } catch (e) {
+      obj = { type: 'error', error: { type: 'proxy_error', message: `upstream ${status}` } };
+    }
+    if (!obj.type) obj.type = 'error';
+    res.write(`event: error\ndata: ${JSON.stringify(obj)}\n\n`);
+    res.end();
+  };
+
   const forward = (status, headers, stream) => {
     const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
     log(`${req.method} ${reqPath} -> ${status}${isSSE ? ' (SSE)' : ''} ${Date.now() - started}ms`);
 
+    // Клиенту уже отправлены заголовки (ранний SSE) — writeHead больше нельзя.
+    if (clientSSE) {
+      if (status >= 200 && status < 300) {
+        if (res.socket) res.socket.setNoDelay(true);
+        stream.on('data', (chunk) => {
+          res.write(chunk);
+          noteBytes(chunk);
+          armTimer();
+        });
+        stream.on('end', () => { stopTimer(); if (!res.writableEnded) res.end(); });
+        stream.on('error', (err) => {
+          stopTimer();
+          log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
+          if (!res.writableEnded && !res.destroyed) res.destroy(err);
+        });
+      } else {
+        // не-2xx после исчерпания ретраев → отдаём как in-band SSE-ошибку
+        const ec = [];
+        stream.on('data', (c) => ec.push(c));
+        stream.on('end', () => inbandError(status, Buffer.concat(ec)));
+        stream.on('error', () => inbandError(status, Buffer.alloc(0)));
+      }
+      return;
+    }
+
+    // Обычный путь (ранний SSE не применялся): как в оригинале.
     res.writeHead(status, headers);
 
     if (!isSSE) {
@@ -150,35 +269,12 @@ const server = http.createServer((req, res) => {
 
     if (res.socket) res.socket.setNoDelay(true);
     res.flushHeaders();
-
-    let tail = Buffer.alloc(0);
-
-    const tick = () => {
-      sseTimer = null;
-      const t = tail.toString('utf8');
-      if (t.length === 0 || t.endsWith('\n\n')) {
-        res.write(KEEPALIVE);
-        tail = Buffer.concat([tail, Buffer.from(KEEPALIVE)]).slice(-4);
-        keepalives += 1;
-        log(`${req.method} ${reqPath} keepalive #${keepalives}`);
-      } else if (t.endsWith('\n')) {
-        res.write(KEEPALIVE_COMMENT);
-        tail = Buffer.concat([tail, Buffer.from(KEEPALIVE_COMMENT)]).slice(-4);
-        keepalives += 1;
-        log(`${req.method} ${reqPath} keepalive mid-event #${keepalives}`);
-      }
-      sseTimer = setTimeout(tick, IDLE_MS);
-    };
-    sseTimer = setTimeout(tick, IDLE_MS);
+    armTimer();
 
     stream.on('data', (chunk) => {
       res.write(chunk);
-      tail = Buffer.concat([
-        tail,
-        chunk.length > 4 ? chunk.subarray(chunk.length - 4) : chunk,
-      ]).slice(-4);
-      if (sseTimer !== null) clearTimeout(sseTimer);
-      sseTimer = setTimeout(tick, IDLE_MS);
+      noteBytes(chunk);
+      armTimer();
     });
     stream.on('end', () => {
       stopTimer();
@@ -198,29 +294,15 @@ const server = http.createServer((req, res) => {
       method: req.method,
       path: upBase + reqPath,
       headers: Object.assign({}, req.headers, { host: upstream.host }),
+      timeout: UPSTREAM_TIMEOUT_MS,
     }, (upRes) => {
       const status = upRes.statusCode;
       const headers = upRes.headers;
-
-      // Шлюз не реализует count_tokens → отдаём локальную оценку вместо 404.
-      // Пробуем апстрим ПЕРВЫМ: шлюзы, которые endpoint умеют, отдают точное число,
-      // и подменять его оценкой не надо.
-      if (COUNT_TOKENS_FALLBACK && status === 404 && isCountTokens(req.method, reqPath)) {
-        upRes.resume();   // тело 404 не нужно — дренируем, чтобы освободить сокет
-        if (aborted) return;
-        const tokens = estimateTokens(body);
-        log(`${req.method} ${reqPath} -> 200 (upstream 404, local estimate ${tokens})`);
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ input_tokens: tokens }));
-        return;
-      }
-
       const transient = shouldRetryStatus(status) && attempt < MAX_RETRIES;
 
       if (transient) {
         const chunks = [];
         let size = 0;
-        let drained = false;
         const drain = (onEnd) => {
           upRes.on('data', (c) => {
             chunks.push(c);
@@ -234,7 +316,8 @@ const server = http.createServer((req, res) => {
           const buf = Buffer.concat(chunks, size);
           if (isTransientBody(status, buf)) {
             log(`${req.method} ${reqPath} retry ${attempt}/${MAX_RETRIES} after ${status}: ${buf.toString('utf8').slice(0, 100)}`);
-            setTimeout(() => makeUpstream(attempt + 1, body), RETRY_DELAY_MS * attempt);
+            if (aborted) return;   // ФИКС 4 — клиент отвалился, не плодим сирот
+            setTimeout(() => { if (!aborted) makeUpstream(attempt + 1, body); }, RETRY_DELAY_MS * attempt);
           } else {
             const pt = new PassThrough();
             pt.end(buf);
@@ -248,10 +331,16 @@ const server = http.createServer((req, res) => {
     });
 
     active = upReq;
+    upReq.on('timeout', () => {
+      log(`${req.method} ${reqPath} upstream timeout ${UPSTREAM_TIMEOUT_MS}ms (attempt ${attempt})`);
+      upReq.destroy(new Error('upstream timeout'));
+    });
     upReq.on('error', (err) => {
       if (res.destroyed || aborted) return;
       log(`${req.method} ${reqPath} upstream error: ${err.message}`);
-      if (!res.headersSent) {
+      if (clientSSE) {
+        inbandError(502, Buffer.from(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: `Bad Gateway: ${err.message}` } })));
+      } else if (!res.headersSent) {
         res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
         res.end(`Bad Gateway: ${err.message}\n`);
       } else if (!res.writableEnded) {
@@ -269,11 +358,15 @@ const server = http.createServer((req, res) => {
   });
   req.on('end', () => {
     const body = Buffer.concat(bodyChunks, bodySize);
+    // ФИКС 2 — ранний SSE: открываем клиенту поток и keepalive ещё ДО upstream.
+    if (EARLY_SSE && wantsStream(req.method, reqPath, body)) {
+      startClientSSE();
+    }
     makeUpstream(1, body);
   });
 
-  req.on('error', () => { aborted = true; if (active) active.destroy(); });
-  res.on('error', () => { aborted = true; if (active) active.destroy(); });
+  req.on('error', () => { aborted = true; stopTimer(); if (active) active.destroy(); });
+  res.on('error', () => { aborted = true; stopTimer(); if (active) active.destroy(); });
   res.on('close', () => {
     if (!res.writableEnded) {
       aborted = true;
@@ -284,11 +377,12 @@ const server = http.createServer((req, res) => {
   req.on('close', () => {
     if (!req.complete) {
       aborted = true;
+      stopTimer();
       if (active) active.destroy();
     }
   });
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, retries ${MAX_RETRIES} x ${RETRY_DELAY_MS}ms)`);
+  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, retries ${MAX_RETRIES} x ${RETRY_DELAY_MS}ms, early_sse ${EARLY_SSE ? 'on' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
 });

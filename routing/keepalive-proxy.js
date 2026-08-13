@@ -46,9 +46,19 @@ const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
 const EARLY_SSE = process.env.EARLY_SSE !== '0';
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
 
+// Ремап claude-haiku* (CC шлёт для быстрых подзадач) на gpt-модель через локальный
+// agentrouter-proxy :20132 (у agentrouter gpt через /v1/messages сломан — нужен
+// Anthropic→OpenAI конвертер; эмулируем gpt-прокси, не меняя claude-путь).
+const HAIKU_REMAP = process.env.HAIKU_REMAP !== '0';
+const HAIKU_TO_MODEL = process.env.HAIKU_TO_MODEL || 'gpt-5.6-sol';
+const HAIKU_GPT_PROXY = process.env.HAIKU_GPT_PROXY || 'http://127.0.0.1:20132';
+
 const upstream = new URL(UPSTREAM);
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
 const upBase = upstream.pathname.replace(/\/+$/, '');
+const gptProxy = new URL(HAIKU_GPT_PROXY);
+const gptRequester = gptProxy.protocol === 'https:' ? https.request : http.request;
+const gptBase = gptProxy.pathname.replace(/\/+$/, '');
 const KEEPALIVE = ': keepalive\n\n';
 const KEEPALIVE_COMMENT = ': keepalive\n';
 
@@ -125,6 +135,49 @@ function wantsStream(method, reqPath, body) {
   } catch (e) {
     return false;
   }
+}
+
+// Ремап маршрутизации для POST /v1/messages:
+//   • claude-haiku*  → HAIKU_TO_MODEL (gpt) на gpt-прокси (у agentrouter haiku нет);
+//   • gpt-*/прочие   → gpt-прокси как есть (у agentrouter gpt через /v1/messages сломан —
+//                      нужен Anthropic→OpenAI конвертер :20132);
+//   • claude-* с суффиксом контекста ([1m], [200k] и т.п.) → срезаем суффикс,
+//                      шлём в agentrouter как есть (таких имён у него в /v1/models нет → 503);
+//   • claude-*        → null (passthrough напрямую в agentrouter).
+// Возвращает { body, requester, hostname, port, base, host } или null.
+function remapHaiku(method, reqPath, body) {
+  if (!HAIKU_REMAP) return null;
+  if (method !== 'POST') return null;
+  const p = reqPath.replace(/\?.*$/, '');
+  if (p !== '/v1/messages') return null;
+  let j;
+  try {
+    j = JSON.parse(body.toString('utf8') || '{}');
+  } catch (e) {
+    return null;
+  }
+  if (typeof j.model !== 'string') return null;
+  const model = j.model;
+  // Суффикс контекстного окна вида `[1m]`, `[200k]` — у agentrouter таких моделей нет.
+  const bare = model.replace(/\s*\[[^\]]*\]\s*$/, '');
+  let newBody = null;
+  let label = null;
+  if (/haiku/i.test(model)) {
+    newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: HAIKU_TO_MODEL })), 'utf8');
+    label = `haiku→${HAIKU_TO_MODEL}`;
+  } else if (/gpt|o[0-9]|davinci|chatgpt/i.test(model)) {
+    newBody = body;
+    label = model;
+  } else if (bare !== model) {
+    newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: bare })), 'utf8');
+    label = `${model}→${bare}`;
+    log(`${method} ${reqPath} ${label} via ${upstream.host}`);
+    return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+  } else {
+    return null;
+  }
+  log(`${method} ${reqPath} ${label} via ${HAIKU_GPT_PROXY}`);
+  return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
 }
 
 const server = http.createServer((req, res) => {
@@ -232,7 +285,9 @@ const server = http.createServer((req, res) => {
 
     // Клиенту уже отправлены заголовки (ранний SSE) — writeHead больше нельзя.
     if (clientSSE) {
-      if (status >= 200 && status < 300) {
+      // 2xx, но НЕ event-stream (апстрим отдал JSON/пустое на stream:true) —
+      // сырые байты в SSE-канале = "malformed response (HTTP 200)". Отдаём in-band.
+      if (status >= 200 && status < 300 && isSSE) {
         if (res.socket) res.socket.setNoDelay(true);
         stream.on('data', (chunk) => {
           res.write(chunk);
@@ -287,13 +342,21 @@ const server = http.createServer((req, res) => {
     });
   };
 
-  const makeUpstream = (attempt, body) => {
-    const upReq = upRequester({
-      hostname: upstream.hostname,
-      port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80),
+  const makeUpstream = (attempt, body, tgt) => {
+    const t = tgt || { requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+    const headers = Object.assign({}, req.headers, { host: t.host });
+    // Ремап мог заменить body (haiku→gpt, срезание суффикса) — content-length от клиента
+    // больше не соответствует длине тела, Node отправит заголовок со старой длиной и
+    // сервер будет ждать недостающие байты (запрос висит). Пересчитываем сами.
+    if (tgt) {
+      headers['content-length'] = Buffer.byteLength(body);
+    }
+    const upReq = t.requester({
+      hostname: t.hostname,
+      port: t.port,
       method: req.method,
-      path: upBase + reqPath,
-      headers: Object.assign({}, req.headers, { host: upstream.host }),
+      path: t.base + reqPath,
+      headers: headers,
       timeout: UPSTREAM_TIMEOUT_MS,
     }, (upRes) => {
       const status = upRes.statusCode;
@@ -317,7 +380,7 @@ const server = http.createServer((req, res) => {
           if (isTransientBody(status, buf)) {
             log(`${req.method} ${reqPath} retry ${attempt}/${MAX_RETRIES} after ${status}: ${buf.toString('utf8').slice(0, 100)}`);
             if (aborted) return;   // ФИКС 4 — клиент отвалился, не плодим сирот
-            setTimeout(() => { if (!aborted) makeUpstream(attempt + 1, body); }, RETRY_DELAY_MS * attempt);
+            setTimeout(() => { if (!aborted) makeUpstream(attempt + 1, body, tgt); }, RETRY_DELAY_MS * attempt);
           } else {
             const pt = new PassThrough();
             pt.end(buf);
@@ -357,12 +420,14 @@ const server = http.createServer((req, res) => {
     bodySize += c.length;
   });
   req.on('end', () => {
-    const body = Buffer.concat(bodyChunks, bodySize);
+    const rawBody = Buffer.concat(bodyChunks, bodySize);
+    const remapped = remapHaiku(req.method, reqPath, rawBody);
+    const body = remapped ? remapped.body : rawBody;
     // ФИКС 2 — ранний SSE: открываем клиенту поток и keepalive ещё ДО upstream.
     if (EARLY_SSE && wantsStream(req.method, reqPath, body)) {
       startClientSSE();
     }
-    makeUpstream(1, body);
+    makeUpstream(1, body, remapped);
   });
 
   req.on('error', () => { aborted = true; stopTimer(); if (active) active.destroy(); });

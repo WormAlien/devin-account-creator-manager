@@ -251,6 +251,11 @@
         <span class="flex-1">AgentRouter</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-agentrouter">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="gorouter">
+        <span class="w-5 text-center text-[14px]">🌐</span>
+        <span class="flex-1">GoRouter</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-gorouter">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="anymodel">
         <span class="w-5 text-center text-[14px]">🤖</span>
         <span class="flex-1">AnyModel</span>
@@ -1512,6 +1517,78 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: GOROUTER ═════════ -->
+    <div data-tab-content="gorouter">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-teal">🌐</span> GoRouter
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-teal text-xs">gorouter.app</code> · клик по ключу = активный (прямой base, БЕЗ прокси) · GitHub-вход в консоль · без чек-ина $25</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadGoSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadGoSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+            <button onclick="goCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+            <button onclick="goShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          </div>
+        </header>
+
+        <div id="go-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <!-- Model map (настраиваемый, как в Custom) -->
+        <div id="go-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации</h2>
+            <button onclick="loadGoModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="go-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="go-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadGoModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="go-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="go-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="go-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key (sk-…)</span>
+              <input id="go-add-key" placeholder="sk-…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="goAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="goShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="go-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">https://gorouter.app/v1</code> напрямую (БЕЗ прокси)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://gorouter.app/" target="_blank" class="text-teal hover:underline">gorouter.app</a>
+        </div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: ANYMODEL ═════════ -->
     <div data-tab-content="anymodel">
       <div class="px-6 py-8 space-y-4">
@@ -2015,7 +2092,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, custom: false, helpcoder: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, custom: false, helpcoder: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -2034,6 +2111,10 @@ const state = {
   agentrouter: [],
   arModels: [],
   arActiveModel: '',
+  gorouter: [],
+  goModels: [],
+  goActiveModel: '',
+  goModelMap: {},
   custom: [],
   customActive: null,
   customModels: {},
@@ -2189,6 +2270,7 @@ function showTab(name) {
   if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); loadCdtActiveModel(); loadCdtModels(false); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } }
+  if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } }
   if (name === 'svrtr') { loadTgPool(); if (!state.loaded.svrtr) { state.loaded.svrtr = true; loadSvrtrSessions(false).then(() => loadSvrtrModels(false)); } }
   if (name === 'helpcoder') { if (!state.loaded.helpcoder) { state.loaded.helpcoder = true; loadHelpcoderSessions(false).then(() => loadHelpcoderModels(false)); } }
   if (name === 'anymodel') { if (!state.loaded.anymodel) { state.loaded.anymodel = true; loadAmodelAccounts(); } }
@@ -4735,6 +4817,462 @@ async function arCopyKey(api_key) {
     await navigator.clipboard.writeText(api_key);
     toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
   } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ GOROUTER ═══════════════════════════════════════
+function goPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (typeof s.balance === 'number') {
+      sumBalance += s.balance;
+      const g = s.grant || 70;
+      sumGrant += g;
+      withBalance++;
+    }
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct };
+}
+
+function renderGoGauge() {
+  const st = goPoolStats(state.gorouter);
+  renderEnergyGauge($('go-energy'), {
+    title: 'GoRouter · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Прямой base https://gorouter.app/v1 · пинг и баланс идут с CC-заголовками (WAF пропускает только Claude Code).',
+  });
+}
+
+async function loadGoSessions(probe) {
+  if (probe) $('go-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/go/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.gorouter = data.sessions || [];
+    if ($('nav-count-gorouter')) $('nav-count-gorouter').textContent = state.gorouter.length;
+    renderGo();
+    renderGoGauge();
+    loadGoModels();
+    loadGoModelMap();
+    if (probe) toast('✓ GoRouter: статусы обновлены', 'success');
+  } catch (e) {
+    $('go-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadGoModels(force) {
+  const keys = state.gorouter
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('go-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('go-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/go/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderGoModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('go-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderGoModels(models) {
+  if (models) state.goModels = models;
+  const list = state.goModels || [];
+  let active = state.goActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/go/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.goActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('go-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-emerald/15 border border-emerald/50 text-emerald' : 'bg-teal/10 border border-teal/30 text-teal'}"
+      onclick='goSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + gorouter-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+}
+
+async function goSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/go/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.goModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.goActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderGoModels(state.goModels);
+  } catch (e) { toast('goSelectModel: ' + e.message, 'error'); }
+}
+
+function renderGo() {
+  const all = state.gorouter.slice().sort((a, b) => {
+    const sa = a.status === 'dead' ? 1 : 0;
+    const sb = b.status === 'dead' ? 1 : 0;
+    if (sa !== sb) return sa - sb;
+    return (b.created || '').localeCompare(a.created || '');
+  });
+  if (!all.length) {
+    $('go-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = s.status === 'live'
+      ? '<span class="text-emerald text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
+    const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = goBalanceCell(s, kJ);
+    return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        <button onclick='goActivate(${kJ})' title="Сделать активным (прямой base, БЕЗ прокси)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-teal hover:border-teal/50'} transition">${esc(keyMask)}</button>
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${actBtn(`goCopyKey(${kJ})`,    'Скопировать API-ключ',   '📋', 'sky')}
+        ${actBtn(`goSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`goRename(${idJ})`,    'Переименовать аккаунт',  '✏️', 'sky')}
+        ${actBtn(`goActivate(${kJ})`,   'Сделать активным',       '🤝', 'amber')}
+        ${actBtn(`goPing(${kJ})`,       'Проверить ключ',         '🩺', 'sky')}
+        ${actBtn(`goOpenLk(${idJ})`,    'Открыть браузер аккаунта (GitHub → gorouter)', '🌐', 'violet')}
+        ${actBtn(`goDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('go-list').innerHTML = table(
+    [
+      { label: 'Email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16' },
+      { label: 'Баланс', align: 'center', w: 'w-24' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${all.length} ключей`
+  );
+}
+
+function goBalanceCell(s, kJ) {
+  if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
+  const manual = s.grantSource === 'manual';
+  const gLabel = typeof s.grant === 'number' ? `из $${s.grant.toFixed(0)}` : 'задать выдачу';
+  const gTip = manual
+    ? `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — вписана вручную. Клик = изменить.`
+    : `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — угадана автоматически (база $70). Клик = вписать точную.`;
+  const edit = `<button onclick='goSetGrant(${kJ})' title="${esc(gTip)}"
+    class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
+    ${manual ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
+    hover:bg-sky/25 hover:border-sky/70 hover:text-sky">✏️ ${gLabel}</button>`;
+
+  if (typeof s.balance === 'number') {
+    const grant = s.grant || 70;
+    const frac = grant > 0 ? s.balance / grant : 0;
+    const color = frac > 0.3 ? 'text-emerald' : frac >= 0.1 ? 'text-amber' : 'text-crimson';
+    const tip = `остаток $${s.balance.toFixed(2)} = выдано $${(s.grant ?? 0).toFixed(0)} (${manual ? 'вручную' : 'авто'}) − потрачено $${(s.spent ?? 0).toFixed(2)} · клик = пересчитать`;
+    return `<span class="inline-flex flex-col items-center"><button onclick='goCheckBalance(${kJ})' title="${esc(tip)}"
+      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${edit}</span>`;
+  }
+  return `<span class="inline-flex flex-col items-center">${actBtn(`goCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
+}
+
+function goShowAdd(show = true) {
+  $('go-add-form').classList.toggle('hidden', !show);
+  if (show) { $('go-add-email').value = ''; $('go-add-key').value = ''; $('go-add-email').focus(); }
+}
+
+async function goAdd() {
+  const email = $('go-add-email').value.trim();
+  const api_key = $('go-add-key').value.trim();
+  if (!email || !api_key) return toast('email и api_key обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/go/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ добавлен', 'success'); goShowAdd(false); loadGoSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function goDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/go/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadGoSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли gorouter).
+async function goSetKey(id) {
+  const cur = state.gorouter.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли gorouter после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/go/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadGoSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+
+// Переименовать аккаунт (подпись) — name и/или email. Профиль браузера привязан
+// к id, поэтому переименование не рвёт привязку.
+async function goRename(id) {
+  const cur = state.gorouter.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const val = prompt('Переименовать аккаунт (подпись).\n\nname:', cur.name || '');
+  if (val === null) return;
+  const name = val.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/go/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт переименован → ${data.name}`, 'success', 3000);
+    loadGoSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function goActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/go/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'gorouter';
+      state.urls.gorouter = 'https://gorouter.app/v1';
+      paintStatus();
+      loadGoSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+async function goPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/go/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.gorouter.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.gorouter[idx].status = data.status;
+    renderGo();
+    renderGoGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function goCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/go/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.gorouter.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) {
+      const s = state.gorouter[idx];
+      s.status = data.status;
+      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; }
+    }
+    renderGo();
+    renderGoGauge();
+    if (data.status === 'live') toast(`💰 баланс $${data.balance.toFixed(2)} (выдано $${data.grant} · потрачено $${data.spent.toFixed(2)})`, 'success', 4000);
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+
+async function goCheckAllBalances() {
+  $('go-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/go/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.gorouter = data.sessions || [];
+    renderGo();
+    renderGoGauge();
+    const withBal = state.gorouter.filter(s => typeof s.balance === 'number').length;
+    toast(`✓ балансы посчитаны (${withBal})`, 'success');
+  } catch (e) {
+    $('go-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+async function goSetGrant(api_key) {
+  const cur = state.gorouter.find(x => x.api_key === api_key);
+  const now = cur && cur.grantManual ? String(cur.grantManual) : '';
+  const spent = cur && typeof cur.spent === 'number' ? cur.spent.toFixed(2) : '?';
+  const grantNow = cur && typeof cur.grant === 'number' ? cur.grant.toFixed(0) : '?';
+  const isManual = cur && cur.grantSource === 'manual';
+
+  const msg = [
+    'Сколько денег было НА АККАУНТЕ ИЗНАЧАЛЬНО (когда его зарегали)?',
+    '',
+    `Сейчас: выдано $${grantNow} (${isManual ? 'вписано тобой' : 'дашборд угадал сам'}), потрачено $${spent}.`,
+    'Остаток = выдано − потрачено. Поэтому если выдача указана неверно — врёт и остаток.',
+    '',
+    'Впиши число: 70, 75, 125, 175, или сколько реально дали (личный акк — больше).',
+    'Оставь поле пустым и нажми OK — дашборд снова будет угадывать сам (база $70).',
+  ].join('\n');
+
+  const val = prompt(msg, now);
+  if (val === null) return;
+  const grant = val.trim() === '' ? null : Number(val.trim());
+  if (grant !== null && !(grant > 0)) return toast('выдача должна быть числом больше 0', 'warn');
+  try {
+    const res = await fetch('/__switch/api/go/set-grant', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key, grant }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const idx = state.gorouter.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) {
+      const s = state.gorouter[idx];
+      if (grant === null) delete s.grantManual; else s.grantManual = grant;
+      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; s.grantSource = data.grantSource; }
+    }
+    renderGo();
+    renderGoGauge();
+    toast(grant === null ? '↩ выдача сброшена на авто' : `✓ выдача $${grant}` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
+  } catch (e) { toast('set-grant: ' + e.message, 'error'); }
+}
+
+async function goOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/go/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already ? '🌐 браузер этого аккаунта уже открыт' : '🌐 браузер аккаунта открыт — залогинься в GitHub, зайди в gorouter и вставь ключ кнопкой 🔑', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function goCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+// Настраиваемый маппинг opus/sonnet/haiku → gorouter-модели (как в Custom).
+async function loadGoModelMap() {
+  try {
+    const res = await fetch('/__switch/api/go/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.goModelMap = data.modelMap || {};
+    renderGoModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderGoModelMap() {
+  const mm = state.goModelMap || {};
+  const models = (state.goModels || []).map(m => m.id);
+  const opts = ['', ...models];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="go-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('go-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='goSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function goSaveModelMap() {
+  const mm = {
+    opus: $('go-mm-opus')?.value || '',
+    sonnet: $('go-mm-sonnet')?.value || '',
+    haiku: $('go-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/go/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.goModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
 
 // ───── триал-сайты (где взять бесплатные кредиты) ─────
@@ -8850,6 +9388,7 @@ function autoRefreshTick() {
       case 'ourtoken':      loadOurtokenSessions(false); break;
       case 'conduit':       loadConduitSessions(false); loadCdtActiveModel(); loadCdtModels(false); break;
       case 'agentrouter':   loadArSessions(false); break;
+      case 'gorouter':      loadGoSessions(false); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
       case 'helpcoder':     loadHelpcoderSessions(false); break;
       case 'video':         loadVideoKeys(); break;

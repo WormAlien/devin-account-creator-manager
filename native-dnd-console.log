@@ -1,4 +1,0 @@
-Total messages: 2 (Errors: 0, Warnings: 0)
-
-[VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://localhost:8200/__switch:0
-[LOG] [grok] fetched sessions: 5 [1, 2, 3, grok-2026-07-30, malGtok1] active= malGtok1 @ http://localhost:8200/__switch:9360

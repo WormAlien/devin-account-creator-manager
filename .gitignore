@@ -261,3 +261,13 @@ tm_captcha_modal.html
 # ── Postman: локальная конфигурация workspace/globals ──────────────────────
 postman/
 .postman/
+
+# Debug garbage quarantine (swept 2026-08-13, restore via MANIFEST.txt)
+_debug_garbage_*/
+
+# ── GoRouter (вкладка дашборда): приватные данные ─────────────────────────────
+# Профили браузера (куки GitHub/gorouter, логины, кеш) и живые сессии — НИКОГДА
+# не коммитить. gorouter-modelmap.json — безопасный конфиг маппинга, коммитим.
+gorouter/profiles/
+gorouter/sessions/
+routing/gorouter-sessions.json

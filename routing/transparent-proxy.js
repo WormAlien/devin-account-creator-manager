@@ -4928,6 +4928,452 @@ async function handleArSetModel(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── GoRouter — автономная вкладка (NewAPI, GitHub-вход) ─────────────
+// Свой пул ключей (gorouter-sessions.json), свой активный ключ/модель.
+// Активация БЕЗ локального прокси: gorouter.app сам Anthropic-совместимый,
+// пишем ANTHROPIC_BASE_URL = https://gorouter.app/v1 напрямую + токен.
+// GitHub-вход: gorouter/open-session.js (как agentrouter, но без чек-ина $25).
+const GO_SESSIONS_FILE = path.join(__dirname, 'gorouter-sessions.json');
+const GO_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'gorouter-active-key.txt');
+const GO_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'gorouter-active-model.txt');
+const GO_BASE_URL = 'https://gorouter.app/v1';
+// Баланс: сервис отдаёт только total_usage (центы). Выдача («грант») — по шагу
+// $25 от базовых $70 (у gorouter НЕ 175, как у agentrouter). Пользователь правит руками.
+const GO_GRANT_STEP = 25;
+const GO_DEFAULT_GRANT = 70;
+const GO_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const GO_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function goLoad() {
+    try {
+        const raw = fs.readFileSync(GO_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'go_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        if (changed) {
+            try { goSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function goSave(arr) {
+    fs.writeFileSync(GO_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function goReadActiveModel() {
+    try { return fs.readFileSync(GO_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function goReadActiveKey() {
+    try { return fs.readFileSync(GO_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+async function goProbe(apiKey) {
+    try {
+        const r = await fetch(`${GO_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...GO_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс: usage endpoint на КОРНЕ gorouter.app (не /v1). spent = total_usage (центы)/100.
+async function goBalance(apiKey, grantOverride) {
+    const day = ms => new Date(ms).toISOString().slice(0, 10);
+    const end = day(Date.now());
+    const start = day(Date.now() - 400 * 864e5);
+    let usageRes;
+    try {
+        usageRes = await fetch(
+            `https://gorouter.app/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
+            {
+                method: 'GET',
+                headers: { ...GO_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(15000),
+            },
+        );
+    } catch (e) {
+        return { status: 'unknown', error: e.message };
+    }
+    if (usageRes.status === 401 || usageRes.status === 403) return { status: 'dead' };
+    if (usageRes.status !== 200) return { status: 'unknown', error: `usage HTTP ${usageRes.status}` };
+
+    let spent;
+    try {
+        const data = await usageRes.json();
+        spent = Math.round((Number(data.total_usage) || 0)) / 100; // центы → доллары
+    } catch (e) {
+        return { status: 'unknown', error: `usage parse: ${e.message}` };
+    }
+    const grant = grantOverride > 0
+        ? grantOverride
+        : Math.max(GO_DEFAULT_GRANT, Math.ceil(spent / GO_GRANT_STEP) * GO_GRANT_STEP);
+    const balance = Math.round((grant - spent) * 100) / 100;
+
+    return { status: 'live', spent, grant, balance, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+}
+
+function goApplyBalance(target, bal) {
+    if (!target || !bal) return bal;
+    target.status = bal.status;
+    if (bal.status === 'live') {
+        target.spent = bal.spent;
+        target.grant = bal.grant;
+        target.balance = bal.balance;
+        target.grantSource = bal.grantSource;
+        target.balanceCheckedAt = new Date().toISOString();
+    }
+    return bal;
+}
+
+async function handleGoSessions(req, res) {
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = goLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await goProbe(s.api_key); }));
+            }
+            goSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => goApplyBalance(s, await goBalance(s.api_key, s.grantManual))));
+            }
+            goSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: goReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGoPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await goProbe(api_key);
+        const sessions = goLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; goSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGoBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        const bal = await goBalance(api_key, target && target.grantManual);
+        if (target) { goApplyBalance(target, bal); goSave(sessions); }
+        jsonRes(res, 200, bal);
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGoSetGrant(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const raw = body.grant;
+        const grant = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+        if (grant !== null && !(grant > 0)) return jsonRes(res, 400, { error: 'grant должен быть > 0 или пустым (сброс)' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        if (grant === null) delete target.grantManual;
+        else target.grantManual = grant;
+        const bal = await goBalance(key, target.grantManual);
+        goApplyBalance(target, bal);
+        goSave(sessions);
+        logLine(`gorouter set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
+        jsonRes(res, 200, { ok: true, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+const goLkPids = new Map();
+function goPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleGoSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = goLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = goLkPids.get(label);
+        if (goPidAlive(prevPid)) {
+            logLine(`gorouter session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'gorouter', 'open-session.js');
+        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'ignore' });
+        proc.on('error', e => logLine(`gorouter session/open spawn error: ${e.message}`));
+        proc.unref();
+        goLkPids.set(label, proc.pid);
+        logLine(`gorouter session/open: ${label} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGoAdd(req, res) {
+    try {
+        const { email, api_key, name } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = goLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({
+            id: 'go_' + Date.now() + '_' + sessions.length,
+            email: mail,
+            name: String(name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+        });
+        goSave(sessions);
+        logLine(`gorouter add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
+// в консоли gorouter). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
+async function handleGoSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        if (wasActive) {
+            fs.writeFileSync(GO_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        goSave(sessions);
+        logLine(`gorouter set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переименовать аккаунт (подпись) — меняем name и/или email. id и профиль браузера
+// не трогаем, поэтому привязка профиля/сессии сохраняется.
+async function handleGoRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        goSave(sessions);
+        logLine(`gorouter rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGoDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.id === idKey);
+        goSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === goReadActiveKey()) {
+            try { fs.rmSync(GO_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(GO_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`gorouter delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация БЕЗ прокси: пишем baseUrl gorouter.app/v1 напрямую + токен.
+async function handleGoActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(GO_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        goSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-go');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = GO_BASE_URL;   // напрямую, без локального прокси
+            delete settings.apiKeyHelper;
+            delete settings.model;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = key;
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`gorouter activate: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`gorouter activate: ${target.email} → ***${key.slice(-6)} (token, base ${GO_BASE_URL})`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: false });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleGoModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (GO_MODELS_CACHE.data && Date.now() - GO_MODELS_CACHE.ts < GO_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: GO_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${GO_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...GO_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        GO_MODELS_CACHE.data = models;
+        GO_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (GO_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: GO_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет gorouter-active-model.txt + settings.model (+ env модели).
+async function handleGoSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(GO_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-go-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = GO_BASE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            const activeKey = goReadActiveKey();
+            if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = activeKey;
+            else delete settings.env.ANTHROPIC_AUTH_TOKEN;
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`gorouter set-model: settings.json FAILED: ${e.message}`);
+        }
+        logLine(`gorouter set-model: ${m} (base ${GO_BASE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: GO_ACTIVE_MODEL_FILE, base: GO_BASE_URL, needRestart: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Настраиваемый маппинг claude-тиров → gorouter-модели (как в Custom). Живёт в сессиях.
+async function handleGoModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = {
+            opus: String(body.opus || '').trim() || null,
+            sonnet: String(body.sonnet || '').trim() || null,
+            haiku: String(body.haiku || '').trim() || null,
+        };
+        const dataFile = path.join(__dirname, 'gorouter-modelmap.json');
+        fs.writeFileSync(dataFile, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        logLine(`gorouter modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function goReadModelMap() {
+    try {
+        const raw = fs.readFileSync(path.join(__dirname, 'gorouter-modelmap.json'), 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
 // ───── VyceAI — ключи + прокси :20131 ────────────────────────────────
 // Ключи живут в vyceai/keys.json: [{ name, key }]. Имя задаёт пользователь и
 // оно не зависит от порядка в файле — раньше был плоский keys.txt, имя бралось
@@ -5591,6 +6037,23 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
+
+    // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/ping'))     return handleGoPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/balance'))  return handleGoBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/models'))   return handleGoModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/go/active-model') return jsonRes(res, 200, { model: goReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/go/modelmap') return jsonRes(res, 200, { ok: true, modelMap: goReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/go/add')       return handleGoAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/key')       return handleGoSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/rename')    return handleGoRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/delete')    return handleGoDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/activate')  return handleGoActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/set-model') return handleGoSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/set-grant') return handleGoSetGrant(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/modelmap')  return handleGoModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/session/open') return handleGoSessionOpen(req, res);
 
     // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);

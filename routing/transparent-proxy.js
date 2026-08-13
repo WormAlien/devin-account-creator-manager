@@ -147,7 +147,7 @@ const BACKENDS = {
 };
 
 const LOG_BUFFER = [];
-const LOG_BUFFER_MAX = 500;
+const LOG_BUFFER_MAX = 2000;
 
 function logLine(s) {
     const t = new Date().toISOString().substring(11, 23);
@@ -275,6 +275,14 @@ function currentTarget() {
         if (url.includes('cun.ai')) {
             return 'cun';
         }
+        // Локальные прокси AgentRouter: keepalive :20133 (claude-* модели) и
+        // конвертер :20132 (gpt-*) стоят ПЕРЕД agentrouter.org — при активации
+        // ключа base_url пишется именно на них. Иначе статус показывал 'unknown'.
+        const u = url.toLowerCase();
+        if (u === 'http://localhost:20132' || u === 'http://127.0.0.1:20132'
+            || u === 'http://localhost:20133' || u === 'http://127.0.0.1:20133') {
+            return 'agentrouter';
+        }
         for (const [name, b] of Object.entries(BACKENDS)) {
             if (url === b.base_url) return name;
         }
@@ -382,6 +390,19 @@ async function handleSettingsApply(req, res) {
             }
         }
         writeSettings(next);
+        // AgentRouter: пресет не знает ключ — подставляем активный из ar-active-key.txt,
+        // а helper убираем (WAF agentrouter пускает только AUTH_TOKEN-путь).
+        if ((next.env && next.env.ANTHROPIC_BASE_URL || '').startsWith(AR_BASE_URL)) {
+            next.env = next.env || {};
+            delete next.apiKeyHelper;
+            delete next.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete next.env.ANTHROPIC_API_KEY;
+            let activeKey = '';
+            try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+            if (activeKey) next.env.ANTHROPIC_AUTH_TOKEN = activeKey;
+            else delete next.env.ANTHROPIC_AUTH_TOKEN;
+            writeSettings(next);
+        }
         return jsonRes(res, 200, { ok: true, current: currentTarget() });
     } catch (e) {
         return jsonRes(res, 400, { error: e.message });
@@ -1493,6 +1514,176 @@ async function handleGrokActive(req, res) {
     jsonRes(res, 200, { active: getDefaultGrokActive() });
   } catch (e) {
     jsonRes(res, 500, { error: e.message });
+  }
+}
+
+function grokFindChrome() {
+  const candidates = [
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+  ];
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
+// POST /__switch/api/grok/launch-chrome {port, profile}
+// Spawn the grok session Chrome from the NODE side. A chrome.exe spawned from a
+// python child on this machine dies silently (CDP never binds), so launcher.py
+// delegates the actual spawn here (proven: node spawn brings Chrome up fine).
+async function handleGrokLaunchChrome(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const port = parseInt(body?.port, 10);
+    const profile = body?.profile;
+    if (!port || !profile) return jsonRes(res, 400, { ok: false, error: 'port and profile required' });
+    if (!fs.existsSync(profile)) return jsonRes(res, 400, { ok: false, error: 'profile dir not found: ' + profile });
+    const chromePath = grokFindChrome();
+    if (!chromePath) return jsonRes(res, 500, { ok: false, error: 'Chrome not found' });
+    const { spawn } = require('child_process');
+    const child = spawn(chromePath, [
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${profile}`,
+      '--profile-directory=Default',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-sync',
+      'about:blank',
+    ], { detached: true, stdio: 'ignore' });
+    child.unref();
+    logLine(`grok chrome spawn: :${port} profile=${profile} pid=${child.pid}`);
+    child.on('exit', (code, sig) => logLine(`grok chrome exit: pid=${child.pid} code=${code} sig=${sig}`));
+    child.on('error', (err) => logLine(`grok chrome spawn error: ${err.message}`));
+    // Node-side CDP probe so the launcher knows immediately whether the browser came up.
+    const started = Date.now();
+    let cdp = false;
+    while (Date.now() - started < 5000) {
+      if (child.exitCode !== null) break;
+      try {
+        const probe = await new Promise((resolve) => {
+          const req = http.get({ host: '127.0.0.1', port, path: '/json/version', timeout: 600 }, (res) => {
+            res.resume(); res.on('end', resolve);
+          });
+          req.on('error', () => resolve());
+          req.on('timeout', () => { req.destroy(); resolve(); });
+        });
+        if (probe) { cdp = true; break; }
+      } catch {}
+      await new Promise(r => setTimeout(r, 350));
+    }
+    logLine(`grok chrome cdp probe: :${port} cdp=${cdp} elapsed=${Date.now() - started}ms exitCode=${child.exitCode}`);
+    jsonRes(res, 200, { ok: true, pid: child.pid, cdp, profile });
+  } catch (e) {
+    jsonRes(res, 500, { ok: false, error: e.message });
+  }
+}
+
+const GROK_LAUNCH_SAMESITE = { no_restriction: 'None', lax: 'Lax', strict: 'Strict', unspecified: 'Lax', null: 'Lax' };
+
+function grokHttpGet(port, pathname, timeoutMs = 1500) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: pathname, timeout: timeoutMs }, (res) => {
+      let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  });
+}
+
+async function grokWsCall(ws, method, params = {}) {
+  const id = Math.floor(Math.random() * 1e9);
+  const result = await new Promise((resolve, reject) => {
+    const onMsg = (ev) => {
+      const m = JSON.parse(ev.data);
+      if (m.id === id) { ws.removeEventListener('message', onMsg); resolve(m); }
+    };
+    ws.addEventListener('message', onMsg);
+    ws.send(JSON.stringify({ id, method, params }));
+    setTimeout(() => { ws.removeEventListener('message', onMsg); reject(new Error('ws timeout: ' + method)); }, 8000);
+  });
+  return result;
+}
+
+// POST /__switch/api/grok/launch {name} | {cookies:[...]}
+// Полный запуск grok-сессии в node: спавн изолированного Chrome (node->chrome
+// живёт, python->chrome умирает на этой машине), CDP, инжект кук (из файла
+// grokCookiesDir/<name>.json либо из body.cookies), переход на grok.com.
+// Дашборд зовёт его вместо launcher.py (python).
+async function handleGrokLaunch(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    let cookies = body?.cookies;
+    let label = body?.name || 'pasted';
+    if (!Array.isArray(cookies)) {
+      const safe = grokSanitizeName(label);
+      const cookieFile = path.join(grokCookiesDir(), `${safe}.json`);
+      if (!fs.existsSync(cookieFile)) return jsonRes(res, 404, { ok: false, error: `cookie file not found: ${safe}.json` });
+      try {
+        cookies = JSON.parse(fs.readFileSync(cookieFile, 'utf8'));
+      } catch {
+        return jsonRes(res, 400, { ok: false, error: `cookie file unreadable: ${safe}.json` });
+      }
+      label = safe;
+    }
+    if (!Array.isArray(cookies) || !cookies.length) return jsonRes(res, 400, { ok: false, error: 'no cookies provided' });
+
+    const chromePath = grokFindChrome();
+    if (!chromePath) return jsonRes(res, 500, { ok: false, error: 'Chrome not found' });
+    const port = 9300 + Math.floor(Math.random() * 100);
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cookie-session-'));
+
+    const child = spawn(chromePath, [
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${profile}`,
+      '--profile-directory=Default',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-sync',
+      'about:blank',
+    ], { detached: true, stdio: 'ignore' });
+    child.unref();
+    logLine(`grok launch: spawn :${port} profile=${profile} pid=${child.pid}`);
+
+    let wsUrl = null;
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 400));
+      try {
+        const raw = await grokHttpGet(port, '/json', 1500);
+        const pages = JSON.parse(raw);
+        const page = pages.find(p => p.type === 'page' && (p.url || '').startsWith('about:'))
+          || pages.find(p => p.type === 'page');
+        if (page && page.webSocketDebuggerUrl) { wsUrl = page.webSocketDebuggerUrl; break; }
+      } catch {}
+    }
+    if (!wsUrl) throw new Error(`Chrome CDP not available on port ${port} (profile=${profile})`);
+
+    const ws = new WebSocket(wsUrl);
+    await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('ws open failed')); });
+
+    await grokWsCall(ws, 'Network.enable');
+    let okCount = 0;
+    for (const c of cookies) {
+      const params = {
+        name: c.name, value: c.value || '',
+        domain: c.domain || '.grok.com', path: c.path || '/',
+        secure: !!c.secure, httpOnly: !!c.httpOnly,
+      };
+      if (c.expirationDate) params.expires = c.expirationDate;
+      const ss = GROK_LAUNCH_SAMESITE[c.sameSite]
+        || (c.sameSite === 'no_restriction' || c.sameSite === 'None' ? 'None' : 'Lax');
+      if (ss) params.sameSite = ss;
+      const r = await grokWsCall(ws, 'Network.setCookie', params);
+      if (r.result && r.result.success) okCount++;
+    }
+    await grokWsCall(ws, 'Page.navigate', { url: 'https://grok.com/' });
+    logLine(`grok launch: ${label} ok cookies=${okCount}/${cookies.length} port=${port}`);
+    jsonRes(res, 200, { ok: true, port, profile, cookies: okCount, message: `Chrome opened: ${label} (${okCount}/${cookies.length} cookies)` });
+  } catch (e) {
+    logLine(`grok launch error: ${e.message}`);
+    jsonRes(res, 500, { ok: false, error: e.message });
   }
 }
 
@@ -2761,6 +2952,151 @@ async function customKillProxy(provider) {
     }
     try { fs.rmSync(customProxyConfigFile(provider.id), { force: true }); } catch {}
     logLine(`custom proxy kill: ${provider.name}${port ? ' :' + port : ''}`);
+}
+
+// ── Health: проба всех сервисов (что запущено / что упало) ──────────────────
+function summarizeStatus(data) {
+    if (!data || typeof data !== 'object') return '';
+    const parts = [];
+    if (typeof data.usableCount === 'number' && typeof data.totalCount === 'number')
+        parts.push(`${data.usableCount}/${data.totalCount} ключей`);
+    if (data.activeKeyId) parts.push(`актив:${String(data.activeKeyId).slice(0, 12)}`);
+    if (data.modelMap) parts.push(`opus→${data.modelMap.opus} · sonnet→${data.modelMap.sonnet} · haiku→${data.modelMap.haiku}`);
+    if (data.mapping && typeof data.mapping === 'object')
+        parts.push(`map:${Object.keys(data.mapping).length} моделей`);
+    if (data.stats) parts.push(`req:${data.stats.requests ?? '?'} err:${data.stats.errors ?? '?'}`);
+    if (data.provider) parts.push(data.provider);
+    if (Array.isArray(data.models) && data.models.length) parts.push(`${data.models.length} моделей`);
+    if (data.ok && !parts.length) parts.push('ok');
+    return parts.slice(0, 4).join(' · ');
+}
+
+async function handleHealth(res) {
+    // порт → [pid, …] всех слушателей разом (один netstat)
+    const listening = new Map();
+    try {
+        const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
+        for (const line of out.split(/\r?\n/)) {
+            const m = line.match(/:(\d{4,5})\s+\S+\s+LISTENING\s+(\d+)/);
+            if (m) {
+                const p = +m[1];
+                if (!listening.has(p)) listening.set(p, []);
+                listening.get(p).push(m[2]);
+            }
+        }
+    } catch {}
+
+    const checks = [
+        { name: 'Дашборд (switcher)', port: LISTEN_PORT, path: '/__switch/api/status' },
+        { name: 'FreeModel ротатор',  port: 20126, path: '/__fmrot/api/status' },
+        { name: 'FreeModel OpenAI',   port: 20130, path: '/__fmoai/api/status' },
+        { name: 'VyceAI',             port: 20131, path: '/__vyceai/api/status' },
+        { name: 'AgentRouter',        port: 20132, path: '/__agentrouter/api/status' },
+        { name: 'Keepalive',          port: AR_KEEPALIVE_PORT, path: '/__keepalive/api/status' },
+    ];
+    const knownPorts = new Set(checks.map(c => c.port));
+
+    // Custom-конвертеры из конфига (не забыть их, даже если порт не в диапазоне)
+    for (const p of (customLoad().providers || [])) {
+        if (p.proxyPort) {
+            knownPorts.add(p.proxyPort);
+            checks.push({ name: `Custom: ${p.name}`, port: p.proxyPort, path: '/__custom/api/status', custom: p });
+        }
+    }
+    // Осиротевшие конвертеры 20150–20250 (слушают, но не в конфиге) — полезно знать
+    for (const port of listening.keys()) {
+        if (port >= 20150 && port <= 20250 && !knownPorts.has(port))
+            checks.push({ name: `Порт :${port} (осиротел)`, port, path: '/__custom/api/status', orphan: true });
+    }
+
+    const probe = async (c) => {
+        const t0 = Date.now();
+        let status = 'down', data = null;
+        try {
+            const r = await fetch(`http://127.0.0.1:${c.port}${c.path}`, { signal: AbortSignal.timeout(1500) });
+            if (r.ok) {
+                status = 'up';
+                try { data = await r.json(); } catch {}
+            }
+        } catch {}
+        const pids = listening.get(c.port) || [];
+        return {
+            name: c.name,
+            port: c.port,
+            pid: pids[0] || null,
+            status,
+            ms: Date.now() - t0,
+            orphan: !!c.orphan,
+            custom: c.custom ? { id: c.custom.id, modelMap: c.custom.modelMap } : undefined,
+            detail: summarizeStatus(data),
+        };
+    };
+    const services = await Promise.all(checks.map(probe));
+
+    // OmniRoute (local :20128) — отдельная проба по ключу: 200 = жив+ключ ок,
+    // 401 = сервер жив, но ключ невалиден, сеть упала = сервис лежит.
+    {
+        const t0 = Date.now();
+        const om = { name: 'OmniRoute', port: 20128, pid: (listening.get(20128) || [null])[0], status: 'down', ms: 0, omni: true, warn: false, detail: 'порт 20128 не слушает' };
+        if (listening.has(20128)) {
+            try {
+                let key = '';
+                try { key = fs.readFileSync(OM_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+                if (!key) key = omniKey();
+                const r = await fetch('http://localhost:20128/v1/models', {
+                    headers: { 'Authorization': `Bearer ${key}` },
+                    signal: AbortSignal.timeout(2500),
+                });
+                om.ms = Date.now() - t0;
+                om.status = 'up';
+                if (r.status === 401) { om.warn = true; om.detail = 'сервер жив, ключ невалиден (401)'; }
+                else if (r.ok) { om.detail = 'жив, ключ валиден'; }
+                else { om.detail = `жив, http ${r.status}`; }
+            } catch { om.status = 'down'; om.detail = 'порт слушает, но /v1/models не отвечает'; }
+        }
+        services.push(om);
+    }
+
+    services.sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'down' ? -1 : 1; // упавшие сверху
+        return a.port - b.port;
+    });
+
+    // Куда смотрит Claude Code сейчас
+    let wired = { base: null, port: null, up: false, service: null };
+    try {
+        const s = readSettings();
+        const base = (s.env && s.env.ANTHROPIC_BASE_URL) || '';
+        const pm = base.match(/:(\d+)/);
+        wired.base = base;
+        wired.port = pm ? +pm[1] : null;
+        wired.up = wired.port ? listening.has(wired.port) : false;
+        const svc = services.find(x => x.port === wired.port);
+        wired.service = svc ? svc.name : null;
+    } catch {}
+
+    // Обновления кода дашборда
+    let git = { branch: null, behind: null, local: null, remote: null };
+    try {
+        const repo = path.join(__dirname, '..');
+        const g = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+        const branch = g('rev-parse', '--abbrev-ref', 'HEAD');
+        g('fetch', '--quiet', 'origin', branch);
+        git = {
+            branch,
+            local: g('rev-parse', '--short', 'HEAD'),
+            remote: g('rev-parse', '--short', `origin/${branch}`),
+            behind: parseInt(g('rev-list', '--count', `HEAD..origin/${branch}`) || '0', 10),
+        };
+    } catch {}
+
+    return jsonRes(res, 200, {
+        services,
+        wired,
+        git,
+        current: currentTarget(),
+        uptime_s: Math.round(process.uptime()),
+    });
 }
 
 // GET /__switch/api/custom/providers → список провайдеров + ключей + активный
@@ -4147,8 +4483,21 @@ const AR_SESSIONS_FILE = path.join(__dirname, 'agentrouter-sessions.json');
 const AR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ar-active-key.txt');
 const AR_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'ar-active-model.txt');
 const AR_BASE_URL = 'https://agentrouter.org';
+// Баланс ключа: сервис не отдаёт остаток напрямую — только потраченное (total_usage).
+// Выдачу («грант») угадываем по шагу $25 от базовых $175. balance = grant − spent.
+const AR_GRANT_STEP = 25;
+const AR_DEFAULT_GRANT = 175;
+const AR_SENTINEL_USD = 1e6;               // hard_limit_usd у безлимитных = 100M — заглушка, не баланс
+const arIsSaneLimit = v => typeof v === 'number' && v > 0 && v < AR_SENTINEL_USD;
 const AR_PROXY_PORT = 20132;
 const AR_PROXY_URL = `http://localhost:${AR_PROXY_PORT}`;
+// SSE keepalive proxy (friend's sse-keepalive-proxy, v1tusha) — стоит перед
+// agentrouter.org для claude-* моделей: шлюз не шлёт `event: ping` во время
+// длинных thinking-пауз, watchdog Claude Code (~20с без байт) рвёт поток и
+// ретраит до бесконечности. Прокси вставляет `: keepalive` и ретраит 401/403/429/5xx.
+const AR_KEEPALIVE_PORT = 20133;
+const AR_KEEPALIVE_URL = `http://localhost:${AR_KEEPALIVE_PORT}`;
+const KEEPALIVE_PROXY_FILE = 'keepalive-proxy.js';
 
 // ????????? agentrouter-proxy.js (:) ???? ???? ???????? ? ???????? ??? Claude Code:
 // claude-* ? pass-through ? agentrouter /v1/messages, gpt-* ? ??????????? ? OpenAI /v1/chat/completions.
@@ -4170,6 +4519,32 @@ async function arProxySpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`agentrouter proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// SSE keepalive proxy: копия sse-keepalive-proxy (v1tusha). Слушает :20133 и
+// форвардит всё в agentrouter.org, вставляя `: keepalive` при тишине > IDLE_MS
+// и ретраи 401/403/429/5xx. Спавнится как и agentrouter-proxy, только для полного
+// pass-through agentrouter-моделей (claude-*).
+async function arKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(AR_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: { ...process.env, PORT: String(AR_KEEPALIVE_PORT) },
+        });
+        child.unref();
+        logLine(`keepalive proxy spawn: :${AR_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -4212,9 +4587,65 @@ async function arProbe(apiKey) {
     } catch { return 'unknown'; }
 }
 
+// Баланс ключа: читаем публичные billing-эндпоинты СВОИМ же ключом (CC-заголовки — WAF
+// пропускает только Claude Code запросы). spent = total_usage (центы!) / 100; grant либо задан
+// вручную (grantOverride — у разных акков выдача разная: 125/175/личный больше), либо угадываем
+// по шагу $25; balance = grant − spent. hard_limit_usd НЕ баланс (у безлимитных = sentinel 100M).
+async function arBalance(apiKey, grantOverride) {
+    const day = ms => new Date(ms).toISOString().slice(0, 10);
+    const end = day(Date.now());
+    const start = day(Date.now() - 400 * 864e5); // 400 дней назад
+    let usageRes;
+    try {
+        usageRes = await fetch(
+            `${AR_BASE_URL}/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
+            {
+                method: 'GET',
+                headers: { ...AR_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(15000),
+            },
+        );
+    } catch (e) {
+        return { status: 'unknown', error: e.message };
+    }
+    if (usageRes.status === 401 || usageRes.status === 403) return { status: 'dead' };
+    if (usageRes.status !== 200) return { status: 'unknown', error: `usage HTTP ${usageRes.status}` };
+
+    let spent;
+    try {
+        const data = await usageRes.json();
+        spent = Math.round((Number(data.total_usage) || 0)) / 100; // центы → доллары
+    } catch (e) {
+        return { status: 'unknown', error: `usage parse: ${e.message}` };
+    }
+    const grant = grantOverride > 0
+        ? grantOverride
+        : Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP);
+    const balance = Math.round((grant - spent) * 100) / 100;
+
+    // Опционально: срок доступа. Не критично — ошибки глотаем, баланс уже посчитан.
+    let accessUntil = null, limitSane = null;
+    try {
+        const subRes = await fetch(`${AR_BASE_URL}/v1/dashboard/billing/subscription`, {
+            method: 'GET',
+            headers: { ...AR_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (subRes.status === 200) {
+            const sub = await subRes.json();
+            accessUntil = sub.access_until && sub.access_until > 0 ? sub.access_until : null;
+            limitSane = arIsSaneLimit(Number(sub.hard_limit_usd));
+        }
+    } catch { /* срок доступа не критичен */ }
+
+    return { status: 'live', spent, grant, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+}
+
 async function handleArSessions(req, res) {
     try {
-        const probe = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('probe') === '1';
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
         const sessions = arLoad();
         if (probe) {
             for (let i = 0; i < sessions.length; i += 3) {
@@ -4222,8 +4653,30 @@ async function handleArSessions(req, res) {
             }
             arSave(sessions);
         }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s.api_key, s.grantManual))));
+            }
+            arSave(sessions);
+        }
         jsonRes(res, 200, { sessions, activeModel: arReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Пишем результат arBalance в объект сессии (персистентный кеш — переживает F5 и рестарт).
+// grantManual НЕ трогаем — это ручная настройка пользователя, живёт отдельно от посчитанного grant.
+function arApplyBalance(target, bal) {
+    if (!target || !bal) return bal;
+    target.status = bal.status;
+    if (bal.status === 'live') {
+        target.spent = bal.spent;
+        target.grant = bal.grant;
+        target.balance = bal.balance;
+        target.accessUntil = bal.accessUntil;
+        target.grantSource = bal.grantSource;
+        target.balanceCheckedAt = new Date().toISOString();
+    }
+    return bal;
 }
 
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
@@ -4237,6 +4690,83 @@ async function handleArPing(req, res) {
         const target = sessions.find(s => s.api_key === api_key);
         if (target) { target.status = status; arSave(sessions); }
         jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/ar/balance?api_key=… → считает баланс и пишет в сессию (кеш).
+async function handleArBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        const bal = await arBalance(api_key, target && target.grantManual);
+        if (target) { arApplyBalance(target, bal); arSave(sessions); }
+        jsonRes(res, 200, bal);
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/set-grant { api_key, grant } → задать/сбросить изначальную выдачу вручную
+// (у разных аккаунтов она разная: 125/175/личный больше). grant=null|0|'' → сброс на авто-угадывание.
+// Сразу пересчитываем баланс с новым grant, если ключ живой.
+async function handleArSetGrant(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const raw = body.grant;
+        const grant = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+        if (grant !== null && !(grant > 0)) return jsonRes(res, 400, { error: 'grant должен быть > 0 или пустым (сброс)' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        if (grant === null) delete target.grantManual;
+        else target.grantManual = grant;
+        // Пересчёт баланса с новой выдачей (если ключ отвечает).
+        const bal = await arBalance(key, target.grantManual);
+        arApplyBalance(target, bal);
+        arSave(sessions);
+        logLine(`agentrouter set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
+        jsonRes(res, 200, { ok: true, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/session/open { api_key } → открыть консоль agentrouter под GitHub-сессией
+// этого аккаунта (для чек-ина +$25). Спавним agentrouter/open-session.js <label> отдельным
+// detached-процессом (видимый Chromium). Первый раз сессии нет → скрипт ждёт ручного GitHub-логина
+// и автосохраняет её; дальше открывает с сохранённой. Dedup: не плодим второй браузер на тот же label.
+const arLkPids = new Map(); // label → pid последнего живого open-session процесса
+function arPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+async function handleArSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = arLoad();
+        const idx = sessions.findIndex(s => s.api_key === key);
+        if (idx < 0) return jsonRes(res, 404, { error: 'ключ не найден' });
+        const target = sessions[idx];
+        const rawLabel = String(target.name || target.email || '').trim();
+        const label = (rawLabel ? rawLabel.replace(/[^\w-]/g, '_') : `ar_${idx + 1}`);
+
+        // Уже открыт браузер для этого label — не плодим второй.
+        const prevPid = arLkPids.get(label);
+        if (arPidAlive(prevPid)) {
+            logLine(`agentrouter session/open: ***${key.slice(-6)} label=${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
+        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'ignore' });
+        proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
+        proc.unref();
+        arLkPids.set(label, proc.pid);
+        logLine(`agentrouter session/open: ***${key.slice(-6)} label=${label} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -4265,6 +4795,16 @@ async function handleArDelete(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// Прямой режим: claude-* → SSE keepalive прокси :20133 (вставляет `: keepalive`
+// при длинных thinking-паузах и ретраит транзиентные ошибки, форвардит в
+// agentrouter.org 1-в-1); gpt-* → через локальный прокси :20132 (нужна конвертация в OpenAI).
+function arTargetFor(model) {
+    const isGpt = /(^|[-_.\/])?(gpt|o[0-9]|davinci|chatgpt)/i.test(String(model || ''))
+        || String(model || '').toLowerCase().includes('gpt');
+    return isGpt ? { base: AR_PROXY_URL, needProxy: true, keepalive: false }
+                 : { base: AR_KEEPALIVE_URL, needProxy: true, keepalive: true };
+}
+
 // Клик по ключу → активный: пишем ключ в ar-active-key.txt + apiKeyHelper в settings.json.
 async function handleArActivate(req, res) {
     try {
@@ -4285,18 +4825,25 @@ async function handleArActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-ar');
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = AR_PROXY_URL;
-            settings.apiKeyHelper = keyHelperCmd('ar-active-key.txt');
+            const curModel = arReadActiveModel() || settings.model || '';
+            const target = arTargetFor(curModel);
+            settings.env.ANTHROPIC_BASE_URL = target.base;
+            delete settings.apiKeyHelper;   // agentrouter-WAF не пускает helper-путь
             delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
-            settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
-            delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
-            clearOtEnv(settings);    // убрать наш AUTH_TOKEN/маппинги от other пулов
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;   // токен рулит авторизацией
+            clearOtEnv(settings);    // снести AUTH_TOKEN/маппинги от other пулов — потом ставим свой
+            settings.env.ANTHROPIC_AUTH_TOKEN = key;   // прямой режим: ключ литералом, как у друга
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
+if (target.needProxy) {
+                if (target.keepalive) await arKeepaliveSpawn();
+                else await arProxySpawn();
+            }
         } catch (e) {
             logLine(`agentrouter activate: settings.json FAILED: ${e.message}`);
         }
-        logLine(`agentrouter activate: ${target.email} → ***${key.slice(-6)} (helper)`);
+        logLine(`agentrouter activate: ${target.email} → ***${key.slice(-6)} (token, base ${arTargetFor(arReadActiveModel() || '').base})`);
         jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -4343,25 +4890,41 @@ async function handleArSetModel(req, res) {
         const body = await readJsonBody(req);
         const m = String(body.model || '').trim();
         if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        // Окно контекста — свойство ID модели, а не апстрима: без суффикса [1m] Claude Code
+        // считает окно 200k и режет историю втрое раньше (та же грабля, что в FreeModel-ветке
+        // на :2093). agentrouter отдаёт claude-* с 1M, поэтому дотягиваем суффикс.
+        // gpt-* не трогаем — у них своё окно.
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
         fs.writeFileSync(AR_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
         let settingsOk = false;
         try {
             const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-ar-model');
-            settings.model = m;
+            const target = arTargetFor(m);
+            settings.model = settingsModel;
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = AR_PROXY_URL;
-            settings.apiKeyHelper = keyHelperCmd('ar-active-key.txt');
+            settings.env.ANTHROPIC_BASE_URL = target.base;
+            delete settings.apiKeyHelper;   // agentrouter-WAF не пускает helper-путь
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            let activeKey = '';
+            try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+            if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = activeKey;   // прямой режим
+            else delete settings.env.ANTHROPIC_AUTH_TOKEN;
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`agentrouter set-model: settings.json FAILED: ${e.message}`);
         }
-        await arProxySpawn();
-        logLine(`agentrouter set-model: ${m} (base :${AR_PROXY_PORT})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, modelFile: AR_ACTIVE_MODEL_FILE });
+        const target = arTargetFor(m);
+        if (target.needProxy) {
+            if (target.keepalive) await arKeepaliveSpawn();
+            else await arProxySpawn();
+        }
+        logLine(`agentrouter set-model: ${m} (base ${target.base})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: AR_ACTIVE_MODEL_FILE, base: target.base, needRestart: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -4548,9 +5111,61 @@ const server = http.createServer((req, res) => {
         });
     }
 
+    // ── Health: что запущено / что упало ──────────────────────────────────────
+    if (req.method === 'GET' && req.url === '/__switch/api/health') {
+        return handleHealth(res);
+    }
+
+    // POST /__switch/api/health/kill { port } → убить всё, что слушает порт.
+    // Безопасно: работает только с портами, которых нет среди служебных и
+    // зарегистрированных custom-провайдеров (иначе можно случайно погасить ядро).
+    if (req.method === 'POST' && req.url === '/__switch/api/health/kill') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                const { port } = JSON.parse(body || '{}');
+                const p = Number(port);
+                if (!p || !Number.isInteger(p) || p < 1024 || p > 65535)
+                    return jsonRes(res, 400, { error: 'port required' });
+                const protected = new Set([
+                    LISTEN_PORT, 20126, 20130, 20131, 20132, AR_KEEPALIVE_PORT,
+                    ...(customLoad().providers || []).map(x => x.proxyPort).filter(Boolean),
+                ]);
+                if (protected.has(p))
+                    return jsonRes(res, 400, { error: `:${p} — конфигурируемый сервис, не дам убить` });
+                const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
+                let killed = 0;
+                for (const line of out.split(/\r?\n/)) {
+                    const m = line.match(new RegExp(`:${p}\\s+\\S+\\s+LISTENING\\s+(\\d+)`));
+                    if (m) { try { execFileSync('taskkill', ['/F', '/PID', m[1]]); killed++; } catch {} }
+                }
+                logLine(`health kill: killed ${killed} listener(s) on :${p}`);
+                jsonRes(res, 200, { ok: true, killed, port: p });
+            } catch (e) { jsonRes(res, 400, { error: e.message }); }
+        });
+        return;
+    }
+
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/logs')) {
         const limit = parseInt(new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('limit') || '200', 10);
         return jsonRes(res, 200, { lines: LOG_BUFFER.slice(-Math.max(1, limit)) });
+    }
+
+    // Прокси (отдельные процессы) шлют сюда свои лог-строки батчами, чтобы они
+    // попадали во вкладку "Server Logs" дашборда. Приходит JSON { name, lines }.
+    if (req.method === 'POST' && req.url === '/__switch/api/logs/ingest') {
+        let b = '';
+        req.on('data', c => b += c);
+        req.on('end', () => {
+            try {
+                const { name, lines } = JSON.parse(b);
+                if (!Array.isArray(lines) || !lines.length) return jsonRes(res, 400, { error: 'lines required' });
+                for (const ln of lines) logLine(`[${name || 'proxy'}] ${ln}`);
+                jsonRes(res, 200, { ok: true, received: lines.length });
+            } catch (e) { jsonRes(res, 400, { error: e.message }); }
+        });
+        return;
     }
 
     // Проверка обновлений кода дашборда: git fetch + сколько коммитов отстаём от origin.
@@ -4869,6 +5484,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/grok/activate') {
         return handleGrokActivate(req, res);
     }
+    if (req.method === 'POST' && req.url === '/__switch/api/grok/launch-chrome') {
+        return handleGrokLaunchChrome(req, res);
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/grok/launch') {
+        return handleGrokLaunch(req, res);
+    }
     if (req.method === 'GET' && req.url === '/__switch/api/grok/active') {
         return handleGrokActive(req, res);
     }
@@ -4961,10 +5582,13 @@ const server = http.createServer((req, res) => {
     // ---- AgentRouter (ar) — ручной пул ключей (agentrouter.org), API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/sessions')) return handleArSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/ping'))     return handleArPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/balance'))  return handleArBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add')       return handleArAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/delete')    return handleArDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/activate')  return handleArActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-model') return handleArSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/set-grant') return handleArSetGrant(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
 
@@ -5660,6 +6284,9 @@ async function grokLauncherStart() {
         env: {
             ...process.env,
             PORT: String(GROK_LAUNCHER_PORT),
+            // Чтобы launcher просил switcher самостоятельно спавнить grok-Chrome
+            // (python->chrome умирает, node->chrome работает).
+            SWITCHER_BASE: `http://localhost:${LISTEN_PORT}`,
             // Явно указываем launcher-у ту же папку cookies, что читает proxy
             // (важно если сработал legacy-fallback).
             GROK_COOKIE_DIR: grokCookiesDir(),
@@ -5747,10 +6374,14 @@ server.listen(LISTEN_PORT, () => {
     // сразу после запуска дашборда, без ручного `python launcher.py`.
     grokLauncherStart().catch(e => console.log('  Grok launcher start error:', e.message));
 
-    // AgentRouter-?????? (:20132) ? ???????? ??? claude-*/gpt-* ??????? agentrouter.
+    // AgentRouter-прокси (:20132) и keepalive-прокси (:20133) для claude-*/gpt-* через agentrouter.
     arProxySpawn().then(r => {
         if (!r.ok) console.log('  ar proxy spawn error:', r.error || '?');
         else if (!r.already) console.log('  ar proxy spawned');
     }).catch(e => console.log('  ar proxy spawn error:', e.message));
+    arKeepaliveSpawn().then(r => {
+        if (!r.ok) console.log('  keepalive proxy spawn error:', r.error || '?');
+        else if (!r.already) console.log('  keepalive proxy spawned');
+    }).catch(e => console.log('  keepalive proxy spawn error:', e.message));
 });
 

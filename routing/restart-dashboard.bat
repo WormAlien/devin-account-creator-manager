@@ -1,37 +1,58 @@
 @echo off
+setlocal EnableDelayedExpansion
 REM Restart Backend Switcher dashboard on :8200.
 REM Kills any existing instance, starts fresh, opens UI in default browser.
+REM
+REM Hardened 2026-08-13:
+REM   - self-elevates to Administrator: taskkill can NOT kill elevated node
+REM     instances from a normal console (silent "Access denied" before).
+REM   - taskkill errors are NOT swallowed; each port is verified with netstat
+REM     until it is actually free (up to 8s) before anything is started.
+REM   - refuses to start on a busy port and exits with code 1 instead of
+REM     crashing with EADDRINUSE.
 REM
 REM Usage: double-click, or call from cmd.
 
 cd /d "%~dp0"
 
-REM Гасим всё разом, потом даём ОС отпустить сокеты.
-REM Раньше пауза была ping -n 2 (~1с) — taskkill отрабатывает асинхронно,
-REM порт ещё в TIME_WAIT, и старт падал с EADDRINUSE. Теперь 4с.
+REM ---- Self-elevation: run as Administrator so taskkill works on all old PIDs ----
+net session >nul 2>&1
+if not "%errorlevel%"=="0" (
+    echo Requesting Administrator rights ^(UAC^) ...
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs -WorkingDirectory '%~dp0'"
+    exit /b
+)
+
+REM Гасим всё разом, потом даём ОС отпустить сокеты (не фиксированной паузой,
+REM а блоками netstat-проверки, пока порт не освободился реально).
 call :KILLPORT 8200  "switcher"
 call :KILLPORT 8300  "legacy"
 call :KILLPORT 20126 "FM rotator"
 call :KILLPORT 20130 "FM OpenAI proxy"
 call :KILLPORT 20131 "VyceAI proxy"
 call :KILLPORT 20132 "agentrouter proxy"
+call :KILLPORT 20133 "keepalive proxy"
+if "%FAILED%"=="1" goto FAILED
 
-echo Waiting for ports to be released ...
-ping 127.0.0.1 -n 5 >nul
+echo All ports released.
 
 echo Starting Freemodel Key Rotator on :20126 ...
+call :STARTGUARD 20126 || goto FAILED
 start "FM Rotator" /B node freemodel-rotator.js
 ping 127.0.0.1 -n 2 >nul
 
 echo Starting FreeModel OpenAI Proxy on :20130 ...
+call :STARTGUARD 20130 || goto FAILED
 start "FM OpenAI Proxy" /B node freemodel-openai-proxy.js
 ping 127.0.0.1 -n 2 >nul
 
 echo Starting VyceAI OpenAI Proxy on :20131 ...
+call :STARTGUARD 20131 || goto FAILED
 start "Vyce OpenAI Proxy" /B node vyceai-openai-proxy.js
 ping 127.0.0.1 -n 2 >nul
 
 echo Starting transparent-proxy.js (switcher + dashboard) on :8200 ...
+call :STARTGUARD 8200 || goto FAILED
 start "Backend Switcher" /MIN node transparent-proxy.js
 
 REM Wait for the server to come up (poll status endpoint up to 6s)
@@ -55,12 +76,52 @@ echo Window will close in 3 seconds...
 ping 127.0.0.1 -n 4 >nul
 exit /b 0
 
-REM ── Убить всех слушателей порта %1 (%2 — человекочитаемое имя) ──────────
-REM netstat отдаёт по строке на каждый сокет, поэтому один PID может
-REM встретиться дважды — второй taskkill просто ничего не находит, это норма.
+:FAILED
+echo.
+echo  *** RESTART FAILED - ports could not be freed, see messages above. ***
+ping 127.0.0.1 -n 5 >nul
+exit /b 1
+
+REM ----------------------------------------------------------------------------
+REM Kill all LISTENING PIDs on port %1 ("%2" = friendly name).
+REM After killing, poll netstat for up to ~8s until the port is really free.
+REM The verification loop is the source of truth (taskkill "not found" on a
+REM duplicate IPv4/IPv6 socket row is harmless noise, not an error).
 :KILLPORT
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%~1 " ^| findstr LISTENING') do (
-    echo Stopping PID %%P on :%~1 ^(%~2^) ...
-    taskkill /F /PID %%P >nul 2>&1
+set "KP_PORT=%~1"
+set "KP_NAME=%~2"
+set "KP_ANY=0"
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%KP_PORT% " ^| findstr LISTENING') do (
+    set "KP_ANY=1"
+    echo   Stopping PID %%P on :%KP_PORT% ^(%KP_NAME%^)...
+    taskkill /F /PID %%P
+)
+if not "%KP_ANY%"=="1" exit /b 0
+set /a KP_WAIT=0
+:KP_WAITFREE
+set "KP_STILL="
+for /f "tokens=5" %%Q in ('netstat -ano ^| findstr ":%KP_PORT% " ^| findstr LISTENING') do set "KP_STILL=%%Q"
+if defined KP_STILL (
+    set /a KP_WAIT+=1
+    if !KP_WAIT! GEQ 8 (
+        echo   !!! ERROR: port :%KP_PORT% still held by PID !KP_STILL! ^(%KP_NAME%^)
+        set "FAILED=1"
+        exit /b 0
+    )
+    ping 127.0.0.1 -n 2 >nul
+    goto KP_WAITFREE
+)
+echo   Port :%KP_PORT% free.
+exit /b 0
+
+REM ----------------------------------------------------------------------------
+REM Refuse to start on a busy port. Exit code 1 -> caller goes to :FAILED.
+:STARTGUARD
+set "SG_PORT=%~1"
+netstat -ano | findstr ":%SG_PORT% " | findstr LISTENING >nul
+if not errorlevel 1 (
+    echo   !!! ABORT: port :%SG_PORT% is still busy, not starting %~2
+    set "FAILED=1"
+    exit /b 1
 )
 exit /b 0

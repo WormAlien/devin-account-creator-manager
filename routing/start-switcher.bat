@@ -36,6 +36,11 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20132 " ^| findstr LISTENIN
     taskkill /F /PID %%P >nul 2>&1
 )
 
+REM Kill keepalive proxy (:20133) — тоже boot-spawn'ится transparent-proxy.js
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20133 " ^| findstr LISTENING') do (
+    taskkill /F /PID %%P >nul 2>&1
+)
+
 echo Starting Backend Switcher on :8200 ...
 start "Backend Switcher" node transparent-proxy.js
 timeout /t 2 /nobreak >nul

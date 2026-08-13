@@ -29,6 +29,8 @@
 | **Evomap** | Ручной пул `email + ключ` (`api.evomap.ai`), активация через API Helper. |
 | **Ourtoken** | Ручной пул `email + ключ` (`api.ourtoken.ai`) + автореги Playwright. |
 | **Conduit** | Аккаунты `conduit.ozdoev.net`, авторег **из Telegram** (device-code, без Playwright). |
+| **AgentRouter** | Пул ключей `agentrouter.org` (WAF — пускает только Claude Code). `claude-*` напрямую, `gpt-*` через локальный прокси `:20132` с **Cyrillic-bypass** (обход WAF «sensitive words detected»). |
+| **HelpCoder** | Аккаунты `helpcoder.cc` (New-API, `gpt-5.*`/codex), авторег чистым HTTP (без email/капчи), $200 бонуса на акк. |
 | **SuperGrok** | Сессии grok.com (device-auth через Camoufox), квоты, cooldown после rate-limit. |
 | **Video / Картинки API** | Хранилища ключей видео- и картинко-провайдеров (CRUD + триал-каталог). |
 | **Плагины** | Вкл/выкл плагинов Claude Code (тоггл `enabledPlugins`) + ★ рекомендованные. |
@@ -141,11 +143,26 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 ## Дашборд
 
-`http://localhost:8200/__switch`. Сайдбар: **Switcher · FreeModel · Aerolink · Cun · Evomap · Ourtoken · Conduit · Video API · Картинки API · SuperGrok · Плагины · Настройки** (+ архив «Чтим память»).
+`http://localhost:8200/__switch`. Сайдбар: **Switcher · FreeModel · Aerolink · Cun · Evomap · Ourtoken · Conduit · Svrtr · AgentRouter · HelpCoder · Video API · Картинки API · SuperGrok · Плагины · Настройки** (+ архив «Чтим память»).
 
 ### Switcher
 
-Переключает Claude Code между бэкендами одним кликом — переписывает `~/.claude/settings.json` (с `.bak-<timestamp>`). После прямого свича — **перезапустить Claude Code**; в режимах API Helper (FM/Aerolink/Evomap/Ourtoken/Conduit) перезапуск не нужен. Сверху — **глобальная шкала запаса** (считает FreeModel-пул).
+Переключает Claude Code между бэкендами одним кликом — переписывает `~/.claude/settings.json` (с `.bak-<timestamp>`). После прямого свича — **перезапустить Claude Code**; в режимах API Helper (FM/Aerolink/Evomap/Ourtoken/Conduit/Svrtr/HelpCoder) перезапуск не нужен. Сверху — **глобальная шкала запаса** (считает FreeModel-пул).
+
+### AgentRouter
+
+Пул ключей `agentrouter.org`. **WAF пускает только реальный Claude Code**: probe/models обязаны нести CC-заголовки, `apiKeyHelper` не работает — ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN` (прямой режим, base `https://agentrouter.org` БЕЗ `/v1`).
+
+- **Выбор модели** — клик по модели → `ar-active-model.txt` + `settings.model`. `claude-*` → напрямую в agentrouter; `gpt-*` → через локальный прокси `:20132` (конвертация Anthropic→OpenAI).
+- **Cyrillic-bypass** — WAF на OpenAI-эндпоинте режет запросы с «чувствительными словами» (`500 sensitive words detected`, падал весь реальный CC). Прокси заменяет английскую `c` → кириллическую `с` (U+0441) в тексте промпта, WAF не видит сигнатуру, на ответе — обратная замена. Полный CC-запрос (91 тул) теперь проходит 200.
+- Прокси спавнится автоматически при выборе gpt-модели; статус — `/__agentrouter/api/status` на `:20132`.
+
+### HelpCoder
+
+Аккаунты `helpcoder.cc` — New-API инстанс, модели `gpt-5.*`/codex. **WAF нет** — работает как обычный OpenAI/Anthropic-совместимый endpoint через API Helper (`hc-active-key.txt`), без прокси и bypass.
+
+- **Авторег** — `helpcoder/helpcoder_autoreg.js [N]`: чистый HTTP (register+token), без email и капчи. Новый акк = $200 бонуса.
+- **Квоты** — cookie-fetch `/api/user/self`, кнопка 🔄 на сессии. 401/403 = мёртвый.
 
 ### FreeModel
 
@@ -279,6 +296,7 @@ node routing/transparent-proxy.js        # switcher вручную
 | :--- | :--- |
 | `install.sh` | Интерактивный установщик с нуля |
 | `routing/transparent-proxy.js` | Switcher :8200 + HTTP API дашборда |
+| `routing/agentrouter-proxy.js` | AgentRouter-прокси :20132 (claude passthrough + gpt конвертер с Cyrillic-bypass) |
 | `routing/proxy-dashboard.html` | UI (Tailwind) |
 | `routing/freemodel-rotator.js` | Ротатор FreeModel-ключей :20126 |
 | `routing/{video,image}-keys.json` | Хранилища ключей провайдеров (gitignored, есть `*.example`) |
@@ -289,6 +307,7 @@ node routing/transparent-proxy.js        # switcher вручную
 | `internal/dashboard-api.js` | Прослойка CLI ↔ HTTP (FreeModel + Conduit) |
 | `internal/freemodel-manager.js` | FreeModel-сессии + квоты + TG-пул |
 | `conduit/` | Conduit: клиент, менеджер, автореги, рекордер сессии |
+| `helpcoder/` | HelpCoder: cookie-клиент (`lib/helpcoder-api.js`), менеджер аккаунтов, авторег |
 | `freemodel/lib/tg-*.js` · `tools/tg-open.py` | Telegram: пул, парсер `.session`, привязка, health, открытие |
 | `tgbot/` | Telegram-пульт (`bot.js` + `.env`) |
 | `~/.claude/settings.json` | Активный backend (Switcher редактирует) |
@@ -316,6 +335,10 @@ node routing/transparent-proxy.js        # switcher вручную
 <tr>
   <td>Квоты в кеше устарели</td>
   <td>Кнопка <b>🔄 Квоты (~2 мин)</b> в табе — перепрогон через headless Chrome</td>
+</tr>
+<tr>
+  <td>AgentRouter: gpt-модель даёт <code>500 sensitive words detected</code></td>
+  <td>WAF режет контент на OpenAI-эндпоинте. Проверь, что активен прокси <code>:20132</code> (спавнится при выборе gpt-модели) — Cyrillic-bypass встроен. Если нет — кликни gpt-модель заново или подними <code>routing/agentrouter-proxy.js</code></td>
 </tr>
 <tr>
   <td><b>✈ Открыть</b> падает / <code>нет tools/tg-venv</code></td>

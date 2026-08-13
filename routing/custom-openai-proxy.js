@@ -328,9 +328,8 @@ function claudeError(res, code, message, errType) {
     stats.errors++;
     writeJSON(res, code, { type: 'error', error: { type: errType || 'api_error', message } });
 }
-function logLine(s) {
-    console.log(`[${new Date().toISOString().substring(11, 23)}] ${s}`);
-}
+const { createLogger } = require('./proxy-logger.js');
+const { logLine } = createLogger('custom-oa');
 
 function handleMessages(req, res, body) {
     let claudeReq;

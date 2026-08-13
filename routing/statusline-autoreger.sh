@@ -2,16 +2,45 @@
 # Autoreger statusline: [provider] provider/model  $ ▰▰▰▰▱▱▱▱ 70% $217.33
 set -u
 
+# ---- stdin from Claude Code: model info -----------------------------------
+# Первично берём payload из env STATUSLINE_PAYLOAD (кладёт его wrapper-команда
+# из settings.json ДО запуска скрипта — надёжнее, чем гонять пайп через
+# wslpath/cygpath, которые могут украсть stdin). Если env нет — читаем stdin,
+# но ПЕРВЫМ делом, до любых subprocess-ов: WSL-интероп cmd.exe жрёт stdin-пайп,
+# и потом cat не получает ничего → model_id "unknown" и мерцающий статус.
+payload="${STATUSLINE_PAYLOAD:-$(cat 2>/dev/null || true)}"
+
 # ROOT = корень репо (скрипт лежит в <repo>/routing/)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROUTING="$ROOT/routing"
 LOGS="$ROOT/logs"
-SETTINGS="$HOME/.claude/settings.json"
 
-# ---- stdin from Claude Code: model info -----------------------------------
-payload="$(cat 2>/dev/null || true)"
 # отладка: `touch logs/.statusline-debug` → сырой payload от CC копится в .jsonl
 [ -f "$LOGS/.statusline-debug" ] && printf '%s\n' "$payload" >> "$LOGS/.statusline-debug.jsonl"
+
+# ---- home пользователя (WSL/MSYS-совместимо) ------------------------------
+# `bash` в PATH у нас WSL-шный: $HOME=/home/wormalien, а .claude лежит в
+# C:\Users\WormAlien. Если настроек по $HOME нет — берём Windows-профиль
+# через cmd.exe %USERPROFILE% и конвертируем wslpath/cygpath.
+if [ -f "$HOME/.claude/settings.json" ]; then
+    PROF="$HOME"
+else
+    up="$(cmd.exe /c "echo %USERPROFILE%" 2>/dev/null | tr -d '\r')"
+    if [ -n "$up" ]; then
+        if command -v wslpath >/dev/null 2>&1; then PROF="$(wslpath -u "$up")"
+        elif command -v cygpath >/dev/null 2>&1; then PROF="$(cygpath -u "$up")"
+        else PROF="$HOME"
+        fi
+    else
+        PROF="$HOME"
+    fi
+fi
+SETTINGS="$PROF/.claude/settings.json"
+
+# curl, который достаёт localhost Windows-хоста и из WSL, и из git-bash:
+# curl.exe (Windows-native) работает в обоих, plain curl в WSL2 туда не ходит.
+if command -v curl.exe >/dev/null 2>&1; then CURL_BIN="curl.exe"; else CURL_BIN="curl"; fi
+
 model_id="$(printf '%s' "$payload" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 [ -z "$model_id" ] && model_id="$(printf '%s' "$payload" | sed -n 's/.*"display_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 [ -z "$model_id" ] && model_id="unknown"
@@ -23,7 +52,7 @@ ctx_max="$(printf '%s' "$payload" | sed -n 's/.*"context_window_size"[[:space:]]
 
 # ---- active provider: prefer live dashboard /__switch/api/status ----------
 raw_target=""
-status_json="$(curl -s --max-time 1 http://localhost:8200/__switch/api/status 2>/dev/null || true)"
+status_json="$("$CURL_BIN" -s --max-time 1 http://localhost:8200/__switch/api/status 2>/dev/null || true)"
 if [ -n "$status_json" ]; then
     raw_target="$(printf '%s' "$status_json" | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 fi
@@ -45,7 +74,8 @@ if [ -z "$raw_target" ]; then
             https://api.ourtoken.ai*) raw_target="ourtoken" ;;
             *localhost:20128*)        raw_target="omniroute" ;;
             *localhost:20131*)        raw_target="vyce_openai" ;;
-            *localhost:20132*)        raw_target="agentrouter" ;;
+            *localhost:20132*|*localhost:20133*)  raw_target="agentrouter" ;;
+            *127.0.0.1:20132*|*127.0.0.1:20133*)  raw_target="agentrouter" ;;
 
             *localhost:8190*)         raw_target="notion" ;;
             *agentrouter.org*)        raw_target="agentrouter" ;;
@@ -89,7 +119,7 @@ stale=0
 active_name=""
 
 if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] && [ -f "$LOGS/.freemodel_meta.json" ]; then
-    active_key="$(cat "$HOME/.claude/fm-active-key.txt" 2>/dev/null | tr -d '[:space:]')"
+    active_key="$(cat "$PROF/.claude/fm-active-key.txt" 2>/dev/null | tr -d '[:space:]')"
     if [ -n "$active_key" ]; then
         # найти dir аккаунта в meta по apiKey
         active_name="$(awk -v key="$active_key" '
@@ -160,7 +190,7 @@ if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] &
             # поднимается, поэтому держать три минуты устаревшую цифру незачем.
             if [ "$stale_age_s" -gt 30 ]; then
                 stale=1
-                (curl -s -m 0.5 -X POST -H 'content-type: application/json' \
+                ("$CURL_BIN" -s -m 0.5 -X POST -H 'content-type: application/json' \
                     --data "{\"kind\":\"freemodel\",\"name\":\"$active_name\"}" \
                     http://localhost:8200/__switch/api/session/refresh-quota >/dev/null 2>&1 &) >/dev/null 2>&1
             fi

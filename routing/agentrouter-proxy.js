@@ -23,6 +23,7 @@ const UPSTREAM_BASE = 'https://agentrouter.org';
 const ACTIVE_KEY_FILE = path.join(require('os').homedir(), '.claude', 'ar-active-key.txt');
 const MAX_TOKENS_LIMIT = 64000;
 const REQUEST_TIMEOUT_MS = 600000;
+const MODELMAP_FILE = path.join(__dirname, 'ar-modelmap.json');
 
 const upstream = new URL(UPSTREAM_BASE);
 
@@ -36,6 +37,41 @@ const CC_HEADERS = {
 };
 
 // ══════════════════════ KEY RESOLUTION ══════════════════════
+
+// ══════════════════════ MODEL MAP (маппинг claude-тиров → модели agentrouter) ══════════════════════
+// Файл routing/ar-modelmap.json {opus, sonnet, haiku} правится на вкладке AgentRouter
+// (POST /__switch/api/ar/modelmap). Прокси перечитывает его по mtime на каждый запрос —
+// правки применяются без рестарта. Пустой тир = не маппить (как есть).
+const modelMapCache = { data: null, mtime: 0 };
+function readModelMap() {
+    try {
+        const st = fs.statSync(MODELMAP_FILE);
+        if (modelMapCache.data && st.mtimeMs === modelMapCache.mtime) return modelMapCache.data;
+        const raw = fs.readFileSync(MODELMAP_FILE, 'utf8');
+        const data = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        modelMapCache.data = { opus: '', sonnet: '', haiku: '', ...data };
+        modelMapCache.mtime = st.mtimeMs;
+        return modelMapCache.data;
+    } catch { return { opus: '', sonnet: '', haiku: '' }; }
+}
+
+// Маппинг claude-тира → целевая модель. Названия тиров ловим по подстроке
+// (claude-haiku-4-5 от Explore-агента, claude-opus-5, claude-sonnet-… и т.п.).
+const TIER_RE = [{ tier: 'opus', re: /(^|[-_.\/])?opus([-\/]|$)/i }, { tier: 'sonnet', re: /(^|[-_.\/])?sonnet([-\/]|$)/i }, { tier: 'haiku', re: /(^|[-_.\/])?haiku([-\/]|$)/i }];
+function applyModelMap(model) {
+    const mm = readModelMap();
+    for (const { tier, re } of TIER_RE) {
+        if (!mm[tier]) continue;
+        if (re.test(String(model || ''))) {
+            const target = mm[tier];
+            if (target !== String(model || '')) {
+                logLine(`model map: ${model} → ${target} (${tier})`);
+                return target;
+            }
+        }
+    }
+    return model;
+}
 
 function resolveKey(req) {
     const auth = req.headers['authorization'] || '';
@@ -60,7 +96,9 @@ function upstreamHeaders(apiKey, body) {
 }
 
 function upstreamRequest(pathSuffix, apiKey, body, onResponse, onError) {
-    const bodyStr = body ? JSON.stringify(body) : null;
+    // body может быть объектом (OpenAI-конвертер) или raw-строкой (pass-through):
+    // строку не ре-сериализуем, иначе JSON закавычится и апстрим сломается.
+    const bodyStr = typeof body === 'string' ? body : (body ? JSON.stringify(body) : null);
     const mod = upstream.protocol === 'https:' ? https : http;
     const req = mod.request({
         hostname: upstream.hostname,
@@ -89,7 +127,7 @@ function handlePassthrough(req, res, body) {
     const apiKey = resolveKey(req);
     if (!apiKey) return claudeError(res, 401, 'Нет ключа AgentRouter', 'authentication_error');
 
-    const upReq = upstreamRequest('/v1/messages', apiKey, null, (upRes) => {
+    const upReq = upstreamRequest('/v1/messages', apiKey, body, (upRes) => {
         if (upRes.statusCode !== 200) {
             let b = '';
             upRes.on('data', c => b += c);
@@ -111,8 +149,6 @@ function handlePassthrough(req, res, body) {
         upRes.pipe(res);
         res.on('close', () => { if (!res.writableEnded) upReq.destroy(); });
     }, (err) => claudeError(res, 502, 'upstream: ' + err.message));
-    upReq.write(body);
-    upReq.end();
 }
 
 // ══════════════════════ ANTHROPIC → OPENAI ══════════════════════
@@ -448,6 +484,11 @@ function handleMessages(req, res, body) {
     const apiKey = resolveKey(req);
     if (!apiKey) return claudeError(res, 401, 'Нет ключа AgentRouter', 'authentication_error');
 
+    // Маппинг claude-тиров (агент haiku/opus/sonnet → модель agentrouter), если задан
+    // на вкладке AgentRouter. Подменяем модель ДО роутинга — дальше штатная логика
+    // сама решит: gpt-цель → OpenAI-конвертер, claude-цель → pass-through.
+    claudeReq.model = applyModelMap(claudeReq.model);
+
     // claude-* и прочее не-GPT → pass-through в agentrouter /v1/messages (работает как есть)
     if (!isGptModel(claudeReq.model)) {
         stats.requests++;
@@ -566,10 +607,12 @@ const server = http.createServer((req, res) => {
     const url = (req.url || '').split('?')[0];
 
     if (req.method === 'GET' && (url === '/health' || url === '/__agentrouter/api/status')) {
+        const mm = readModelMap();
         return writeJSON(res, 200, {
             ok: true, upstream: UPSTREAM_BASE, port: LISTEN_PORT, stats,
             keySource: 'header → ar-active-key.txt',
             routing: 'claude-* → /v1/messages (passthrough); gpt-* → /v1/chat/completions (openai)',
+            modelMap: mm,
         });
     }
     if (req.method === 'GET' && url === '/v1/models') return handleModels(req, res);

@@ -256,6 +256,11 @@
         <span class="flex-1">GoRouter</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-gorouter">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="github">
+        <span class="w-5 text-center text-[14px]">🐙</span>
+        <span class="flex-1">GitHub аккаунты</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-github">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="anymodel">
         <span class="w-5 text-center text-[14px]">🤖</span>
         <span class="flex-1">AnyModel</span>
@@ -285,7 +290,7 @@
         <span class="flex-1">Настройки</span>
       </button>
       <!-- Whoami -->
-      <div class="mt-4 pt-3 border-t border-line-soft">
+      <div data-extra-nav="whoami" class="mt-4 pt-3 border-t border-line-soft">
         <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
              onclick="const s=this.nextElementSibling;const c=this.querySelector('.chev');s.classList.toggle('hidden');c.classList.toggle('rotate-90')">
           <span class="chev inline-block transition-transform text-[9px]">▶</span>
@@ -302,7 +307,7 @@
       </div>
 
       <!-- Чтим память (deprecated: Devin, Notion) -->
-      <div class="mt-4 pt-3 border-t border-line-soft">
+      <div data-extra-nav="memory" class="mt-4 pt-3 border-t border-line-soft">
         <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
              onclick="const s=this.nextElementSibling;const c=this.querySelector('.chev');s.classList.toggle('hidden');c.classList.toggle('rotate-90')">
           <span class="chev inline-block transition-transform text-[9px]">▶</span>
@@ -535,6 +540,10 @@
             <button onclick="checkDashboardUpdate()" class="px-4 py-2 bg-elevated border border-line-soft text-sm rounded-lg hover:border-emerald/60 transition">🔍 Проверить</button>
             <button id="dash-update-btn" onclick="pullDashboardUpdate()" disabled
               class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">⬇ Обновить дашборд</button>
+          </div>
+          <div class="text-xs text-muted pt-1">
+            Репозиторий и история обновлений:
+            <a href="https://github.com/WormAlien/vibe-code-account-creator-manager" target="_blank" rel="noopener" class="text-emerald hover:underline font-mono">github.com/WormAlien/vibe-code-account-creator-manager</a>
           </div>
         </div>
 
@@ -1487,6 +1496,17 @@
           </div>
         </div>
 
+        <!-- Model map (настраиваемый маппинг claude-тиров, как в GoRouter/Custom) -->
+        <div id="ar-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — читается прокси :20132/:20133 по mtime, применяется БЕЗ рестарта</h2>
+            <button onclick="loadArModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="ar-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
         <!-- Add form (скрыта по умолчанию) -->
         <div id="ar-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
           <div class="flex gap-2 items-end flex-wrap">
@@ -1585,6 +1605,77 @@
           <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
           <a href="https://gorouter.app/" target="_blank" class="text-teal hover:underline">gorouter.app</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: GITHUB ACCOUNTS ═════════ -->
+    <div data-tab-content="github">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-emerald">🐙</span> GitHub аккаунты
+            </h1>
+            <p class="text-sm text-muted mt-1">купленные аккаунты · форматы <code class="font-mono text-emerald text-xs">Логин:Пароль:2FA:Recovery:Ник</code> / <code class="font-mono text-emerald text-xs">Логин:Пароль:2FA:дата:токен:email</code> · 2FA-код считается локально (TOTP) · <code class="font-mono text-azure text-xs">routing/github-accounts.json</code></p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <input id="gh-search" oninput="ghRenderGrid()" placeholder="🔍 поиск по нику/логину…" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            <button onclick="ghRefreshCodes()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить коды</button>
+            <button onclick="ghShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+            <button onclick="ghShowImport()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📥 Импорт</button>
+          </div>
+        </header>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="gh-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">логин (email/username)</span>
+              <input id="gh-add-login" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">ник</span>
+              <input id="gh-add-nick" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">пароль</span>
+              <input id="gh-add-pass" type="password" placeholder="••••••••" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">2FA-секрет</span>
+              <input id="gh-add-secret" placeholder="ABCDEFGH…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">recovery codes (через запятую)</span>
+              <input id="gh-add-rec" placeholder="aaaaa-bbbbb, ccccc-ddddd…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="ghAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="ghShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="gh-import-form" class="hidden rounded-xl bg-surface border border-sky/40 p-4">
+          <div class="flex flex-col gap-2">
+            <span class="text-[10px] text-faint">вставь строки, по одной на аккаунт. Форматы:<br><code class="font-mono">Логин:Пароль:2FA-секрет:Recovery codes:Ник</code><br><code class="font-mono">Username:Password:2FA-секрет:DateSignup:ApiKey:Email</code></span>
+            <textarea id="gh-import-text" rows="6" placeholder="baker51607553@gmail.com:пароль:X6JAFHSZN7UYPC7X:26a52-37ce0,170cb-98522:cyclopswormnight" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60"></textarea>
+            <div id="gh-import-preview" class="text-xs text-faint"></div>
+            <div class="flex gap-2">
+              <button onclick="ghImport()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Импортировать</button>
+              <button onclick="ghShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="gh-grid" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          <div class="col-span-full p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>2FA-код считается прямо в браузере из секрета (base32 + HMAC-SHA1, RFC 6238)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>status: emerald live / amber cooldown / crimson dead — меняется в меню карточки</span>
         </div>
       </div>
     </div>
@@ -2092,7 +2183,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, custom: false, helpcoder: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, custom: false, helpcoder: false, github: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -2111,10 +2202,15 @@ const state = {
   agentrouter: [],
   arModels: [],
   arActiveModel: '',
+  arModelMap: {},
   gorouter: [],
   goModels: [],
   goActiveModel: '',
   goModelMap: {},
+  github: [],
+  ghReveal: {},          // id -> { pass:bool, secret:bool, rec:bool }
+  ghMenuOpen: null,      // id открытого меню «⋯»
+  ghTotpCache: {},       // id -> { code, until } кеш TOTP, чтобы не дёргать crypto на каждый тик
   custom: [],
   customActive: null,
   customModels: {},
@@ -2271,6 +2367,7 @@ function showTab(name) {
   if (name === 'conduit') { loadTgPool(); loadCdtActiveModel(); loadCdtModels(false); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } }
   if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } }
+  if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
   if (name === 'svrtr') { loadTgPool(); if (!state.loaded.svrtr) { state.loaded.svrtr = true; loadSvrtrSessions(false).then(() => loadSvrtrModels(false)); } }
   if (name === 'helpcoder') { if (!state.loaded.helpcoder) { state.loaded.helpcoder = true; loadHelpcoderSessions(false).then(() => loadHelpcoderModels(false)); } }
   if (name === 'anymodel') { if (!state.loaded.anymodel) { state.loaded.anymodel = true; loadAmodelAccounts(); } }
@@ -4132,6 +4229,34 @@ async function customCreate() {
   } catch (e) { toast('Create: ' + e.message, 'error'); }
 }
 
+function customShowEditProvider(id) {
+  const form = document.getElementById('custom-edit-' + id);
+  const p = state.custom.find(x => x.id === id);
+  if (!form || !p) return;
+  const show = form.classList.contains('hidden');
+  form.classList.toggle('hidden', !show);
+  if (show) {
+    document.getElementById('custom-edit-name-' + id).value = p.name || '';
+    document.getElementById('custom-edit-base-' + id).value = p.baseUrl || '';
+    document.getElementById('custom-edit-name-' + id).focus();
+  }
+}
+
+async function customSaveProvider(id) {
+  const name = document.getElementById('custom-edit-name-' + id).value.trim();
+  const baseUrl = document.getElementById('custom-edit-base-' + id).value.trim();
+  if (!name || !baseUrl) return toast('имя и baseUrl обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/custom/provider/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name, baseUrl }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ провайдер обновлён', 'success'); loadCustomProviders(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Update: ' + e.message, 'error'); }
+}
+
 async function customDeleteProvider(id) {
   const p = state.custom.find(x => x.id === id);
   if (!p) return;
@@ -4173,6 +4298,27 @@ async function customDeleteKey(providerId, apiKey) {
     if (data.ok) { toast('ключ удалён', 'info'); loadCustomProviders(); }
     else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Delete key: ' + e.message, 'error'); }
+}
+
+async function customEditKey(providerId, currentKey) {
+  const p = state.custom.find(x => x.id === providerId);
+  const k = p?.keys.find(kk => kk.apiKey === currentKey);
+  if (!k) return;
+  const mask = currentKey.length > 8 ? '…' + currentKey.slice(-8) : currentKey;
+  const input = prompt(`Заменить ключ ${mask} на новый.\n\nНовый api_key:`);
+  if (input === null) return;
+  const newKey = input.trim();
+  if (!newKey) return toast('ключ не может быть пустым', 'warn');
+  if (newKey === currentKey) return toast('ключ не изменился', 'info');
+  try {
+    const res = await fetch('/__switch/api/custom/key/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId, oldApiKey: currentKey, newApiKey: newKey }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast(`✓ ключ ***${newKey.slice(-6)} обновлён`, 'success'); loadCustomProviders(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Edit key: ' + e.message, 'error'); }
 }
 
 async function customPing(providerId, apiKey) {
@@ -4386,6 +4532,7 @@ function customRender() {
           ${actBtn(`customCopyKey(${kJ})`,                 'Скопировать ключ', '📋', 'cyan')}
           ${actBtn(`customPing(${pId}, ${kJ})`,            'Проверить ключ',   '🩺', 'violet')}
           ${actBtn(`customActivate(${pId}, ${kJ})`,        'Сделать активным', '🤝', 'amber')}
+          ${actBtn(`customEditKey(${pId}, ${kJ})`,          'Редактировать ключ', '✏️', 'cyan')}
           ${actBtn(`customDeleteKey(${pId}, ${kJ})`,       'Удалить',          '🗑', 'crimson')}
         </td>
       </tr>`;
@@ -4404,8 +4551,26 @@ function customRender() {
           </div>
         </div>
         <div class="flex gap-2 items-center">
+          <button onclick='customShowEditProvider(${pId})' class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-violet/50 hover:text-violet">✏️ Изменить</button>
           <button onclick='customDeleteProvider(${pId})' class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-crimson/50 hover:text-crimson">🗑 Удалить</button>
         </div>
+      </div>
+
+      <!-- Edit form (скрыта по умолчанию) -->
+      <div id="custom-edit-${p.id}" class="hidden rounded-xl bg-surface border border-violet/40 p-4 mx-4 mt-3">
+        <div class="flex gap-2 items-end flex-wrap">
+          <label class="flex flex-col gap-1">
+            <span class="text-[10px] text-faint">имя провайдера</span>
+            <input id="custom-edit-name-${p.id}" placeholder="MyProvider" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-48 focus:outline-none focus:border-violet/60">
+          </label>
+          <label class="flex flex-col gap-1 flex-1">
+            <span class="text-[10px] text-faint">base url</span>
+            <input id="custom-edit-base-${p.id}" placeholder="https://api.example.com/v1" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60">
+          </label>
+          <button onclick='customSaveProvider(${pId})' class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">💾 Сохранить</button>
+          <button onclick='customShowEditProvider(${pId})' class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+        </div>
+        <div class="text-[10px] text-faint mt-2">Если провайдер активен — смена base url перезапустит прокси и обновит settings.json / активный файл.</div>
       </div>
       <div class="px-4 py-3 space-y-3">
         <div class="flex gap-2 items-end flex-wrap">
@@ -4496,6 +4661,7 @@ async function loadArSessions(probe) {
     renderAr();
     renderArGauge();
     loadArModels();
+    loadArModelMap();
     if (probe) toast('✓ AgentRouter: статусы обновлены', 'success');
   } catch (e) {
     $('ar-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
@@ -4542,6 +4708,7 @@ async function renderArModels(models) {
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
+  renderArModelMap();
 }
 
 
@@ -4565,6 +4732,53 @@ async function arSelectModel(id) {
       + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
     renderArModels(state.arModels);
   } catch (e) { toast('arSelectModel: ' + e.message, 'error'); }
+}
+
+// Настраиваемый маппинг claude-тиров → agentrouter-модели (как в GoRouter/Custom).
+// Читается прокси :20132 и keepalive :20133 по mtime — применяется без рестарта.
+async function loadArModelMap() {
+  try {
+    const res = await fetch('/__switch/api/ar/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.arModelMap = data.modelMap || {};
+    renderArModelMap();
+  } catch (e) { /* маппинг может отсутствовать — не критично */ }
+}
+
+async function renderArModelMap() {
+  const mm = state.arModelMap || {};
+  const models = (state.arModels || []).map(m => m.id);
+  const opts = ['', ...models];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="ar-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('ar-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='arSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function arSaveModelMap() {
+  const mm = {
+    opus: $('ar-mm-opus')?.value || '',
+    sonnet: $('ar-mm-sonnet')?.value || '',
+    haiku: $('ar-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/ar/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.arModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён — прокси :20132/:20133 применит без рестарта', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
 
 function renderAr() {
@@ -4592,6 +4806,7 @@ function renderAr() {
     const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
     const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
     const balanceCell = arBalanceCell(s, kJ);
+    const ghBadge = arGhBadge(s);
     return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
         ${activeTag}${esc(email)}
@@ -4602,6 +4817,7 @@ function renderAr() {
       </td>
       <td class="px-3 py-2.5 text-center">${statusCell}</td>
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${ghBadge}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${actBtn(`arCopyKey(${kJ})`,    'Скопировать API-ключ',   '📋', 'sky')}
         ${actBtn(`arActivate(${kJ})`,   'Сделать активным',       '🤝', 'amber')}
@@ -4618,6 +4834,7 @@ function renderAr() {
       { label: 'API Key' },
       { label: 'Status', align: 'center', w: 'w-16' },
       { label: 'Баланс', align: 'center', w: 'w-24' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -4642,14 +4859,46 @@ function arBalanceCell(s, kJ) {
     hover:bg-sky/25 hover:border-sky/70 hover:text-sky">✏️ ${gLabel}</button>`;
 
   if (typeof s.balance === 'number') {
-    const grant = s.grant || 175;
+    const grant = (s.grant || 175) + (s.bonus || 0);
     const frac = grant > 0 ? s.balance / grant : 0;
     const color = frac > 0.3 ? 'text-emerald' : frac >= 0.1 ? 'text-amber' : 'text-crimson';
-    const tip = `остаток $${s.balance.toFixed(2)} = выдано $${(s.grant ?? 0).toFixed(0)} (${manual ? 'вручную' : 'авто'}) − потрачено $${(s.spent ?? 0).toFixed(2)} · клик = пересчитать`;
-    return `<span class="inline-flex flex-col items-center"><button onclick='arCheckBalance(${kJ})' title="${esc(tip)}"
-      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${edit}</span>`;
+    const bonusTip = (s.bonus || 0) > 0 ? ` + чек-ин $${(s.bonus || 0).toFixed(0)}` : '';
+    const tip = `остаток $${s.balance.toFixed(2)} = выдано $${(s.grant ?? 0).toFixed(0)} (${manual ? 'вручную' : 'авто'})${bonusTip} − потрачено $${(s.spent ?? 0).toFixed(2)} · клик = пересчитать`;
+    const bonusBtn = `<button onclick='arAddBonus(${kJ})' title="Чек-ин в ЛК дал +$25 — засчитать бонус. Уже: $${(s.bonus || 0).toFixed(0)}"
+      class="ml-1 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
+      ${(s.bonus || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
+      hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+25</button>`;
+    return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center"><button onclick='arCheckBalance(${kJ})' title="${esc(tip)}"
+      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}</span>${edit}</span>`;
   }
   return `<span class="inline-flex flex-col items-center">${actBtn(`arCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
+}
+
+// POST /__switch/api/ar/add-bonus { api_key } → чек-ин в ЛК дал +$25. Бонус копится отдельно от
+// выдачи: баланс = grant + bonus − spent. После ответа обновляем кеш сессии и перерисовываем.
+// Параметр — api_key (kJ = JSON.stringify(s.api_key)), ищем сессию по find, как arSetGrant/arCheckBalance.
+async function arAddBonus(api_key) {
+  const s = state.agentrouter.find(x => x.api_key === api_key);
+  if (!s) return;
+  const has = (s.bonus || 0) > 0;
+  if (!confirm(`Чек-ин в ЛК дал +$25?${has ? `\nУже засчитано: $${s.bonus.toFixed(0)}. Добавить ещё +$25.` : ''}`)) return;
+  try {
+    const res = await fetch('/__switch/api/ar/add-bonus', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const idx = state.agentrouter.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) {
+      const t = state.agentrouter[idx];
+      t.bonus = (t.bonus || 0) + 25;
+      if (data.status === 'live') { t.spent = data.spent; t.grant = data.grant; t.balance = data.balance; t.grantSource = data.grantSource; }
+    }
+    renderAr();
+    renderArGauge();
+    toast(`✓ +$25 засчитано` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
+  } catch (e) { toast('add-bonus: ' + e.message, 'error'); }
 }
 
 function arShowAdd(show = true) {
@@ -4810,6 +5059,87 @@ async function arOpenLk(api_key) {
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     toast(data.already ? '🌐 браузер уже открыт' : '🌐 браузер открыт (первый раз — залогинься в GitHub; чек-ин +$25)', 'success', 5000);
   } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+// Бейдж «какой GitHub привязан» в колонке GitHub таблицы AR. Метка-организация:
+// 'personal' — личный GitHub владельца; 'gh_…' — ник из хранилища; нет — «—».
+// Клик открывает модалку выбора (сменить/отвязать).
+function arGhBadge(s) {
+  const kJ = JSON.stringify(s.api_key);
+  if (s.ghId === 'personal') {
+    return `<button onclick='arPickGithub(${kJ})' title="GitHub: личный (мой) · клик — сменить/отвязать"
+      class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-violet/10 border border-violet/40 text-violet rounded font-mono hover:bg-violet/20 whitespace-nowrap">🐙 Личный</button>`;
+  }
+  const gh = s.ghId ? (state.github || []).find(g => g.id === s.ghId) : null;
+  if (gh) {
+    return `<button onclick='arPickGithub(${kJ})' title="${esc('GitHub: ' + gh.login + ' · клик — сменить/отвязать')}"
+      class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-teal/10 border border-teal/40 text-teal rounded font-mono hover:bg-teal/20 whitespace-nowrap">🐙 ${esc(gh.nickname || gh.login)}</button>`;
+  }
+  return `<button onclick='arPickGithub(${kJ})' title="GitHub не выбран · клик — выбрать"
+    class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-teal/60 hover:text-teal whitespace-nowrap">🐙 —</button>`;
+}
+
+// Модалка выбора GitHub-аккаунта для AR-аккаунта. Первый пункт — «личный GitHub» (вне хранилища),
+// ниже — импортированные аккаунты из routing/github-accounts.json. ghId=null → отвязать.
+async function arPickGithub(api_key) {
+  if (!(state.github || []).length && !state.loaded.github) {
+    try {
+      await loadGhKeys();
+    } catch (e) { /* loadGhKeys сама пишет ошибку в gh-grid */ }
+  }
+  const list = state.github || [];
+  const kJ = JSON.stringify(api_key);
+  const kJs = kJ.replace(/'/g, '&#39;');
+  const cur = state.agentrouter.find(x => x.api_key === api_key);
+  const curGhId = cur && cur.ghId ? cur.ghId : null;
+  const rows = [
+    `<div class="flex items-center justify-between px-3 py-2 rounded-lg border cursor-pointer transition ${curGhId === 'personal' ? 'bg-violet/10 border-violet/50' : 'bg-elevated border-line-soft hover:border-violet/60'}"
+       onclick='arSetGithub(${kJs}, "personal")'>
+      <span class="text-xs text-ink">🌟 Личный GitHub <span class="text-muted">(мой)</span></span>
+      ${curGhId === 'personal' ? '<span class="text-violet text-xs">✓</span>' : ''}
+    </div>`,
+  ];
+  for (const g of (list || [])) {
+    const st = GH_STATUS_META[g.status] || GH_STATUS_META.unknown;
+    const sel = curGhId === g.id;
+    const gJ = JSON.stringify(g.id).replace(/'/g, '&#39;');
+    rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border cursor-pointer transition ${sel ? 'bg-teal/10 border-teal/50' : 'bg-elevated border-line-soft hover:border-teal/60'}"
+       onclick='arSetGithub(${kJs}, ${gJ})'>
+      <span class="text-xs text-ink truncate max-w-[18ch]">🐙 ${esc(g.nickname || g.login)}</span>
+      <span class="flex items-center gap-1.5 shrink-0">
+        <span class="font-mono text-[10px] text-faint truncate max-w-[16ch]">${esc(g.login)}</span>
+        <span class="text-[10px] ${st.badge.split(' ').slice(-2).join(' ')} px-1 py-px rounded border ${st.badge}">${st.label}</span>
+        ${sel ? '<span class="text-teal text-xs">✓</span>' : ''}
+      </span>
+    </div>`);
+  }
+  $('ar-gh-modal-list').innerHTML = rows.join('');
+  $('ar-gh-modal-subtitle').textContent = cur ? (cur.email || cur.name || api_key.slice(-6)) : '—';
+  const unbindBtn = curGhId
+    ? `<button onclick='arSetGithub(${kJs}, null)' class="text-xs px-3 py-1.5 rounded-lg border border-crimson/40 text-crimson hover:bg-crimson/10 transition">Отвязать</button>`
+    : '';
+  $('ar-gh-modal-unbind').innerHTML = unbindBtn;
+  $('ar-gh-modal').classList.remove('hidden');
+}
+
+function closeArGhModal() {
+  $('ar-gh-modal').classList.add('hidden');
+}
+
+async function arSetGithub(api_key, ghId) {
+  try {
+    const res = await fetch('/__switch/api/ar/set-github', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key, ghId }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    closeArGhModal();
+    const sess = (state.agentrouter || []).find(x => x.api_key === api_key);
+    if (sess) sess.ghId = ghId;
+    renderAr();
+    toast(ghId === null ? '🐙 GitHub отвязан' : ghId === 'personal' ? '🐙 привязан личный GitHub' : '🐙 GitHub привязан', 'success', 2500);
+  } catch (e) { toast('GitHub: ' + e.message, 'error'); }
 }
 
 async function arCopyKey(api_key) {
@@ -5465,6 +5795,490 @@ async function imgDelete(api_key) {
     if (data.ok) { toast('удалён', 'info'); loadImageKeys(); }
     else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// ───── GitHub-аккаунты (gh) — карточки с TOTP ─────
+async function loadGhKeys() {
+  try {
+    const res = await fetch('/__switch/api/gh/keys');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.github = data.keys || [];
+    if ($('nav-count-github')) $('nav-count-github').textContent = state.github.length;
+    ghRenderGrid();
+  } catch (e) {
+    $('gh-grid').innerHTML = `<div class="col-span-full p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function ghShowAdd(show = true) {
+  $('gh-add-form').classList.toggle('hidden', !show);
+  if (show) { $('gh-add-login').value=''; $('gh-add-nick').value=''; $('gh-add-pass').value=''; $('gh-add-secret').value=''; $('gh-add-rec').value=''; $('gh-add-login').focus(); }
+}
+function ghShowImport(show = true) {
+  $('gh-import-form').classList.toggle('hidden', !show);
+  if (show) $('gh-import-text').focus();
+}
+
+async function ghAdd() {
+  const login = $('gh-add-login').value.trim();
+  const password = $('gh-add-pass').value;
+  const totpSecret = $('gh-add-secret').value.trim();
+  const recoveryCodes = $('gh-add-rec').value;
+  if (!login) return toast('логин обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/gh/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ login, password, totpSecret, recoveryCodes, nickname: $('gh-add-nick').value.trim() }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('✓ аккаунт добавлен', 'success'); ghShowAdd(false); loadGhKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+// Парсинг строк форматов:
+//   1) «Логин:Пароль:2FA-секрет:Recovery codes:Ник» (5 полей, Baker)
+//   2) «Username:Password:2FA-секрет:DateSignup:ApiKey:Email» (6 полей, новые аккаунты)
+// Детект формата по сигнатурам, а не по позиции от края: у новых аккаунтов
+// DateSignup — 13-значный timestamp, ApiKey — токен (ghp_/gho_/ghu_/github_pat_),
+// Email — с «@». Ник — это username, а не email (чтобы карточки выглядели однотипно).
+function ghParseLine(line) {
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const isB32 = s => s.length >= 10 && [...s.toUpperCase()].every(c => B32.includes(c));
+  const isEmail = s => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.trim());
+  const isToken = s => /^(ghp_|gho_|ghu_|ghs_|github_pat_)/.test(s.trim()) || s.trim().length >= 40;
+  const isTs = s => /^\d{10,14}$/.test(s.trim());
+  const parts = line.split(':').map(p => p.trim());
+
+  // Формат 2 (6+ полей): Username:Password:2FA:DateSignup:ApiKey:Email
+  if (parts.length >= 6 && isTs(parts[3]) && (isToken(parts[4]) || isEmail(parts[5]))) {
+    const note = `registration: ${parts[3]}` + (isEmail(parts[5]) ? `; email: ${parts[5]}` : '');
+    return {
+      login: parts[0],
+      password: parts[1],
+      totpSecret: parts[2].toUpperCase(),
+      apiToken: parts[4] || '',
+      recoveryCodes: [],
+      nickname: parts[0],
+      note,
+    };
+  }
+
+  // Формат 1 (5 полей): Логин:Пароль:2FA:Recovery:Ник
+  if (parts.length === 5) {
+    const nick = isEmail(parts[4]) ? parts[0] : parts[4];
+    const note = isEmail(parts[0]) ? `email: ${parts[0]}` : '';
+    return {
+      login: parts[0],
+      password: parts[1],
+      totpSecret: parts[2].toUpperCase(),
+      recoveryCodes: parts[3].split(/[,;\s]+/).map(c => c.trim()).filter(Boolean),
+      nickname: nick || parts[0],
+      note,
+    };
+  }
+
+  // Fallback: устойчиво к «:» внутри пароля — последние 3 справа фиксированы
+  // (ник / recovery / секрет). Если вытащенный «секрет» не похож на base32,
+  // а следующий слева — похож, значит перед ним были доп. поля (дата и т.п.).
+  if (parts.length < 5) return { error: `нужно минимум 5 полей, нашлось ${parts.length}` };
+  const nickname = parts.pop();
+  const recoveryRaw = parts.pop();
+  let secret = parts.pop();
+  const login = parts.shift();
+  let password = parts.join(':');
+  let note = '';
+  if (!isB32(secret) && parts.length && isB32(parts[parts.length - 1])) {
+    note = secret;
+    secret = parts.pop().toUpperCase();
+    password = parts.join(':');
+  }
+  if (!login) return { error: 'логин пустой' };
+  return {
+    login, password,
+    totpSecret: secret.toUpperCase(),
+    recoveryCodes: recoveryRaw.split(/[,;\s]+/).map(c => c.trim()).filter(Boolean),
+    nickname: isEmail(nickname) ? login : (nickname || login),
+    note,
+  };
+}
+
+let ghParsePreview = null;
+function ghRenderImportPreview() {
+  const text = $('gh-import-text').value;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const parsed = [];
+  const errors = [];
+  lines.forEach((ln, i) => {
+    const r = ghParseLine(ln);
+    if (r.error) errors.push(`строка ${i + 1}: ${r.error}`);
+    else parsed.push(r);
+  });
+  ghParsePreview = { parsed, errors };
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const rows = parsed.map((a, i) =>
+    `<tr class="border-b border-line-soft/40">
+      <td class="py-0.5 pr-2 font-mono text-ink">${esc(a.nickname)}</td>
+      <td class="py-0.5 pr-2 font-mono text-faint">${esc(a.login)}</td>
+      <td class="py-0.5 pr-2">${a.totpSecret ? '<span class="text-emerald">✓ 2FA</span>' : '<span class="text-faint">—</span>'}</td>
+      <td class="py-0.5 pr-2 font-mono text-faint">${esc(a.note)}</td>
+      <td class="py-0.5">${a.apiToken ? '<span class="text-emerald">✓ токен</span>' : a.recoveryCodes.length ? `<span class="text-emerald">✓ ${a.recoveryCodes.length}</span>` : '<span class="text-faint">—</span>'}</td>
+    </tr>`
+  ).join('');
+  $('gh-import-preview').innerHTML = errors.length
+    ? `<div class="text-crimson">⚠ ${errors.length} из ${lines.length} строк с ошибкой: ${errors.join(' · ')}</div>`
+    : (parsed.length
+      ? `<div class="text-emerald mb-1">✓ ${parsed.length} строк(и) готово к импорту</div><table class="w-full text-[11px]"><thead><tr class="text-faint text-left"><th class="py-0.5 pr-2 font-normal">ник</th><th class="py-0.5 pr-2 font-normal">логин</th><th class="py-0.5 pr-2 font-normal">2FA</th><th class="py-0.5 pr-2 font-normal">доп</th><th class="py-0.5 font-normal">токены</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<span class="text-faint">вставь строки выше</span>`);
+}
+$('gh-import-text').addEventListener('input', ghRenderImportPreview);
+
+async function ghImport() {
+  if (!ghParsePreview) ghRenderImportPreview();
+  const { parsed, errors } = ghParsePreview || { parsed: [], errors: [] };
+  if (!parsed.length) return toast(errors[0] || 'нет строк для импорта', 'warn');
+  try {
+    const res = await fetch('/__switch/api/gh/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accounts: parsed }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`✓ импортировано ${data.added}, пропущено ${data.skipped}, ошибок ${data.errors.length}`, 'success');
+      ghShowImport(false);
+      loadGhKeys();
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Import: ' + e.message, 'error'); }
+}
+
+async function ghDelete(id) {
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/gh/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); delete state.ghTotpCache[id]; loadGhKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function ghSetStatus(id, status) {
+  try {
+    const res = await fetch('/__switch/api/gh/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast(`статус → ${status}`, 'info'); ghToggleMenu(id); loadGhKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Status: ' + e.message, 'error'); }
+}
+
+function ghToggleMenu(id) { state.ghMenuOpen = state.ghMenuOpen === id ? null : id; ghRenderGrid(); }
+
+function ghTogglePass(id) { state.ghReveal[id] = state.ghReveal[id] || {}; state.ghReveal[id].pass = !state.ghReveal[id].pass; ghRenderGrid(); }
+function ghToggleSecret(id) { state.ghReveal[id] = state.ghReveal[id] || {}; state.ghReveal[id].secret = !state.ghReveal[id].secret; ghRenderGrid(); }
+function ghToggleRec(id) { state.ghReveal[id] = state.ghReveal[id] || {}; state.ghReveal[id].rec = !state.ghReveal[id].rec; ghRenderGrid(); }
+
+async function ghCopy(text, label) {
+  try { await navigator.clipboard.writeText(text); toast('📋 ' + label, 'info'); }
+  catch { toast('clipboard недоступен', 'warn'); }
+}
+
+function ghAccount(id) { return state.github.find(x => x.id === id) || null; }
+
+function ghCopyLogin(id) {
+  const a = ghAccount(id);
+  if (!a) return;
+  ghCopy(a.login, 'логин скопирован');
+}
+
+function ghCopyPass(id) {
+  const a = ghAccount(id);
+  if (!a) return;
+  ghCopy(a.password, 'пароль скопирован');
+}
+
+function ghToggleToken(id) {
+  state.ghReveal[id] = state.ghReveal[id] || {};
+  state.ghReveal[id].token = !state.ghReveal[id].token;
+  ghRenderGrid();
+}
+
+function ghCopyToken(id) {
+  const a = ghAccount(id);
+  if (!a) return;
+  ghCopy(a.apiToken, 'API-токен скопирован');
+}
+
+function ghCopySecret(id) {
+  const a = ghAccount(id);
+  if (!a) return;
+  ghCopy(a.totpSecret, '2FA-секрет скопирован');
+}
+
+async function ghCopyCode(id) {
+  const a = ghAccount(id);
+  if (!a) return;
+  const code = await ghCodeFor(id, a.totpSecret);
+  if (code) ghCopy(code, '2FA-код скопирован');
+}
+
+function ghOpenGitHub(id) {
+  ghOpenSession(id);
+}
+
+async function ghOpenSession(id) {
+  try {
+    const res = await fetch('/__switch/api/gh/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok && data.already) toast('🌐 браузер этого аккаунта уже открыт', 'info');
+    else if (data.ok) toast('🌐 браузер открыт — если первый раз, введи логин/пароль/2FA-код с карточки', 'success', 6000);
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Open: ' + e.message, 'error'); }
+}
+
+function ghRefreshCodes() {
+  state.ghTotpCache = {};
+  ghRenderGrid();
+  toast('↻ 2FA-коды обновлены', 'info');
+}
+
+// ───── TOTP (RFC 6238) — локально, без сайтов ─────
+const GH_B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function ghBase32Decode(str) {
+  const clean = String(str || '').replace(/[^A-Za-z2-7]/g, '').toUpperCase();
+  const bits = [];
+  for (const ch of clean) {
+    const v = GH_B32.indexOf(ch);
+    if (v < 0) return null;
+    for (let b = 4; b >= 0; b--) bits.push((v >> b) & 1);
+  }
+  const bytes = [];
+  for (let i = 0; i + 7 < bits.length; i += 8) {
+    let n = 0;
+    for (let j = 0; j < 8; j++) n = (n << 1) | bits[i + j];
+    bytes.push(n);
+  }
+  return bytes.length ? bytes : null;
+}
+
+async function ghComputeTotp(secret) {
+  const keyBytes = ghBase32Decode(secret);
+  if (!keyBytes || !keyBytes.length) return null;
+  const counter = Math.floor(Date.now() / 1000 / 30);
+  const buf = new ArrayBuffer(8);
+  const dv = new DataView(buf);
+  dv.setUint32(4, counter >>> 0); // 64-bit big-endian, top 32 bits = 0
+  const cryptoObj = window.crypto;
+  if (!cryptoObj || !cryptoObj.subtle) return null;
+  const key = await cryptoObj.subtle.importKey(
+    'raw', new Uint8Array(keyBytes), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']
+  );
+  const sig = new Uint8Array(await cryptoObj.subtle.sign('HMAC', key, new Uint8Array(buf)));
+  const off = sig[sig.length - 1] & 0x0f;
+  const code = ((sig[off] & 0x7f) << 24 | (sig[off + 1] & 0xff) << 16 | (sig[off + 2] & 0xff) << 8 | (sig[off + 3] & 0xff)) % 1000000;
+  return String(code).padStart(6, '0');
+}
+
+function ghTotpSecondsLeft() { return 30 - (Math.floor(Date.now() / 1000) % 30); }
+
+// Кешируем код на время 30-секундного окна — не дёргаем crypto на каждый тик.
+async function ghCodeFor(id, secret) {
+  const s = String(secret || '');
+  if (!s) return null;
+  const windowStart = Math.floor(Date.now() / 1000 / 30);
+  const cached = state.ghTotpCache[id];
+  if (cached && cached.windowStart === windowStart) return cached.code;
+  const code = await ghComputeTotp(s);
+  if (code) state.ghTotpCache[id] = { windowStart, code };
+  return code;
+}
+
+let ghTimerRunning = false;
+function ghStartTimer() {
+  if (ghTimerRunning) return;
+  ghTimerRunning = true;
+  setInterval(() => {
+    const el = $('gh-grid');
+    if (!el || el.offsetParent === null) return; // вкладка не видима — не тикаем
+    ghRenderCountdowns();
+  }, 1000);
+}
+
+const GH_STATUS_META = {
+  live:     { color: 'emerald', bar: 'bg-emerald',    badge: 'bg-emerald/15 text-emerald border-emerald/40',   label: 'live' },
+  cooldown: { color: 'amber',   bar: 'bg-amber',      badge: 'bg-amber/15   text-amber   border-amber/40',     label: 'cooldown' },
+  dead:     { color: 'crimson', bar: 'bg-crimson',    badge: 'bg-crimson/15 text-crimson border-crimson/40',   label: 'dead' },
+  error:    { color: 'crimson', bar: 'bg-crimson',    badge: 'bg-crimson/15 text-crimson border-crimson/40',   label: '2FA error' },
+  unknown:  { color: 'gray',    bar: 'bg-gray-500',   badge: 'bg-elevated   text-faint   border-line-soft',     label: 'unknown' },
+};
+
+async function ghRenderGrid() {
+  const query = ($('gh-search').value || '').trim().toLowerCase();
+  const rows = state.github.filter(a =>
+    !query || a.nickname.toLowerCase().includes(query) || a.login.toLowerCase().includes(query));
+  const $grid = $('gh-grid');
+  if (!state.github.length) {
+    $grid.innerHTML = `<div class="col-span-full rounded-xl bg-surface border border-line-soft p-12 text-center text-faint text-xs">
+      Нет GitHub аккаунтов — нажми <span class="text-emerald">➕ Добавить</span> или <span class="text-sky">📥 Импорт</span></div>`;
+    return;
+  }
+  if (!rows.length) {
+    $grid.innerHTML = `<div class="col-span-full p-12 text-center text-faint text-xs">ничего не найдено по запросу «${esc(query)}»</div>`;
+    return;
+  }
+  const cards = await Promise.all(rows.map(async a => {
+    const code = await ghCodeFor(a.id, a.totpSecret);
+    const secs = ghTotpSecondsLeft();
+    return { a, code, secs };
+  }));
+  $grid.innerHTML = cards.map(({ a, code, secs }) => ghCardHtml(a, code, secs)).join('');
+}
+
+function ghCountdownMeta(secs) {
+  if (secs <= 3)  return { cls: 'bg-crimson',   label: 'critical' };
+  if (secs <= 10) return { cls: 'bg-amber',     label: 'warning' };
+  return { cls: 'bg-teal', label: 'normal' };
+}
+
+function ghCardHtml(a, code, secs) {
+  const st = GH_STATUS_META[a.status] || GH_STATUS_META.unknown;
+  const idJ = a.id;
+  const rev = state.ghReveal[a.id] || {};
+  const menuOpen = state.ghMenuOpen === a.id;
+  const passShown = rev.pass ? esc(a.password) : '••••••••';
+  const secretShown = rev.secret;
+  const recShown = rev.rec;
+  const tokenShown = rev.token;
+  const cd = ghCountdownMeta(secs);
+  const codeText = code === null
+    ? `<span class="text-crimson text-sm font-mono">Ошибка 2FA</span>`
+    : `<span data-gh-code class="font-mono text-2xl tracking-[0.15em] select-all ${secs <= 3 ? 'text-crimson' : secs <= 10 ? 'text-amber' : 'text-emerald'}">${code.slice(0, 3)}&nbsp;${code.slice(3)}</span>`;
+  const menu = menuOpen ? `<div class="absolute right-0 bottom-14 z-20 w-52 rounded-lg bg-elevated border border-line-soft p-1 shadow-xl text-xs">
+    <button onclick="ghToggleRec('${idJ}')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2">${recShown ? '🙈' : '🔑'} ${recShown ? 'Скрыть' : 'Показать'} recovery codes</button>
+    <button onclick="ghToggleSecret('${idJ}')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2">${secretShown ? '🙈' : '🔒'} ${secretShown ? 'Скрыть' : 'Показать'} 2FA-секрет</button>
+    ${a.apiToken ? `<button onclick="ghToggleToken('${idJ}')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2">${tokenShown ? '🙈' : '🔑'} ${tokenShown ? 'Скрыть' : 'Показать'} API-токен</button>` : ''}
+    <button onclick="ghTogglePass('${idJ}')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2">${rev.pass ? '🙈' : '👁'} ${rev.pass ? 'Скрыть' : 'Показать'} пароль</button>
+    <div class="my-1 border-t border-line-soft"></div>
+    <button onclick="ghSetStatus('${idJ}', 'live')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${a.status === 'live' ? 'text-emerald' : ''}">🟢 live</button>
+    <button onclick="ghSetStatus('${idJ}', 'cooldown')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${a.status === 'cooldown' ? 'text-amber' : ''}">🟠 cooldown</button>
+    <button onclick="ghSetStatus('${idJ}', 'dead')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${a.status === 'dead' ? 'text-crimson' : ''}">🔴 dead</button>
+    <div class="my-1 border-t border-line-soft"></div>
+    <button onclick="ghDelete('${idJ}')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface text-crimson">🗑 Удалить</button>
+  </div>` : '';
+  const recBlock = recShown
+    ? `<div class="mt-1 flex flex-col gap-0.5">${(a.recoveryCodes || []).length
+        ? a.recoveryCodes.map(r => `<span class="font-mono text-[11px] text-faint select-all">${esc(r)}</span>`).join('')
+        : `<span class="text-[11px] text-faint">recovery-кодов нет</span>`}</div>`
+    : '';
+  const tokenBlock = (a.apiToken && tokenShown) ? `<div class="rounded-md bg-elevated/60 border border-line-soft px-2.5 py-1.5">
+    <div class="text-[10px] uppercase tracking-wide text-faint">API-токен</div>
+    <div class="flex items-center justify-between gap-2">
+      <span class="font-mono text-xs text-ink truncate select-all" title="${esc(a.apiToken)}">${esc(a.apiToken)}</span>
+      <button onclick="ghCopyToken('${idJ}')" title="Скопировать API-токен" class="shrink-0 w-7 h-7 rounded-md text-faint hover:text-ink hover:bg-surface flex items-center justify-center">📋</button>
+    </div>
+  </div>` : '';
+  const seqIdx = state.github.findIndex(x => x.id === a.id) + 1;
+  return `<div data-gh-id="${esc(a.id)}" class="relative rounded-lg bg-surface border ${menuOpen ? 'border-teal/60' : 'border-line-soft'} hover:border-line transition min-h-[280px] flex flex-col overflow-hidden">
+    <div class="h-1 w-full ${st.bar}"></div>
+    ${menu}
+    <div class="p-4 flex-1 flex flex-col gap-2.5">
+      <div class="flex items-center gap-3 pr-8">
+        <div class="w-10 h-10 rounded-md bg-elevated border ${st.color === 'crimson' ? 'border-crimson/50' : st.color === 'amber' ? 'border-amber/50' : 'border-emerald/50'} flex items-center justify-center text-lg">🐙</div>
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-semibold text-ink truncate" title="${esc(a.nickname)}">${esc(a.nickname)}</div>
+          <span class="inline-block text-[10px] px-1.5 py-0.5 rounded border ${st.badge}">${st.label}</span>
+        </div>
+      </div>
+      <div class="flex items-center justify-between text-[10px] text-faint mt-0.5">
+        <span title="Порядок добавления в дашборд (последовательность покупки)">№${seqIdx} в цепочке</span>
+        <span class="whitespace-nowrap">добавлен ${esc(a.added || '—')}</span>
+      </div>
+      <div class="flex flex-col gap-2 mt-1">
+        <div class="rounded-md bg-elevated/60 border border-line-soft px-2.5 py-1.5">
+          <div class="text-[10px] uppercase tracking-wide text-faint">Логин</div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-mono text-xs text-ink truncate select-all" title="${esc(a.login)}">${esc(a.login)}</span>
+            <button onclick="ghCopyLogin('${idJ}')" title="Скопировать логин" class="shrink-0 w-7 h-7 rounded-md text-faint hover:text-ink hover:bg-surface flex items-center justify-center">📋</button>
+          </div>
+        </div>
+        <div class="rounded-md bg-elevated/60 border border-line-soft px-2.5 py-1.5">
+          <div class="text-[10px] uppercase tracking-wide text-faint">Пароль</div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-mono text-xs text-ink truncate select-all">${passShown}</span>
+            <span class="shrink-0 flex items-center">
+              <button onclick="ghTogglePass('${idJ}')" title="Показать/скрыть пароль" class="w-7 h-7 rounded-md text-faint hover:text-ink hover:bg-surface flex items-center justify-center">${rev.pass ? '🙈' : '👁'}</button>
+              <button onclick="ghCopyPass('${idJ}')" title="Скопировать пароль" class="w-7 h-7 rounded-md text-faint hover:text-ink hover:bg-surface flex items-center justify-center">📋</button>
+            </span>
+          </div>
+        </div>
+        ${tokenBlock}
+      </div>
+      <div class="rounded-lg bg-elevated/40 border border-line-soft p-3 mt-1">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-[10px] uppercase tracking-wide text-faint">2FA-код</span>
+          ${code === null ? '' : `<button onclick="ghCopyCode('${idJ}')" title="Скопировать 2FA-код" class="w-7 h-7 rounded-md text-faint hover:text-ink hover:bg-surface flex items-center justify-center">📋</button>`}
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          ${codeText}
+          ${code === null ? '' : `<span data-gh-sec class="text-[11px] font-mono ${cd.label === 'critical' ? 'text-crimson' : cd.label === 'warning' ? 'text-amber' : 'text-faint'}">${secs}s</span>`}
+        </div>
+        <div class="mt-2 h-1 rounded bg-elevated overflow-hidden">
+          <div data-gh-bar class="h-full rounded transition-all duration-1000 ${cd.cls}" style="width:${(secs / 30) * 100}%"></div>
+        </div>
+        ${secretShown ? `<div class="mt-2 flex items-center justify-between gap-2 rounded-md bg-elevated/60 border border-line-soft px-2.5 py-1.5">
+          <span class="text-[10px] uppercase tracking-wide text-faint">2FA-секрет</span>
+          <span class="shrink-0 flex items-center gap-1">
+            <span class="font-mono text-[11px] text-ink select-all truncate">${esc(a.totpSecret || '—')}</span>
+            <button onclick="ghCopySecret('${idJ}')" title="Скопировать 2FA-секрет" class="w-7 h-7 rounded-md text-faint hover:text-ink hover:bg-surface flex items-center justify-center">📋</button>
+          </span>
+        </div>` : ''}
+      </div>
+      <div class="mt-0.5">${recBlock}</div>
+      <div class="flex-1"></div>
+      <div class="flex gap-2">
+        <button onclick="ghOpenGitHub('${idJ}')" class="flex-1 text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Открыть GitHub ↗</button>
+        <button onclick="ghToggleMenu('${idJ}')" title="Действия (recovery/секрет/статус/удалить)" class="w-9 text-xs px-2 py-2 bg-surface border border-line-soft rounded-lg hover:border-line hover:bg-elevated flex items-center justify-center">⋯</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Обновляем только countdown-полоски и секунды + подменяем код при перевале окна.
+async function ghRenderCountdowns() {
+  const cards = $('gh-grid')?.querySelectorAll('[data-gh-id]');
+  if (!cards || !cards.length) return;
+  const secs = ghTotpSecondsLeft();
+  for (const el of cards) {
+    const id = el.dataset.ghId;
+    const acc = state.github.find(x => x.id === id);
+    if (!acc) continue;
+    const bar = el.querySelector('[data-gh-bar]');
+    const secEl = el.querySelector('[data-gh-sec]');
+    const codeEl = el.querySelector('[data-gh-code]');
+    if (bar) bar.style.width = (secs / 30) * 100 + '%';
+    const cd = ghCountdownMeta(secs);
+    if (bar) bar.className = 'h-full rounded transition-all duration-1000 ' + cd.cls;
+    if (secEl) {
+      secEl.textContent = secs + 's';
+      secEl.className = 'text-[11px] font-mono ' + (cd.label === 'critical' ? 'text-crimson' : cd.label === 'warning' ? 'text-amber' : 'text-faint');
+    }
+    if (codeEl) {
+      const code = await ghCodeFor(id, acc.totpSecret);
+      if (code) {
+        const txt = code.slice(0, 3) + '\u00A0' + code.slice(3);
+        if (codeEl.textContent !== txt) codeEl.textContent = txt;
+        codeEl.className = 'font-mono text-2xl tracking-[0.15em] select-all ' + (cd.label === 'critical' ? 'text-crimson' : cd.label === 'warning' ? 'text-amber' : 'text-emerald');
+      }
+    }
+  }
 }
 
 // ───── триал-сайты картинок (где взять бесплатные кредиты) ─────
@@ -9197,27 +10011,65 @@ function onSettingsFm() {
 
 // ═══════════════════ Tabs Manager ═══════════════════════════════════
 // Порядок и видимость вкладок в главном nav. Хранится в localStorage.
-// { order: [tabName...], hidden: [tabName...] }. Применяется на init +
-// после каждого изменения в модалке. Вложенные "deprecated" табы (tokenrouter,
-// devin, notion) не трогаем — они внутри collapsible "Чтим память".
+// { order: [tabName...], hidden: [tabName...], shown: [extraKey...] }.
+// Применяется на init + после каждого изменения в модалке.
+//
+// Свежая установка (нет конфига в localStorage) — видно только актуальные
+// вкладки из DEFAULT_TABS_VISIBLE (whitelist), в этом порядке; всё остальное
+// скрыто (в модалке — 🚫). Пока пользователь ничего не тронул, дефолт
+// применяется на лету и НЕ пишется в localStorage. Новые вкладки, добавленные
+// в nav позже, по умолчанию тоже скрыты (их нет в whitelist).
+//
+// Секции nav (Whoami, Чтим память) — отдельные блоки внизу сайдбара, не
+// вкладки. Управляются той же модалкой через EXTRA_NAV: по умолчанию скрыты
+// у всех (в т.ч. у тех, у кого уже сохранён конфиг), пока пользователь явно
+// не включит их глазком (тогда ключ попадает в config.shown).
 const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
+const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'grok', 'github', 'settings', 'plugins', 'health'];
+const EXTRA_NAV = [
+  { key: 'whoami', icon: '🔍', label: 'Whoami' },
+  { key: 'memory', icon: '🕯', label: 'Чтим память' },
+];
 
 function loadTabsConfig() {
   try {
     const raw = localStorage.getItem(TABS_CONFIG_KEY);
-    if (!raw) return { order: [], hidden: [] };
+    if (!raw) return { order: [...DEFAULT_TABS_VISIBLE], hidden: null, shown: [] }; // null = дефолт свежей установки
     const p = JSON.parse(raw);
-    return { order: Array.isArray(p.order) ? p.order : [], hidden: Array.isArray(p.hidden) ? p.hidden : [] };
-  } catch { return { order: [], hidden: [] }; }
+    return {
+      order: Array.isArray(p.order) ? p.order : [],
+      hidden: Array.isArray(p.hidden) ? p.hidden : [],
+      shown: Array.isArray(p.shown) ? p.shown : [],
+    };
+  } catch { return { order: [...DEFAULT_TABS_VISIBLE], hidden: null, shown: [] }; }
 }
 function saveTabsConfig(cfg) {
   localStorage.setItem(TABS_CONFIG_KEY, JSON.stringify(cfg));
 }
+// Эффективный набор скрытых: пользовательский конфиг, либо whitelist-дефолт.
+// Экстра-секции (Whoami/Чтим память) скрыты, пока не попали в config.shown.
+function effectiveHiddenSet() {
+  const cfg = loadTabsConfig();
+  const set = new Set();
+  const shown = new Set(cfg.shown || []);
+  if (cfg.hidden) {
+    for (const t of cfg.hidden) set.add(t);
+  } else {
+    for (const b of getMainNavButtons()) if (!DEFAULT_TABS_VISIBLE.includes(b.dataset.tab)) set.add(b.dataset.tab);
+  }
+  for (const ex of EXTRA_NAV) if (!shown.has(ex.key)) set.add(ex.key);
+  return set;
+}
 function getMainNavButtons() {
-  // Только прямые дети #main-nav — не трогаем nested (Whoami / Чтим память).
+  // Только прямые дети #main-nav (кнопки-вкладки). Экстра-секции отдельно.
   const nav = document.getElementById('main-nav');
   if (!nav) return [];
   return Array.from(nav.querySelectorAll(':scope > button.nav-btn[data-tab]'));
+}
+function getMainNavSections() {
+  const nav = document.getElementById('main-nav');
+  if (!nav) return [];
+  return Array.from(nav.querySelectorAll(':scope > div[data-extra-nav]'));
 }
 function applyTabsConfig() {
   const nav = document.getElementById('main-nav');
@@ -9225,15 +10077,30 @@ function applyTabsConfig() {
   const cfg = loadTabsConfig();
   const btns = getMainNavButtons();
   const byTab = Object.fromEntries(btns.map(b => [b.dataset.tab, b]));
-  // Применяем порядок: сначала табы из cfg.order (в их порядке), потом новые (которых нет в cfg).
+  // Применяем порядок: сначала табы из cfg.order (в их порядке), потом новые.
+  // Новые актуальные вкладки (в whitelist, но ещё не в сохранённом порядке)
+  // вставляем на дефолтную позицию — сразу после предыдущего актуального
+  // таба, а не в конец списка.
   const ordered = [];
   for (const name of cfg.order) if (byTab[name]) ordered.push(byTab[name]);
-  for (const b of btns) if (!cfg.order.includes(b.dataset.tab)) ordered.push(b);
+  for (const name of DEFAULT_TABS_VISIBLE) {
+    if (cfg.order.includes(name) || !byTab[name]) continue;
+    const pos = DEFAULT_TABS_VISIBLE.indexOf(name);
+    let insertAt = ordered.length;
+    for (let i = ordered.length - 1; i >= 0; i--) {
+      const t = ordered[i].dataset.tab;
+      if (DEFAULT_TABS_VISIBLE.includes(t) && DEFAULT_TABS_VISIBLE.indexOf(t) < pos) { insertAt = i + 1; break; }
+    }
+    ordered.splice(insertAt, 0, byTab[name]);
+  }
+  for (const b of btns) if (!cfg.order.includes(b.dataset.tab) && !DEFAULT_TABS_VISIBLE.includes(b.dataset.tab)) ordered.push(b);
   // Переставляем в DOM (append сохраняет event listeners).
   for (const b of ordered) nav.appendChild(b);
-  // Видимость.
-  const hidden = new Set(cfg.hidden);
+  // Видимость вкладок.
+  const hidden = effectiveHiddenSet();
   for (const b of btns) b.classList.toggle('hidden', hidden.has(b.dataset.tab));
+  // Видимость экстра-секций (Whoami / Чтим память).
+  for (const s of getMainNavSections()) s.classList.toggle('hidden', hidden.has(s.dataset.extraNav));
   // Если активная вкладка скрыта — переключаемся на первую видимую.
   const active = localStorage.getItem('opencode_active_tab');
   if (active && hidden.has(active)) {
@@ -9245,7 +10112,7 @@ function renderTabsManagerList() {
   const list = document.getElementById('tabs-manager-list');
   if (!list) return;
   const cfg = loadTabsConfig();
-  const hidden = new Set(cfg.hidden);
+  const hidden = effectiveHiddenSet();
   const btns = getMainNavButtons();
   // Собираем label из живых DOM-кнопок (иконка + текст).
   const items = btns.map(b => {
@@ -9253,6 +10120,8 @@ function renderTabsManagerList() {
     const label = b.querySelector('span.flex-1')?.textContent?.trim() || b.dataset.tab;
     return { name: b.dataset.tab, icon, label, hidden: hidden.has(b.dataset.tab) };
   });
+  // Экстра-секции (Whoami / Чтим память) — в конце списка.
+  for (const ex of EXTRA_NAV) items.push({ name: ex.key, icon: ex.icon, label: ex.label, hidden: hidden.has(ex.key) });
   list.innerHTML = items.map(it => `
     <li data-tab="${it.name}" class="flex items-center gap-2 px-2.5 py-2 rounded-md bg-elevated/50 border border-line-soft ${it.hidden ? 'opacity-50' : ''}">
       <span class="handle text-faint cursor-grab hover:text-ink px-1 select-none">≡</span>
@@ -9268,7 +10137,14 @@ function renderTabsManagerList() {
 function commitTabsOrder(list) {
   const newOrder = Array.from(list.children).map(li => li.dataset.tab);
   const cur = loadTabsConfig();
-  saveTabsConfig({ ...cur, order: newOrder });
+  // материализуем и видимость: если это свежая установка (hidden null) —
+  // сохраняем текущий эффективный набор, иначе реордер не сбросит дефолт.
+  saveTabsConfig({
+    ...cur,
+    order: newOrder,
+    hidden: Array.isArray(cur.hidden) ? cur.hidden : Array.from(effectiveHiddenSet()),
+    shown: Array.isArray(cur.shown) ? cur.shown : [],
+  });
   applyTabsConfig();
   renderTabsManagerList();
 }
@@ -9316,9 +10192,22 @@ function wireTabsReorder(list) {
 }
 function toggleTabHidden(name) {
   const cfg = loadTabsConfig();
-  const set = new Set(cfg.hidden);
-  set.has(name) ? set.delete(name) : set.add(name);
-  saveTabsConfig({ ...cfg, hidden: Array.from(set) });
+  const set = effectiveHiddenSet();
+  const isExtra = EXTRA_NAV.some(ex => ex.key === name);
+  if (set.has(name)) {
+    set.delete(name);
+    if (isExtra) {
+      // экстра-секцию явно показали → запоминаем, чтобы не прятать после рефреша
+      const shown = new Set(cfg.shown || []);
+      shown.add(name);
+      saveTabsConfig({ ...cfg, hidden: Array.from(set), shown: Array.from(shown) });
+    } else {
+      saveTabsConfig({ ...cfg, hidden: Array.from(set) });
+    }
+  } else {
+    set.add(name);
+    saveTabsConfig({ ...cfg, hidden: Array.from(set) });
+  }
   applyTabsConfig();
   renderTabsManagerList();
 }
@@ -9393,6 +10282,7 @@ function autoRefreshTick() {
       case 'helpcoder':     loadHelpcoderSessions(false); break;
       case 'video':         loadVideoKeys(); break;
       case 'image':         loadImageKeys(); break;
+      case 'github':        loadGhKeys(); break;
       case 'omniroute-pool': loadOmSessions(false); break;
       // grok — свой autopoll (4s) уже отдельно
       // switcher/settings/plugins — статичные, не трогаем
@@ -9725,6 +10615,22 @@ document.addEventListener('DOMContentLoaded', toggleLogPanel);
     <div id="tg-bind-modal-list" class="space-y-1.5 overflow-y-auto mb-4 pr-1"></div>
     <div class="flex justify-end">
       <button onclick="closeTgBindModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- AR GitHub bind modal -->
+<div id="ar-gh-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+  <div class="bg-surface rounded-xl border border-line-soft shadow-2xl p-5 w-[460px] max-w-[92vw] max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-semibold">🐙 GitHub аккаунт</h3>
+      <button onclick="closeArGhModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-3">Выбери GitHub для <span id="ar-gh-modal-subtitle" class="font-mono text-ink">—</span> · «Личный» = твой, вне хранилища</p>
+    <div id="ar-gh-modal-list" class="space-y-1.5 overflow-y-auto mb-4 pr-1"></div>
+    <div id="ar-gh-modal-unbind" class="mb-3"></div>
+    <div class="flex justify-end">
+      <button onclick="closeArGhModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
     </div>
   </div>
 </div>

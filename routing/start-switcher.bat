@@ -5,6 +5,9 @@ REM and tells you to restart Claude Code.
 
 cd /d "%~dp0"
 
+REM Kill orphaned browser zombies left by autoregers / LK sessions (real user browser untouched)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cleanup-reg-procs.ps1"
+
 REM Kill any existing instance on :8200 so we don't get EADDRINUSE
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8200 " ^| findstr LISTENING') do (
     echo Stopping existing listener on :8200 (PID %%P)

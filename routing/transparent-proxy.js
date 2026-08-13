@@ -12,6 +12,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 // ---- Load routing/.env (gitignored real keys) ------------------------------
@@ -3127,6 +3128,60 @@ async function handleCustomProviderCreate(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// POST /__switch/api/custom/provider/update { id, name, baseUrl } → отредактировать провайдера
+async function handleCustomProviderUpdate(req, res) {
+    try {
+        const { id, name, baseUrl } = await readJsonBody(req);
+        const { data, provider } = customFind(String(id || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        const n = String(name || '').trim();
+        const b = String(baseUrl || '').trim().replace(/\/+$/, '');
+        if (!n || !b) return jsonRes(res, 400, { error: 'name и baseUrl обязательны' });
+        if (!/^https?:\/\//.test(b)) return jsonRes(res, 400, { error: 'baseUrl должен начинаться с http(s)://' });
+        if (data.providers.some(p => p.baseUrl === b && p.id !== provider.id)) {
+            return jsonRes(res, 400, { error: `провайдер с baseUrl ${b} уже есть` });
+        }
+        const baseChanged = provider.baseUrl !== b;
+        const oldBase = provider.baseUrl;
+        provider.name = n;
+        provider.baseUrl = b;
+        customSave(data);
+        if (baseChanged) {
+            // кеш моделей привязан к старому baseUrl — он больше не валиден
+            CUSTOM_MODELS_CACHE.delete(oldBase);
+        }
+
+        // если провайдер активен — синхронизируем активные файлы, прокси и settings.json
+        const active = customReadActiveProvider();
+        if (active && active.id === provider.id) {
+            fs.writeFileSync(CUSTOM_ACTIVE_PROVIDER_FILE,
+                JSON.stringify({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl }, null, 2) + '\n', 'utf-8');
+            // под активным провайдером крутится прокси (modelMap) → перезапускаем с новым upstream
+            if (provider.proxyPid) {
+                await customKillProxy(provider);
+                const r2 = await customSpawnProxy(provider);
+                logLine(`custom provider update: proxy respawn ${r2.ok ? ': ' + r2.port : 'FAIL ' + (r2.error || '?')}`);
+            }
+            try {
+                const fresh = customFind(provider.id).provider;
+                const targetUrl = fresh && fresh.proxyPort ? `http://localhost:${fresh.proxyPort}` : b;
+                const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+                const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+                settings.env = settings.env || {};
+                if (String(settings.apiKeyHelper || '').includes('custom-active-key.txt')) {
+                    makeSettingsBackup('settings-custom-update');
+                    settings.env.ANTHROPIC_BASE_URL = targetUrl;
+                    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+                }
+            } catch (e) {
+                logLine(`custom provider update: settings.json FAILED: ${e.message}`);
+            }
+        }
+        logLine(`custom provider update: ${n} (${b})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // POST /__switch/api/custom/provider/delete { id } → удалить провайдера
 async function handleCustomProviderDelete(req, res) {
     try {
@@ -3179,6 +3234,32 @@ async function handleCustomKeyDelete(req, res) {
             try { fs.rmSync(CUSTOM_ACTIVE_PROVIDER_FILE, { force: true }); } catch {}
         }
         logLine(`custom key delete: ${provider.name} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/key/update { providerId, oldApiKey, newApiKey } → заменить значение ключа
+async function handleCustomKeyUpdate(req, res) {
+    try {
+        const { providerId, oldApiKey, newApiKey } = await readJsonBody(req);
+        const oldK = String(oldApiKey || '').trim();
+        const newK = String(newApiKey || '').trim();
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        const target = provider.keys.find(k => k.apiKey === oldK);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        if (!newK) return jsonRes(res, 400, { error: 'apiKey обязателен' });
+        if (provider.keys.some(k => k.apiKey === newK)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        target.apiKey = newK;
+        customSave(data);
+        // если редактируется активный ключ — обновляем active-key файл (прокси читает его на каждый запрос)
+        let activeKey = '';
+        try { activeKey = fs.readFileSync(CUSTOM_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+        if (oldK === activeKey) {
+            fs.writeFileSync(CUSTOM_ACTIVE_KEY_FILE, newK, { encoding: 'utf-8', flag: 'w' });
+            logLine(`custom key update: активный ключ перезаписан (***${newK.slice(-6)})`);
+        }
+        logLine(`custom key update: ${provider.name} (***${newK.slice(-6)})`);
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -4042,6 +4123,170 @@ async function handleImageTrialStatus(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── GitHub-аккаунты (gh) — хранилище купленных аккаунтов ─────
+// Купленный аккаунт приходит строкой:
+//   Логин:Пароль:2FA-секрет:Recovery codes:Ник
+// 2FA-код считается ЛОКАЛЬНО в браузере (TOTP base32 + HMAC-SHA1), сайты не нужны.
+// Пароль/секрет/коды НИКОГДА не логируем — только маскированный логин/ник.
+const GH_ACCOUNTS_FILE = path.join(__dirname, 'github-accounts.json');
+
+function ghLoad() {
+    try {
+        const raw = fs.readFileSync(GH_ACCOUNTS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function ghSave(arr) {
+    fs.writeFileSync(GH_ACCOUNTS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function ghSanitize(acc) {
+    // Отдаём аккаунты в дашборд как есть (пароль/секрет нужны для копирования и TOTP).
+    // Маскируем только в логах, ниже.
+    return acc;
+}
+
+async function handleGhKeys(req, res) {
+    try { jsonRes(res, 200, { keys: ghLoad() }); }
+    catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function ghNormalizeAccount(raw) {
+    const login = String(raw.login || '').trim();
+    const nickname = String(raw.nickname || '').trim();
+    if (!login) throw new Error('логин обязателен');
+    const acc = {
+        id: 'gh_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        login,
+        password: String(raw.password ?? ''),
+        totpSecret: String(raw.totpSecret || '').trim().toUpperCase(),
+        apiToken: String(raw.apiToken || '').trim(),
+        recoveryCodes: Array.isArray(raw.recoveryCodes)
+            ? raw.recoveryCodes.map(c => String(c).trim()).filter(Boolean)
+            : String(raw.recoveryCodes || '').split(/[,;\s]+/).map(c => c.trim()).filter(Boolean),
+        nickname: nickname || login,
+        status: ['live', 'cooldown', 'dead', 'error'].includes(raw.status) ? raw.status : 'live',
+        note: String(raw.note || '').trim(),
+        added: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    };
+    return acc;
+}
+
+async function handleGhAdd(req, res) {
+    try {
+        const raw = await readJsonBody(req);
+        const acc = ghNormalizeAccount(raw);
+        const keys = ghLoad();
+        if (keys.some(k => k.login === acc.login))
+            return jsonRes(res, 400, { error: 'аккаунт с таким логином уже есть' });
+        keys.push(acc);
+        ghSave(keys);
+        logLine(`github add: ${acc.login} (ник ${acc.nickname}, секрет ${acc.totpSecret ? 'есть' : 'нет'})`);
+        jsonRes(res, 200, { ok: true, id: acc.id });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGhImport(req, res) {
+    try {
+        const { accounts } = await readJsonBody(req);
+        if (!Array.isArray(accounts) || !accounts.length)
+            return jsonRes(res, 400, { error: 'accounts — пустой массив' });
+        const keys = ghLoad();
+        const existing = new Set(keys.map(k => k.login));
+        let added = 0, skipped = 0, errors = [];
+        for (const raw of accounts) {
+            try {
+                const acc = ghNormalizeAccount(raw);
+                if (existing.has(acc.login)) { skipped++; continue; }
+                keys.push(acc);
+                existing.add(acc.login);
+                added++;
+            } catch (e) {
+                const login = String(raw?.login || '?');
+                errors.push({ login: login.slice(0, 12) + (login.length > 12 ? '…' : ''), error: e.message });
+            }
+        }
+        ghSave(keys);
+        logLine(`github import: +${added} (пропущено ${skipped}, ошибок ${errors.length})`);
+        jsonRes(res, 200, { ok: true, added, skipped, errors });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGhDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const keys = ghLoad();
+        const target = keys.find(k => k.id === id);
+        const next = keys.filter(k => k.id !== id);
+        ghSave(next);
+        logLine(`github delete: ${target ? target.login : id}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleGhUpdate(req, res) {
+    try {
+        const { id, ...patch } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const keys = ghLoad();
+        const idx = keys.findIndex(k => k.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const cur = keys[idx];
+        if (patch.login !== undefined) cur.login = String(patch.login).trim();
+        if (patch.nickname !== undefined) cur.nickname = String(patch.nickname || cur.login).trim();
+        if (patch.password !== undefined) cur.password = String(patch.password ?? '');
+        if (patch.totpSecret !== undefined) cur.totpSecret = String(patch.totpSecret || '').trim().toUpperCase();
+        if (patch.apiToken !== undefined) cur.apiToken = String(patch.apiToken || '').trim();
+        if (patch.recoveryCodes !== undefined) {
+            cur.recoveryCodes = Array.isArray(patch.recoveryCodes)
+                ? patch.recoveryCodes.map(c => String(c).trim()).filter(Boolean)
+                : String(patch.recoveryCodes || '').split(/[,;\s]+/).map(c => c.trim()).filter(Boolean);
+        }
+        if (patch.status !== undefined && ['live', 'cooldown', 'dead', 'error'].includes(patch.status)) cur.status = patch.status;
+        if (patch.note !== undefined) cur.note = String(patch.note || '').trim();
+        ghSave(keys);
+        logLine(`github update: ${cur.login} (статус ${cur.status})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Открыть GitHub в персональном профиле браузера на аккаунт (сохраняет сессию).
+const ghLkPids = new Map();
+function ghPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleGhOpen(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const keys = ghLoad();
+        const target = keys.find(k => k.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        // Профиль привязываем к СТАБИЛЬНОМУ id аккаунта: переименование не рвёт сессию.
+        const label = 'acct_' + id;
+
+        const prevPid = ghLkPids.get(label);
+        if (ghPidAlive(prevPid)) {
+            logLine(`github session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'github', 'open-session.js');
+        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`github session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`github session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`github session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => { ghLkPids.delete(label); logLine(`github session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.unref();
+        ghLkPids.set(label, proc.pid);
+        logLine(`github session/open: ${label} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // ───── Svrtr — пул ТГ-аккаунтов, активация через API Helper ─────
 // api.svrtr.org — Anthropic-совместимый endpoint (x-api-key). Авторег через @svrtrbot.
 // Активация = ключ в sr-active-key.txt + apiKeyHelper в settings.json.
@@ -4480,6 +4725,7 @@ async function handleConduitSetModel(req, res) {
 // WAF отбивает запросы, которые не выглядят как Claude Code: все probe/models обязаны
 // нести CC-заголовки (user-agent claude-cli/, anthropic-version/beta, x-app). cs
 const AR_SESSIONS_FILE = path.join(__dirname, 'agentrouter-sessions.json');
+const AR_MODELMAP_FILE = path.join(__dirname, 'ar-modelmap.json');
 const AR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ar-active-key.txt');
 const AR_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'ar-active-model.txt');
 const AR_BASE_URL = 'https://agentrouter.org';
@@ -4591,7 +4837,7 @@ async function arProbe(apiKey) {
 // пропускает только Claude Code запросы). spent = total_usage (центы!) / 100; grant либо задан
 // вручную (grantOverride — у разных акков выдача разная: 125/175/личный больше), либо угадываем
 // по шагу $25; balance = grant − spent. hard_limit_usd НЕ баланс (у безлимитных = sentinel 100M).
-async function arBalance(apiKey, grantOverride) {
+async function arBalance(apiKey, grantOverride, bonusOverride) {
     const day = ms => new Date(ms).toISOString().slice(0, 10);
     const end = day(Date.now());
     const start = day(Date.now() - 400 * 864e5); // 400 дней назад
@@ -4621,7 +4867,8 @@ async function arBalance(apiKey, grantOverride) {
     const grant = grantOverride > 0
         ? grantOverride
         : Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP);
-    const balance = Math.round((grant - spent) * 100) / 100;
+    const bonus = Number(bonusOverride) > 0 ? Number(bonusOverride) : 0;
+    const balance = Math.round((grant + bonus - spent) * 100) / 100;
 
     // Опционально: срок доступа. Не критично — ошибки глотаем, баланс уже посчитан.
     let accessUntil = null, limitSane = null;
@@ -4638,7 +4885,7 @@ async function arBalance(apiKey, grantOverride) {
         }
     } catch { /* срок доступа не критичен */ }
 
-    return { status: 'live', spent, grant, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+    return { status: 'live', spent, grant, bonus, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
 }
 
 async function handleArSessions(req, res) {
@@ -4655,7 +4902,7 @@ async function handleArSessions(req, res) {
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
-                await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s.api_key, s.grantManual))));
+                await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s.api_key, s.grantManual, s.bonus))));
             }
             arSave(sessions);
         }
@@ -4671,6 +4918,7 @@ function arApplyBalance(target, bal) {
     if (bal.status === 'live') {
         target.spent = bal.spent;
         target.grant = bal.grant;
+        target.bonus = bal.bonus;
         target.balance = bal.balance;
         target.accessUntil = bal.accessUntil;
         target.grantSource = bal.grantSource;
@@ -4701,7 +4949,7 @@ async function handleArBalance(req, res) {
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
         const sessions = arLoad();
         const target = sessions.find(s => s.api_key === api_key);
-        const bal = await arBalance(api_key, target && target.grantManual);
+        const bal = await arBalance(api_key, target && target.grantManual, target && target.bonus);
         if (target) { arApplyBalance(target, bal); arSave(sessions); }
         jsonRes(res, 200, bal);
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -4724,11 +4972,55 @@ async function handleArSetGrant(req, res) {
         if (grant === null) delete target.grantManual;
         else target.grantManual = grant;
         // Пересчёт баланса с новой выдачей (если ключ отвечает).
-        const bal = await arBalance(key, target.grantManual);
+        const bal = await arBalance(key, target.grantManual, target.bonus);
         arApplyBalance(target, bal);
         arSave(sessions);
         logLine(`agentrouter set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
         jsonRes(res, 200, { ok: true, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/add-bonus { api_key } → чек-ин в ЛК дал +$25 (поле bonus копится отдельно
+// от изначальной выдачи grant). Баланс = grant + bonus − spent. grant НЕ трогаем.
+async function handleArAddBonus(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        target.bonus = Math.round(((Number(target.bonus) || 0) + 25) * 100) / 100;
+        const bal = await arBalance(key, target.grantManual, target.bonus);
+        arApplyBalance(target, bal);
+        arSave(sessions);
+        logLine(`agentrouter add-bonus: ***${key.slice(-6)} → +$25 (всего bonus $${target.bonus})`);
+        jsonRes(res, 200, { ok: true, bonus: target.bonus, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/set-github { api_key, ghId } → привязать/сменить/отвязать GitHub-аккаунт
+// (метка-организация, никакой автоматики). ghId может быть:
+//   'personal' — личный GitHub владельца (вне хранилища github-accounts.json);
+//   'gh_<…>'   — id из хранилища (валидируем по ghLoad());
+//   null/''    — снять метку.
+async function handleArSetGithub(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const ghId = (body.ghId === null || body.ghId === undefined || body.ghId === '') ? null : String(body.ghId).trim();
+        const sessions = arLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        if (ghId && ghId !== 'personal') {
+            const exists = ghLoad().some(g => g.id === ghId);
+            if (!exists) return jsonRes(res, 400, { error: 'gh-аккаунт не найден в хранилище' });
+        }
+        target.ghId = ghId;
+        arSave(sessions);
+        logLine(`agentrouter set-github: ***${key.slice(-6)} → ${ghId === null ? 'отвязан' : ghId === 'personal' ? 'личный' : 'gh:' + ghId}`);
+        jsonRes(res, 200, { ok: true, ghId: target.ghId });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -4750,22 +5042,27 @@ async function handleArSessionOpen(req, res) {
         const idx = sessions.findIndex(s => s.api_key === key);
         if (idx < 0) return jsonRes(res, 404, { error: 'ключ не найден' });
         const target = sessions[idx];
-        const rawLabel = String(target.name || target.email || '').trim();
-        const label = (rawLabel ? rawLabel.replace(/[^\w-]/g, '_') : `ar_${idx + 1}`);
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ хэшу api_key, а не к name/email:
+        // переименование аккаунта не рвёт сохранённый профиль.
+        const label = 'ar_' + crypto.createHash('sha1').update(key).digest('hex').slice(0, 8);
+        const dispName = String(target.name || target.email || label);
 
         // Уже открыт браузер для этого label — не плодим второй.
         const prevPid = arLkPids.get(label);
         if (arPidAlive(prevPid)) {
-            logLine(`agentrouter session/open: ***${key.slice(-6)} label=${label} — уже открыт (pid ${prevPid})`);
+            logLine(`agentrouter session/open: ${dispName} (***${key.slice(-6)}) label=${label} — уже открыт (pid ${prevPid})`);
             return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
         }
 
         const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
-        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'ignore' });
+        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`agentrouter session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => { arLkPids.delete(label); logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         arLkPids.set(label, proc.pid);
-        logLine(`agentrouter session/open: ***${key.slice(-6)} label=${label} (pid ${proc.pid})`);
+        logLine(`agentrouter session/open: ${dispName} (***${key.slice(-6)}) label=${label} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -4928,6 +5225,34 @@ async function handleArSetModel(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// Маппинг claude-тиров → модели agentrouter (как в GoRouter/Custom). Живёт в
+// routing/ar-modelmap.json, читается прокси :20132 и keepalive :20133 по mtime
+// на каждый запрос — правка применяется БЕЗ рестарта прокси.
+function arReadModelMap() {
+    try {
+        const raw = fs.readFileSync(AR_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { return {}; }
+}
+
+// GET /__switch/api/ar/modelmap → текущий маппинг; POST {opus, sonnet, haiku} → сохранить.
+async function handleArModelMap(req, res) {
+    try {
+        if (req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const mm = {
+                opus: String(body.opus || '').trim() || '',
+                sonnet: String(body.sonnet || '').trim() || '',
+                haiku: String(body.haiku || '').trim() || '',
+            };
+            fs.writeFileSync(AR_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+            logLine(`agentrouter modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+            return jsonRes(res, 200, { ok: true, modelMap: mm });
+        }
+        jsonRes(res, 200, { ok: true, modelMap: arReadModelMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // ───── GoRouter — автономная вкладка (NewAPI, GitHub-вход) ─────────────
 // Свой пул ключей (gorouter-sessions.json), свой активный ключ/модель.
 // Активация БЕЗ локального прокси: gorouter.app сам Anthropic-совместимый,
@@ -5042,7 +5367,9 @@ function goApplyBalance(target, bal) {
     if (bal.status === 'live') {
         target.spent = bal.spent;
         target.grant = bal.grant;
+        target.bonus = bal.bonus;
         target.balance = bal.balance;
+        target.accessUntil = bal.accessUntil;
         target.grantSource = bal.grantSource;
         target.balanceCheckedAt = new Date().toISOString();
     }
@@ -5144,8 +5471,11 @@ async function handleGoSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'gorouter', 'open-session.js');
-        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'ignore' });
+        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`gorouter session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`gorouter session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`gorouter session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => { goLkPids.delete(label); logLine(`gorouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         goLkPids.set(label, proc.pid);
         logLine(`gorouter session/open: ${label} (pid ${proc.pid})`);
@@ -6033,7 +6363,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/delete')    return handleArDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/activate')  return handleArActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-model') return handleArSetModel(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ar/modelmap') return handleArModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/modelmap') return handleArModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-grant') return handleArSetGrant(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/add-bonus') return handleArAddBonus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
@@ -6075,6 +6409,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/image/trials')) return handleImageTrials(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/image/trial-status')  return handleImageTrialStatus(req, res);
 
+    // ---- GitHub-аккаунты (gh) — хранилище купленных аккаунтов + TOTP в браузере ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/gh/keys'))    return handleGhKeys(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/add')             return handleGhAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/import')          return handleGhImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/delete')          return handleGhDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/update')          return handleGhUpdate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/open')            return handleGhOpen(req, res);
+
     // ---- Svrtr — пул ТГ-аккаунтов, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/svrtr/sessions'))    return handleSvrtrSessions(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/svrtr/active-key')          return handleSvrtrActiveKey(req, res);
@@ -6107,8 +6449,10 @@ const server = http.createServer((req, res) => {
     // ---- Custom providers (произвольные провайдеры: имя + baseUrl + ключи) ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/providers'))       return handleCustomProviders(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/provider')                return handleCustomProviderCreate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/provider/update')          return handleCustomProviderUpdate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/provider/delete')          return handleCustomProviderDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/key')                      return handleCustomKeyAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/key/update')               return handleCustomKeyUpdate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/key/delete')               return handleCustomKeyDelete(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/ping'))             return handleCustomPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/models'))           return handleCustomModels(req, res);

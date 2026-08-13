@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Autoreger statusline: [provider] provider/model  $ ▰▰▰▰▱▱▱▱ 70% $217.33
+# Autoreger statusline: provider/model │ $217.33~ │ ⧉ 139k/1M
 set -u
 
 # ---- stdin from Claude Code: model info -----------------------------------
@@ -96,9 +96,6 @@ if [ -z "$raw_target" ]; then
 fi
 
 # LABELS mirror proxy-dashboard.html:1261 (lowercased for /model format)
-# [transport] stays as raw target (apihelper, omniroute, ...) — that's the switcher slot.
-# provider/model uses the label — that's what routes to real credentials.
-transport="${raw_target:-unknown}"
 case "$raw_target" in
     apihelper|freemodel_rotator) provider="freemodel" ;;
     omniroute)                   provider="omniroute" ;;
@@ -262,126 +259,72 @@ elif [ "$provider" = "agentrouter" ] && [ -f "$ROUTING/agentrouter-sessions.json
 fi
 
 # ---- render ----------------------------------------------------------------
-bars=10
-[ "$pct" -gt 100 ] && pct=100
-[ "$pct" -lt 0 ] && pct=0
-filled=$(( pct * bars / 100 ))
-empty=$(( bars - filled ))
-
-if   [ "$pct" -ge 60 ]; then bar_col=$'\033[38;5;42m'
-elif [ "$pct" -ge 30 ]; then bar_col=$'\033[38;5;220m'
-else                         bar_col=$'\033[38;5;203m'
-fi
-
 RESET=$'\033[0m'
 DIM=$'\033[2m'
-BR_PROV=$'\033[38;5;110m'
 MODEL_COL=$'\033[38;5;180m'
 SEP=$'\033[38;5;240m'
-LABEL=$'\033[38;5;245m'
 MONEY=$'\033[38;5;42m'
 
-fill_str=""; i=0
-while [ "$i" -lt "$filled" ]; do fill_str="${fill_str}▰"; i=$((i+1)); done
-empty_str=""; i=0
-while [ "$i" -lt "$empty" ]; do empty_str="${empty_str}▱"; i=$((i+1)); done
-
-printf '%s[%s]%s %s%s/%s%s' \
-    "$BR_PROV" "$transport" "$RESET" \
-    "$MODEL_COL" "$provider" "$model_id" "$RESET"
+printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
 
 if [ "$have_gauge" = "1" ]; then
-    # если данные stale — приглушаем цвет шкалы и цифр
     if [ "$stale" = "1" ]; then
-        bar_col="$DIM"
-        pct_col="$DIM"
         money_col="$DIM"
+        stale_mark="~"
     else
-        pct_col="$LABEL"
         money_col="$MONEY"
+        stale_mark=""
     fi
 
-    printf ' %s│%s %s$%s %s%s%s%s%s %s%d%%%s %s$%s%s' \
+    printf ' %s│%s %s$%s%s%s' \
         "$SEP" "$RESET" \
-        "$LABEL" "$RESET" \
-        "$bar_col" "$fill_str" "$DIM" "$empty_str" "$RESET" \
-        "$pct_col" "$pct" "$RESET" \
-        "$money_col" "$avail_sum" "$RESET"
+        "$money_col" "$avail_sum" "$stale_mark" "$RESET"
 
     # ⏳ перезарядка: окно выжрано, аккаунт живой и ждёт налива
     if [ -n "$cool_str" ]; then
         printf ' %s⏳%s%s' $'\033[38;5;220m' "$cool_str" "$RESET"
     fi
-
-    # маркер возраста для freemodel если >60с (stale уже подсвечен цветом)
-    if [ "$stale" = "1" ] && [ "$stale_age_s" -gt 0 ]; then
-        if   [ "$stale_age_s" -lt 60 ];   then age_str="${stale_age_s}s"
-        elif [ "$stale_age_s" -lt 3600 ]; then age_str="$((stale_age_s/60))m"
-        else                                   age_str="$((stale_age_s/3600))h"
-        fi
-        printf ' %s(%s)%s' "$DIM" "$age_str" "$RESET"
-    fi
 fi
 
-# ---- context window gauge: ⧉ ▰▰▱▱▱ 42% -------------------------------------
-# заполнение = занято; цвет от занятости: <50% зелёный, <80% жёлтый, дальше красный
+# ---- context window: ⧉ 139k/1M --------------------------------------------
+# Точные токены показываем вмеcто округлённого used_percentage.
+ctx_warn=""
+if [ -n "$ctx_max" ] && [ "$provider" = "freemodel" ] && [ "$ctx_max" -lt 1000000 ]; then
+    case "$model_id" in
+        *"[1m]"*) ;;
+        *) ctx_warn="⚠" ;;
+    esac
+fi
 
-# Показываем ЦИФРЫ CC, не бэкенда: даже если бэкенд принимает больше
-# (freemodel — 1M по пробе ctx-probe.sh 2026-07-19), сам Claude Code
-# предупреждает и автокомпактит по своему context_window_size (~200k).
-# Оверрайд на real_max давал ложные 16% при реальных 90% занятости.
-
-if [ -n "$ctx_pct" ]; then
-    [ "$ctx_pct" -gt 100 ] && ctx_pct=100
-    ctx_bars=5
-    ctx_filled=$(( (ctx_pct * ctx_bars + 50) / 100 ))
-    [ "$ctx_filled" -gt "$ctx_bars" ] && ctx_filled=$ctx_bars
-    ctx_empty=$(( ctx_bars - ctx_filled ))
-
-    if   [ "$ctx_pct" -lt 50 ]; then ctx_col=$'\033[38;5;42m'
-    elif [ "$ctx_pct" -lt 80 ]; then ctx_col=$'\033[38;5;220m'
-    else                             ctx_col=$'\033[38;5;203m'
-    fi
-
-    ctx_fill=""; i=0
-    while [ "$i" -lt "$ctx_filled" ]; do ctx_fill="${ctx_fill}▰"; i=$((i+1)); done
-    ctx_emp=""; i=0
-    while [ "$i" -lt "$ctx_empty" ]; do ctx_emp="${ctx_emp}▱"; i=$((i+1)); done
-
-    # человекочитаемые токены: 105k/1M — при окне 1M процент почти не двигается
-    ctx_tok_str=""
-    if [ -n "$ctx_tok" ] && [ -n "$ctx_max" ] && [ "$ctx_max" -gt 0 ]; then
-        if [ "$ctx_tok" -ge 1000000 ]; then tok_h="$(awk -v t="$ctx_tok" 'BEGIN{printf "%.1fM", t/1000000}')"
-        elif [ "$ctx_tok" -ge 1000 ];  then tok_h="$((ctx_tok/1000))k"
-        else                                tok_h="$ctx_tok"
+if [ -n "$ctx_tok" ] && [ "$ctx_tok" -gt 0 ] && [ -n "$ctx_max" ] && [ "$ctx_max" -gt 0 ]; then
+    format_tokens() {
+        local tokens="$1" out_var="$2" formatted
+        if [ "$tokens" -ge 1000000 ]; then formatted="$((tokens / 1000000))M"
+        elif [ "$tokens" -ge 1000 ]; then formatted="$((tokens / 1000))k"
+        else formatted="$tokens"
         fi
-        if [ "$ctx_max" -ge 1000000 ]; then max_h="$((ctx_max/1000000))M"
-        else                                max_h="$((ctx_max/1000))k"
-        fi
-        ctx_tok_str="$tok_h/$max_h"
+        printf -v "$out_var" '%s' "$formatted"
+    }
 
-        # Бэкенд даёт 1M, а CC считает 200k → в id модели потерялся суффикс [1m].
-        # Цифры НЕ подменяем (CC автокомпактит по своему числу, оверрайд давал
-        # ложные 16% при реальных 90%) — только помечаем, что окно урезано зря.
-        ctx_warn=""
-        if [ "$provider" = "freemodel" ] && [ "$ctx_max" -lt 1000000 ]; then
-            case "$model_id" in
-                *"[1m]"*) ;;            # суффикс на месте — окно урезал не он
-                *) ctx_warn="⚠" ;;
-            esac
-        fi
-    fi
-
-    printf ' %s│%s %s⧉%s %s%s%s%s%s %s%d%%%s' \
+    format_tokens "$ctx_tok" ctx_tok_h
+    format_tokens "$ctx_max" ctx_max_h
+    printf ' %s│%s %s⧉ %s/%s%s' \
         "$SEP" "$RESET" \
-        "$LABEL" "$RESET" \
-        "$ctx_col" "$ctx_fill" "$DIM" "$ctx_emp" "$RESET" \
-        "$LABEL" "$ctx_pct" "$RESET"
-    [ -n "$ctx_tok_str" ] && printf ' %s%s%s' "$DIM" "$ctx_tok_str" "$RESET"
-    # ⚠ = окно урезано до 200k из-за модели без [1m]; лечится /model <id>[1m]
-    [ -n "$ctx_warn" ] && printf '%s%s%s' $'\033[38;5;220m' "$ctx_warn" "$RESET"
+        "$DIM" "$ctx_tok_h" "$ctx_max_h" "$RESET"
+else
+    # Старые/неполные payload: процент пригоден только еcли Claude Code его поcчитал.
+    if [ -n "$ctx_pct" ] && [ "$ctx_pct" -gt 0 ]; then
+        [ "$ctx_pct" -gt 100 ] && ctx_pct=100
+        printf ' %s│%s %s⧉ %d%%%s' \
+            "$SEP" "$RESET" \
+            "$DIM" "$ctx_pct" "$RESET"
+    elif [ -n "$ctx_max" ] && [ "$ctx_max" -gt 0 ]; then
+        # Нулевой usage от gateway не означает пуcтую живую cеccию.
+        printf ' %s│%s %s⧉ ?%s' "$SEP" "$RESET" "$DIM" "$RESET"
+    fi
 fi
+[ -n "$ctx_warn" ] && printf '%s%s%s' $'\033[38;5;220m' "$ctx_warn" "$RESET"
 
-# statusline всегда успешен: последняя условная команда (ctx_warn) при пустом
-# значении даёт exit 1, а CC может счесть ненулевой код сбоем и не отрисовать бар.
+# statusline вcегда уcпешен: поcледняя уcловная команда при пуcтом значении
+# может дать exit 1, а Claude Code может cчеcть ненулевой код cбоем.
 exit 0

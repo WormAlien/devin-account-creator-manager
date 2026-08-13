@@ -13,8 +13,11 @@ set -u
 # (и контекст, и баланс). 2с — потолок, обычно env есть и cat не вызывается.
 payload="${STATUSLINE_PAYLOAD:-$(timeout 2 cat 2>/dev/null || true)}"
 
-# ROOT = корень репо (скрипт лежит в <repo>/routing/)
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ROOT = корень репо (скрипт лежит в <repo>/routing/). ${BASH_SOURCE%/*} вместо
+# $(dirname) — без форка.
+_self="${BASH_SOURCE[0]}"
+_dir="${_self%/*}"
+ROOT="$(cd "$_dir/.." && pwd)"
 ROUTING="$ROOT/routing"
 LOGS="$ROOT/logs"
 
@@ -44,47 +47,52 @@ SETTINGS="$PROF/.claude/settings.json"
 # curl.exe (Windows-native) работает в обоих, plain curl в WSL2 туда не ходит.
 if command -v curl.exe >/dev/null 2>&1; then CURL_BIN="curl.exe"; else CURL_BIN="curl"; fi
 
-model_id="$(printf '%s' "$payload" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-[ -z "$model_id" ] && model_id="$(printf '%s' "$payload" | sed -n 's/.*"display_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+# ---- payload → поля (bash-native regex, БЕЗ форков) ------------------------
+# Раньше это были 6 вызовов sed|head. Каждый форк на Windows ~30-60мс, statusline
+# зовётся часто и с таймаутом → скрипт должен быть быстрым. =~ читает всё in-proc.
+model_id=""
+if [[ "$payload" =~ \"model\"[^}]*\"id\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+    model_id="${BASH_REMATCH[1]}"
+elif [[ "$payload" =~ \"display_name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+    model_id="${BASH_REMATCH[1]}"
+fi
 [ -z "$model_id" ] && model_id="unknown"
 
 # context window: used_percentage приходит готовым (CC ≥2.1.132)
-ctx_pct="$(printf '%s' "$payload" | sed -n 's/.*"used_percentage"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)"
-ctx_tok="$(printf '%s' "$payload" | sed -n 's/.*"total_input_tokens"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)"
-ctx_max="$(printf '%s' "$payload" | sed -n 's/.*"context_window_size"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)"
+ctx_pct=""; [[ "$payload" =~ \"used_percentage\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && ctx_pct="${BASH_REMATCH[1]}"
+ctx_tok=""; [[ "$payload" =~ \"total_input_tokens\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && ctx_tok="${BASH_REMATCH[1]}"
+ctx_max=""; [[ "$payload" =~ \"context_window_size\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && ctx_max="${BASH_REMATCH[1]}"
 
-# ---- active provider: prefer live dashboard /__switch/api/status ----------
+# ---- active provider: из settings.json (bash-native, БЕЗ сети) ------------
+# Раньше тут был блокирующий `curl :8200` в КАЖДОМ вызове statusline — сеть в
+# горячем пути. Провайдер однозначно определяется по apiKeyHelper/ANTHROPIC_BASE_URL
+# в settings.json, читаем файл целиком в память и парсим =~ (0 форков, 0 сети).
 raw_target=""
-status_json="$("$CURL_BIN" -s --max-time 1 http://localhost:8200/__switch/api/status 2>/dev/null || true)"
-if [ -n "$status_json" ]; then
-    raw_target="$(printf '%s' "$status_json" | sed -n 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-fi
+settings_raw=""
+[ -f "$SETTINGS" ] && settings_raw="$(<"$SETTINGS")"
+helper=""; [[ "$settings_raw" =~ \"apiKeyHelper\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && helper="${BASH_REMATCH[1]}"
+base_url=""; [[ "$settings_raw" =~ \"ANTHROPIC_BASE_URL\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && base_url="${BASH_REMATCH[1]}"
+case "$helper" in
+    *fm-active-key.txt*|*freemodel*) raw_target="apihelper" ;;
+    *al-active-key.txt*)             raw_target="aerolink" ;;
+    *cdt-active-key.txt*)            raw_target="conduit" ;;
+    *ev-active-key.txt*)             raw_target="evomap" ;;
+    *ot-active-key.txt*)             raw_target="ourtoken" ;;
+    *om-active-key.txt*)             raw_target="omniroute" ;;
+    *vyceai-active-key.txt*)         raw_target="vyce_openai" ;;
+    *ar-active-key.txt*)             raw_target="agentrouter" ;;
+esac
 if [ -z "$raw_target" ]; then
-    helper="$(sed -n 's/.*"apiKeyHelper"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS" 2>/dev/null | head -n1)"
-    base_url="$(sed -n 's/.*"ANTHROPIC_BASE_URL"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SETTINGS" 2>/dev/null | head -n1)"
-    case "$helper" in
-        *fm-active-key.txt*|*freemodel*) raw_target="apihelper" ;;
-        *al-active-key.txt*)             raw_target="aerolink" ;;
-        *cdt-active-key.txt*)            raw_target="conduit" ;;
-        *ev-active-key.txt*)             raw_target="evomap" ;;
-        *ot-active-key.txt*)             raw_target="ourtoken" ;;
-        *om-active-key.txt*)             raw_target="omniroute" ;;
-        *vyceai-active-key.txt*)         raw_target="vyce_openai" ;;
-        *ar-active-key.txt*)             raw_target="agentrouter" ;;
+    case "$base_url" in
+        https://api.ourtoken.ai*) raw_target="ourtoken" ;;
+        *localhost:20128*)        raw_target="omniroute" ;;
+        *localhost:20131*)        raw_target="vyce_openai" ;;
+        *localhost:20132*|*localhost:20133*)  raw_target="agentrouter" ;;
+        *127.0.0.1:20132*|*127.0.0.1:20133*)  raw_target="agentrouter" ;;
+        *localhost:8190*)         raw_target="notion" ;;
+        *agentrouter.org*)        raw_target="agentrouter" ;;
+        *cc.freemodel.dev*)       raw_target="apihelper" ;;
     esac
-    if [ -z "$raw_target" ]; then
-        case "$base_url" in
-            https://api.ourtoken.ai*) raw_target="ourtoken" ;;
-            *localhost:20128*)        raw_target="omniroute" ;;
-            *localhost:20131*)        raw_target="vyce_openai" ;;
-            *localhost:20132*|*localhost:20133*)  raw_target="agentrouter" ;;
-            *127.0.0.1:20132*|*127.0.0.1:20133*)  raw_target="agentrouter" ;;
-
-            *localhost:8190*)         raw_target="notion" ;;
-            *agentrouter.org*)        raw_target="agentrouter" ;;
-            *cc.freemodel.dev*)       raw_target="apihelper" ;;
-        esac
-    fi
 fi
 
 # LABELS mirror proxy-dashboard.html:1261 (lowercased for /model format)
@@ -208,21 +216,32 @@ elif [ "$provider" = "ourtoken" ] && [ -f "$ROUTING/ourtoken-sessions.json" ]; t
     [ -z "$live" ] && live=0
 elif [ "$provider" = "agentrouter" ] && [ -f "$ROUTING/agentrouter-sessions.json" ]; then
     # agentrouter: баланс = grant − spent, кеш ведёт дашборд в agentrouter-sessions.json
-    # (обновляется через GET /__switch/api/ar/balance). Тут читаем кеш активного ключа,
-    # шкала = balance/grant, и по аналогии с freemodel лениво дёргаем рефреш если протухло.
-    ar_key="$(cat "$PROF/.claude/ar-active-key.txt" 2>/dev/null | tr -d '[:space:]')"
+    # (обновляется через GET /__switch/api/ar/balance). Читаем кеш активного ключа
+    # bash-native (0 форков), шкала = balance/grant, ленивый рефреш если протухло.
+    ar_key=""; read -r ar_key < "$PROF/.claude/ar-active-key.txt" 2>/dev/null || true
+    ar_key="${ar_key//[$' \t\r\n']/}"
     if [ -n "$ar_key" ]; then
-        # блок объекта активного ключа (RS="}" — один аккаунт на чанк)
-        block="$(awk -v key="$ar_key" 'BEGIN{RS="}"} index($0,key)>0 {print; exit}' "$ROUTING/agentrouter-sessions.json")"
+        # весь файл в память, вырезаем объект активного ключа между соседними {…}
+        ar_raw="$(<"$ROUTING/agentrouter-sessions.json")"
+        block=""
+        if [[ "$ar_raw" == *"$ar_key"* ]]; then
+            after="${ar_raw#*"$ar_key"}"        # хвост от ключа
+            before="${ar_raw%%"$ar_key"*}"      # голова до ключа
+            head_obj="${before##*\{}"           # от последней { перед ключом
+            tail_obj="${after%%\}*}"            # до первой } после ключа
+            block="{$head_obj$ar_key$tail_obj}"
+        fi
         if [ -n "$block" ]; then
             have_gauge=1
-            bal="$(printf '%s' "$block"   | grep -oE '"balance"[[:space:]]*:[[:space:]]*-?[0-9]+(\.[0-9]+)?' | grep -oE '\-?[0-9]+(\.[0-9]+)?' | head -n1)"
-            grant="$(printf '%s' "$block" | grep -oE '"grant"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?'    | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1)"
-            chk="$(printf '%s' "$block"   | grep -oE '"balanceCheckedAt"[[:space:]]*:[[:space:]]*"[^"]+"'   | sed 's/.*"\([^"]*\)"$/\1/' | head -n1)"
-            [ -z "$bal" ]   && bal=0
-            [ -z "$grant" ] && grant=0
-            avail_sum="$(awk -v b="$bal" 'BEGIN{ if(b<0)b=0; printf "%.2f", b+0 }')"
-            pct="$(awk -v b="$bal" -v g="$grant" 'BEGIN{ if(b<0)b=0; if(g>0) printf "%d",(b/g)*100; else print 0 }')"
+            bal=0;   [[ "$block" =~ \"balance\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\.[0-9]+)?) ]] && bal="${BASH_REMATCH[1]}"
+            grant=0; [[ "$block" =~ \"grant\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && grant="${BASH_REMATCH[1]}"
+            chk="";  [[ "$block" =~ \"balanceCheckedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && chk="${BASH_REMATCH[1]}"
+            # avail_sum = баланс как есть (дашборд уже посчитал grant−spent); pct = bal/grant.
+            # Целочисленная арифметика bash (без awk-форков): дробь режем по точке.
+            [[ "$bal" == -* ]] && bal=0
+            avail_sum="$bal"
+            bal_i="${bal%.*}"; grant_i="${grant%.*}"
+            if [ "${grant_i:-0}" -gt 0 ] 2>/dev/null; then pct=$(( bal_i * 100 / grant_i )); else pct=0; fi
 
             # свежесть по balanceCheckedAt (ISO). Порог 90с: billing-эндпоинт медленный
             # (~1-2с) и это реальные деньги — чаще дёргать незачем.

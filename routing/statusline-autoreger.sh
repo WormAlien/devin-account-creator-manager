@@ -8,7 +8,10 @@ set -u
 # wslpath/cygpath, которые могут украсть stdin). Если env нет — читаем stdin,
 # но ПЕРВЫМ делом, до любых subprocess-ов: WSL-интероп cmd.exe жрёт stdin-пайп,
 # и потом cat не получает ничего → model_id "unknown" и мерцающий статус.
-payload="${STATUSLINE_PAYLOAD:-$(cat 2>/dev/null || true)}"
+# timeout на cat: без payload в env и с открытым-но-пустым stdin cat блокируется
+# НАВСЕГДА → CC убивает statusline по своему таймауту → бар пропадает целиком
+# (и контекст, и баланс). 2с — потолок, обычно env есть и cat не вызывается.
+payload="${STATUSLINE_PAYLOAD:-$(timeout 2 cat 2>/dev/null || true)}"
 
 # ROOT = корень репо (скрипт лежит в <repo>/routing/)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -203,8 +206,40 @@ elif [ "$provider" = "ourtoken" ] && [ -f "$ROUTING/ourtoken-sessions.json" ]; t
     live="$(grep -c '"status"[[:space:]]*:[[:space:]]*"live"' "$ROUTING/ourtoken-sessions.json" 2>/dev/null | head -n1 | tr -cd 0-9)"
     [ -z "$total" ] && total=0
     [ -z "$live" ] && live=0
-    avail_sum="$(printf '%d.00' "$live")"
-    [ "$total" -gt 0 ] && pct=$(( live * 100 / total ))
+elif [ "$provider" = "agentrouter" ] && [ -f "$ROUTING/agentrouter-sessions.json" ]; then
+    # agentrouter: баланс = grant − spent, кеш ведёт дашборд в agentrouter-sessions.json
+    # (обновляется через GET /__switch/api/ar/balance). Тут читаем кеш активного ключа,
+    # шкала = balance/grant, и по аналогии с freemodel лениво дёргаем рефреш если протухло.
+    ar_key="$(cat "$PROF/.claude/ar-active-key.txt" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "$ar_key" ]; then
+        # блок объекта активного ключа (RS="}" — один аккаунт на чанк)
+        block="$(awk -v key="$ar_key" 'BEGIN{RS="}"} index($0,key)>0 {print; exit}' "$ROUTING/agentrouter-sessions.json")"
+        if [ -n "$block" ]; then
+            have_gauge=1
+            bal="$(printf '%s' "$block"   | grep -oE '"balance"[[:space:]]*:[[:space:]]*-?[0-9]+(\.[0-9]+)?' | grep -oE '\-?[0-9]+(\.[0-9]+)?' | head -n1)"
+            grant="$(printf '%s' "$block" | grep -oE '"grant"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?'    | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1)"
+            chk="$(printf '%s' "$block"   | grep -oE '"balanceCheckedAt"[[:space:]]*:[[:space:]]*"[^"]+"'   | sed 's/.*"\([^"]*\)"$/\1/' | head -n1)"
+            [ -z "$bal" ]   && bal=0
+            [ -z "$grant" ] && grant=0
+            avail_sum="$(awk -v b="$bal" 'BEGIN{ if(b<0)b=0; printf "%.2f", b+0 }')"
+            pct="$(awk -v b="$bal" -v g="$grant" 'BEGIN{ if(b<0)b=0; if(g>0) printf "%d",(b/g)*100; else print 0 }')"
+
+            # свежесть по balanceCheckedAt (ISO). Порог 90с: billing-эндпоинт медленный
+            # (~1-2с) и это реальные деньги — чаще дёргать незачем.
+            if [ -n "$chk" ]; then
+                chk_ts="$(date -d "$chk" +%s 2>/dev/null || echo 0)"
+                now_s="$(date +%s)"
+                [ "$chk_ts" -gt 0 ] && stale_age_s=$(( now_s - chk_ts ))
+                [ "$stale_age_s" -lt 0 ] && stale_age_s=0
+            fi
+            if [ "$stale_age_s" -gt 90 ]; then
+                stale=1
+                # fire-and-forget: curl рвётся за 0.5с, но дашборд-хендлер дофетчит и
+                # запишет кеш сам (fetch не привязан к res) — как у freemodel-рефреша.
+                ("$CURL_BIN" -s -m 0.5 "http://localhost:8200/__switch/api/ar/balance?api_key=$ar_key" >/dev/null 2>&1 &) >/dev/null 2>&1
+            fi
+        fi
+    fi
 fi
 
 # ---- render ----------------------------------------------------------------

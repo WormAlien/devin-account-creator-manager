@@ -363,6 +363,12 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
   (`apiKey`) → блок в `.freemodel_quota_cache.json`. Метрика — 5h окно:
   `pct = (1 − h5/h5max)·100`, `$ = h5max − h5` (остаток до reset).
 - **Квота для `ourtoken`** — `live/total` из `ourtoken-sessions.json`.
+- **Квота для `agentrouter` / `tabi` / `gorouter`** — одна функция
+  `gauge_from_balance_cache()` в скрипте: читает блок активного ключа
+  (`~/.claude/{ar,tabi,gorouter}-active-key.txt`) из
+  `{agentrouter,tabi,gorouter}-sessions.json`, `$ = balance` (дашборд уже посчитал
+  grant+bonus−spent). Lazy-refresh при протухании >90с: fire-and-forget
+  `GET /__switch/api/{ar,tb,go}/balance?api_key=…`.
 - **Денежный блок** — доcтупная cумма активного аккаунта. `~` означает уcтаревший
   кеш; `⏳` c оcтавшимcя временем означает cooldown FreeModel.
 - **Контекcтное окно** (`⧉ 139k/1M`) — из stdin-payload Claude Code

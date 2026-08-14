@@ -140,6 +140,57 @@ stale_age_s=0
 stale=0
 active_name=""
 
+# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter):
+# дашборд держит там balance/grant/balanceCheckedAt активного ключа. Читаем блок активного
+# ключа bash-native (0 форков), avail_sum = balance как есть (дашборд уже посчитал
+# grant+bonus−spent), pct = balance/grant. Ленивый рефреш через
+# GET /__switch/api/<endpoint_path>?api_key=… если кеш протух (> <stale_s>).
+gauge_from_balance_cache() {
+    local sessions_file="$1" active_key_file="$2" endpoint_path="$3" stale_threshold="$4"
+    local key raw after before head_obj tail_obj block bal grant chk bal_i grant_i chk_ts now_s
+    have_gauge=0
+
+    key=""; read -r key < "$active_key_file" 2>/dev/null || true
+    key="${key//[$' \t\r\n']/}"
+    [ -n "$key" ] || return 0
+
+    # весь файл в память, вырезаем объект активного ключа между соседними {…}
+    raw="$(<"$sessions_file")"
+    [[ "$raw" == *"$key"* ]] || return 0
+    after="${raw#*"$key"}"        # хвост от ключа
+    before="${raw%%"$key"*}"      # голова до ключа
+    head_obj="${before##*\{}"     # от последней { перед ключом
+    tail_obj="${after%%\}*}"      # до первой } после ключа
+    block="{$head_obj$key$tail_obj}"
+    [ -n "$block" ] || return 0
+
+    have_gauge=1
+    bal=0;   [[ "$block" =~ \"balance\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\.[0-9]+)?) ]] && bal="${BASH_REMATCH[1]}"
+    grant=0; [[ "$block" =~ \"grant\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && grant="${BASH_REMATCH[1]}"
+    chk="";  [[ "$block" =~ \"balanceCheckedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && chk="${BASH_REMATCH[1]}"
+    # avail_sum = баланс как есть; pct = bal/grant. Целочисленная арифметика bash
+    # (без awk-форков): дробь режем по точке.
+    [[ "$bal" == -* ]] && bal=0
+    avail_sum="$bal"
+    bal_i="${bal%.*}"; grant_i="${grant%.*}"
+    if [ "${grant_i:-0}" -gt 0 ] 2>/dev/null; then pct=$(( bal_i * 100 / grant_i )); else pct=0; fi
+
+    # свежесть по balanceCheckedAt (ISO). Порог 90с: billing-эндпоинт медленный
+    # (~1-2с) и это реальные деньги — чаще дёргать незачем.
+    if [ -n "$chk" ]; then
+        chk_ts="$(date -d "$chk" +%s 2>/dev/null || echo 0)"
+        now_s="$(date +%s)"
+        [ "$chk_ts" -gt 0 ] && stale_age_s=$(( now_s - chk_ts ))
+        [ "$stale_age_s" -lt 0 ] && stale_age_s=0
+    fi
+    if [ "$stale_age_s" -gt "$stale_threshold" ]; then
+        stale=1
+        # fire-and-forget: curl рвётся за 0.5с, но дашборд-хендлер дофетчит и
+        # запишет кеш сам (fetch не привязан к res) — как у freemodel-рефреша.
+        ("$CURL_BIN" -s -m 0.5 "http://localhost:8200/__switch/api/$endpoint_path?api_key=$key" >/dev/null 2>&1 &) >/dev/null 2>&1
+    fi
+}
+
 if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] && [ -f "$LOGS/.freemodel_meta.json" ]; then
     active_key="$(cat "$PROF/.claude/fm-active-key.txt" 2>/dev/null | tr -d '[:space:]')"
     if [ -n "$active_key" ]; then
@@ -226,50 +277,11 @@ elif [ "$provider" = "ourtoken" ] && [ -f "$ROUTING/ourtoken-sessions.json" ]; t
     [ -z "$total" ] && total=0
     [ -z "$live" ] && live=0
 elif [ "$provider" = "agentrouter" ] && [ -f "$ROUTING/agentrouter-sessions.json" ]; then
-    # agentrouter: баланс = grant − spent, кеш ведёт дашборд в agentrouter-sessions.json
-    # (обновляется через GET /__switch/api/ar/balance). Читаем кеш активного ключа
-    # bash-native (0 форков), шкала = balance/grant, ленивый рефреш если протухло.
-    ar_key=""; read -r ar_key < "$PROF/.claude/ar-active-key.txt" 2>/dev/null || true
-    ar_key="${ar_key//[$' \t\r\n']/}"
-    if [ -n "$ar_key" ]; then
-        # весь файл в память, вырезаем объект активного ключа между соседними {…}
-        ar_raw="$(<"$ROUTING/agentrouter-sessions.json")"
-        block=""
-        if [[ "$ar_raw" == *"$ar_key"* ]]; then
-            after="${ar_raw#*"$ar_key"}"        # хвост от ключа
-            before="${ar_raw%%"$ar_key"*}"      # голова до ключа
-            head_obj="${before##*\{}"           # от последней { перед ключом
-            tail_obj="${after%%\}*}"            # до первой } после ключа
-            block="{$head_obj$ar_key$tail_obj}"
-        fi
-        if [ -n "$block" ]; then
-            have_gauge=1
-            bal=0;   [[ "$block" =~ \"balance\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\.[0-9]+)?) ]] && bal="${BASH_REMATCH[1]}"
-            grant=0; [[ "$block" =~ \"grant\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && grant="${BASH_REMATCH[1]}"
-            chk="";  [[ "$block" =~ \"balanceCheckedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && chk="${BASH_REMATCH[1]}"
-            # avail_sum = баланс как есть (дашборд уже посчитал grant−spent); pct = bal/grant.
-            # Целочисленная арифметика bash (без awk-форков): дробь режем по точке.
-            [[ "$bal" == -* ]] && bal=0
-            avail_sum="$bal"
-            bal_i="${bal%.*}"; grant_i="${grant%.*}"
-            if [ "${grant_i:-0}" -gt 0 ] 2>/dev/null; then pct=$(( bal_i * 100 / grant_i )); else pct=0; fi
-
-            # свежесть по balanceCheckedAt (ISO). Порог 90с: billing-эндпоинт медленный
-            # (~1-2с) и это реальные деньги — чаще дёргать незачем.
-            if [ -n "$chk" ]; then
-                chk_ts="$(date -d "$chk" +%s 2>/dev/null || echo 0)"
-                now_s="$(date +%s)"
-                [ "$chk_ts" -gt 0 ] && stale_age_s=$(( now_s - chk_ts ))
-                [ "$stale_age_s" -lt 0 ] && stale_age_s=0
-            fi
-            if [ "$stale_age_s" -gt 90 ]; then
-                stale=1
-                # fire-and-forget: curl рвётся за 0.5с, но дашборд-хендлер дофетчит и
-                # запишет кеш сам (fetch не привязан к res) — как у freemodel-рефреша.
-                ("$CURL_BIN" -s -m 0.5 "http://localhost:8200/__switch/api/ar/balance?api_key=$ar_key" >/dev/null 2>&1 &) >/dev/null 2>&1
-            fi
-        fi
-    fi
+    gauge_from_balance_cache "$ROUTING/agentrouter-sessions.json" "$PROF/.claude/ar-active-key.txt" "ar/balance" 90
+elif [ "$provider" = "tabi" ] && [ -f "$ROUTING/tabi-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/tabi-sessions.json" "$PROF/.claude/tabi-active-key.txt" "tb/balance" 90
+elif [ "$provider" = "gorouter" ] && [ -f "$ROUTING/gorouter-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/gorouter-sessions.json" "$PROF/.claude/gorouter-active-key.txt" "go/balance" 90
 fi
 
 # ---- render ----------------------------------------------------------------

@@ -145,6 +145,26 @@ const BACKENDS = {
         // Anthropic→OpenAI прокси (vyceai-openai-proxy.js) → vyceai.com/v1
         // chat/completions. Маппинг claude-* → vyce-модели в vyceai/config.js.
     },
+    tabi: {
+        label: 'Tabi Token',
+        base_url: 'http://localhost:20155',
+        api_key: 'dummy',           // real key keepalive reads from tabi-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20155) → tabitoken.com (БЕЗ /v1).
+        // Активация через handleTbActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в tabi-active-key.txt и инжектится прокси на каждый запрос.
+    },
+    gorouter: {
+        label: 'GoRouter',
+        base_url: 'http://localhost:20156',
+        api_key: 'dummy',           // real key keepalive reads from gorouter-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20156) → gorouter.app (БЕЗ /v1).
+        // Активация через handleGoActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в gorouter-active-key.txt и инжектится прокси на каждый запрос.
+    },
 };
 
 const LOG_BUFFER = [];
@@ -2838,6 +2858,7 @@ function customModelsCacheSave() {
     } catch {}
 }
 customModelsCacheLoad();
+customSweepOrphanProxyConfigs();
 
 const CUSTOM_PROXY_PORT_MIN = 20150;
 const CUSTOM_PROXY_PORT_MAX = 20250;
@@ -2953,6 +2974,166 @@ async function customKillProxy(provider) {
     }
     try { fs.rmSync(customProxyConfigFile(provider.id), { force: true }); } catch {}
     logLine(`custom proxy kill: ${provider.name}${port ? ' :' + port : ''}`);
+}
+
+// Нужен ли конвертер: режим (mode) > протокол (скан) > эвристика по modelMap.
+function customNeedProxy(provider) {
+    if (provider.mode === 'direct') return false;
+    if (provider.mode === 'proxy') return true;
+    const proto = provider.protocol || 'unknown';
+    if (proto === 'anthropic') return false;
+    if (proto === 'openai' || proto === 'mapped') return true;
+    const mm = provider.modelMap || {};
+    return !!(mm.opus || mm.sonnet || mm.haiku);
+}
+
+// Переписать ANTHROPIC_BASE_URL в settings.json (apiKeyHelper не трогаем).
+// При перенаправлении на локальный конвертер чистим и env-оверрайды моделей
+// (могут остаться от прошлого direct-режима).
+function customRepointSettings(url, reason) {
+    try {
+        const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+        const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        makeSettingsBackup('settings-custom-' + reason);
+        settings.env = settings.env || {};
+        settings.env.ANTHROPIC_BASE_URL = url;
+        if (String(url).startsWith('http://localhost:')) {
+            for (const k of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME', 'ANTHROPIC_SMALL_FAST_MODEL']) delete settings.env[k];
+            delete settings.model;
+        }
+        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+        return { ok: true };
+    } catch (e) {
+        logLine(`custom repoint settings (${reason}) FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Прямое подключение (mode=direct): CC сам добавляет /v1/messages к ANTHROPIC_BASE_URL,
+// поэтому baseUrl чистим от /v1. Нестандартные имена моделей уходят в ANTHROPIC_DEFAULT_*_MODEL.
+function customCleanBase(base) {
+    return String(base || '').replace(/\/+$/, '').replace(/\/v1$/, '').replace(/\/+$/, '');
+}
+
+// Мутирует settings.env под direct-режим; возвращает массив предупреждений.
+function customApplyDirectEnv(settings, provider) {
+    settings.env = settings.env || {};
+    settings.env.ANTHROPIC_BASE_URL = customCleanBase(provider.baseUrl);
+    const mm = provider.modelMap || {};
+    const set = (k, v) => { if (v) settings.env[k] = v; else delete settings.env[k]; };
+    set('ANTHROPIC_DEFAULT_OPUS_MODEL', mm.opus);
+    set('ANTHROPIC_DEFAULT_SONNET_MODEL', mm.sonnet);
+    set('ANTHROPIC_DEFAULT_HAIKU_MODEL', mm.haiku);
+    set('ANTHROPIC_SMALL_FAST_MODEL', mm.haiku || mm.sonnet);
+    for (const k of ['ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME', 'ANTHROPIC_MODEL']) delete settings.env[k];
+    delete settings.model;
+    const warns = [];
+    if (provider.protocol === 'openai') warns.push('у провайдера нет Anthropic-роута — прямое не сработает, переключи на прокси');
+    else if ((provider.protocol === 'mapped' || !provider.protocol) && !(mm.opus || mm.sonnet || mm.haiku)) warns.push('стандартные имена CC провайдер отклоняет — заполни маппинг (уйдёт в ANTHROPIC_DEFAULT_*_MODEL)');
+    return warns;
+}
+
+function customApplyDirect(provider) {
+    try {
+        const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+        const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        makeSettingsBackup('settings-custom-direct');
+        const warns = customApplyDirectEnv(settings, provider);
+        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+        return { ok: true, warns };
+    } catch (e) {
+        logLine(`custom apply direct FAILED: ${e.message}`);
+        return { ok: false, error: e.message, warns: [] };
+    }
+}
+
+// Автоподсказка маппинга из каталога: первый claude-opus/sonnet/haiku id на тир.
+function suggestClaudeMap(models) {
+    const s = { opus: '', sonnet: '', haiku: '' };
+    for (const m of (models || [])) {
+        const id = String(m.id || '');
+        const low = id.toLowerCase();
+        if (!s.opus && /claude-?opus/.test(low)) s.opus = id;
+        else if (!s.sonnet && /claude-?sonnet/.test(low)) s.sonnet = id;
+        else if (!s.haiku && /claude-?haiku/.test(low)) s.haiku = id;
+    }
+    return s;
+}
+
+// Скан типа провайдера: есть ли Anthropic-роут POST /messages и принимает ли он
+// стандартную модель Claude Code (claude-opus-5[1m]).
+//   openai   — роута /messages нет (404/405) → только конвертер.
+//   anthropic— роут есть и стандартную модель принимает → прямое подключение.
+//   mapped   — роут есть, но стандартную модель отклоняет (claude-opus-5[1m]
+//              отсутствует в каталоге) → нужен маппинг + конвертер.
+async function customDetectProtocol(provider, apiKey) {
+    const base = String(provider.baseUrl || '').replace(/\/+$/, '');
+    const clean = base.replace(/\/v1$/, '').replace(/\/+$/, '');
+    const candidates = [];
+    if (!candidates.includes(base + '/messages')) candidates.push(base + '/messages');
+    const v1 = clean + '/v1/messages';
+    if (v1 !== base + '/messages' && !candidates.includes(v1)) candidates.push(v1);
+
+    let models = [], modelsOk = false;
+    try {
+        const mresp = await fetch(base + '/models', {
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(8000),
+        });
+        if (mresp.ok) {
+            const j = await mresp.json();
+            models = (j.data || []).map(m => ({ id: m.id, owned_by: m.owned_by }));
+            modelsOk = true;
+        }
+    } catch {}
+
+    const probe = async (model) => {
+        for (const url of candidates) {
+            try {
+                const r = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+                    body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+                    signal: AbortSignal.timeout(8000),
+                });
+                if (r.status === 404 || r.status === 405) continue; // роута нет → не Anthropic
+                if ((r.status === 401 || r.status === 403) && !modelsOk) continue; // ключ невалиден вообще
+                return { status: r.status, body: await r.text().catch(() => '') };
+            } catch {}
+        }
+        return null;
+    };
+
+    // 1) есть ли вообще работоспособный Anthropic-роут (пробуем общеизвестную claude-модель)
+    const baseProbe = await probe('claude-opus-4-8');
+    if (!baseProbe) return { protocol: 'openai', models, modelsOk };
+    // роут отвечает, но не 200 (503 model_not_found / "No available channel", 400, 429…) →
+    // рабочего Anthropic-роута нет → фактически OpenAI (только конвертер).
+    if (baseProbe.status !== 200) return { protocol: 'openai', models, modelsOk };
+
+    // 2) принимает ли роут стандартную модель Claude Code
+    const defProbe = await probe('claude-opus-5[1m]');
+    if (defProbe && defProbe.status === 200) return { protocol: 'anthropic', models, modelsOk };
+    const isModelError = defProbe && /model.{0,50}(not found|not_found|does not exist|unknown model|invalid model|not_found_error)/i.test(defProbe.body);
+    // 403 на стандартной модели = доступ отклонён (нет такой модели/тира) → нужен маппинг на доступную
+    if (defProbe && (isModelError || defProbe.status === 403)) return { protocol: 'mapped', models, modelsOk };
+    // неоднозначно — считаем anthropic (прямое подключение, пользователь поправит)
+    return { protocol: 'anthropic', models, modelsOk };
+}
+
+// Свип осиротевших конфигов конвертеров (~/.claude/custom-<id>-proxy.json) без провайдера.
+function customSweepOrphanProxyConfigs() {
+    try {
+        const data = customLoad();
+        const ids = new Set(data.providers.map(p => p.id));
+        const dir = path.join(os.homedir(), '.claude');
+        for (const f of fs.readdirSync(dir)) {
+            const m = f.match(/^custom-(cp_\d+)-proxy\.json$/);
+            if (m && !ids.has(m[1])) {
+                try { fs.rmSync(path.join(dir, f), { force: true }); logLine(`custom sweep: removed orphan ${f}`); } catch {}
+            }
+        }
+    } catch {}
 }
 
 // ── Health: проба всех сервисов (что запущено / что упало) ──────────────────
@@ -3213,7 +3394,27 @@ async function handleCustomKeyAdd(req, res) {
         provider.keys.push({ apiKey: key, active: false, status: null, addedAt: new Date().toISOString() });
         customSave(data);
         logLine(`custom key add: ${provider.name} (***${key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true });
+
+        // авто-скан типа провайдера первым ключом + авто-подсказка маппинга
+        let scan = null;
+        if (provider.keys.length === 1) {
+            scan = await customDetectProtocol(provider, key);
+            if (scan.protocol) provider.protocol = scan.protocol;
+            provider.scanTs = Date.now();
+            const mm = provider.modelMap || {};
+            if (!mm.opus && !mm.sonnet && !mm.haiku) {
+                const sug = suggestClaudeMap(scan.models || []);
+                if (sug.opus || sug.sonnet || sug.haiku) provider.modelMap = sug;
+            }
+            customSave(data);
+            logLine(`custom key add: scan ${provider.name} → ${scan.protocol || 'unknown'}${scan.modelsOk ? `, ${scan.models.length} моделей` : ''}`);
+        }
+        jsonRes(res, 200, {
+            ok: true,
+            protocol: provider.protocol,
+            scan: scan ? { protocol: scan.protocol, error: scan.error || null } : null,
+            modelMap: provider.modelMap,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -3344,22 +3545,33 @@ async function handleCustomActivate(req, res) {
         const target = provider.keys.find(k => k.apiKey === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
 
+        // при переключении custom-провайдера гасим конвертер предыдущего
+        const prevActive = customReadActiveProvider();
+        if (prevActive && prevActive.id !== provider.id) {
+            const prev = customFind(prevActive.id).provider;
+            if (prev && prev.proxyPid) {
+                await customKillProxy(prev);
+                prev.proxyPort = null;
+                prev.proxyPid = null;
+                customSave(data);
+                logLine(`custom activate: killed previous converter ${prev.name}`);
+            }
+        }
+
         fs.writeFileSync(CUSTOM_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
         fs.writeFileSync(CUSTOM_ACTIVE_PROVIDER_FILE,
             JSON.stringify({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl }, null, 2) + '\n', 'utf-8');
         provider.keys.forEach(k => { k.active = k.apiKey === key; });
         customSave(data);
 
-        // OpenAI-only провайдер (задан modelMap) → спавним Anthropic→OpenAI прокси.
-        // Anthropic-совместимый (modelMap пуст) → ходим напрямую на baseUrl.
-        const mm = provider.modelMap || {};
-        const needProxy = !!(mm.opus || mm.sonnet || mm.haiku);
+        // Тип провайдера: режим (mode) > протокол (скан) > эвристика по modelMap.
+        const needProxy = customNeedProxy(provider);
         let proxy = null;
+        let directWarns = [];
         if (needProxy) {
             proxy = await customSpawnProxy(provider);
             if (!proxy.ok) return jsonRes(res, 400, { error: 'не удалось поднять прокси: ' + (proxy.error || '?') });
         }
-        const targetUrl = proxy && proxy.port ? `http://localhost:${proxy.port}` : provider.baseUrl;
 
         let settingsOk = false;
         try {
@@ -3367,27 +3579,25 @@ async function handleCustomActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-custom');
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = targetUrl;
-            settings.apiKeyHelper = keyHelperCmd('custom-active-key.txt');
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
+            settings.apiKeyHelper = keyHelperCmd('custom-active-key.txt');
             delete settings.env.ANTHROPIC_API_KEY;
             delete settings.env.ANTHROPIC_AUTH_TOKEN;
-            delete settings.env.ANTHROPIC_MODEL;
-            delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-            delete settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME;
-            delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-            delete settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME;
-            delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-            delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME;
-            delete settings.model;
+            if (needProxy) {
+                settings.env.ANTHROPIC_BASE_URL = `http://localhost:${proxy.port}`;
+                for (const k of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME']) delete settings.env[k];
+                delete settings.model;
+            } else {
+                directWarns = customApplyDirectEnv(settings, provider);
+            }
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`custom activate: settings.json FAILED: ${e.message}`);
             if (proxy && proxy.ok) await customKillProxy(provider);
         }
-        logLine(`custom activate: ${provider.name} → ***${key.slice(-6)} (helper${proxy ? ', via proxy :' + proxy.port : ''})`);
-        jsonRes(res, 200, { ok: true, provider: provider.name, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: !!proxy });
+        logLine(`custom activate: ${provider.name} → ***${key.slice(-6)} (helper${proxy ? ', via proxy :' + proxy.port : ', direct'})`);
+        jsonRes(res, 200, { ok: true, provider: provider.name, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: !!proxy, mode: needProxy ? 'proxy' : 'direct', warns: directWarns });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -3404,14 +3614,141 @@ async function handleCustomModelMap(req, res) {
         };
         customSave(data);
         logLine(`custom modelmap: ${provider.name} opus→${provider.modelMap.opus || '-'} sonnet→${provider.modelMap.sonnet || '-'} haiku→${provider.modelMap.haiku || '-'}`);
-        // если провайдер активен и под ним крутится прокси — перезапускаем с новым конфигом
+
+        // Сохранение маппинга само синхронизирует конвертер активного провайдера:
+        // поднять, если его нет; перезапустить, если он уже есть; погасить, если маппинг очищен.
         const active = customReadActiveProvider();
-        if (active && active.id === provider.id && provider.proxyPid) {
-            await customKillProxy(provider);
-            const res2 = await customSpawnProxy(provider);
-            logLine(`custom modelmap: proxy restarted ${res2.ok ? ': ' + res2.port : 'FAIL ' + (res2.error || '')}`);
+        let action = 'saved', message = 'Маппинг сохранён. Активируй провайдера, чтобы применить.', port = null;
+        if (active && active.id === provider.id) {
+            const needProxy = customNeedProxy(provider);
+            if (!needProxy) {
+                // direct-режим: конвертер не нужен, маппинг уходит в ANTHROPIC_DEFAULT_*_MODEL
+                if (provider.proxyPid) {
+                    await customKillProxy(provider);
+                    provider.proxyPort = null;
+                    provider.proxyPid = null;
+                    customSave(data);
+                }
+                const r = customApplyDirect(provider);
+                if (r.ok) {
+                    action = 'direct';
+                    message = 'Прямое подключение: маппинг ушёл в ANTHROPIC_DEFAULT_*_MODEL. Перезапусти сессию Claude Code.'
+                        + (r.warns.length ? ' ⚠ ' + r.warns.join('; ') : '');
+                } else {
+                    action = 'error';
+                    message = 'Direct: settings.json не обновился: ' + (r.error || '?');
+                }
+            } else if (provider.proxyPid) {
+                await customKillProxy(provider);
+                const r2 = await customSpawnProxy(provider);
+                if (r2.ok) {
+                    port = r2.port;
+                    const s = customRepointSettings(`http://localhost:${r2.port}`, 'modelmap-respawn');
+                    action = 'restarted';
+                    message = s.ok
+                        ? `Конвертер перезапущен на :${r2.port} с новым маппингом. Перезапусти сессию Claude Code.`
+                        : `Конвертер перезапущен на :${r2.port}, но settings.json не обновился: ${s.error}.`;
+                } else {
+                    action = 'error';
+                    message = 'Не удалось перезапустить конвертер: ' + (r2.error || '?');
+                }
+            } else if (needProxy && !provider.proxyPid) {
+                const r2 = await customSpawnProxy(provider);
+                if (r2.ok) {
+                    port = r2.port;
+                    const s = customRepointSettings(`http://localhost:${r2.port}`, 'modelmap-spawn');
+                    action = 'spawned';
+                    message = s.ok
+                        ? `Конвертер поднят на :${r2.port}, Claude Code перенаправлен на http://localhost:${r2.port}. Перезапусти сессию Claude Code.`
+                        : `Конвертер поднят на :${r2.port}, но settings.json не обновился: ${s.error}.`;
+                } else {
+                    action = 'error';
+                    message = 'Не удалось поднять конвертер: ' + (r2.error || '?');
+                }
+            } else if (!needProxy && provider.proxyPid) {
+                await customKillProxy(provider);
+                const s = customRepointSettings(provider.baseUrl, 'modelmap-kill');
+                action = 'killed';
+                message = s.ok
+                    ? `Конвертер остановлен, подключение напрямую к ${provider.baseUrl}. Перезапусти сессию Claude Code.`
+                    : `Конвертер остановлен, но settings.json не обновился: ${s.error}.`;
+            } else {
+                action = 'noop';
+                message = needProxy
+                    ? 'Маппинг сохранён. Конвертер уже готов.'
+                    : 'Маппинг сохранён. Провайдер Anthropic-совместимый — прямое подключение, конвертер не нужен.';
+            }
         }
-        jsonRes(res, 200, { ok: true, modelMap: provider.modelMap });
+        logLine(`custom modelmap action: ${action} | ${message}`);
+        jsonRes(res, 200, { ok: true, modelMap: provider.modelMap, action, message, port });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/scan { providerId, apiKey } → повторный скан типа провайдера
+async function handleCustomScan(req, res) {
+    try {
+        const { providerId, apiKey } = await readJsonBody(req);
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        const key = String(apiKey || '').trim()
+            || (provider.keys.find(k => k.active) || {}).apiKey
+            || (provider.keys[0] || {}).apiKey;
+        if (!key) return jsonRes(res, 400, { error: 'нет ключа для сканирования — добавь ключ' });
+        const scan = await customDetectProtocol(provider, key);
+        provider.protocol = scan.protocol || provider.protocol || 'unknown';
+        if (!provider.mode) provider.mode = scan.protocol === 'anthropic' ? 'direct' : 'proxy';
+        provider.scanTs = Date.now();
+        customSave(data);
+        logLine(`custom scan: ${provider.name} → ${provider.protocol} (${scan.modelsOk ? scan.models.length + ' моделей' : 'модели недоступы'})`);
+        jsonRes(res, 200, { ok: true, protocol: provider.protocol, mode: provider.mode, models: scan.models, modelsOk: scan.modelsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/custom/mode { providerId, mode } → переключить режим подключения (proxy|direct)
+async function handleCustomMode(req, res) {
+    try {
+        const { providerId, mode } = await readJsonBody(req);
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        const m = String(mode || '').trim();
+        if (m !== 'proxy' && m !== 'direct') return jsonRes(res, 400, { error: 'mode должен быть proxy или direct' });
+        provider.mode = m;
+        customSave(data);
+        let action = 'saved', message = 'Режим сохранён. Активируй провайдера, чтобы применить.', warns = [];
+        const active = customReadActiveProvider();
+        if (active && active.id === provider.id) {
+            const needProxy = customNeedProxy(provider);
+            if (needProxy) {
+                await customKillProxy(provider);
+                provider.proxyPort = null;
+                provider.proxyPid = null;
+                customSave(data);
+                const r = await customSpawnProxy(provider);
+                if (r.ok) {
+                    const s = customRepointSettings(`http://localhost:${r.port}`, 'mode-proxy');
+                    action = 'proxy';
+                    message = s.ok
+                        ? `Режим «прокси»: конвертер поднят на :${r.port}. Перезапусти сессию Claude Code.`
+                        : `Конвертер на :${r.port}, но settings.json не обновился: ${s.error}.`;
+                } else {
+                    action = 'error';
+                    message = 'Не удалось поднять конвертер: ' + (r.error || '?');
+                }
+            } else {
+                await customKillProxy(provider);
+                provider.proxyPort = null;
+                provider.proxyPid = null;
+                customSave(data);
+                const r = customApplyDirect(provider);
+                warns = r.warns || [];
+                action = 'direct';
+                message = r.ok
+                    ? `Режим «прямое»: подключение к ${customCleanBase(provider.baseUrl)}` + (warns.length ? ' ⚠ ' + warns.join('; ') : '') + '. Перезапусти сессию Claude Code.'
+                    : 'Direct: settings.json не обновился: ' + (r.error || '?');
+            }
+        }
+        logLine(`custom mode: ${provider.name} → ${m} (${action})`);
+        jsonRes(res, 200, { ok: true, mode: provider.mode, action, message, warns });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -3432,8 +3769,13 @@ async function handleCustomDeactivate(req, res) {
     try {
         const active = customReadActiveProvider();
         if (active) {
-            const { provider } = customFind(active.id);
-            if (provider) await customKillProxy(provider);
+            const { data: d2, provider } = customFind(active.id);
+            if (provider) {
+                await customKillProxy(provider);
+                provider.proxyPort = null;
+                provider.proxyPid = null;
+                customSave(d2);
+            }
         }
         try { fs.rmSync(CUSTOM_ACTIVE_KEY_FILE, { force: true }); } catch {}
         try { fs.rmSync(CUSTOM_ACTIVE_PROVIDER_FILE, { force: true }); } catch {}
@@ -3452,6 +3794,8 @@ async function handleCustomDeactivate(req, res) {
                 settings.env = settings.env || {};
                 delete settings.env.ANTHROPIC_BASE_URL;
                 delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+                for (const k of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME', 'ANTHROPIC_SMALL_FAST_MODEL']) delete settings.env[k];
+                delete settings.model;
                 fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
                 settingsOk = true;
             }
@@ -4732,6 +5076,7 @@ const AR_BASE_URL = 'https://agentrouter.org';
 // Баланс ключа: сервис не отдаёт остаток напрямую — только потраченное (total_usage).
 // Выдачу («грант») угадываем по шагу $25 от базовых $175. balance = grant − spent.
 const AR_GRANT_STEP = 25;
+const AR_REFERRAL_STEP = 100;
 const AR_DEFAULT_GRANT = 175;
 const AR_SENTINEL_USD = 1e6;               // hard_limit_usd у безлимитных = 100M — заглушка, не баланс
 const arIsSaneLimit = v => typeof v === 'number' && v > 0 && v < AR_SENTINEL_USD;
@@ -4837,7 +5182,7 @@ async function arProbe(apiKey) {
 // пропускает только Claude Code запросы). spent = total_usage (центы!) / 100; grant либо задан
 // вручную (grantOverride — у разных акков выдача разная: 125/175/личный больше), либо угадываем
 // по шагу $25; balance = grant − spent. hard_limit_usd НЕ баланс (у безлимитных = sentinel 100M).
-async function arBalance(apiKey, grantOverride, bonusOverride) {
+async function arBalance(apiKey, grantOverride, bonusOverride, referralOverride) {
     const day = ms => new Date(ms).toISOString().slice(0, 10);
     const end = day(Date.now());
     const start = day(Date.now() - 400 * 864e5); // 400 дней назад
@@ -4868,7 +5213,8 @@ async function arBalance(apiKey, grantOverride, bonusOverride) {
         ? grantOverride
         : Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP);
     const bonus = Number(bonusOverride) > 0 ? Number(bonusOverride) : 0;
-    const balance = Math.round((grant + bonus - spent) * 100) / 100;
+    const referral = Number(referralOverride) > 0 ? Number(referralOverride) : 0;
+    const balance = Math.round((grant + bonus + referral - spent) * 100) / 100;
 
     // Опционально: срок доступа. Не критично — ошибки глотаем, баланс уже посчитан.
     let accessUntil = null, limitSane = null;
@@ -4885,7 +5231,7 @@ async function arBalance(apiKey, grantOverride, bonusOverride) {
         }
     } catch { /* срок доступа не критичен */ }
 
-    return { status: 'live', spent, grant, bonus, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+    return { status: 'live', spent, grant, bonus, referral, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
 }
 
 async function handleArSessions(req, res) {
@@ -4902,7 +5248,7 @@ async function handleArSessions(req, res) {
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
-                await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s.api_key, s.grantManual, s.bonus))));
+                await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s.api_key, s.grantManual, s.bonus, s.referral))));
             }
             arSave(sessions);
         }
@@ -4919,6 +5265,7 @@ function arApplyBalance(target, bal) {
         target.spent = bal.spent;
         target.grant = bal.grant;
         target.bonus = bal.bonus;
+        target.referral = bal.referral;
         target.balance = bal.balance;
         target.accessUntil = bal.accessUntil;
         target.grantSource = bal.grantSource;
@@ -4949,7 +5296,7 @@ async function handleArBalance(req, res) {
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
         const sessions = arLoad();
         const target = sessions.find(s => s.api_key === api_key);
-        const bal = await arBalance(api_key, target && target.grantManual, target && target.bonus);
+        const bal = await arBalance(api_key, target && target.grantManual, target && target.bonus, target && target.referral);
         if (target) { arApplyBalance(target, bal); arSave(sessions); }
         jsonRes(res, 200, bal);
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -4972,7 +5319,7 @@ async function handleArSetGrant(req, res) {
         if (grant === null) delete target.grantManual;
         else target.grantManual = grant;
         // Пересчёт баланса с новой выдачей (если ключ отвечает).
-        const bal = await arBalance(key, target.grantManual, target.bonus);
+        const bal = await arBalance(key, target.grantManual, target.bonus, target.referral);
         arApplyBalance(target, bal);
         arSave(sessions);
         logLine(`agentrouter set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
@@ -4991,11 +5338,30 @@ async function handleArAddBonus(req, res) {
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
         target.bonus = Math.round(((Number(target.bonus) || 0) + 25) * 100) / 100;
-        const bal = await arBalance(key, target.grantManual, target.bonus);
+        const bal = await arBalance(key, target.grantManual, target.bonus, target.referral);
         arApplyBalance(target, bal);
         arSave(sessions);
         logLine(`agentrouter add-bonus: ***${key.slice(-6)} → +$25 (всего bonus $${target.bonus})`);
         jsonRes(res, 200, { ok: true, bonus: target.bonus, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/add-referral { api_key } → реврал принёс +$100 (поле referral копится
+// отдельно от bonus и grant). Баланс = grant + bonus + referral − spent. grant НЕ трогаем.
+async function handleArAddReferral(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        target.referral = Math.round(((Number(target.referral) || 0) + AR_REFERRAL_STEP) * 100) / 100;
+        const bal = await arBalance(key, target.grantManual, target.bonus, target.referral);
+        arApplyBalance(target, bal);
+        arSave(sessions);
+        logLine(`agentrouter add-referral: ***${key.slice(-6)} → +$${AR_REFERRAL_STEP} (всего referral $${target.referral})`);
+        jsonRes(res, 200, { ok: true, referral: target.referral, ...bal });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -5024,7 +5390,7 @@ async function handleArSetGithub(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// POST /__switch/api/ar/session/open { api_key } → открыть консоль agentrouter под GitHub-сессией
+// POST /__switch/api/ar/session/open { id } → открыть консоль agentrouter под GitHub-сессией
 // этого аккаунта (для чек-ина +$25). Спавним agentrouter/open-session.js <label> отдельным
 // detached-процессом (видимый Chromium). Первый раз сессии нет → скрипт ждёт ручного GitHub-логина
 // и автосохраняет её; дальше открывает с сохранённой. Dedup: не плодим второй браузер на тот же label.
@@ -5036,21 +5402,21 @@ function arPidAlive(pid) {
 async function handleArSessionOpen(req, res) {
     try {
         const body = await readJsonBody(req);
-        const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
         const sessions = arLoad();
-        const idx = sessions.findIndex(s => s.api_key === key);
-        if (idx < 0) return jsonRes(res, 404, { error: 'ключ не найден' });
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
         const target = sessions[idx];
-        // Профиль браузера привязываем к СТАБИЛЬНОМУ хэшу api_key, а не к name/email:
-        // переименование аккаунта не рвёт сохранённый профиль.
-        const label = 'ar_' + crypto.createHash('sha1').update(key).digest('hex').slice(0, 8);
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта (как в gorouter), а не к
+        // api_key/name/email: смена ключа и переименование не рвут сохранённый профиль.
+        const label = 'acct_' + id;
         const dispName = String(target.name || target.email || label);
 
         // Уже открыт браузер для этого label — не плодим второй.
         const prevPid = arLkPids.get(label);
         if (arPidAlive(prevPid)) {
-            logLine(`agentrouter session/open: ${dispName} (***${key.slice(-6)}) label=${label} — уже открыт (pid ${prevPid})`);
+            logLine(`agentrouter session/open: ${dispName} label=${label} — уже открыт (pid ${prevPid})`);
             return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
         }
 
@@ -5062,7 +5428,7 @@ async function handleArSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { arLkPids.delete(label); logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         arLkPids.set(label, proc.pid);
-        logLine(`agentrouter session/open: ${dispName} (***${key.slice(-6)}) label=${label} (pid ${proc.pid})`);
+        logLine(`agentrouter session/open: ${dispName} label=${label} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -5075,7 +5441,15 @@ async function handleArAdd(req, res) {
         if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
         const sessions = arLoad();
         if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
-        sessions.push({ email: mail, name: String(name || '').trim() || mail.split('@')[0], api_key: key, active: false, status: 'unknown', created: new Date().toISOString() });
+        sessions.push({
+            id: 'ar_' + Date.now() + '_' + sessions.length,
+            email: mail,
+            name: String(name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+        });
         arSave(sessions);
         logLine(`agentrouter add: ${mail} (***${key.slice(-6)})`);
         jsonRes(res, 200, { ok: true });
@@ -5084,12 +5458,230 @@ async function handleArAdd(req, res) {
 
 async function handleArDelete(req, res) {
     try {
-        const { api_key } = await readJsonBody(req);
-        const key = String(api_key || '').trim();
-        arSave(arLoad().filter(s => s.api_key !== key));
-        logLine(`agentrouter delete: ***${key.slice(-6)}`);
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.id === idKey);
+        arSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.active) {
+            try { fs.rmSync(AR_ACTIVE_KEY_FILE, { force: true }); } catch {}
+        }
+        logLine(`agentrouter delete: ${target ? (target.email || '?') : '?'}`);
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── AgentRouter: share/import (механика из gorouter, аккаунт идентифицируем по id) ──
+// Формат: base64url(JSON { v:1, provider:'agentrouter', email, name, api_key,
+// session:{cookies,origins} }). storageState из agentrouter/profiles/acct_<id>/,
+// label совпадает с handleArSessionOpen (acct_ + id).
+const AR_SHARE_SCRIPT = path.join(__dirname, '..', 'agentrouter', 'share-session.js');
+const AR_SESSIONS_DIR = path.join(__dirname, '..', 'agentrouter', 'sessions');
+
+function arB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function arB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/ar/share { id } → снять storageState профиля и собрать строку.
+async function handleArShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = arLkPids.get(label);
+        if (arPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        const stateFile = path.join(AR_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [AR_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code2, sig) => resolve({ code: code2, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`agentrouter share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'agentrouter',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            session,
+        };
+        const share = arB64UrlEncode(JSON.stringify(payload));
+        logLine(`agentrouter share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/import { share } → разобрать строку и добавить аккаунт.
+async function handleArImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(arB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'agentrouter' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не agentrouter-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = arLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'ar_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        sessions.push({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+        });
+        arSave(sessions);
+
+        try {
+            fs.mkdirSync(AR_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(AR_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`agentrouter import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`agentrouter import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''})`);
+        jsonRes(res, 200, { ok: true, email: mail, hasSession: session.cookies.length > 0 || session.origins.length > 0 });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── AgentRouter: rename / set-key (механика из gorouter, аккаунт по стабильному id) ──
+// Профиль браузера привязан к id (acct_<id>), а не к api_key — поэтому смена ключа
+// и переименование НЕ рвут сохранённую GitHub-сессию.
+
+// POST /__switch/api/ar/rename { id, email?, name? } → переименовать аккаунт.
+async function handleArRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        arSave(sessions);
+        logLine(`agentrouter rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/key { id, api_key } → сменить/вписать API-ключ аккаунта
+// (ключ берётся в консоли agentrouter). Профиль привязан к id — сессия НЕ теряется.
+// Если аккаунт был активным — обновляем активный ключ (прокси читает файл на каждый запрос).
+async function handleArSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = arLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        if (wasActive) {
+            fs.writeFileSync(AR_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        arSave(sessions);
+        logLine(`agentrouter set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Старый label до миграции на id: ar_ + sha1(api_key)[0:8].
+function arLegacyLabelForKey(key) {
+    return 'ar_' + crypto.createHash('sha1').update(String(key || '')).digest('hex').slice(0, 8);
+}
+
+// Одноразовая миграция существующих аккаунтов на стабильный id (модель gorouter):
+// 1) выдаём id аккаунтам без него; 2) переименовываем папки профилей и session-файлы
+// из старого формата ar_<sha1(api_key)> в acct_<id>, чтобы сохранённые сессии не осиротели.
+// Вызывается при старте сервера. Повторно ничего не делает (все id уже стоят).
+function arMigrateIds() {
+    try {
+        const sessions = arLoad();
+        const dir = path.join(__dirname, '..', 'agentrouter', 'profiles');
+        let changed = false, moved = 0;
+        sessions.forEach((s, i) => {
+            if (s.id) return;
+            const id = 'ar_' + Date.now() + '_' + i;
+            s.id = id;
+            changed = true;
+            const oldLabel = arLegacyLabelForKey(s.api_key);
+            const newLabel = 'acct_' + id;
+            const oldDir = path.join(dir, oldLabel);
+            const newDir = path.join(dir, newLabel);
+            if (fs.existsSync(oldDir) && !fs.existsSync(newDir)) {
+                try { fs.renameSync(oldDir, newDir); moved++; }
+                catch (e) { logLine(`agentrouter migrate: не смогли переименовать ${oldLabel} → ${newLabel}: ${e.message}`); }
+            }
+            const oldState = path.join(AR_SESSIONS_DIR, oldLabel + '.json');
+            const newState = path.join(AR_SESSIONS_DIR, newLabel + '.json');
+            if (fs.existsSync(oldState) && !fs.existsSync(newState)) {
+                try { fs.renameSync(oldState, newState); moved++; } catch {}
+            }
+        });
+        if (changed) {
+            arSave(sessions);
+            logLine(`agentrouter migrate: выдал id ${sessions.filter(s => s.id).length} аккаунтам, переименовано профилей/сессий: ${moved}`);
+        }
+    } catch (e) {
+        logLine(`agentrouter migrate failed: ${e.message}`);
+    }
 }
 
 // Прямой режим: claude-* → SSE keepalive прокси :20133 (вставляет `: keepalive`
@@ -5100,9 +5692,8 @@ function arTargetFor(model) {
         || String(model || '').toLowerCase().includes('gpt');
     return isGpt ? { base: AR_PROXY_URL, needProxy: true, keepalive: false }
                  : { base: AR_KEEPALIVE_URL, needProxy: true, keepalive: true };
-}
-
-// Клик по ключу → активный: пишем ключ в ar-active-key.txt + apiKeyHelper в settings.json.
+}// Клик по ключу → активный: пишем ключ в ar-active-key.txt — оба прокси (:20133/:20132)
+// читают его на каждый запрос, поэтому смена активного ключа работает на лету без рестарта Claude Code.
 async function handleArActivate(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -5130,7 +5721,7 @@ async function handleArActivate(req, res) {
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;   // токен рулит авторизацией
             clearOtEnv(settings);    // снести AUTH_TOKEN/маппинги от other пулов — потом ставим свой
-            settings.env.ANTHROPIC_AUTH_TOKEN = key;   // прямой режим: ключ литералом, как у друга
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // заглушка: реальный ключ прокси берут из ar-active-key.txt на каждый запрос
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
 if (target.needProxy) {
@@ -5262,10 +5853,19 @@ const GO_SESSIONS_FILE = path.join(__dirname, 'gorouter-sessions.json');
 const GO_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'gorouter-active-key.txt');
 const GO_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'gorouter-active-model.txt');
 const GO_BASE_URL = 'https://gorouter.app/v1';
+// SSE keepalive proxy для gorouter (как у tabi :20155): форвардит напрямую в
+// gorouter.app, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const GO_UPSTREAM = 'https://gorouter.app';
+const GO_KEEPALIVE_PORT = 20156;
+const GO_KEEPALIVE_URL = `http://localhost:${GO_KEEPALIVE_PORT}`;
+const GO_MODELMAP_FILE = path.join(__dirname, 'gorouter-modelmap.json');
 // Баланс: сервис отдаёт только total_usage (центы). Выдача («грант») — по шагу
 // $25 от базовых $70 (у gorouter НЕ 175, как у agentrouter). Пользователь правит руками.
 const GO_GRANT_STEP = 25;
 const GO_DEFAULT_GRANT = 70;
+// Чек-ин в ЛК даёт бонус: у agentrouter это $25, у gorouter — $5.
+const GO_BONUS_STEP = 5;
 const GO_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 const GO_CC_HEADERS = {
@@ -5311,6 +5911,37 @@ function goReadActiveKey() {
     catch { return null; }
 }
 
+// SSE keepalive proxy для gorouter: второй экземпляр keepalive-proxy.js на :20156.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с agentrouter
+// :20133 и tabi :20155. UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages.
+async function goKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(GO_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(GO_KEEPALIVE_PORT),
+                UPSTREAM: GO_UPSTREAM,
+                KEY_FILE: GO_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: GO_MODELMAP_FILE,
+            },
+        });
+        child.unref();
+        logLine(`gorouter keepalive proxy spawn: :${GO_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`gorouter keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
 // Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
 async function goProbe(apiKey) {
     try {
@@ -5326,7 +5957,7 @@ async function goProbe(apiKey) {
 }
 
 // Баланс: usage endpoint на КОРНЕ gorouter.app (не /v1). spent = total_usage (центы)/100.
-async function goBalance(apiKey, grantOverride) {
+async function goBalance(apiKey, grantOverride, bonusOverride) {
     const day = ms => new Date(ms).toISOString().slice(0, 10);
     const end = day(Date.now());
     const start = day(Date.now() - 400 * 864e5);
@@ -5356,9 +5987,10 @@ async function goBalance(apiKey, grantOverride) {
     const grant = grantOverride > 0
         ? grantOverride
         : Math.max(GO_DEFAULT_GRANT, Math.ceil(spent / GO_GRANT_STEP) * GO_GRANT_STEP);
-    const balance = Math.round((grant - spent) * 100) / 100;
+    const bonus = Number(bonusOverride) > 0 ? Number(bonusOverride) : 0;
+    const balance = Math.round((grant + bonus - spent) * 100) / 100;
 
-    return { status: 'live', spent, grant, balance, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+    return { status: 'live', spent, grant, bonus, balance, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
 }
 
 function goApplyBalance(target, bal) {
@@ -5390,7 +6022,7 @@ async function handleGoSessions(req, res) {
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
-                await Promise.all(sessions.slice(i, i + 3).map(async s => goApplyBalance(s, await goBalance(s.api_key, s.grantManual))));
+                await Promise.all(sessions.slice(i, i + 3).map(async s => goApplyBalance(s, await goBalance(s.api_key, s.grantManual, s.bonus))));
             }
             goSave(sessions);
         }
@@ -5418,7 +6050,7 @@ async function handleGoBalance(req, res) {
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
         const sessions = goLoad();
         const target = sessions.find(s => s.api_key === api_key);
-        const bal = await goBalance(api_key, target && target.grantManual);
+        const bal = await goBalance(api_key, target && target.grantManual, target && target.bonus);
         if (target) { goApplyBalance(target, bal); goSave(sessions); }
         jsonRes(res, 200, bal);
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -5437,11 +6069,30 @@ async function handleGoSetGrant(req, res) {
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
         if (grant === null) delete target.grantManual;
         else target.grantManual = grant;
-        const bal = await goBalance(key, target.grantManual);
+        const bal = await goBalance(key, target.grantManual, target.bonus);
         goApplyBalance(target, bal);
         goSave(sessions);
         logLine(`gorouter set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
         jsonRes(res, 200, { ok: true, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/go/add-bonus { api_key } → чек-ин в ЛК дал +$5 (поле bonus копится отдельно
+// от изначальной выдачи grant). Баланс = grant + bonus − spent. grant НЕ трогаем.
+async function handleGoAddBonus(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        target.bonus = Math.round(((Number(target.bonus) || 0) + GO_BONUS_STEP) * 100) / 100;
+        const bal = await goBalance(key, target.grantManual, target.bonus);
+        goApplyBalance(target, bal);
+        goSave(sessions);
+        logLine(`gorouter add-bonus: ***${key.slice(-6)} → +$${GO_BONUS_STEP} (всего bonus $${target.bonus})`);
+        jsonRes(res, 200, { ok: true, bonus: target.bonus, ...bal });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -5480,6 +6131,124 @@ async function handleGoSessionOpen(req, res) {
         goLkPids.set(label, proc.pid);
         logLine(`gorouter session/open: ${label} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── GoRouter: share/import (передать аккаунт другу и принять чужой) ────────
+// Формат: base64url(JSON { v:1, provider:'gorouter', email, name, api_key,
+// session:{cookies,origins} }). «Живая» часть (GitHub + gorouter) — storageState
+// из gorouter/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
+
+const GO_SHARE_SCRIPT = path.join(__dirname, '..', 'gorouter', 'share-session.js');
+const GO_SESSIONS_DIR = path.join(__dirname, '..', 'gorouter', 'sessions');
+
+function goB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function goB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/go/share { id } → снять storageState профиля и собрать строку.
+async function handleGoShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = goLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = goLkPids.get(label);
+        if (goPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(GO_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [GO_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`gorouter share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'gorouter',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            session,
+        };
+        const share = goB64UrlEncode(JSON.stringify(payload));
+        logLine(`gorouter share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/go/import { share } → разобрать строку и добавить аккаунт.
+async function handleGoImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(goB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'gorouter' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не gorouter-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = goLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'go_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        sessions.push({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+        });
+        goSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(GO_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(GO_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`gorouter import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`gorouter import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''})`);
+        jsonRes(res, 200, { ok: true, id, email: mail, hasSession: session.cookies.length > 0 || session.origins.length > 0 });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -5594,20 +6363,21 @@ async function handleGoActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-go');
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = GO_BASE_URL;   // напрямую, без локального прокси
+            settings.env.ANTHROPIC_BASE_URL = GO_KEEPALIVE_URL;   // keepalive :20156 → gorouter.app напрямую
             delete settings.apiKeyHelper;
             delete settings.model;
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
-            settings.env.ANTHROPIC_AUTH_TOKEN = key;
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из gorouter-active-key.txt
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`gorouter activate: settings.json FAILED: ${e.message}`);
         }
-        logLine(`gorouter activate: ${target.email} → ***${key.slice(-6)} (token, base ${GO_BASE_URL})`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: false });
+        await goKeepaliveSpawn();
+        logLine(`gorouter activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${GO_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -5663,21 +6433,20 @@ async function handleGoSetModel(req, res) {
             const mm = (body.modelMap || {});
             settings.model = mm[m] || settingsModel;
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = GO_BASE_URL;
+            settings.env.ANTHROPIC_BASE_URL = GO_KEEPALIVE_URL;
             delete settings.apiKeyHelper;
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
-            const activeKey = goReadActiveKey();
-            if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = activeKey;
-            else delete settings.env.ANTHROPIC_AUTH_TOKEN;
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
         } catch (e) {
             logLine(`gorouter set-model: settings.json FAILED: ${e.message}`);
         }
-        logLine(`gorouter set-model: ${m} (base ${GO_BASE_URL})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: GO_ACTIVE_MODEL_FILE, base: GO_BASE_URL, needRestart: true });
+        await goKeepaliveSpawn();
+        logLine(`gorouter set-model: ${m} (base ${GO_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: GO_ACTIVE_MODEL_FILE, base: GO_KEEPALIVE_URL, needRestart: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -5690,8 +6459,7 @@ async function handleGoModelMap(req, res) {
             sonnet: String(body.sonnet || '').trim() || null,
             haiku: String(body.haiku || '').trim() || null,
         };
-        const dataFile = path.join(__dirname, 'gorouter-modelmap.json');
-        fs.writeFileSync(dataFile, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        fs.writeFileSync(GO_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
         logLine(`gorouter modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -5699,9 +6467,649 @@ async function handleGoModelMap(req, res) {
 
 function goReadModelMap() {
     try {
-        const raw = fs.readFileSync(path.join(__dirname, 'gorouter-modelmap.json'), 'utf8');
+        const raw = fs.readFileSync(GO_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
+}
+
+// ───── Tabi (tb) — автономная вкладка (NewAPI, GitHub-вход) ────────────
+// tabitoken.com: Anthropic-совместимый шлюз (прямой /v1/messages жив), но модели
+// -thinking → длинные паузы → watchdog CC рвёт поток. Поэтому активация как у
+// AgentRouter: claude-* через SSE keepalive-прокси на :20155 (вставляет `: keepalive`
+// и ретраит 401/403/429/5xx), форвардит в https://tabitoken.com. Свой пул ключей
+// (tabi-sessions.json), свой активный ключ/модель, свой modelmap (tabi-modelmap.json).
+// GitHub-вход: tabi/open-session.js + share/import как у gorouter (🔗/📥).
+const TB_SESSIONS_FILE = path.join(__dirname, 'tabi-sessions.json');
+const TB_MODELMAP_FILE = path.join(__dirname, 'tabi-modelmap.json');
+const TB_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'tabi-active-key.txt');
+const TB_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'tabi-active-model.txt');
+const TB_BASE_URL = 'https://tabitoken.com';   // БЕЗ /v1 (usage на корне, как AR/GO)
+// Баланс: сервис отдаёт только total_usage (центы). Выдача («грант») по умолчанию
+// $100 (база провайдера) + $20 за каждого приведённого по реферальной ссылке.
+// balance = grant + bonus − spent. Пользователь правит руками кнопкой ✏️.
+const TB_GRANT_STEP = 20;
+const TB_DEFAULT_GRANT = 100;
+const TB_BONUS_STEP = 20;
+const TB_SENTINEL_USD = 1e6;
+const tbIsSaneLimit = v => typeof v === 'number' && v > 0 && v < TB_SENTINEL_USD;
+const TB_KEEPALIVE_PORT = 20155;
+const TB_KEEPALIVE_URL = `http://localhost:${TB_KEEPALIVE_PORT}`;
+const TB_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const TB_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function tbLoad() {
+    try {
+        const raw = fs.readFileSync(TB_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция (как gorouter): стабильный id нужен для share/import/rename/setKey.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'tb_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        if (changed) {
+            try { tbSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function tbSave(arr) {
+    fs.writeFileSync(TB_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function tbReadActiveModel() {
+    try { return fs.readFileSync(TB_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function tbReadActiveKey() {
+    try { return fs.readFileSync(TB_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для tabitoken: второй экземпляр keepalive-proxy.js на :20155.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с agentrouter :20133.
+async function tbKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(TB_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(TB_KEEPALIVE_PORT),
+                UPSTREAM: TB_BASE_URL,
+                KEY_FILE: TB_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: TB_MODELMAP_FILE,
+            },
+        });
+        child.unref();
+        logLine(`tabi keepalive proxy spawn: :${TB_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`tabi keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+async function tbProbe(apiKey) {
+    try {
+        const r = await fetch(`${TB_BASE_URL}/v1/models`, {
+            method: 'GET',
+            headers: { ...TB_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс ключа: usage на КОРНЕ tabitoken.com (не /v1), spent = total_usage (центы)/100.
+// grant = вручную (grantManual) либо авто: база $100 + шаг $20 по потраченному.
+async function tbBalance(apiKey, grantOverride, bonusOverride) {
+    const day = ms => new Date(ms).toISOString().slice(0, 10);
+    const end = day(Date.now());
+    const start = day(Date.now() - 400 * 864e5);
+    let usageRes;
+    try {
+        usageRes = await fetch(
+            `${TB_BASE_URL}/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
+            {
+                method: 'GET',
+                headers: { ...TB_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(15000),
+            },
+        );
+    } catch (e) {
+        return { status: 'unknown', error: e.message };
+    }
+    if (usageRes.status === 401 || usageRes.status === 403) return { status: 'dead' };
+    if (usageRes.status !== 200) return { status: 'unknown', error: `usage HTTP ${usageRes.status}` };
+
+    let spent;
+    try {
+        const data = await usageRes.json();
+        spent = Math.round((Number(data.total_usage) || 0)) / 100; // центы → доллары
+    } catch (e) {
+        return { status: 'unknown', error: `usage parse: ${e.message}` };
+    }
+    const grant = grantOverride > 0
+        ? grantOverride
+        : Math.max(TB_DEFAULT_GRANT, Math.ceil(spent / TB_GRANT_STEP) * TB_GRANT_STEP);
+    const bonus = Number(bonusOverride) > 0 ? Number(bonusOverride) : 0;
+    const balance = Math.round((grant + bonus - spent) * 100) / 100;
+
+    // Опционально: срок доступа. Ошибки глотаем.
+    let accessUntil = null, limitSane = null;
+    try {
+        const subRes = await fetch(`${TB_BASE_URL}/v1/dashboard/billing/subscription`, {
+            method: 'GET',
+            headers: { ...TB_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (subRes.status === 200) {
+            const sub = await subRes.json();
+            accessUntil = sub.access_until && sub.access_until > 0 ? sub.access_until : null;
+            limitSane = tbIsSaneLimit(Number(sub.hard_limit_usd));
+        }
+    } catch { /* срок доступа не критичен */ }
+
+    return { status: 'live', spent, grant, bonus, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+}
+
+function tbApplyBalance(target, bal) {
+    if (!target || !bal) return bal;
+    target.status = bal.status;
+    if (bal.status === 'live') {
+        target.spent = bal.spent;
+        target.grant = bal.grant;
+        target.bonus = bal.bonus;
+        target.balance = bal.balance;
+        target.accessUntil = bal.accessUntil;
+        target.grantSource = bal.grantSource;
+        target.balanceCheckedAt = new Date().toISOString();
+    }
+    return bal;
+}
+
+async function handleTbSessions(req, res) {
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = tbLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await tbProbe(s.api_key); }));
+            }
+            tbSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => tbApplyBalance(s, await tbBalance(s.api_key, s.grantManual, s.bonus))));
+            }
+            tbSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: tbReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTbPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await tbProbe(api_key);
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; tbSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTbBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        const bal = await tbBalance(api_key, target && target.grantManual, target && target.bonus);
+        if (target) { tbApplyBalance(target, bal); tbSave(sessions); }
+        jsonRes(res, 200, bal);
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTbSetGrant(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const raw = body.grant;
+        const grant = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+        if (grant !== null && !(grant > 0)) return jsonRes(res, 400, { error: 'grant должен быть > 0 или пустым (сброс)' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        if (grant === null) delete target.grantManual;
+        else target.grantManual = grant;
+        const bal = await tbBalance(key, target.grantManual, target.bonus);
+        tbApplyBalance(target, bal);
+        tbSave(sessions);
+        logLine(`tabi set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
+        jsonRes(res, 200, { ok: true, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/tb/add-bonus { api_key } → рефка принесла +$20 (поле bonus копится
+// отдельно от выдачи grant). Баланс = grant + bonus − spent. grant НЕ трогаем.
+async function handleTbAddBonus(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        target.bonus = Math.round(((Number(target.bonus) || 0) + TB_BONUS_STEP) * 100) / 100;
+        const bal = await tbBalance(key, target.grantManual, target.bonus);
+        tbApplyBalance(target, bal);
+        tbSave(sessions);
+        logLine(`tabi add-bonus: ***${key.slice(-6)} → +$${TB_BONUS_STEP} (всего bonus $${target.bonus})`);
+        jsonRes(res, 200, { ok: true, bonus: target.bonus, ...bal });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+const tbLkPids = new Map();
+function tbPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleTbSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tbLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        const label = 'acct_' + id;
+
+        const prevPid = tbLkPids.get(label);
+        if (tbPidAlive(prevPid)) {
+            logLine(`tabi session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'tabi', 'open-session.js');
+        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`tabi session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`tabi session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`tabi session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => { tbLkPids.delete(label); logLine(`tabi session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.unref();
+        tbLkPids.set(label, proc.pid);
+        logLine(`tabi session/open: ${label} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTbAdd(req, res) {
+    try {
+        const { email, api_key, name } = await readJsonBody(req);
+        const key = String(api_key || '').trim();
+        const mail = String(email || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        const sessions = tbLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        sessions.push({
+            id: 'tb_' + Date.now() + '_' + sessions.length,
+            email: mail,
+            name: String(name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+        });
+        tbSave(sessions);
+        logLine(`tabi add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTbDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.id === idKey);
+        tbSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === tbReadActiveKey()) {
+            try { fs.rmSync(TB_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(TB_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`tabi delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация через SSE keepalive-прокси :20155 (как agentrouter claude-*): пишем ключ
+// в tabi-active-key.txt, прокси инжектит его на каждый запрос. В settings.json —
+// заглушка AUTH_TOKEN='dummy'.
+async function handleTbActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(TB_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        tbSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-tabi');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = TB_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.model;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из tabi-active-key.txt
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`tabi activate: settings.json FAILED: ${e.message}`);
+        }
+        await tbKeepaliveSpawn();
+        logLine(`tabi activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${TB_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleTbModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (TB_MODELS_CACHE.data && Date.now() - TB_MODELS_CACHE.ts < TB_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: TB_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${TB_BASE_URL}/v1/models`, {
+            signal: controller.signal,
+            headers: { ...TB_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        TB_MODELS_CACHE.data = models;
+        TB_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (TB_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: TB_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет tabi-active-model.txt + settings.model. Прокси :20155
+// читает активный ключ по mtime, modelmap — свой tabi-modelmap.json. [1m] дотягиваем
+// для claude-opus/sonnet (окно контекста — свойство ID, а не апстрима).
+async function handleTbSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(TB_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-tabi-model');
+            settings.model = settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = TB_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            settingsOk = true;
+        } catch (e) {
+            logLine(`tabi set-model: settings.json FAILED: ${e.message}`);
+        }
+        await tbKeepaliveSpawn();
+        logLine(`tabi set-model: ${m} (base ${TB_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: TB_ACTIVE_MODEL_FILE, base: TB_KEEPALIVE_URL, needRestart: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function tbReadModelMap() {
+    try {
+        const raw = fs.readFileSync(TB_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { return {}; }
+}
+
+// GET/POST /__switch/api/tb/modelmap → маппинг claude-тиров → tabi-модели
+// (читается keepalive-прокси :20155 по mtime — правка без рестарта).
+async function handleTbModelMap(req, res) {
+    try {
+        if (req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const mm = {
+                opus: String(body.opus || '').trim() || '',
+                sonnet: String(body.sonnet || '').trim() || '',
+                haiku: String(body.haiku || '').trim() || '',
+            };
+            fs.writeFileSync(TB_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+            logLine(`tabi modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+            return jsonRes(res, 200, { ok: true, modelMap: mm });
+        }
+        jsonRes(res, 200, { ok: true, modelMap: tbReadModelMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (как gorouter set-key).
+async function handleTbSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        if (wasActive) {
+            fs.writeFileSync(TB_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        tbSave(sessions);
+        logLine(`tabi set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTbRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        tbSave(sessions);
+        logLine(`tabi rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── Tabi: share/import (передать аккаунт другу и принять чужой) ──────────
+// Формат тот же, что у gorouter: base64url(JSON { v:1, provider:'tabi', email, name,
+// api_key, session:{cookies,origins} }). storageState из tabi/profiles/acct_<id>/.
+const TB_SHARE_SCRIPT = path.join(__dirname, '..', 'tabi', 'share-session.js');
+const TB_SESSIONS_DIR = path.join(__dirname, '..', 'tabi', 'sessions');
+
+function tbB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function tbB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/tb/share { id } → снять storageState профиля и собрать строку.
+async function handleTbShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tbLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = tbLkPids.get(label);
+        if (tbPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        const stateFile = path.join(TB_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [TB_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code2, sig) => resolve({ code: code2, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`tabi share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'tabi',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            session,
+        };
+        const share = tbB64UrlEncode(JSON.stringify(payload));
+        logLine(`tabi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/tb/import { share } → разобрать строку и добавить аккаунт.
+async function handleTbImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(tbB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'tabi' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не tabi-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = tbLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'tb_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        sessions.push({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+        });
+        tbSave(sessions);
+
+        try {
+            fs.mkdirSync(TB_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(TB_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`tabi import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`tabi import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''})`);
+        jsonRes(res, 200, { ok: true, id, email: mail, hasSession: session.cookies.length > 0 || session.origins.length > 0 });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 // ───── VyceAI — ключи + прокси :20131 ────────────────────────────────
@@ -6367,10 +7775,15 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/modelmap') return handleArModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-grant') return handleArSetGrant(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-bonus') return handleArAddBonus(req, res);
+if (req.method === 'POST' && req.url === '/__switch/api/ar/add-referral') return handleArAddReferral(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/share')    return handleArShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/import')   return handleArImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/rename')   return handleArRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/key')      return handleArSetKey(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
@@ -6386,8 +7799,31 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/activate')  return handleGoActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-model') return handleGoSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-grant') return handleGoSetGrant(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/add-bonus') return handleGoAddBonus(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/modelmap')  return handleGoModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/session/open') return handleGoSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/share')    return handleGoShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
+
+    // ---- Tabi (tb) — автономная вкладка, keepalive :20155 → tabitoken.com ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/sessions')) return handleTbSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/ping'))     return handleTbPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/balance'))  return handleTbBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/models'))   return handleTbModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/tb/active-model') return jsonRes(res, 200, { model: tbReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/tb/modelmap') return jsonRes(res, 200, { ok: true, modelMap: tbReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/add')       return handleTbAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/key')       return handleTbSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/rename')    return handleTbRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/delete')    return handleTbDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/activate')  return handleTbActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/set-model') return handleTbSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/set-grant') return handleTbSetGrant(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/add-bonus') return handleTbAddBonus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/modelmap')  return handleTbModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/session/open') return handleTbSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/share')    return handleTbShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/import')   return handleTbImport(req, res);
 
     // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);
@@ -6457,7 +7893,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/ping'))             return handleCustomPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/models'))           return handleCustomModels(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/modelmap')                 return handleCustomModelMap(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/custom/activate')                 return handleCustomActivate(req, res);
+if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')                   return handleCustomScan(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/mode')                   return handleCustomMode(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/activate')               return handleCustomActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/deactivate')               return handleCustomDeactivate(req, res);
 
     // ---- FreeModel авто-подмена мёртвого аккаунта ($0 → следующий) ----
@@ -7163,6 +8601,10 @@ server.listen(LISTEN_PORT, () => {
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);
+
+    // Одноразовая миграция agentrouter-аккаунтов на стабильный id (модель gorouter):
+    // выдаём id и переименовываем старые профили ar_<sha1> → acct_<id>, чтобы не потерять сессии.
+    try { arMigrateIds(); } catch (e) { console.log(`  ar-migrate skip: ${e.message}`); }
 
     // Одноразовая очистка health-кэша от phone'ов, которых уже нет в пуле —
     // иначе кэш растёт бесконтрольно и путает UI после массовых переимпортов.

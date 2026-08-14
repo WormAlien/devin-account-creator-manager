@@ -47,6 +47,13 @@ const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
 const EARLY_SSE = process.env.EARLY_SSE !== '0';
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
 
+// Активный ключ agentrouter: keepalive инжектит его в исходящие заголовки на каждый
+// запрос, поэтому переключение ключа на вкладке дашборда работает на лету (без
+// рестарта Claude Code). В settings.json лежит заглушка AUTH_TOKEN='dummy'.
+// KEY_FILE параметризован env'ом: второй экземпляр прокси (Tabi) инжектит свой ключ.
+const AR_ACTIVE_KEY_FILE = process.env.KEY_FILE
+    || path.join(require('os').homedir(), '.claude', 'ar-active-key.txt');
+
 // Ремап claude-haiku* (CC шлёт для быстрых подзадач) на gpt-модель через локальный
 // agentrouter-proxy :20132 (у agentrouter gpt через /v1/messages сломан — нужен
 // Anthropic→OpenAI конвертер; эмулируем gpt-прокси, не меняя claude-путь).
@@ -55,7 +62,10 @@ const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
 const HAIKU_REMAP = process.env.HAIKU_REMAP !== '0';
 const HAIKU_TO_MODEL = process.env.HAIKU_TO_MODEL || 'gpt-5.6-sol';
 const HAIKU_GPT_PROXY = process.env.HAIKU_GPT_PROXY || 'http://127.0.0.1:20132';
-const AR_MODELMAP_FILE = path.join(__dirname, 'ar-modelmap.json');
+// Файл маппинга claude-тиров параметризован env'ом: второй экземпляр прокси (Tabi)
+// читает свой tabi-modelmap.json; первый (AgentRouter) — как раньше, ar-modelmap.json.
+const AR_MODELMAP_FILE = process.env.MODELMAP_FILE
+    || path.join(__dirname, 'ar-modelmap.json');
 
 const modelMapCache = { data: null, mtime: 0 };
 function readModelMap() {
@@ -395,6 +405,15 @@ const server = http.createServer((req, res) => {
   const makeUpstream = (attempt, body, tgt) => {
     const t = tgt || { requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
     const headers = Object.assign({}, req.headers, { host: t.host });
+    // Активный ключ agentrouter из ar-active-key.txt (смена на лету): перекрываем
+    // клиентский AUTH_TOKEN-заглушку реальным ключом из файла.
+    try {
+      const arKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim();
+      if (arKey) {
+        headers.authorization = `Bearer ${arKey}`;
+        headers['x-api-key'] = arKey;
+      }
+    } catch {}
     // Ремап мог заменить body (haiku→gpt, срезание суффикса) — content-length от клиента
     // больше не соответствует длине тела, Node отправит заголовок со старой длиной и
     // сервер будет ждать недостающие байты (запрос висит). Пересчитываем сами.

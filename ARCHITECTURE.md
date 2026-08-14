@@ -124,7 +124,7 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
 | **Svrtr**     | активна   | ТГ-аккаунты svrtr.org (api.svrtr.org), кредиты, реги через @svrtrbot, активация через API Helper | `/api/svrtr/*` |
 | **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js для чек-ина +$25), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap}` |
-| **GoRouter** | активна   | ручной пул ключей gorouter.app (прямой base, без прокси), GitHub-вход в консоль, баланс, маппинг моделей | `/api/go/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
+| **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную | `/api/gh/{keys,add,import,delete,update,open}` |
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
@@ -312,6 +312,10 @@ OpenAI-пути; claude pass-through bypass не использует (там WA
   `bonus` (копится, отдельно от выдачи), `balance = grant + bonus − spent`, grant НЕ трогается.
   UI — кнопка «+25» справа от суммы (confirm → пересчёт; зелёная, если бонус уже есть).
   `arBalance(apiKey, grantOverride, bonusOverride)` — bonus идёт третьим аргументом.
+- **GoRouter — то же 1 в 1, но шагом $5**: `POST /api/go/add-bonus` → `handleGoAddBonus`,
+  `GO_BONUS_STEP = 5`, `goBalance(apiKey, grantOverride, bonusOverride)`, кеш в
+  `gorouter-sessions.json`, UI-кнопка «+5» справа от суммы (`goAddBonus()` / `goBalanceCell()`).
+  База выдачи у gorouter — `GO_DEFAULT_GRANT = 70` (не 175).
 
 ### Кнопка «🌐 ЛК» (вход в сессию для чек-ина +$25)
 

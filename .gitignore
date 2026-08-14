@@ -283,6 +283,13 @@ agentrouter/sessions/
 # не коммитить. open-session.js держит профиль на диск на аккаунт.
 agentrouter/profiles/
 
+# ── Tabi Token (вкладка дашборда): приватные данные ──────────────────────────
+# Профили браузера (куки GitHub/tabitoken, логины, кеш) и живые сессии — НИКОГДА
+# не коммитить. tabi-modelmap.json — безопасный конфиг маппинга, коммитим.
+tabi/profiles/
+tabi/sessions/
+routing/tabi-sessions.json
+
 # ── GitHub-аккаунты (вкладка дашборда): приватные данные ──────────────────────
 # Профили браузера (куки/сессии GitHub на аккаунт) — НИКОГДА не коммитить.
 # github-accounts.json уже закрыт выше, github-accounts.example.json коммитим.

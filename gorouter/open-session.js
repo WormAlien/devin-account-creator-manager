@@ -23,14 +23,55 @@ const fs = require('fs');
 const path = require('path');
 
 const SIGN_IN_URL = 'https://gorouter.app/sign-in';
-const TWO_FA_URL = 'https://2fa.online/';
 const PROFILES_DIR = path.join(__dirname, 'profiles');
+const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
 const labelArg = process.argv[2];
 const label = (labelArg || `session_${Date.now()}`).replace(/[^\w-]/g, '_');
 const profileDir = path.join(PROFILES_DIR, label);
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
+
+// Если рядом лежит <label>.json (импортированный чужой share-код) — применяем
+// его как storageState: cookies + localStorage. Тогда GitHub/gorouter сразу залогинены.
+function loadImportedSession() {
+  try {
+    const p = path.join(SESSIONS_DIR, label + '.json');
+    if (!fs.existsSync(p)) return null;
+    const raw = fs.readFileSync(p, 'utf8');
+    const ss = JSON.parse(raw);
+    if (!ss || typeof ss !== 'object') return null;
+    return {
+      cookies: Array.isArray(ss.cookies) ? ss.cookies : [],
+      origins: Array.isArray(ss.origins) ? ss.origins : [],
+    };
+  } catch { return null; }
+}
+
+async function applyImportedSession(context, session) {
+  if (!session) return false;
+  let applied = false;
+  if (session.cookies && session.cookies.length) {
+    try {
+      await context.addCookies(session.cookies);
+      applied = true;
+    } catch (e) {
+      console.log(`⚠️ часть cookies не применилась: ${e.message}`);
+    }
+  }
+  // localStorage: вставляем addInitScript до goto, чтобы каждый origin получил свои ключи.
+  const lsOrigins = (session.origins || []).filter(o => o.localStorage && o.localStorage.length);
+  for (const o of lsOrigins) {
+    try {
+      await context.addInitScript(
+        (entries) => { for (const { name, value } of entries) { try { localStorage.setItem(name, value); } catch {} } },
+        o.localStorage.map(({ name, value }) => ({ name, value })),
+      );
+      applied = true;
+    } catch { /* origin может быть невалидным — пропускаем */ }
+  }
+  return applied;
+}
 
 // Первый ли запуск профиля: нет файла Default/Preferences → чистый профиль, ждём логин.
 function isFreshProfile() {
@@ -61,6 +102,7 @@ async function waitForLogin(page, context) {
 async function main() {
   if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
   const fresh = isFreshProfile();
+  const imported = loadImportedSession();
 
   console.log(`🚀 Запускаю Chromium (видимый режим)…`);
   console.log(`📂 профиль аккаунта: ${profileDir} · ${fresh ? 'чистый (нужен GitHub-логин)' : 'уже есть (сохранённый)'}`);
@@ -74,15 +116,25 @@ async function main() {
 
   const page = context.pages()[0] || await context.newPage();
 
+  // Импортированная чужая сессия: подкладываем cookies/localStorage до навигации.
+  let appliedSession = false;
+  if (fresh && imported) {
+    appliedSession = await applyImportedSession(context, imported);
+  }
+
   try {
     await page.goto(SIGN_IN_URL, { waitUntil: 'domcontentloaded' });
-    // Вторая вкладка — 2fa.online (код подтверждения для GitHub-логина).
-    const page2 = await context.newPage();
-    await page2.goto(TWO_FA_URL, { waitUntil: 'domcontentloaded' });
+
+    if (appliedSession) {
+      console.log('✅ Импортированная сессия применена (GitHub/gorouter уже залогинены).');
+      console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
+      await new Promise(() => {}); // держим открытым, закрытие — вручную
+      return;
+    }
 
     if (!fresh) {
       console.log('✅ Профиль восстановлен (GitHub/gorouter уже залогинены, если заходил раньше).');
-      console.log('   Браузер открыт (gorouter + 2fa.online) — закрой когда закончишь (Ctrl+C).');
+      console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {}); // держим открытым, закрытие — вручную
       return;
     }

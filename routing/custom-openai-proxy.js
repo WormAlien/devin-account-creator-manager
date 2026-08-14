@@ -89,6 +89,27 @@ function toolResultToText(block) {
     return JSON.stringify(c);
 }
 
+// Грубая оценка токенов запроса (~4 символа на токен) для usage в ответе,
+// когда апстрим не присылает реальный usage (игнорирует stream_options.include_usage).
+function estimateTokens(claudeReq) {
+    let chars = systemToText(claudeReq.system).length;
+    for (const msg of claudeReq.messages || []) {
+        const c = msg.content;
+        if (typeof c === 'string') chars += c.length;
+        else if (Array.isArray(c)) {
+            for (const b of c) {
+                if (b && b.type === 'text') chars += (b.text || '').length;
+                else if (b && b.type === 'tool_use') chars += JSON.stringify(b.input || {}).length;
+                else if (b && b.type === 'tool_result') chars += toolResultToText(b).length;
+            }
+        }
+    }
+    for (const t of claudeReq.tools || []) {
+        chars += (t.name || '').length + (t.description || '').length + JSON.stringify(t.input_schema || {}).length;
+    }
+    return Math.max(1, Math.ceil(chars / 4));
+}
+
 function convertClaudeToOpenAI(claudeReq) {
     const messages = [];
     const sys = systemToText(claudeReq.system);
@@ -181,8 +202,8 @@ function convertOpenAIToClaude(openaiResp, claudeReq) {
         stop_reason: mapStopReason(choice.finish_reason),
         stop_sequence: null,
         usage: {
-            input_tokens: (openaiResp.usage && openaiResp.usage.prompt_tokens) || 0,
-            output_tokens: (openaiResp.usage && openaiResp.usage.completion_tokens) || 0,
+            input_tokens: (openaiResp.usage && openaiResp.usage.prompt_tokens) || estimateTokens(claudeReq),
+            output_tokens: (openaiResp.usage && openaiResp.usage.completion_tokens) || Math.max(1, Math.ceil((msg.content || '').length / 4)),
         },
     };
 }
@@ -228,7 +249,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     sseWrite(clientRes, 'message_start', {
         type: 'message_start',
-        message: { id: msgId, type: 'message', role: 'assistant', model: claudeReq.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } },
+        message: { id: msgId, type: 'message', role: 'assistant', model: claudeReq.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: estimateTokens(claudeReq), output_tokens: 0 } },
     });
     sseWrite(clientRes, 'ping', { type: 'ping' });
 
@@ -236,7 +257,8 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
     let textBlockIndex = null;
     const toolBlocks = new Map();
     let finishReason = null;
-    let usage = { input_tokens: 0, output_tokens: 0 };
+    let usage = { input_tokens: estimateTokens(claudeReq), output_tokens: 0 };
+    let streamedChars = 0;
     let buffer = '';
 
     function ensureTextBlock() {
@@ -258,6 +280,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         if (!choice) return;
         const delta = choice.delta || {};
         if (delta.content) {
+            streamedChars += delta.content.length;
             const idx = ensureTextBlock();
             sseWrite(clientRes, 'content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'text_delta', text: delta.content } });
         }
@@ -286,7 +309,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         for (const tb of toolBlocks.values()) {
             if (tb.started) sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: tb.claudeIndex });
         }
-        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
+        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: { output_tokens: usage.output_tokens || Math.max(1, Math.ceil(streamedChars / 4)) } });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();
     }

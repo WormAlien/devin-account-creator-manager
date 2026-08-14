@@ -200,8 +200,12 @@ function toolResultToText(block) {
 // (proxy/token/key/...) режутся отдельным правилом — см. AR_WAF.md.
 const EN_C = 'c';
 const CYR_S = '\u0441';
-function cyrEncode(s) { return String(s).replace(/c/g, CYR_S); }
-function cyrDecode(s) { return String(s).split(CYR_S).join(EN_C); }
+// 2026-08-15: WAF agentrouter обновился — кириллические хомоглифы (c→с) теперь
+// сами триггерят 400 content-blocked, а чистая латиница проходит 200 (проверено).
+// Кодирование отключено: body идёт как есть. См. AR_WAF.md.
+const CYR_BYPASS_ENABLED = false;
+function cyrEncode(s) { return CYR_BYPASS_ENABLED ? String(s).replace(/c/g, CYR_S) : String(s); }
+function cyrDecode(s) { return CYR_BYPASS_ENABLED ? String(s).split(CYR_S).join(EN_C) : String(s); }
 
 function convertClaudeToOpenAI(claudeReq) {
     const messages = [];

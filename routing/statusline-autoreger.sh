@@ -81,6 +81,9 @@ case "$helper" in
     *om-active-key.txt*)             raw_target="omniroute" ;;
     *vyceai-active-key.txt*)         raw_target="vyce_openai" ;;
     *ar-active-key.txt*)             raw_target="agentrouter" ;;
+    *tabi-active-key.txt*)           raw_target="tabi" ;;
+    *gorouter-active-key.txt*)       raw_target="gorouter" ;;
+    *custom-active-key.txt*)         raw_target="custom" ;;
 esac
 if [ -z "$raw_target" ]; then
     case "$base_url" in
@@ -89,9 +92,17 @@ if [ -z "$raw_target" ]; then
         *localhost:20131*)        raw_target="vyce_openai" ;;
         *localhost:20132*|*localhost:20133*)  raw_target="agentrouter" ;;
         *127.0.0.1:20132*|*127.0.0.1:20133*)  raw_target="agentrouter" ;;
+        *localhost:20155*)        raw_target="tabi" ;;
+        *localhost:20156*)        raw_target="gorouter" ;;
+        *127.0.0.1:20155*)        raw_target="tabi" ;;
+        *127.0.0.1:20156*)        raw_target="gorouter" ;;
+        *tabitoken.com*)          raw_target="tabi" ;;
+        *gorouter.app*)           raw_target="gorouter" ;;
         *localhost:8190*)         raw_target="notion" ;;
         *agentrouter.org*)        raw_target="agentrouter" ;;
         *cc.freemodel.dev*)       raw_target="apihelper" ;;
+        # Custom OpenAI Proxy (Anthropic→OpenAI конвертер) — порты 20150–20250
+        *localhost:2015[0-9]*|*localhost:201[6-9][0-9]*|*localhost:202[0-5][0-9]*)  raw_target="custom" ;;
     esac
 fi
 
@@ -106,6 +117,9 @@ case "$raw_target" in
     ourtoken)                    provider="ourtoken" ;;
     conduit)                     provider="conduit" ;;
     vyce_openai)                 provider="vyceai" ;;
+    tabi)                        provider="tabi" ;;
+    gorouter)                    provider="gorouter" ;;
+    custom)                      provider="Custom🧪" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
 esac

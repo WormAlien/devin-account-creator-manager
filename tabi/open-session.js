@@ -1,40 +1,37 @@
-// agentrouter/open-session.js
+// tabi/open-session.js
 //
-// Открывает консоль agentrouter.org в видимом Chromium с ПЕРСОНАЛЬНЫМ ПРОФИЛЕМ
+// Открывает консоль tabitoken.com в видимом Chromium с ПЕРСОНАЛЬНЫМ ПРОФИЛЕМ
 // на аккаунт (полный профиль на диск: куки, localStorage, сессия GitHub).
 //
 // Сценарий:
 //   1. В дашборде нажимаешь 🌐 «Открыть браузер» на карточке аккаунта.
-//   2. Открывается Chromium с профилем agentrouter/profiles/<label>/ (на аккаунт).
+//   2. Открывается Chromium с профилем tabi/profiles/<label>/ (на аккаунт).
 //   3. Если залогинен раньше — консоль уже открыта. Если нет — войди через GitHub.
-//   4. Профиль сохраняется автоматически — при следующих открытиях agentrouter
-//      уже залогинен (можно сразу жать чек-ин +$25).
-//
-// Если рядом лежит <label>.json (импортированный чужой share-код) — применяем его
-// как storageState (cookies + localStorage), тогда GitHub/agentrouter сразу залогинены.
+//   4. Профиль сохраняется автоматически — при следующих открытиях tabitoken
+//      уже залогинен.
 //
 // Использование:
-//   node agentrouter/open-session.js <label>
-//     label — имя профиля (папка agentrouter/profiles/<label>/)
+//   node tabi/open-session.js <label>
+//     label — имя профиля (папка tabi/profiles/<label>/)
 //
-// Код возврата 0 = профиль открыт, 2 = таймаут ожидания GitHub-логина (первый вход), 1 = ошибка.
+// Код возврата 0 = профиль открыт, 2 = таймаут ожидания GitHub-логина (первый вход).
 
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const CONSOLE_URL = 'https://agentrouter.org/';
+const SIGN_IN_URL = 'https://tabitoken.com/sign-in';
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
-const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
-
 const labelArg = process.argv[2];
-const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
+const label = (labelArg || `session_${Date.now()}`).replace(/[^\w-]/g, '_');
 const profileDir = path.join(PROFILES_DIR, label);
 
+const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
+
 // Если рядом лежит <label>.json (импортированный чужой share-код) — применяем
-// его как storageState: cookies + localStorage. Тогда GitHub/agentrouter сразу залогинены.
+// его как storageState: cookies + localStorage. Тогда GitHub/tabitoken сразу залогинены.
 function loadImportedSession() {
   try {
     const p = path.join(SESSIONS_DIR, label + '.json');
@@ -60,6 +57,7 @@ async function applyImportedSession(context, session) {
       console.log(`⚠️ часть cookies не применилась: ${e.message}`);
     }
   }
+  // localStorage: вставляем addInitScript до goto, чтобы каждый origin получил свои ключи.
   const lsOrigins = (session.origins || []).filter(o => o.localStorage && o.localStorage.length);
   for (const o of lsOrigins) {
     try {
@@ -85,14 +83,15 @@ function hasSessionCookie(cookies) {
   return cookies.some(c => /session|token|access|auth/i.test(c.name) && c.value);
 }
 
-// Ждём, пока GitHub-вход пройден и появился auth-cookie на agentrouter.org —
-// значит мы внутри консоли. Профиль в этот момент уже сохраняется Chromium'ом на диск.
+// Ждём, пока URL уйдёт со /sign-in И появится кука — это значит GitHub-вход прошёл
+// и мы внутри tabitoken (консоль/дашборд). Тогда профиль уже сохранён Chromium'ом.
 async function waitForLogin(page, context) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const url = page.url();
-    const cookies = await context.cookies('https://agentrouter.org').catch(() => []);
-    if (url.includes('agentrouter.org') && hasSessionCookie(cookies)) return true;
+    const cookies = await context.cookies().catch(() => []);
+    const leftSignIn = !url.includes('/sign-in');
+    if (leftSignIn && hasSessionCookie(cookies)) return true;
     await page.waitForTimeout(1500);
   }
   return false;
@@ -122,24 +121,24 @@ async function main() {
   }
 
   try {
-    await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(SIGN_IN_URL, { waitUntil: 'domcontentloaded' });
 
     if (appliedSession) {
-      console.log('✅ Импортированная сессия применена (GitHub/agentrouter уже залогинены).');
-      console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
-      await new Promise(() => {});
-      return;
-    }
-
-    if (!fresh) {
-      console.log('✅ Профиль восстановлен (agentrouter уже залогинен, если заходил раньше).');
+      console.log('✅ Импортированная сессия применена (GitHub/tabitoken уже залогинены).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {}); // держим открытым, закрытие — вручную
       return;
     }
 
-    console.log('⚠️  Первый вход. Залогинься через GitHub в открывшемся браузере.');
-    console.log('   Профиль сохранится автоматически.');
+    if (!fresh) {
+      console.log('✅ Профиль восстановлен (GitHub/tabitoken уже залогинены, если заходил раньше).');
+      console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
+      await new Promise(() => {}); // держим открытым, закрытие — вручную
+      return;
+    }
+
+    console.log('⚠️  Первый вход. Залогинься в GitHub (кнопка «Продолжить с GitHub»),');
+    console.log('   затем зайди на tabitoken.com — профиль сохранится автоматически.');
 
     const ok = await waitForLogin(page, context);
     if (!ok) {

@@ -17,7 +17,10 @@
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
 | `20150-20250`| **Custom OpenAI Proxies** (динамически) | `routing/custom-openai-proxy.js` | Anthropic→OpenAI конвертер для Custom-провайдеров с заполненным `modelMap`. Спавнится на активацию (детached), конфиг `~/.claude/custom-<id>-proxy.json`, ключ из `~/.claude/custom-active-key.txt`. Убивается при деактивации/удалении. |
-| `20132`| **AgentRouter Proxy** | `routing/agentrouter-proxy.js` | Фронтенд для agentrouter.org: `claude-*` → pass-through в `/v1/messages`, `gpt-*` → конвертер Anthropic→OpenAI `/v1/chat/completions` **с Cyrillic-bypass** (обход WAF «sensitive words detected»). **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки от клиента. Спавнится автоматически при выборе gpt-модели. |
+| `20133`| **AgentRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для agentrouter.org (`claude-*` pass-through): держит SSE-паузы thinking-моделей, режет `[1m]`-суффиксы, count_tokens fallback. `PORT=20133`, `KEY_FILE=ar-active-key.txt`, `MODELMAP_FILE=ar-modelmap.json`. |
+| `20132`| **AgentRouter Proxy** | `routing/agentrouter-proxy.js` | Фронтенд для agentrouter.org: `claude-*` → pass-through в `/v1/messages`, `gpt-*` → конвертер Anthropic→OpenAI `/v1/chat/completions`. Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false` (с 2026-08-15 WAF режет кириллические хомоглифы `400 content-blocked`, чистую латиницу пускает). **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки от клиента. Спавнится автоматически при выборе gpt-модели. |
+| `20155`| **Tabi Token keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для tabitoken.com. `PORT=20155`, `KEY_FILE=tabi-active-key.txt`, `MODELMAP_FILE=tabi-modelmap.json`. |
+| `20156`| **GoRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для gorouter.app. `PORT=20156`, `KEY_FILE=gorouter-active-key.txt`, `MODELMAP_FILE=gorouter-modelmap.json`. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -83,8 +86,16 @@
 - **agentrouter** (прямой режим) — `ANTHROPIC_BASE_URL=https://agentrouter.org` (БЕЗ `/v1`),
   ключ пишется **литералом** в `ANTHROPIC_AUTH_TOKEN` (не apiKeyHelper — WAF agentrouter
   не пускает helper-путь). `apiKeyHelper` удаляется, модель из `~/.claude/ar-active-model.txt`.
-  Роутинг моделей: `claude-*` → `agentrouter.org` напрямую, `gpt-*` → локальный прокси
+  Роутинг моделей: `claude-*` → SSE keepalive `http://localhost:20133`, `gpt-*` → локальный прокси
   `http://localhost:20132` (нужна конвертация в OpenAI). Пул: `routing/agentrouter-sessions.json`.
+- **gorouter** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20156` (SSE keepalive,
+  форвард в gorouter.app), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `gorouter-active-key.txt`,
+  модель из `~/.claude/gorouter-active-model.txt` + `gorouter-modelmap.json`. Пул:
+  `routing/gorouter-sessions.json`.
+- **tabi** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20155` (SSE keepalive,
+  форвард в tabitoken.com), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `tabi-active-key.txt`,
+  модель из `~/.claude/tabi-active-model.txt` + `tabi-modelmap.json`. Пул:
+  `routing/tabi-sessions.json`.
 - **helpcoder** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/hc-active-key.txt`,
   `ANTHROPIC_BASE_URL=https://helpcoder.cc`, TTL=0. OpenAI-совместимый New-API инстанс
   (ключи `sk-`), понимает и Anthropic-формат `/v1/messages`. Все модели `gpt-*`
@@ -125,6 +136,7 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **Svrtr**     | активна   | ТГ-аккаунты svrtr.org (api.svrtr.org), кредиты, реги через @svrtrbot, активация через API Helper | `/api/svrtr/*` |
 | **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js для чек-ина +$25), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap}` |
 | **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
+| **Tabi Token** | активна  | ручной пул ключей tabitoken.com, GitHub-вход в консоль, баланс (`grant + bonus − spent`, дефолт $100, реф-бонус $20), маппинг моделей, **активация через SSE keepalive :20155** (keepalive-proxy.js → tabitoken.com, срез `[1m]`, count_tokens fallback) | `/api/tb/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную | `/api/gh/{keys,add,import,delete,update,open}` |
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
@@ -321,6 +333,39 @@ c→с обходило), поэтому в `agentrouter-proxy.js` есть `cyr
 - Dedup: `arLkPids` (label → pid), повторный клик при живом pid → `{already:true}`, второй
   браузер не плодится.
 - `stdio: 'pipe'` + ретрансляция stdout/stderr скрипта в `logLine()` — ошибки видны в Server Logs.
+
+---
+
+## GoRouter (go) — GitHub-вход, SSE keepalive :20156
+
+Пул в `routing/gorouter-sessions.json`. Активация/работа — через **SSE keepalive `:20156`**
+(второй экземпляр `keepalive-proxy.js`, форвард в `https://gorouter.app`, режет `[1m]`-суффиксы,
+count_tokens fallback, держит SSE-паузы thinking-моделей). Ключ пишется литералом в
+`ANTHROPIC_AUTH_TOKEN`, модель из `~/.claude/gorouter-active-model.txt`.
+
+- **GitHub-вход в консоль** — `gorouter/open-session.js` (персональный профиль
+  `gorouter/profiles/<label>/`), там же чек-ин бонуса.
+- **Баланс** — `balance = grant + bonus − spent`. Сервис отдаёт только `total_usage` (центы).
+  База выдачи `GO_DEFAULT_GRANT = 70`, шаг бонуса `GO_BONUS_STEP = 5` (кнопка «+5»),
+  ручная выдача `grantManual` (✏️). Кеш: `spent/grant/bonus/balance/balanceCheckedAt` прямо
+  в `gorouter-sessions.json` (`goBalance()` / `goApplyBalance()`).
+- **Маппинг claude-тиров** — `routing/gorouter-modelmap.json`, применяется keepalive по mtime.
+- **Share / import** — `gorouter/share-session.js` (🔗) / импорт из буфера (📥).
+
+---
+
+## Tabi Token (tb) — GitHub-вход, SSE keepalive :20155
+
+Пул в `routing/tabi-sessions.json`. Активация/работа — через **SSE keepalive `:20155`**
+(как gorouter, форвард в `https://tabitoken.com`, БЕЗ `/v1` на корне usage). Ключ литералом
+в `ANTHROPIC_AUTH_TOKEN`, модель из `~/.claude/tabi-active-model.txt`.
+
+- **GitHub-вход в консоль** — `tabi/open-session.js` (профиль `tabi/profiles/<label>/`).
+- **Баланс** — `balance = grant + bonus − spent`. Дефолт выдачи `TB_DEFAULT_GRANT = 100`,
+  реф-бонус `TB_BONUS_STEP = 20` за приведённого, ручная выдача `grantManual` (✏️).
+  Кеш в `tabi-sessions.json` (`tbBalance()` / `tbApplyBalance()`).
+- **Маппинг claude-тиров** — `routing/tabi-modelmap.json`, применяется keepalive по mtime.
+- **Share / import** — как у gorouter.
 
 ---
 

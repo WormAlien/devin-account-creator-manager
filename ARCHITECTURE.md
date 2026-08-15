@@ -351,6 +351,14 @@ count_tokens fallback, держит SSE-паузы thinking-моделей). К�
   в `gorouter-sessions.json` (`goBalance()` / `goApplyBalance()`).
 - **Маппинг claude-тиров** — `routing/gorouter-modelmap.json`, применяется keepalive по mtime.
 - **Share / import** — `gorouter/share-session.js` (🔗) / импорт из буфера (📥).
+  Код = `base64url(JSON { v:1, provider, email, name, api_key, meta, session })`, где
+  `meta` — цифры аккаунта (`grant/grantManual/grantSource/bonus/spent/balance/status/
+  accessUntil/balanceCheckedAt/created/referral`), поэтому у получателя аккаунт появляется
+  с той же выдачей и балансом, а не пустым. Белый список `SHARE_META_FIELDS` в
+  `transparent-proxy.js` (общий для ar/go/tb): `active/id/api_key/ghId` из чужого кода
+  не применяются. `v` остаётся `1` — поле аддитивное, старые дашборды его игнорируют.
+  Клиент всегда показывает код в окне `#share-code-modal` (авто-копия ненадёжна: код
+  приходит через ~7 с после клика, user gesture к тому моменту истёк).
 
 ---
 

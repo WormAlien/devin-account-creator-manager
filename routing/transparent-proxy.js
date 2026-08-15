@@ -5472,9 +5472,45 @@ async function handleArDelete(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ── Share-код: перенос метаданных аккаунта (общее для agentrouter/gorouter/tabi) ──
+// Раньше в код попадали только email/name/api_key + сессия, поэтому у получателя
+// аккаунт появлялся «пустым»: выдачу (grant), бонус, потраченное и баланс нужно
+// было задавать заново руками. Переносим весь блок цифр как есть — это свойства
+// самого аккаунта у провайдера, они одинаковы у обеих сторон.
+//
+// `v` намеренно остаётся 1: meta — аддитивное поле. Старый дашборд его просто
+// игнорирует, поэтому новые коды импортируются и старой версией тоже, а старые
+// коды (без meta) — новой. Обновляться синхронно с другом не нужно.
+const SHARE_META_FIELDS = [
+    'status', 'spent', 'grant', 'grantManual', 'grantSource',
+    'bonus', 'referral', 'balance', 'accessUntil', 'balanceCheckedAt', 'created',
+];
+
+function sharePickMeta(acct) {
+    const meta = {};
+    for (const k of SHARE_META_FIELDS) {
+        if (acct && acct[k] !== undefined) meta[k] = acct[k];
+    }
+    return meta;
+}
+
+// Накладываем meta на новую запись. Белый список обязателен: чужой share-код не
+// должен уметь проставить active/id/api_key/ghId или дописать произвольные поля.
+function shareApplyMeta(rec, meta) {
+    if (!meta || typeof meta !== 'object') return rec;
+    for (const k of SHARE_META_FIELDS) {
+        const v = meta[k];
+        if (v === undefined) continue;
+        if (v !== null && typeof v !== 'number' && typeof v !== 'string' && typeof v !== 'boolean') continue;
+        rec[k] = v;
+    }
+    return rec;
+}
+
 // ── AgentRouter: share/import (механика из gorouter, аккаунт идентифицируем по id) ──
 // Формат: base64url(JSON { v:1, provider:'agentrouter', email, name, api_key,
-// session:{cookies,origins} }). storageState из agentrouter/profiles/acct_<id>/,
+// meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// storageState из agentrouter/profiles/acct_<id>/,
 // label совпадает с handleArSessionOpen (acct_ + id).
 const AR_SHARE_SCRIPT = path.join(__dirname, '..', 'agentrouter', 'share-session.js');
 const AR_SESSIONS_DIR = path.join(__dirname, '..', 'agentrouter', 'sessions');
@@ -5530,6 +5566,7 @@ async function handleArShare(req, res) {
             email: target.email || '',
             name: target.name || '',
             api_key: target.api_key || '',
+            meta: sharePickMeta(target),
             session,
         };
         const share = arB64UrlEncode(JSON.stringify(payload));
@@ -5565,7 +5602,9 @@ async function handleArImport(req, res) {
 
         const id = 'ar_' + Date.now() + '_' + sessions.length;
         const label = 'acct_' + id;
-        sessions.push({
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
             id,
             email: mail,
             name: String(payload.name || '').trim() || mail.split('@')[0],
@@ -5574,7 +5613,9 @@ async function handleArImport(req, res) {
             status: 'unknown',
             created: new Date().toISOString(),
             shared: true,
-        });
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
         arSave(sessions);
 
         try {
@@ -5582,8 +5623,15 @@ async function handleArImport(req, res) {
             fs.writeFileSync(path.join(AR_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
         } catch (e) { logLine(`agentrouter import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
-        logLine(`agentrouter import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''})`);
-        jsonRes(res, 200, { ok: true, email: mail, hasSession: session.cookies.length > 0 || session.origins.length > 0 });
+        logLine(`agentrouter import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6136,7 +6184,8 @@ async function handleGoSessionOpen(req, res) {
 
 // ── GoRouter: share/import (передать аккаунт другу и принять чужой) ────────
 // Формат: base64url(JSON { v:1, provider:'gorouter', email, name, api_key,
-// session:{cookies,origins} }). «Живая» часть (GitHub + gorouter) — storageState
+// meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// «Живая» часть (GitHub + gorouter) — storageState
 // из gorouter/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
 
 const GO_SHARE_SCRIPT = path.join(__dirname, '..', 'gorouter', 'share-session.js');
@@ -6194,6 +6243,7 @@ async function handleGoShare(req, res) {
             email: target.email || '',
             name: target.name || '',
             api_key: target.api_key || '',
+            meta: sharePickMeta(target),
             session,
         };
         const share = goB64UrlEncode(JSON.stringify(payload));
@@ -6229,7 +6279,9 @@ async function handleGoImport(req, res) {
 
         const id = 'go_' + Date.now() + '_' + sessions.length;
         const label = 'acct_' + id;
-        sessions.push({
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
             id,
             email: mail,
             name: String(payload.name || '').trim() || mail.split('@')[0],
@@ -6238,7 +6290,9 @@ async function handleGoImport(req, res) {
             status: 'unknown',
             created: new Date().toISOString(),
             shared: true,
-        });
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
         goSave(sessions);
 
         // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
@@ -6247,8 +6301,15 @@ async function handleGoImport(req, res) {
             fs.writeFileSync(path.join(GO_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
         } catch (e) { logLine(`gorouter import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
-        logLine(`gorouter import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''})`);
-        jsonRes(res, 200, { ok: true, id, email: mail, hasSession: session.cookies.length > 0 || session.origins.length > 0 });
+        logLine(`gorouter import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -7000,7 +7061,8 @@ async function handleTbRename(req, res) {
 
 // ── Tabi: share/import (передать аккаунт другу и принять чужой) ──────────
 // Формат тот же, что у gorouter: base64url(JSON { v:1, provider:'tabi', email, name,
-// api_key, session:{cookies,origins} }). storageState из tabi/profiles/acct_<id>/.
+// api_key, meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// storageState из tabi/profiles/acct_<id>/.
 const TB_SHARE_SCRIPT = path.join(__dirname, '..', 'tabi', 'share-session.js');
 const TB_SESSIONS_DIR = path.join(__dirname, '..', 'tabi', 'sessions');
 
@@ -7055,6 +7117,7 @@ async function handleTbShare(req, res) {
             email: target.email || '',
             name: target.name || '',
             api_key: target.api_key || '',
+            meta: sharePickMeta(target),
             session,
         };
         const share = tbB64UrlEncode(JSON.stringify(payload));
@@ -7090,7 +7153,9 @@ async function handleTbImport(req, res) {
 
         const id = 'tb_' + Date.now() + '_' + sessions.length;
         const label = 'acct_' + id;
-        sessions.push({
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
             id,
             email: mail,
             name: String(payload.name || '').trim() || mail.split('@')[0],
@@ -7099,7 +7164,9 @@ async function handleTbImport(req, res) {
             status: 'unknown',
             created: new Date().toISOString(),
             shared: true,
-        });
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
         tbSave(sessions);
 
         try {
@@ -7107,8 +7174,15 @@ async function handleTbImport(req, res) {
             fs.writeFileSync(path.join(TB_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
         } catch (e) { logLine(`tabi import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
-        logLine(`tabi import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''})`);
-        jsonRes(res, 200, { ok: true, id, email: mail, hasSession: session.cookies.length > 0 || session.origins.length > 0 });
+        logLine(`tabi import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 

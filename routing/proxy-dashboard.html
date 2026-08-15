@@ -5436,7 +5436,10 @@ async function arShare(id) {
     const copied = await copyToClipboard(data.share, '', { silent: true });
     openShareCodeModal({
       provider: 'AgentRouter',
-      subtitle: (cur.email || cur.name || id) + ' ·' + note,
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
       code: data.share,
       copied,
     });
@@ -5525,7 +5528,9 @@ async function arImport() {
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     $('ar-import-preview').innerHTML = '';
     arShowImport(false);
-    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}`, 'success', 4000);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
     loadArSessions(false);
   } catch (e) {
     $('ar-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
@@ -5832,7 +5837,10 @@ async function goShare(id) {
     const copied = await copyToClipboard(data.share, '', { silent: true });
     openShareCodeModal({
       provider: 'GoRouter',
-      subtitle: (cur.email || cur.name || id) + ' ·' + note,
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
       code: data.share,
       copied,
     });
@@ -5867,7 +5875,9 @@ async function goImport() {
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     $('go-import-preview').innerHTML = '';
     goShowImport(false);
-    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}`, 'success', 4000);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
     loadGoSessions(false);
   } catch (e) {
     $('go-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
@@ -6407,7 +6417,10 @@ async function tbShare(id) {
     const copied = await copyToClipboard(data.share, '', { silent: true });
     openShareCodeModal({
       provider: 'Tabi',
-      subtitle: (cur.email || cur.name || id) + ' ·' + note,
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
       code: data.share,
       copied,
     });
@@ -6442,7 +6455,9 @@ async function tbImport() {
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     $('tb-import-preview').innerHTML = '';
     tbShowImport(false);
-    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}`, 'success', 4000);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
     loadTbSessions(false);
   } catch (e) {
     $('tb-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;

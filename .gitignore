@@ -124,6 +124,7 @@ SESSIONS_STATUS.md
 routing/*.log
 routing/*.err
 routing/*.log.err
+routing/*.log.out
 routing/mode.txt
 routing/keepalive-config-*.json
 

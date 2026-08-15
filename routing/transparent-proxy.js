@@ -479,15 +479,15 @@ function makeKeepaliveHandlers(port) {
         return jsonRes(res, 200, r.data);
     }
 
-    // POST .../keepalive/config { hedgeMs?, maxAttempts? } → патчим на лету.
+    // POST .../keepalive/config { hedgeMs?, maxAttempts?, preCommitMs? } → патчим на лету.
     async function handleConfig(req, res) {
         let b = '';
         req.on('data', (c) => b += c);
         req.on('end', async () => {
             try {
                 const patch = JSON.parse(b || '{}');
-                if (!('hedgeMs' in patch) && !('maxAttempts' in patch))
-                    return jsonRes(res, 400, { error: 'ожидался { hedgeMs?, maxAttempts? }' });
+                if (!('hedgeMs' in patch) && !('maxAttempts' in patch) && !('preCommitMs' in patch))
+                    return jsonRes(res, 400, { error: 'ожидался { hedgeMs?, maxAttempts?, preCommitMs? }' });
                 const r = await keepaliveFetch('POST', '/__config', patch, port);
                 if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает' });
                 logLine(`keepalive config :${port} -> ${JSON.stringify(patch)}`);
@@ -5202,7 +5202,11 @@ async function arKeepaliveSpawn() {
         if (!free) return { ok: true, already: true };
         const { spawn } = require('child_process');
         const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
-            detached: true, stdio: 'ignore', env: { ...process.env, PORT: String(AR_KEEPALIVE_PORT) },
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(AR_KEEPALIVE_PORT),
+                PRE_COMMIT_MS: process.env.AR_PRE_COMMIT_MS || '10000',
+            },
         });
         child.unref();
         logLine(`keepalive proxy spawn: :${AR_KEEPALIVE_PORT} (pid ${child.pid})`);
@@ -6052,6 +6056,7 @@ async function goKeepaliveSpawn() {
                 UPSTREAM: GO_UPSTREAM,
                 KEY_FILE: GO_ACTIVE_KEY_FILE,
                 MODELMAP_FILE: GO_MODELMAP_FILE,
+                PRE_COMMIT_MS: process.env.GO_PRE_COMMIT_MS || '10000',
             },
         });
         child.unref();
@@ -6691,6 +6696,7 @@ async function tbKeepaliveSpawn() {
                 UPSTREAM: TB_BASE_URL,
                 KEY_FILE: TB_ACTIVE_KEY_FILE,
                 MODELMAP_FILE: TB_MODELMAP_FILE,
+                PRE_COMMIT_MS: process.env.TB_PRE_COMMIT_MS || '10000',
             },
         });
         child.unref();

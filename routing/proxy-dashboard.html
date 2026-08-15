@@ -1528,6 +1528,10 @@
               <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
               <input id="ar-keepalive-attempts" type="number" min="1" max="10" placeholder="2" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="ar-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
             <div class="flex items-center gap-2">
               <button onclick="arApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
               <span id="ar-keepalive-status" class="text-xs text-faint font-mono">—</span>
@@ -1538,6 +1542,7 @@
             <span>ремапов: <b id="ar-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="ar-stat-keepalives" class="text-ink">—</b></span>
             <span>хеджей: <b id="ar-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="ar-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="ar-stat-errors" class="text-ink">—</b></span>
           </div>
         </div>
@@ -1634,6 +1639,10 @@
               <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
               <input id="go-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="go-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
             <div class="flex items-center gap-2">
               <button onclick="goApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
               <span id="go-keepalive-status" class="text-xs text-faint font-mono">—</span>
@@ -1644,6 +1653,7 @@
             <span>ремапов: <b id="go-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="go-stat-keepalives" class="text-ink">—</b></span>
             <span>хеджей: <b id="go-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="go-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="go-stat-errors" class="text-ink">—</b></span>
           </div>
         </div>
@@ -1762,6 +1772,10 @@
               <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
               <input id="tb-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="tb-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
             <div class="flex items-center gap-2">
               <button onclick="tbApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
               <span id="tb-keepalive-status" class="text-xs text-faint font-mono">—</span>
@@ -1772,6 +1786,7 @@
             <span>ремапов: <b id="tb-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="tb-stat-keepalives" class="text-ink">—</b></span>
             <span>хеджей: <b id="tb-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="tb-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="tb-stat-errors" class="text-ink">—</b></span>
           </div>
         </div>
@@ -5094,11 +5109,13 @@ async function loadKeepaliveCard(pfx, api) {
     if (!data || typeof data.cfg === 'undefined') throw new Error('keepalive не отвечает');
     const hedge = $(pfx + '-keepalive-hedge');
     const attempts = $(pfx + '-keepalive-attempts');
+    const precommit = $(pfx + '-keepalive-precommit');
     if (hedge) hedge.value = String(Math.round((data.cfg.hedgeMs || 0) / 1000));
     if (attempts) attempts.value = String(data.cfg.maxAttempts);
-    if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts}`;
+    if (precommit) precommit.value = String(Math.round((data.cfg.preCommitMs || 0) / 1000));
+    if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts} · пре-коммит ${data.cfg.preCommitMs ? (data.cfg.preCommitMs / 1000) + 's' : 'выкл'}`;
     const s = data.stats || {};
-    for (const [id, key] of [[pfx + '-stat-requests','requests'],[pfx + '-stat-remaps','remaps'],[pfx + '-stat-keepalives','keepalives'],[pfx + '-stat-hedges','hedges'],[pfx + '-stat-errors','errors']]) {
+    for (const [id, key] of [[pfx + '-stat-requests','requests'],[pfx + '-stat-remaps','remaps'],[pfx + '-stat-keepalives','keepalives'],[pfx + '-stat-hedges','hedges'],[pfx + '-stat-retries','retries'],[pfx + '-stat-errors','errors']]) {
       const el = $(id);
       if (el) el.textContent = Number(s[key] ?? 0).toLocaleString('ru-RU');
     }
@@ -5111,16 +5128,18 @@ async function applyKeepaliveCard(pfx, api) {
     const patch = {};
     const hedgeSec = Number($(pfx + '-keepalive-hedge')?.value);
     const attempts = Number($(pfx + '-keepalive-attempts')?.value);
+    const precommitSec = Number($(pfx + '-keepalive-precommit')?.value);
     if (Number.isFinite(hedgeSec)) patch.hedgeMs = Math.round(hedgeSec * 1000);
     if (Number.isFinite(attempts) && attempts > 0) patch.maxAttempts = attempts;
+    if (Number.isFinite(precommitSec)) patch.preCommitMs = Math.round(precommitSec * 1000);
     const res = await fetch(api + '/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
     const data = await res.json();
     if (data && typeof data.cfg !== 'undefined') {
-      if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts}`;
-      toast(`✓ хедж применён: ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'}, попыток ${data.cfg.maxAttempts}`, 'success', 3500);
+      if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts} · пре-коммит ${data.cfg.preCommitMs ? (data.cfg.preCommitMs / 1000) + 's' : 'выкл'}`;
+      toast(`✓ keepalive применён: хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'}, попыток ${data.cfg.maxAttempts}, пре-коммит ${data.cfg.preCommitMs ? (data.cfg.preCommitMs / 1000) + 's' : 'выкл'}`, 'success', 3500);
     } else throw new Error((data && data.error) || 'keepalive не отвечает');
   } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; toast('keepalive config: ' + e.message, 'error'); }
 }

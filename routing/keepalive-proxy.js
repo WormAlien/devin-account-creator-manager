@@ -12,10 +12,11 @@
  *      POST /v1/messages/count_tokens, CC читает input_tokens с тела ошибки и
  *      падает "Unable to validate model... z.usage.input_tokens", /model не
  *      переключается. Прокси отвечает сам локальной оценкой.
- *   2. Ранний SSE (EARLY_SSE=1): для POST /v1/messages со stream:true открываем
- *      SSE-ответ клиенту СРАЗУ и запускаем keepalive ДО обращения к upstream.
- *      Один таймер покрывает и TTFB-дыру (шлюз долго думает до первого байта),
- *      и retry-паузы. Финальные ошибки уходят in-band как `event: error`.
+ *   2. Пре-коммит (PRE_COMMIT_MS): для POST /v1/messages со stream:true через
+ *      cfg.preCommitMs тишины открываем SSE-ответ клиенту И держим поток
+ *      keepalive'ами, ретраи идут за кулисами. Друг измерил: клиент сдаётся сам,
+ *      получив 0 байт за ~18с, поэтому дефолт 10с — с запасом до дедлайна.
+ *      Финальные ошибки уходят in-band как `event: error`.
  *   3. Upstream-таймаут (UPSTREAM_TIMEOUT_MS): каждая попытка ограничена по
  *      времени — устраняет висящие минутами запросы (в логах были 129с).
  *   4. Не ретраить после отмены клиентом (проверка aborted перед retry).
@@ -41,10 +42,8 @@ const PORT = Number(process.env.PORT || 8787);
 const UPSTREAM = process.env.UPSTREAM || 'https://agentrouter.org';
 const IDLE_MS = Number(process.env.IDLE_MS || 5000);
 const LOG_FILE = process.env.LOG_FILE || '';
-const MAX_RETRIES = Number(process.env.MAX_RETRIES || 3);
 const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 1500);
 const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
-const EARLY_SSE = process.env.EARLY_SSE !== '0';
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
 
 // Активный ключ agentrouter: keepalive инжектит его в исходящие заголовки на каждый
@@ -99,7 +98,9 @@ const upBase = upstream.pathname.replace(/\/+$/, '');
 const gptProxy = new URL(HAIKU_GPT_PROXY);
 const gptRequester = gptProxy.protocol === 'https:' ? https.request : http.request;
 const gptBase = gptProxy.pathname.replace(/\/+$/, '');
-const KEEPALIVE = ': keepalive\n\n';
+// Настоящее SSE-событие на границе событий: watchdog клиента считает только
+// реальные события (замер v1tusha), комментарий его НЕ сбрасывает.
+const PING = 'event: ping\ndata: {"type":"ping"}\n\n';
 const KEEPALIVE_COMMENT = ': keepalive\n';
 
 const { createLogger } = require('./proxy-logger.js');
@@ -130,6 +131,7 @@ const CONFIG_FILE = process.env.CONFIG_FILE
 const cfg = {
   hedgeMs: Number(process.env.HEDGE_MS || 20000),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || 3),
+  preCommitMs: Number(process.env.PRE_COMMIT_MS || 10000),
 };
 
 // Числовая ручка из патча: мусор игнорируем, дурь зажимаем (иначе опечатка
@@ -149,6 +151,8 @@ function loadConfig() {
   if (h !== null) cfg.hedgeMs = h;
   const a = patchNum(c.maxAttempts, 1, 10, false);
   if (a !== null) cfg.maxAttempts = a;
+  const p = patchNum(c.preCommitMs, 2000, 120000, true);
+  if (p !== null) cfg.preCommitMs = p;
 }
 function saveConfig() {
   try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
@@ -162,15 +166,21 @@ function applyPatch(p) {
     const a = patchNum(p.maxAttempts, 1, 10, false);
     if (a !== null) cfg.maxAttempts = a;
   }
+  if ('preCommitMs' in p) {
+    const pc = patchNum(p.preCommitMs, 2000, 120000, true);
+    if (pc !== null) cfg.preCommitMs = pc;
+  }
   saveConfig();
-  log(`config updated: хедж ${cfg.hedgeMs ? `${cfg.hedgeMs}ms` : 'off'}, попыток на запрос ${cfg.maxAttempts}`);
+  log(`config updated: хедж ${cfg.hedgeMs ? `${cfg.hedgeMs}ms` : 'off'}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
 }
 function publicState() {
-  return { cfg: Object.assign({}, cfg), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, stats: Object.assign({}, stats) };
+  return { cfg: Object.assign({}, cfg), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt, stats: Object.assign({}, stats) };
 }
 // Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
-// AgentRouter в том же блоке, что и крутилки хеджа.
-const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0 };
+// AgentRouter в том же блоке, что и крутилки хеджа. retries — всего повторов,
+// byStatus/byModel — распределение финальных ответов для отладки.
+const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, byStatus: {}, byModel: {} };
+const startedAt = Date.now();
 // Служебные пути: статус (health-check дашборда), состояние и патч конфига.
 function handleControl(req, res, reqPath) {
   if (req.method === 'GET' && reqPath === '/__keepalive/api/status') {
@@ -208,7 +218,7 @@ function shouldRetryStatus(status) {
   return status === 401 || status === 403 || status === 429 || (status >= 500 && status <= 599);
 }
 
-const RETRY_NO = /invalid|authentication|api[ _-]?key|expired|billing|quota|permission|denied|bad request|bad gateway upstream/i;
+const RETRY_NO = /invalid|authentication|api[ _-]?key|expired|billing|quota|permission|denied|bad request|missing|required|incorrect|not supported|bad gateway upstream/i;
 // Постоянные ошибки New API на китайском (не ретраить): нет прав, неверный/
 // просроченный токен, нет средств/квоты, модель/канал не существует.
 const RETRY_NO_ZH = /无权|权限|无效|过期|余额|额度|欠费|不存在|认证|封禁|禁用/;
@@ -218,14 +228,6 @@ function isTransientBody(status, buf) {
   const s = buf.toString('utf8');
   if (!s.trim()) return true;
   if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s)) return false;
-  if (RETRY_OK.test(s)) return true;
-  return status >= 500 || status === 429 || status === 401 || status === 403;
-}
-
-function isTransientBody(status, buf) {
-  const s = buf.toString('utf8');
-  if (!s.trim()) return true;
-  if (RETRY_NO.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
 }
@@ -352,6 +354,7 @@ const server = http.createServer((req, res) => {
   let finished = false;           // исход решён (победитель или сдались)
   let launched = 0;               // сколько попыток/дублей уже запущено
   let hedgeTimer = null;          // таймер хедж-дубля
+  let preTimer = null;            // таймер отложенного пре-коммита (preCommitMs)
   let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
   let tgt = null;                 // результат remapHaiku
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
@@ -386,6 +389,10 @@ const server = http.createServer((req, res) => {
       clearTimeout(sseTimer);
       sseTimer = null;
     }
+    if (preTimer !== null) {
+      clearTimeout(preTimer);
+      preTimer = null;
+    }
   };
 
   // keepalive-тик на уровне запроса — работает и ДО прихода заголовков upstream,
@@ -395,11 +402,11 @@ const server = http.createServer((req, res) => {
     if (aborted || res.writableEnded) return;
     const t = tail.toString('utf8');
     if (t.length === 0 || t.endsWith('\n\n')) {
-      res.write(KEEPALIVE);
-      tail = Buffer.concat([tail, Buffer.from(KEEPALIVE)]).slice(-4);
+      res.write(PING);
+      tail = Buffer.concat([tail, Buffer.from(PING)]).slice(-4);
       keepalives += 1;
       stats.keepalives += 1;
-      log(`${req.method} ${reqPath} keepalive #${keepalives}`);
+      log(`${req.method} ${reqPath} keepalive ping #${keepalives}`);
     } else if (t.endsWith('\n')) {
       res.write(KEEPALIVE_COMMENT);
       tail = Buffer.concat([tail, Buffer.from(KEEPALIVE_COMMENT)]).slice(-4);
@@ -417,8 +424,12 @@ const server = http.createServer((req, res) => {
     tail = Buffer.concat([tail, chunk.length > 4 ? chunk.subarray(chunk.length - 4) : chunk]).slice(-4);
   };
 
-  // Открываем клиенту SSE-ответ ДО обращения к upstream и запускаем keepalive.
-  const startClientSSE = () => {
+  // Отложенный пре-коммит (v1tusha): если через cfg.preCommitMs тишины апстрим
+  // так и не прислал заголовки, открываем клиенту SSE-ответ и держим keepalive,
+  // пока ретраи добиваются upstream. Если апстрим ответил раньше — коммит не нужен.
+  const commitSSE = () => {
+    preTimer = null;
+    if (aborted || res.writableEnded || res.headersSent) return;
     clientSSE = true;
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -428,6 +439,7 @@ const server = http.createServer((req, res) => {
     if (res.socket) res.socket.setNoDelay(true);
     res.flushHeaders();
     armTimer();
+    log(`${req.method} ${reqPath} пре-коммит SSE (${cfg.preCommitMs}ms тишины)`);
   };
 
   // Ошибка, когда клиенту уже отправлены SSE-заголовки: отдаём in-band `event: error`.
@@ -448,13 +460,22 @@ const server = http.createServer((req, res) => {
 
   const forward = (status, headers, stream) => {
     const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
+    stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
+    try {
+      const m = JSON.parse((reqBody || Buffer.alloc(0)).toString('utf8')).model;
+      if (typeof m === 'string') stats.byModel[m] = (stats.byModel[m] || 0) + 1;
+    } catch (e) {}
     log(`${req.method} ${reqPath} -> ${status}${isSSE ? ' (SSE)' : ''} ${Date.now() - started}ms`);
 
-    // Клиенту уже отправлены заголовки (ранний SSE) — writeHead больше нельзя.
+    // Клиенту уже отправлены заголовки (пре-коммит) — writeHead больше нельзя.
     if (clientSSE) {
+      // Апстрим сжал ответ (игнорируя accept-encoding: identity) — сырые gzip-байты
+      // в SSE-канале = мусор. Отдаём честную in-band ошибку (v1tusha).
+      const enc = String(headers['content-encoding'] || '').toLowerCase();
+      const compressed = enc !== '' && enc !== 'identity';
       // 2xx, но НЕ event-stream (апстрим отдал JSON/пустое на stream:true) —
       // сырые байты в SSE-канале = "malformed response (HTTP 200)". Отдаём in-band.
-      if (status >= 200 && status < 300 && isSSE) {
+      if (status >= 200 && status < 300 && isSSE && !compressed) {
         if (res.socket) res.socket.setNoDelay(true);
         stream.on('data', (chunk) => {
           res.write(chunk);
@@ -468,10 +489,16 @@ const server = http.createServer((req, res) => {
           if (!res.writableEnded && !res.destroyed) res.destroy(err);
         });
       } else {
-        // не-2xx после исчерпания ретраев → отдаём как in-band SSE-ошибку
+        // не-2xx после исчерпания ретраев / сжатый поток → in-band SSE-ошибка
         const ec = [];
         stream.on('data', (c) => ec.push(c));
-        stream.on('end', () => inbandError(status, Buffer.concat(ec)));
+        stream.on('end', () => {
+          if (compressed) {
+            inbandError(status, Buffer.from(JSON.stringify({ type: 'error', error: { type: 'api_error', message: `шлюз сжал поток (${enc}) вопреки accept-encoding: identity` } })));
+          } else {
+            inbandError(status, Buffer.concat(ec));
+          }
+        });
         stream.on('error', () => inbandError(status, Buffer.alloc(0)));
       }
       return;
@@ -552,6 +579,7 @@ const server = http.createServer((req, res) => {
     activeSet.delete(r);
     if (finished || aborted) return;
     if (launched < cfg.maxAttempts) {
+      stats.retries += 1;
       log(`${req.method} ${reqPath} -> ретрай/дубль #${launched + 1} через ${delayMs}ms (${why})`);
       setTimeout(() => { if (!aborted && !finished) makeUpstream(); }, delayMs);
       return;
@@ -693,9 +721,10 @@ const server = http.createServer((req, res) => {
     tgt = remapped;
     if (remapped) stats.remaps += 1;
     streaming = wantsStream(req.method, reqPath, req.headers, reqBody);
-    // ФИКС 2 — ранний SSE: открываем клиенту поток и keepalive ещё ДО upstream.
-    if (EARLY_SSE && streaming) {
-      startClientSSE();
+    // Пре-коммит (v1tusha): открываем SSE клиенту только после cfg.preCommitMs
+    // тишины от upstream, не сразу. 0 = отложенный пре-коммит выключен.
+    if (streaming && cfg.preCommitMs > 0 && preTimer === null) {
+      preTimer = setTimeout(commitSSE, cfg.preCommitMs);
     }
     makeUpstream();
     scheduleHedge();
@@ -723,6 +752,79 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// Самопроверка нетривиальной логики: `node keepalive-proxy.js selftest`.
+// Адаптировано под наши сигнатуры (remapHaiku / wantsStream / isTransientBody).
+// applyPatch пишет в CONFIG_FILE — запоминаем живой конфиг и возвращаем как было,
+// иначе прогон затрёт настройку, выставленную через дашборд.
+if (process.argv[2] === 'selftest') {
+  const assert = require('assert');
+  const parse = (b) => JSON.parse(b.toString('utf8'));
+  let savedCfg = null;
+  try { savedCfg = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch (e) { /* файла нет */ }
+
+  // ремап: haiku без маппинга в ar-modelmap.json -> fallback HAIKU_TO_MODEL (gpt)
+  const h = remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [] })));
+  assert.ok(h, 'haiku должен ремапиться');
+  assert.strictEqual(parse(h.body).model, HAIKU_TO_MODEL, 'haiku -> HAIKU_TO_MODEL');
+  // ремап: не-маппленная модель (не haiku, не gpt, без суффикса) — passthrough (null)
+  const o = Buffer.from(JSON.stringify({ model: 'custom-model-x' }));
+  assert.strictEqual(remapHaiku('POST', '/v1/messages', o), null, 'не-маппленная модель без изменений');
+  // ремап: не-JSON не трогаем (null)
+  assert.strictEqual(remapHaiku('POST', '/v1/messages', Buffer.from('not json')), null, 'не-JSON без изменений');
+  // ремап: не /v1/messages не трогаем
+  assert.strictEqual(remapHaiku('POST', '/v1/count_tokens', o), null, 'не /v1/messages без изменений');
+
+  // классификатор: китайский «нет доступа» — постоянная ошибка, НЕ ретраить
+  assert.strictEqual(
+    isTransientBody(403, Buffer.from('{"error":{"message":"该令牌无权访问模型 claude-haiku-4-5"}}')),
+    false, 'zh 无权访问 = постоянная');
+  // классификатор: транзиентное всё ещё ретраим
+  assert.strictEqual(isTransientBody(403, Buffer.from('unauthorized client detected')), true, 'транзиентное ретраим');
+  assert.strictEqual(isTransientBody(429, Buffer.from('')), true, 'пустое тело ретраим');
+  // классификатор: постоянные (в т.ч. новые из апдейта v1tusha)
+  assert.strictEqual(isTransientBody(500, Buffer.from('missing required field')), false, 'missing required = постоянная');
+  assert.strictEqual(isTransientBody(500, Buffer.from('model not supported')), false, 'not supported = постоянная');
+
+  // publicState отдаёт апстрим и пре-коммит, без сюрпризов
+  const pub = publicState();
+  assert.strictEqual(pub.upstream, UPSTREAM, 'publicState отдаёт upstream');
+  assert.strictEqual(typeof pub.uptime_ms, 'number', 'publicState отдаёт uptime_ms');
+
+  // wantsStream: пре-коммит заголовков имеет смысл только для стримовых запросов
+  assert.strictEqual(wantsStream('POST', '/v1/messages', {}, Buffer.from('{"model":"x","stream":true}')), true, 'stream:true = поток');
+  assert.strictEqual(wantsStream('POST', '/v1/messages', {}, Buffer.from('{"model":"x"}')), false, 'без stream = не поток');
+  assert.strictEqual(wantsStream('POST', '/v1/messages', { accept: 'text/event-stream' }, Buffer.alloc(0)), true, 'accept SSE = поток');
+  assert.strictEqual(wantsStream('POST', '/v1/messages', {}, Buffer.from('not json')), false, 'не-JSON = не поток');
+  assert.strictEqual(wantsStream('GET', '/v1/messages', {}, Buffer.alloc(0)), false, 'GET = не поток');
+
+  // Ручки хеджа/пре-коммита на лету: применяются, мусор игнорируется, дурь зажимается.
+  applyPatch({ hedgeMs: 7000, maxAttempts: 4, preCommitMs: 12000 });
+  assert.strictEqual(cfg.hedgeMs, 7000, 'hedgeMs применился');
+  assert.strictEqual(cfg.maxAttempts, 4, 'maxAttempts применился');
+  assert.strictEqual(cfg.preCommitMs, 12000, 'preCommitMs применился');
+  applyPatch({ hedgeMs: 5, maxAttempts: 999, preCommitMs: 999999 }); // опечатка -> зажимаем
+  assert.strictEqual(cfg.hedgeMs, 1000, 'hedgeMs зажат по нижней границе');
+  assert.strictEqual(cfg.maxAttempts, 10, 'maxAttempts зажат по верхней границе');
+  assert.strictEqual(cfg.preCommitMs, 120000, 'preCommitMs зажат по верхней границе');
+  applyPatch({ hedgeMs: 'нет' });
+  assert.strictEqual(cfg.hedgeMs, 1000, 'мусор в hedgeMs игнорируется');
+  applyPatch({ hedgeMs: 0 });
+  assert.strictEqual(cfg.hedgeMs, 0, '0 выключает хедж');
+  applyPatch({ preCommitMs: 0 });
+  assert.strictEqual(cfg.preCommitMs, 0, '0 выключает пре-коммит');
+
+  // ВОССТАНОВЛЕНИЕ — строго последним: любой applyPatch выше пишет в CONFIG_FILE,
+  // и если восстановить раньше, прогон затрёт живую настройку дашборда.
+  if (savedCfg === null) {
+    try { fs.unlinkSync(CONFIG_FILE); } catch (e) { /* selftest создал config — уберём */ }
+  } else {
+    fs.writeFileSync(CONFIG_FILE, savedCfg); // вернули то, что было до прогона
+  }
+
+  console.log('selftest OK');
+  process.exit(0);
+}
+
 loadConfig();
 
 server.keepAliveTimeout = 0;   // не убивать долгие SSE-соединения (v1tusha)
@@ -734,5 +836,5 @@ server.on('clientError', (err, socket) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, хедж ${cfg.hedgeMs ? cfg.hedgeMs + 'ms' : 'off'}, early_sse ${EARLY_SSE ? 'on' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
+  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, хедж ${cfg.hedgeMs ? cfg.hedgeMs + 'ms' : 'off'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
 });

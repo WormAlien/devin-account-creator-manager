@@ -125,6 +125,7 @@ routing/*.log
 routing/*.err
 routing/*.log.err
 routing/mode.txt
+routing/keepalive-config-*.json
 
 # Routing secrets (real keys). .env.example IS committed.
 routing/.env

@@ -1513,6 +1513,35 @@
           </div>
         </div>
 
+        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20133) -->
+        <div id="ar-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20133 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="arLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="ar-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <input id="ar-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <input id="ar-keepalive-attempts" type="number" min="1" max="10" placeholder="2" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="arApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <span id="ar-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div id="ar-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="ar-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="ar-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="ar-stat-keepalives" class="text-ink">—</b></span>
+            <span>хеджей: <b id="ar-stat-hedges" class="text-ink">—</b></span>
+            <span>ошибок: <b id="ar-stat-errors" class="text-ink">—</b></span>
+          </div>
+        </div>
+
         <!-- Add form (скрыта по умолчанию) -->
         <div id="ar-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
           <div class="flex gap-2 items-end flex-wrap">
@@ -1587,6 +1616,35 @@
           </div>
           <div id="go-modelmap-sel" class="flex gap-2 items-end flex-wrap">
             <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20156) -->
+        <div id="go-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20156 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="goLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="go-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <input id="go-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <input id="go-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="goApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <span id="go-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div id="go-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="go-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="go-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="go-stat-keepalives" class="text-ink">—</b></span>
+            <span>хеджей: <b id="go-stat-hedges" class="text-ink">—</b></span>
+            <span>ошибок: <b id="go-stat-errors" class="text-ink">—</b></span>
           </div>
         </div>
 
@@ -1686,6 +1744,35 @@
           </div>
           <div id="tb-modelmap-sel" class="flex gap-2 items-end flex-wrap">
             <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20155) -->
+        <div id="tb-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20155 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="tbLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="tb-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <input id="tb-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <input id="tb-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="tbApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <span id="tb-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div id="tb-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="tb-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="tb-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="tb-stat-keepalives" class="text-ink">—</b></span>
+            <span>хеджей: <b id="tb-stat-hedges" class="text-ink">—</b></span>
+            <span>ошибок: <b id="tb-stat-errors" class="text-ink">—</b></span>
           </div>
         </div>
 
@@ -2494,9 +2581,9 @@ function showTab(name) {
   if (name === 'grok') { grokRenderSaved(); }
   if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); loadCdtActiveModel(); loadCdtModels(false); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
-  if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } }
-  if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } }
-  if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } }
+  if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } arLoadKeepalive(); }
+  if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } goLoadKeepalive(); }
+  if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
   if (name === 'svrtr') { loadTgPool(); if (!state.loaded.svrtr) { state.loaded.svrtr = true; loadSvrtrSessions(false).then(() => loadSvrtrModels(false)); } }
   if (name === 'helpcoder') { if (!state.loaded.helpcoder) { state.loaded.helpcoder = true; loadHelpcoderSessions(false).then(() => loadHelpcoderModels(false)); } }
@@ -4995,6 +5082,55 @@ async function arSaveModelMap() {
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
+
+// Keepalive хедж-конфиг + статистика (GET /__state через __switch-мост).
+// pfx — префикс ID (ar/go/tb), api — base пути /__switch/api/[pfx]/keepalive/.
+async function loadKeepaliveCard(pfx, api) {
+  const st = $(pfx + '-keepalive-status');
+  if (st) st.textContent = '…';
+  try {
+    const res = await fetch(api + '/state');
+    const data = await res.json();
+    if (!data || typeof data.cfg === 'undefined') throw new Error('keepalive не отвечает');
+    const hedge = $(pfx + '-keepalive-hedge');
+    const attempts = $(pfx + '-keepalive-attempts');
+    if (hedge) hedge.value = String(Math.round((data.cfg.hedgeMs || 0) / 1000));
+    if (attempts) attempts.value = String(data.cfg.maxAttempts);
+    if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts}`;
+    const s = data.stats || {};
+    for (const [id, key] of [[pfx + '-stat-requests','requests'],[pfx + '-stat-remaps','remaps'],[pfx + '-stat-keepalives','keepalives'],[pfx + '-stat-hedges','hedges'],[pfx + '-stat-errors','errors']]) {
+      const el = $(id);
+      if (el) el.textContent = Number(s[key] ?? 0).toLocaleString('ru-RU');
+    }
+  } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; }
+}
+
+async function applyKeepaliveCard(pfx, api) {
+  const st = $(pfx + '-keepalive-status');
+  try {
+    const patch = {};
+    const hedgeSec = Number($(pfx + '-keepalive-hedge')?.value);
+    const attempts = Number($(pfx + '-keepalive-attempts')?.value);
+    if (Number.isFinite(hedgeSec)) patch.hedgeMs = Math.round(hedgeSec * 1000);
+    if (Number.isFinite(attempts) && attempts > 0) patch.maxAttempts = attempts;
+    const res = await fetch(api + '/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (data && typeof data.cfg !== 'undefined') {
+      if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts}`;
+      toast(`✓ хедж применён: ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'}, попыток ${data.cfg.maxAttempts}`, 'success', 3500);
+    } else throw new Error((data && data.error) || 'keepalive не отвечает');
+  } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; toast('keepalive config: ' + e.message, 'error'); }
+}
+
+const arLoadKeepalive   = () => loadKeepaliveCard('ar', '/__switch/api/keepalive');
+const arApplyKeepalive  = () => applyKeepaliveCard('ar', '/__switch/api/keepalive');
+const goLoadKeepalive   = () => loadKeepaliveCard('go', '/__switch/api/go/keepalive');
+const goApplyKeepalive  = () => applyKeepaliveCard('go', '/__switch/api/go/keepalive');
+const tbLoadKeepalive   = () => loadKeepaliveCard('tb', '/__switch/api/tb/keepalive');
+const tbApplyKeepalive  = () => applyKeepaliveCard('tb', '/__switch/api/tb/keepalive');
 
 function renderAr() {
   const all = state.agentrouter.slice().sort((a, b) => {
@@ -10931,14 +11067,28 @@ async function pullDashboardUpdate() {
     const res = await fetch('/__switch/api/dashboard/update-pull', { method: 'POST' });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || 'fail');
-    badge.textContent = '✓ обновлено — перезапусти прокси';
+    badge.textContent = '✓ обновлено — нужен перезапуск';
     badge.className = 'shrink-0 text-xs text-emerald';
-    toast('✓ Код обновлён. Перезапусти прокси: restart-dashboard.bat', 'success', 8000);
+    openDashRestartModal();
   } catch (e) {
     badge.textContent = '✗ ' + e.message; badge.className = 'shrink-0 text-xs text-crimson';
     btn.disabled = false;
     toast('Обновление: ' + e.message, 'error');
   }
+}
+
+// Поп-ап «дашборд обновлён» → кнопка перезапуска прокси (restart-dashboard.bat).
+function openDashRestartModal() {
+  const m = $('dash-restart-modal');
+  if (m) m.classList.remove('hidden');
+}
+function closeDashRestartModal() {
+  const m = $('dash-restart-modal');
+  if (m) m.classList.add('hidden');
+}
+function dashRestartNow() {
+  closeDashRestartModal();
+  launchBat('restart-dashboard.bat');
 }
 
 async function loadSettingsJson() {
@@ -11845,6 +11995,21 @@ document.addEventListener('DOMContentLoaded', toggleLogPanel);
     <div class="flex gap-2 justify-end mt-3">
       <button onclick="shareCodeCopy()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">📋 Копировать</button>
       <button onclick="closeShareCodeModal()" class="text-xs px-3 py-2 rounded-lg border border-line-soft hover:bg-elevated transition">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Дашборд обновлён → предложить перезапуск прокси -->
+<div id="dash-restart-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onclick="if(event.target===this) closeDashRestartModal()">
+  <div class="bg-surface rounded-xl border border-emerald/40 shadow-2xl p-5 w-[480px] max-w-[92vw]">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-sm font-semibold">✓ Дашборд обновлён</h3>
+      <button onclick="closeDashRestartModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mt-2">git pull --ff-only прошёл успешно. Чтобы новые маршруты и фиксы начали работать, перезапусти прокси-сервер — это займёт пару секунд.</p>
+    <div class="flex gap-2 justify-end mt-4">
+      <button onclick="closeDashRestartModal()" class="text-xs px-3 py-2 rounded-lg border border-line-soft hover:bg-elevated transition">Позже</button>
+      <button onclick="dashRestartNow()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">🔄 Перезапустить сейчас</button>
     </div>
   </div>
 </div>

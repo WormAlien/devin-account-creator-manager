@@ -118,12 +118,109 @@ function log(msg) {
   logLine(msg);
 }
 
+// --- Runtime-конфиг хеджинга (меняется на лету через POST /__config) ---
+// Хедж: если шлюз молчит дольше cfg.hedgeMs, пускаем ПАРАЛЛЕЛЬНЫЙ дубль запроса и
+// берём того, кто ответил первым, остальных рвём. Дефолты (20с / 2 попытки)
+// замерены на живом agentrouter (v1tusha, 15.08.2026): hedgeMs=5000 + 5 попыток
+// дали ~3x нагрузку и рост ответов 8с → 15-30с; 20с/2 вернули 6.6–8.6с.
+// 0 = выключить. CONFIG_FILE кейсуется по PORT — у нас 3 экземпляра прокси на
+// одном скрипте (:20133 agentrouter, :20155 tabi, :20156 gorouter).
+const CONFIG_FILE = process.env.CONFIG_FILE
+  || path.join(__dirname, `keepalive-config-${Number(process.env.PORT || 8787)}.json`);
+const cfg = {
+  hedgeMs: Number(process.env.HEDGE_MS || 20000),
+  maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || 3),
+};
+
+// Числовая ручка из патча: мусор игнорируем, дурь зажимаем (иначе опечатка
+// hedgeMs:5 устроит шлюзу лавину дублей).
+function patchNum(v, min, max, allowZero) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  if (allowZero && n === 0) return 0;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+function loadConfig() {
+  let raw;
+  try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch (e) { return; }
+  let c;
+  try { c = JSON.parse(raw); } catch (e) { log(`config.json битый, игнорирую: ${e.message}`); return; }
+  const h = patchNum(c.hedgeMs, 1000, 120000, true);
+  if (h !== null) cfg.hedgeMs = h;
+  const a = patchNum(c.maxAttempts, 1, 10, false);
+  if (a !== null) cfg.maxAttempts = a;
+}
+function saveConfig() {
+  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
+}
+function applyPatch(p) {
+  if ('hedgeMs' in p) {
+    const h = patchNum(p.hedgeMs, 1000, 120000, true);
+    if (h !== null) cfg.hedgeMs = h;
+  }
+  if ('maxAttempts' in p) {
+    const a = patchNum(p.maxAttempts, 1, 10, false);
+    if (a !== null) cfg.maxAttempts = a;
+  }
+  saveConfig();
+  log(`config updated: хедж ${cfg.hedgeMs ? `${cfg.hedgeMs}ms` : 'off'}, попыток на запрос ${cfg.maxAttempts}`);
+}
+function publicState() {
+  return { cfg: Object.assign({}, cfg), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, stats: Object.assign({}, stats) };
+}
+// Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
+// AgentRouter в том же блоке, что и крутилки хеджа.
+const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0 };
+// Служебные пути: статус (health-check дашборда), состояние и патч конфига.
+function handleControl(req, res, reqPath) {
+  if (req.method === 'GET' && reqPath === '/__keepalive/api/status') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, port: PORT, upstream: UPSTREAM, idle_ms: IDLE_MS, retries: cfg.maxAttempts, hedge_ms: cfg.hedgeMs }));
+    return;
+  }
+  if (req.method === 'GET' && reqPath === '/__state') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(publicState()));
+    return;
+  }
+  if (req.method === 'POST' && reqPath === '/__config') {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const patch = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+        applyPatch(patch);
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(publicState()));
+      } catch (e) {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    req.on('error', () => {});
+    return;
+  }
+  res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+  res.end('not found\n');
+}
+
 function shouldRetryStatus(status) {
   return status === 401 || status === 403 || status === 429 || (status >= 500 && status <= 599);
 }
 
 const RETRY_NO = /invalid|authentication|api[ _-]?key|expired|billing|quota|permission|denied|bad request|bad gateway upstream/i;
+// Постоянные ошибки New API на китайском (не ретраить): нет прав, неверный/
+// просроченный токен, нет средств/квоты, модель/канал не существует.
+const RETRY_NO_ZH = /无权|权限|无效|过期|余额|额度|欠费|不存在|认证|封禁|禁用/;
 const RETRY_OK = /unauthorized client detected|overloaded|too many|rate limit|internal|upstream|temporar|busy|unavailable/i;
+
+function isTransientBody(status, buf) {
+  const s = buf.toString('utf8');
+  if (!s.trim()) return true;
+  if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s)) return false;
+  if (RETRY_OK.test(s)) return true;
+  return status >= 500 || status === 429 || status === 401 || status === 403;
+}
 
 function isTransientBody(status, buf) {
   const s = buf.toString('utf8');
@@ -165,11 +262,13 @@ function estimateTokens(body) {
   }
 }
 
-// stream:true в теле POST /v1/messages? Только такие запросы кандидаты на ранний SSE.
-function wantsStream(method, reqPath, body) {
+// stream:true в теле POST /v1/messages или accept: text/event-stream?
+// Только такие запросы кандидаты на ранний SSE.
+function wantsStream(method, reqPath, headers, body) {
   if (method !== 'POST') return false;
   const p = reqPath.replace(/\?.*$/, '');
   if (p !== '/v1/messages') return false;
+  if (/text\/event-stream/i.test(String((headers && headers.accept) || ''))) return true;
   try {
     return JSON.parse(body.toString('utf8') || '{}').stream === true;
   } catch (e) {
@@ -243,22 +342,28 @@ function remapHaiku(method, reqPath, body) {
 const server = http.createServer((req, res) => {
   const reqPath = req.url;
   const started = Date.now();
-  let active = null;
   let sseTimer = null;
   let keepalives = 0;
   let aborted = false;
   let clientSSE = false;          // мы уже открыли SSE-ответ клиенту (ранний SSE)
   let tail = Buffer.alloc(0);     // последние ≤4 байта отправленного клиенту (для формата keepalive)
+  let activeSet = new Set();      // все живые попытки (ретраи + хедж-дубли)
+  let winner = null;              // победитель гонки
+  let finished = false;           // исход решён (победитель или сдались)
+  let launched = 0;               // сколько попыток/дублей уже запущено
+  let hedgeTimer = null;          // таймер хедж-дубля
+  let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
+  let tgt = null;                 // результат remapHaiku
+  let streaming = false;          // стримовый запрос (ранний SSE + identity)
 
-  // Статус для дашборда (:8200 health-check).
-  if (req.method === 'GET' && req.url === '/__keepalive/api/status') {
-    log(`GET /__keepalive/api/status -> 200`);
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, port: PORT, upstream: UPSTREAM, idle_ms: IDLE_MS, retries: MAX_RETRIES }));
+  // Служебные пути: статус (health-check дашборда), состояние, runtime-конфиг.
+  if (req.url.startsWith('/__')) {
+    handleControl(req, res, req.url);
     return;
   }
 
   log(`>> ${req.method} ${reqPath} start`);
+  stats.requests += 1;
 
   // ФИКС 1 — count_tokens fallback: шлюз обычно 404-ит этот endpoint, CC читает
   // input_tokens с тела ошибки и падает на валидации модели (/model не работает).
@@ -293,11 +398,13 @@ const server = http.createServer((req, res) => {
       res.write(KEEPALIVE);
       tail = Buffer.concat([tail, Buffer.from(KEEPALIVE)]).slice(-4);
       keepalives += 1;
+      stats.keepalives += 1;
       log(`${req.method} ${reqPath} keepalive #${keepalives}`);
     } else if (t.endsWith('\n')) {
       res.write(KEEPALIVE_COMMENT);
       tail = Buffer.concat([tail, Buffer.from(KEEPALIVE_COMMENT)]).slice(-4);
       keepalives += 1;
+      stats.keepalives += 1;
       log(`${req.method} ${reqPath} keepalive mid-event #${keepalives}`);
     }
     sseTimer = setTimeout(tick, IDLE_MS);
@@ -371,7 +478,16 @@ const server = http.createServer((req, res) => {
     }
 
     // Обычный путь (ранний SSE не применялся): как в оригинале.
-    res.writeHead(status, headers);
+    // Апстрим отдаёт не-stream JSON как text/plain; CC v2 SDK требует
+    // application/json для парсинга — переписываем content-type для /v1/messages.
+    let hdrs = headers;
+    if (!isSSE && /\/v1\/messages/.test(reqPath)) {
+      const ct = String(headers['content-type'] || '');
+      if (/^text\/plain/i.test(ct)) {
+        hdrs = Object.assign({}, headers, { 'content-type': ct.replace(/^text\/plain/i, 'application/json') });
+      }
+    }
+    res.writeHead(status, hdrs);
 
     if (!isSSE) {
       stream.on('error', (err) => {
@@ -402,7 +518,71 @@ const server = http.createServer((req, res) => {
     });
   };
 
-  const makeUpstream = (attempt, body, tgt) => {
+  const settle = (r) => {
+    winner = r;
+    finished = true;
+    for (const x of activeSet) {
+      if (x !== r && !x.destroyed) {
+        try { x.destroy(); } catch (e) {}
+      }
+    }
+    // Победитель остаётся в activeSet: на обрыв клиента его тоже надо рвать.
+    activeSet.clear();
+    if (!r.destroyed) activeSet.add(r);
+    log(`${req.method} ${reqPath} winner settled`);
+  };
+  const giveUp = (why) => {
+    finished = true;
+    stats.errors += 1;
+    for (const x of activeSet) {
+      if (!x.destroyed) { try { x.destroy(); } catch (e) {} }
+    }
+    activeSet.clear();
+    log(`${req.method} ${reqPath} все попытки исчерпаны: ${why}`);
+    if (clientSSE) {
+      inbandError(502, Buffer.from(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: `upstream: ${why}` } })));
+    } else if (!res.headersSent) {
+      res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: `upstream: ${why}` } }));
+    } else if (!res.writableEnded) {
+      res.destroy();
+    }
+  };
+  const attemptDone = (r, why, delayMs) => {
+    activeSet.delete(r);
+    if (finished || aborted) return;
+    if (launched < cfg.maxAttempts) {
+      log(`${req.method} ${reqPath} -> ретрай/дубль #${launched + 1} через ${delayMs}ms (${why})`);
+      setTimeout(() => { if (!aborted && !finished) makeUpstream(); }, delayMs);
+      return;
+    }
+    if (activeSet.size === 0) giveUp(why);
+  };
+
+  // Хедж-дубль: если через cfg.hedgeMs апстрим всё ещё молчит (нет даже заголовков),
+  // запускаем ПАРАЛЛЕЛЬНУЮ попытку. Победит тот, кто ответит первым — остальных рвём.
+  const scheduleHedge = () => {
+    if (cfg.hedgeMs <= 0 || finished || aborted || hedgeTimer !== null) return;
+    if (launched >= cfg.maxAttempts) return;
+    hedgeTimer = setTimeout(() => {
+      hedgeTimer = null;
+      if (finished || aborted) return;
+      log(`${req.method} ${reqPath} хедж: тишина ${Date.now() - started}ms, пускаю дубль #${launched + 1}`);
+      stats.hedges += 1;
+      makeUpstream();
+      scheduleHedge();
+    }, cfg.hedgeMs);
+  };
+
+  const makeUpstream = () => {
+    if (finished || aborted) return;
+    if (launched >= cfg.maxAttempts) {
+      if (activeSet.size === 0) giveUp('попытки исчерпаны');
+      return;
+    }
+    launched += 1;
+    const attempt = launched;
+    const body = reqBody;
     const t = tgt || { requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
     const headers = Object.assign({}, req.headers, { host: t.host });
     // Активный ключ agentrouter из ar-active-key.txt (смена на лету): перекрываем
@@ -420,6 +600,11 @@ const server = http.createServer((req, res) => {
     if (tgt) {
       headers['content-length'] = Buffer.byteLength(body);
     }
+    // Стримовые запросы: просим НЕ кодировать (иначе gzip-мусор в SSE-канале после
+    // раннего SSE/хеджа ломает поток). v1tusha: accept-encoding identity.
+    if (streaming) {
+      headers['accept-encoding'] = 'identity';
+    }
     const upReq = t.requester({
       hostname: t.hostname,
       port: t.port,
@@ -430,54 +615,67 @@ const server = http.createServer((req, res) => {
     }, (upRes) => {
       const status = upRes.statusCode;
       const headers = upRes.headers;
-      const transient = shouldRetryStatus(status) && attempt < MAX_RETRIES;
+      const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
+      const jsonLike = !isSSE && /application\/json|text\/plain/i.test(String(headers['content-type'] || ''));
+      const hasEnc = /gzip|deflate|br/i.test(String(headers['content-encoding'] || ''));
+      const chunks = [];
+      let size = 0;
+      const drain = (onEnd) => {
+        upRes.on('data', (c) => { chunks.push(c); size += c.length; });
+        upRes.on('end', onEnd);
+        upRes.on('error', () => onEnd());
+      };
+      const forwardBuffered = (buf, hdrs) => {
+        const pt = new PassThrough();
+        pt.end(buf);
+        settle(upReq);
+        forward(status, hdrs, pt);
+      };
 
-      if (transient) {
-        const chunks = [];
-        let size = 0;
-        const drain = (onEnd) => {
-          upRes.on('data', (c) => {
-            chunks.push(c);
-            size += c.length;
-          });
-          upRes.on('end', onEnd);
-          upRes.on('error', () => onEnd());
-        };
+      // 200 на не-stream /v1/messages: апстрим отдаёт JSON как text/plain, иногда
+      // пустое тело (после долгого thinking). Драним всегда — тело маленькое, зато
+      // пустоту/валидность ловим до проброса клиенту.
+      if (status === 200 && jsonLike && !hasEnc) {
         drain(() => {
-          if (aborted) return;
+          if (finished || aborted) return;
+          const buf = Buffer.concat(chunks, size);
+          const text = buf.toString('utf8').trim();
+          if (!text) {
+            attemptDone(upReq, `пустой 200 (попытка ${attempt})`, RETRY_DELAY_MS * attempt);
+            return;
+          }
+          forwardBuffered(buf, headers);
+        });
+        return;
+      }
+
+      if (shouldRetryStatus(status)) {
+        drain(() => {
+          if (finished || aborted) return;
           const buf = Buffer.concat(chunks, size);
           if (isTransientBody(status, buf)) {
-            log(`${req.method} ${reqPath} retry ${attempt}/${MAX_RETRIES} after ${status}: ${buf.toString('utf8').slice(0, 100)}`);
-            if (aborted) return;   // ФИКС 4 — клиент отвалился, не плодим сирот
-            setTimeout(() => { if (!aborted) makeUpstream(attempt + 1, body, tgt); }, RETRY_DELAY_MS * attempt);
+            attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
-            const pt = new PassThrough();
-            pt.end(buf);
-            forward(status, headers, pt);
+            forwardBuffered(buf, headers);
           }
         });
         return;
       }
 
+      settle(upReq);
       forward(status, headers, upRes);
     });
 
-    active = upReq;
+    activeSet.add(upReq);
     upReq.on('timeout', () => {
+      if (finished || aborted) return;
       log(`${req.method} ${reqPath} upstream timeout ${UPSTREAM_TIMEOUT_MS}ms (attempt ${attempt})`);
       upReq.destroy(new Error('upstream timeout'));
     });
     upReq.on('error', (err) => {
-      if (res.destroyed || aborted) return;
-      log(`${req.method} ${reqPath} upstream error: ${err.message}`);
-      if (clientSSE) {
-        inbandError(502, Buffer.from(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: `Bad Gateway: ${err.message}` } })));
-      } else if (!res.headersSent) {
-        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
-        res.end(`Bad Gateway: ${err.message}\n`);
-      } else if (!res.writableEnded) {
-        res.destroy(err);
-      }
+      if (finished || aborted || res.destroyed) { activeSet.delete(upReq); return; }
+      log(`${req.method} ${reqPath} upstream error (attempt ${attempt}): ${err.message}`);
+      attemptDone(upReq, err.message, 0);
     });
     upReq.end(body);
   };
@@ -491,32 +689,50 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     const rawBody = Buffer.concat(bodyChunks, bodySize);
     const remapped = remapHaiku(req.method, reqPath, rawBody);
-    const body = remapped ? remapped.body : rawBody;
+    reqBody = remapped ? remapped.body : rawBody;
+    tgt = remapped;
+    if (remapped) stats.remaps += 1;
+    streaming = wantsStream(req.method, reqPath, req.headers, reqBody);
     // ФИКС 2 — ранний SSE: открываем клиенту поток и keepalive ещё ДО upstream.
-    if (EARLY_SSE && wantsStream(req.method, reqPath, body)) {
+    if (EARLY_SSE && streaming) {
       startClientSSE();
     }
-    makeUpstream(1, body, remapped);
+    makeUpstream();
+    scheduleHedge();
   });
 
-  req.on('error', () => { aborted = true; stopTimer(); if (active) active.destroy(); });
-  res.on('error', () => { aborted = true; stopTimer(); if (active) active.destroy(); });
+  req.on('error', () => { aborted = true; stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
+  res.on('error', () => { aborted = true; stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
   res.on('close', () => {
     if (!res.writableEnded) {
       aborted = true;
       stopTimer();
-      if (active) active.destroy();
+      for (const x of activeSet) { try { x.destroy(); } catch (e) {} }
+      activeSet.clear();
+      if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; }
     }
   });
   req.on('close', () => {
     if (!req.complete) {
       aborted = true;
       stopTimer();
-      if (active) active.destroy();
+      for (const x of activeSet) { try { x.destroy(); } catch (e) {} }
+      activeSet.clear();
+      if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; }
     }
   });
 });
 
+loadConfig();
+
+server.keepAliveTimeout = 0;   // не убивать долгие SSE-соединения (v1tusha)
+server.headersTimeout = 0;
+server.setTimeout(0);
+server.on('clientError', (err, socket) => {
+  if (err.code === 'ECONNRESET' || !socket.writable) { if (!socket.destroyed) socket.destroy(); return; }
+  socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+});
+
 server.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, retries ${MAX_RETRIES} x ${RETRY_DELAY_MS}ms, early_sse ${EARLY_SSE ? 'on' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
+  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, хедж ${cfg.hedgeMs ? cfg.hedgeMs + 'ms' : 'off'}, early_sse ${EARLY_SSE ? 'on' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
 });

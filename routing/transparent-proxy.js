@@ -435,6 +435,77 @@ function jsonRes(res, code, body) {
     res.end(JSON.stringify(body));
 }
 
+// ---- Keepalive-мост (хедж-конфиг :20133/:20155/:20156) ---------------------
+// Дашборд ходит только через /__switch/api/... — кидаем запрос в keepalive-прокси
+// (GET /__state, POST /__config). Порт передаём параметром — один мост
+// обслуживает все keepalive-инстансы (AgentRouter, Tabi, GoRouter).
+function keepaliveFetch(method, path, body, port) {
+    return new Promise((resolve) => {
+        const p = Number(port);
+        const data = body ? JSON.stringify(body) : null;
+        const req = http.request({
+            hostname: '127.0.0.1',
+            port: p,
+            method,
+            path,
+            headers: data ? {
+                'content-type': 'application/json; charset=utf-8',
+                'content-length': Buffer.byteLength(data),
+            } : {},
+            timeout: 3000,
+        }, (up) => {
+            const chunks = [];
+            up.on('data', (c) => chunks.push(c));
+            up.on('end', () => {
+                let obj = null;
+                try { obj = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (e) {}
+                resolve({ ok: true, status: up.statusCode, data: obj });
+            });
+            up.on('error', () => resolve({ ok: false, status: 0, data: null }));
+        });
+        req.on('timeout', () => { try { req.destroy(); } catch (e) {} resolve({ ok: false, status: 0, data: null }); });
+        req.on('error', () => resolve({ ok: false, status: 0, data: null }));
+        if (data) req.write(data);
+        req.end();
+    });
+}
+
+// Фабрика хендлеров моста для конкретного keepalive-инстанса (по порту).
+function makeKeepaliveHandlers(port) {
+    // GET .../keepalive/state → { cfg, upstream, port, idle_ms, stats }.
+    async function handleState(req, res) {
+        const r = await keepaliveFetch('GET', '/__state', null, port);
+        if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает' });
+        return jsonRes(res, 200, r.data);
+    }
+
+    // POST .../keepalive/config { hedgeMs?, maxAttempts? } → патчим на лету.
+    async function handleConfig(req, res) {
+        let b = '';
+        req.on('data', (c) => b += c);
+        req.on('end', async () => {
+            try {
+                const patch = JSON.parse(b || '{}');
+                if (!('hedgeMs' in patch) && !('maxAttempts' in patch))
+                    return jsonRes(res, 400, { error: 'ожидался { hedgeMs?, maxAttempts? }' });
+                const r = await keepaliveFetch('POST', '/__config', patch, port);
+                if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает' });
+                logLine(`keepalive config :${port} -> ${JSON.stringify(patch)}`);
+                return jsonRes(res, 200, r.data);
+            } catch (e) { return jsonRes(res, 400, { error: e.message }); }
+        });
+        req.on('error', () => jsonRes(res, 400, { error: 'read error' }));
+    }
+
+    return { state: handleState, config: handleConfig };
+}
+
+// Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156.
+const keepaliveAr = makeKeepaliveHandlers(Number(process.env.AR_KEEPALIVE_PORT || 20133));
+const keepaliveTb = makeKeepaliveHandlers(Number(process.env.TB_KEEPALIVE_PORT || 20155));
+const keepaliveGo = makeKeepaliveHandlers(Number(process.env.GO_KEEPALIVE_PORT || 20156));
+
+
 // ---- /__switch/api/whoami --------------------------------------------------
 // Body: { input: "<paste from OmniRoute log>" }
 // Pulls all hex/dash chunks of length >= 8, looks each up in
@@ -3175,6 +3246,8 @@ async function handleHealth(res) {
         { name: 'VyceAI',             port: 20131, path: '/__vyceai/api/status' },
         { name: 'AgentRouter',        port: 20132, path: '/__agentrouter/api/status' },
         { name: 'Keepalive',          port: AR_KEEPALIVE_PORT, path: '/__keepalive/api/status' },
+        { name: 'Keepalive GoRouter', port: Number(process.env.GO_KEEPALIVE_PORT || 20156), path: '/__keepalive/api/status' },
+        { name: 'Keepalive Tabi',     port: Number(process.env.TB_KEEPALIVE_PORT || 20155), path: '/__keepalive/api/status' },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -7858,6 +7931,14 @@ if (req.method === 'POST' && req.url === '/__switch/api/ar/add-referral') return
     if (req.method === 'POST' && req.url === '/__switch/api/ar/import')   return handleArImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/rename')   return handleArRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/key')      return handleArSetKey(req, res);
+
+    // Keepalive-мост (хедж-конфиг :20133/:20155/:20156) — реальное время без рестарта.
+    if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/keepalive/config') return keepaliveAr.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/tb/keepalive/state')  return keepaliveTb.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/keepalive/config') return keepaliveTb.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);

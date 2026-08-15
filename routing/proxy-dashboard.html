@@ -4868,6 +4868,21 @@ async function loadArSessions(probe) {
   }
 }
 
+// Лёгкий тик автообновления: только перечитываем сессии из кеша (который обновляет
+// статус-бар) и рисуем баланс. БЕЗ loadArModels/loadArModelMap — они ходят в апстрим,
+// каждые 15с это перегруз провайдера.
+async function loadArSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/ar/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.agentrouter = data.sessions || [];
+    if ($('nav-count-agentrouter')) $('nav-count-agentrouter').textContent = state.agentrouter.length;
+    renderAr();
+    renderArGauge();
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+
 async function loadArModels(force) {
   const keys = state.agentrouter
     .slice()
@@ -5050,6 +5065,21 @@ function renderAr() {
 // dead → 🔴; есть balance → $XX.XX цветом по доле остатка; иначе кнопка 💰 для чека.
 // Вторая строка — кликабельная выдача «из $175»: у разных аккаунтов она разная (125/175/личный
 // больше), поэтому её можно вписать руками. Показываем цифру, а не иконку — иконку не видно.
+// Маркер свежести: баланс в сессии — это кеш, который периодически обновляет статус-бар
+// (GET /__switch/api/{ar,go,tb}/balance?api_key=…). ⟳ = баланс проверен статус-баром <2 мин
+// назад, ~ = кеш устарел (статус-бар обновит при следующем рендере), пусто = ещё не проверялось.
+function balanceFreshMark(s) {
+  const ts = s && s.balanceCheckedAt;
+  if (!ts) return '';
+  const ageS = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (!isFinite(ageS) || ageS < 0) return '';
+  const fmt = ageS < 60 ? `${Math.round(ageS)}с` : `${Math.round(ageS / 60)}м`;
+  if (ageS < 120) {
+    return `<span class="text-emerald text-[10px] leading-none" title="обновлено статус-баром ${fmt} назад">⟳</span>`;
+  }
+  return `<span class="text-faint text-[10px] leading-none" title="кеш устарел ${fmt} назад — статус-бар обновит при следующей проверке">~</span>`;
+}
+
 function arBalanceCell(s, kJ) {
   if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
   const manual = s.grantSource === 'manual';
@@ -5078,7 +5108,7 @@ function arBalanceCell(s, kJ) {
       ${(s.referral || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
       hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+100</button>`;
     return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center"><button onclick='arCheckBalance(${kJ})' title="${esc(tip)}"
-      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}${referralBtn}</span>${edit}</span>`;
+      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}${referralBtn}${balanceFreshMark(s)}</span>${edit}</span>`;
   }
   return `<span class="inline-flex flex-col items-center">${actBtn(`arCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
 }
@@ -5385,7 +5415,8 @@ async function arCopyKey(api_key) {
 }
 
 // Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
-// бэке и скопировать компактный base64-код. Аккаунт идентифицируется id.
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Аккаунт идентифицируется id.
 async function arShare(id) {
   const cur = state.agentrouter.find(x => x.id === id);
   if (!cur) return toast('аккаунт не найден', 'error');
@@ -5397,11 +5428,22 @@ async function arShare(id) {
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    await copyToClipboard(data.share, '');
     const note = data.hasSession
       ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
       : ' (без сессии — получателю придётся залогиниться)';
-    toast('✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note, 'success', 6000);
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'AgentRouter',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note,
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
   } catch (e) { toast('share: ' + e.message, 'error'); }
 }
 
@@ -5544,6 +5586,18 @@ async function loadGoSessions(probe) {
   } catch (e) {
     $('go-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
   }
+}
+
+async function loadGoSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/go/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.gorouter = data.sessions || [];
+    if ($('nav-count-gorouter')) $('nav-count-gorouter').textContent = state.gorouter.length;
+    renderGo();
+    renderGoGauge();
+  } catch (e) { /* молча — следующий тик повторит */ }
 }
 
 async function loadGoModels(force) {
@@ -5691,7 +5745,7 @@ function goBalanceCell(s, kJ) {
       ${(s.bonus || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
       hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+5</button>`;
     return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center"><button onclick='goCheckBalance(${kJ})' title="${esc(tip)}"
-      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}</span>${edit}</span>`;
+      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}${balanceFreshMark(s)}</span>${edit}</span>`;
   }
   return `<span class="inline-flex flex-col items-center">${actBtn(`goCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
 }
@@ -5757,7 +5811,8 @@ async function goDelete(id) {
 }
 
 // Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
-// бэке и скопировать компактный base64-код. Друг вставит его у себя кнопкой 📥.
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
 async function goShare(id) {
   const cur = state.gorouter.find(x => x.id === id);
   if (!cur) return toast('аккаунт не найден', 'error');
@@ -5769,11 +5824,22 @@ async function goShare(id) {
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    await copyToClipboard(data.share, '');
     const note = data.hasSession
       ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
       : ' (без сессии — получателю придётся залогиниться)';
-    toast('✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note, 'success', 6000);
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'GoRouter',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note,
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
   } catch (e) { toast('share: ' + e.message, 'error'); }
 }
 
@@ -6097,6 +6163,18 @@ async function loadTbSessions(probe) {
   }
 }
 
+async function loadTbSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/tb/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.tabi = data.sessions || [];
+    if ($('nav-count-tabi')) $('nav-count-tabi').textContent = state.tabi.length;
+    renderTb();
+    renderTbGauge();
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+
 async function loadTbModels(force) {
   const keys = state.tabi
     .slice()
@@ -6242,7 +6320,7 @@ function tbBalanceCell(s, kJ) {
       ${(s.bonus || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
       hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+20</button>`;
     return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center"><button onclick='tbCheckBalance(${kJ})' title="${esc(tip)}"
-      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}</span>${edit}</span>`;
+      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}${balanceFreshMark(s)}</span>${edit}</span>`;
   }
   return `<span class="inline-flex flex-col items-center">${actBtn(`tbCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
 }
@@ -6308,7 +6386,8 @@ async function tbDelete(id) {
 }
 
 // Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
-// бэке и скопировать компактный base64-код. Друг вставит его у себя кнопкой 📥.
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
 async function tbShare(id) {
   const cur = state.tabi.find(x => x.id === id);
   if (!cur) return toast('аккаунт не найден', 'error');
@@ -6320,11 +6399,22 @@ async function tbShare(id) {
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    await copyToClipboard(data.share, '');
     const note = data.hasSession
       ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
       : ' (без сессии — получателю придётся залогиниться)';
-    toast('✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note, 'success', 6000);
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'Tabi',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note,
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
   } catch (e) { toast('share: ' + e.message, 'error'); }
 }
 
@@ -9617,26 +9707,82 @@ async function tgRename(phone) {
 }
 
 // ═══════════════════ CLIPBOARD ══════════════════════════════════════
-async function copyToClipboard(text, label = 'скопировано') {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast(`📋 ${label}`, 'success', 2500);
-  } catch (e) {
-    // Fallback для http (без secure context — clipboard API недоступен).
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
-      toast(`📋 ${label}`, 'success', 2500);
-    } catch (e2) {
-      toast('Не вышло скопировать: ' + (e.message || e2.message), 'error');
-    }
+// Возвращает true/false — успех копирования. Раньше функция врала: фолбэк
+// не проверял результат document.execCommand('copy') (тот молча возвращает
+// false, если истёк user gesture или документ не в фокусе) и всё равно рисовал
+// «📋 скопировано». Из-за этого 🔗 «Поделиться» показывал успех при пустом
+// буфере: копирование там идёт через ~7 с после клика (бэк снимает сессию).
+// opts.silent — не показывать свои тосты (вызывающий сам решает, что сказать).
+async function copyToClipboard(text, label = 'скопировано', opts = {}) {
+  const str = String(text ?? '');
+  if (!str) {
+    if (!opts.silent) toast('нечего копировать', 'warn');
+    return false;
   }
+  let firstErr = '';
+  // Попытка 1: Clipboard API. Требует secure context (localhost — ок) И фокус
+  // на документе, иначе NotAllowedError: Document is not focused.
+  try {
+    try { window.focus(); } catch {}
+    if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('clipboard API недоступен');
+    await navigator.clipboard.writeText(str);
+    if (!opts.silent && label) toast(`📋 ${label}`, 'success', 2500);
+    return true;
+  } catch (e) { firstErr = e.message || String(e); }
+
+  // Попытка 2: старый execCommand через скрытую textarea (http без secure
+  // context / отказ Clipboard API). Результат ОБЯЗАТЕЛЬНО проверяем.
+  const ta = document.createElement('textarea');
+  try {
+    ta.value = str;
+    ta.readOnly = true;
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.left = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { ta.setSelectionRange(0, str.length); } catch {}
+    const ok = document.execCommand('copy');
+    if (!ok) throw new Error('execCommand("copy") вернул false (нет user gesture / нет фокуса)');
+    if (!opts.silent && label) toast(`📋 ${label}`, 'success', 2500);
+    return true;
+  } catch (e2) {
+    if (!opts.silent) toast('не удалось скопировать: ' + (firstErr || e2.message), 'error', 6000);
+    return false;
+  } finally {
+    ta.remove();
+  }
+}
+
+// ═══════════════════ SHARE-КОД: окно с кодом ════════════════════════
+// Показывается после 🔗 «Поделиться» (AgentRouter / GoRouter / Tabi). Нужно
+// потому, что авто-копия в этом сценарии принципиально ненадёжна: код приходит
+// через ~7 с после клика. Кнопка 📋 внутри окна копирует в живом user gesture,
+// плюс код всегда можно выделить руками (Ctrl+C) или просто увидеть.
+function openShareCodeModal({ provider = '', subtitle = '', code = '', copied = false } = {}) {
+  $('share-code-provider').textContent = provider || '—';
+  $('share-code-subtitle').textContent = subtitle || '—';
+  const hint = $('share-code-hint');
+  hint.textContent = copied
+    ? '✓ уже в буфере обмена · или Ctrl+C прямо здесь'
+    : '⚠ авто-копия не сработала — жми 📋 «Копировать» или выдели и Ctrl+C';
+  hint.className = 'text-[11px] mt-1.5 ' + (copied ? 'text-emerald' : 'text-amber');
+  const ta = $('share-code-text');
+  ta.value = code;
+  $('share-code-modal').classList.remove('hidden');
+  ta.focus();
+  ta.select();
+}
+
+// Чистим textarea: в коде лежит api_key + куки, незачем держать их в DOM.
+function closeShareCodeModal() {
+  $('share-code-modal').classList.add('hidden');
+  $('share-code-text').value = '';
+}
+
+function shareCodeCopy() {
+  copyToClipboard($('share-code-text').value, 'share-код');
 }
 
 // ═══════════════════ FREEMODEL BAN ══════════════════════════════════
@@ -11270,7 +11416,11 @@ let _lastTgPoll = 0;
 
 const AUTOREF_KEY = 'dashboard-auto-refresh-enabled';
 function autoRefreshEnabled() {
-  return localStorage.getItem(AUTOREF_KEY) === '1';
+  // По умолчанию ВКЛ: баланс на вкладках AR/Go/Tabi живёт в кеше, который периодически
+  // обновляет статус-бар (GET /__switch/api/{ar,go,tb}/balance). Без автоперечитки дашборд
+  // показывал бы старую цифру до F5. Явный выбор пользователя (on/off) уважается.
+  const v = localStorage.getItem(AUTOREF_KEY);
+  return v === null ? true : v === '1';
 }
 function setAutoRefresh(on) {
   localStorage.setItem(AUTOREF_KEY, on ? '1' : '0');
@@ -11306,9 +11456,9 @@ function autoRefreshTick() {
       case 'evomap':        loadEvomapSessions(false); break;
       case 'ourtoken':      loadOurtokenSessions(false); break;
       case 'conduit':       loadConduitSessions(false); loadCdtActiveModel(); loadCdtModels(false); break;
-      case 'agentrouter':   loadArSessions(false); break;
-      case 'gorouter':      loadGoSessions(false); break;
-      case 'tabi':          loadTbSessions(false); break;
+      case 'agentrouter':   loadArSessionsLight(); break;
+      case 'gorouter':      loadGoSessionsLight(); break;
+      case 'tabi':          loadTbSessionsLight(); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
       case 'helpcoder':     loadHelpcoderSessions(false); break;
       case 'video':         loadVideoKeys(); break;
@@ -11662,6 +11812,24 @@ document.addEventListener('DOMContentLoaded', toggleLogPanel);
     <div id="ar-gh-modal-unbind" class="mb-3"></div>
     <div class="flex justify-end">
       <button onclick="closeArGhModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share-код (AgentRouter / GoRouter / Tabi) -->
+<div id="share-code-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onclick="if(event.target===this) closeShareCodeModal()">
+  <div class="bg-surface rounded-xl border border-violet/40 shadow-2xl p-5 w-[560px] max-w-[92vw] max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-sm font-semibold">🔗 share-код · <span id="share-code-provider" class="text-violet">—</span></h3>
+      <button onclick="closeShareCodeModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-2"><span id="share-code-subtitle" class="font-mono text-ink">—</span></p>
+    <textarea id="share-code-text" readonly rows="6" class="text-[10px] font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full break-all focus:outline-none focus:border-violet/60"></textarea>
+    <div id="share-code-hint" class="text-[11px] mt-1.5 text-emerald">—</div>
+    <p class="text-[11px] text-faint mt-2">Отправь код другу — он вставит его кнопкой 📥 «Вставить аккаунт» на той же вкладке. Внутри email, API-ключ и живая сессия, так что делись только с тем, кому доверяешь.</p>
+    <div class="flex gap-2 justify-end mt-3">
+      <button onclick="shareCodeCopy()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">📋 Копировать</button>
+      <button onclick="closeShareCodeModal()" class="text-xs px-3 py-2 rounded-lg border border-line-soft hover:bg-elevated transition">Закрыть</button>
     </div>
   </div>
 </div>

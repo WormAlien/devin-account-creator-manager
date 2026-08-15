@@ -2,11 +2,11 @@
 
 # Vibe-Code Account Creator Manager
 
-Локальная control-plane: автореги бесплатных Claude-аккаунтов (`FreeModel` · `Conduit`) + переключение backend'а Claude Code между пулами (**FreeModel · OmniRoute · Aerolink · Cun · Evomap · Ourtoken · Conduit**) одним кликом из веб-дашборда, с авто-ротацией ключей **без перезапуска** Claude Code. Плюс ТГ-пульт для управления с телефона.
+Локальная control-plane: переключение backend'а Claude Code между провайдерами (**AgentRouter · GoRouter · Tabi Token**) одним кликом из веб-дашборда, автореги/импорт ключей, GitHub-аккаунты с 2FA, статус-лайн с балансом и контекстом. Плюс ТГ-пульт для управления с телефона.
 
 <br>
 
-![Switcher](docs/dashboard.png)
+![Dashboard](docs/dashboard.png)
 
 <br>
 
@@ -14,28 +14,36 @@
 
 ## Что это
 
-Всё под одной крышей: автореги + веб-дашборд на `:8200` (`routing/transparent-proxy.js`), который переписывает `~/.claude/settings.json` и менеджит все пулы ключей. Claude Code читает из `settings.json` `ANTHROPIC_BASE_URL` + ключ — переключение бэкенда = подмена этих полей.
+Всё под одной крышей: автореги + веб-дашборд на `:8200` (`routing/transparent-proxy.js`), который переписывает `~/.claude/settings.json` и менеджит пулы ключей. Claude Code читает из `settings.json` `ANTHROPIC_BASE_URL` + ключ — переключение бэкенда = подмена этих полей.
 
-Фишка: для пулов FreeModel / Aerolink / Conduit ключ кладётся в файл (`~/.claude/*-active-key.txt`), а `settings.json` через `apiKeyHelper` (TTL=0) читает его **на каждый запрос** → ключ можно менять на лету, **без перезапуска** Claude Code. На этом построена авто-ротация.
+Три актуальных провайдера — **AgentRouter**, **GoRouter**, **Tabi Token** — ходят через локальные **SSE keepalive-прокси** (`routing/keepalive-proxy.js`), которые держат SSE-поток и режут `[1m]`-суффиксы моделей. WAF-провайдеры (AgentRouter) пускают только «настоящие» запросы Claude Code, поэтому ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN`, а баланс каждого ключа дашборд считает сам (`grant + bonus − spent`) и кеширует в `*-sessions.json`.
+
+Фишка: **статус-лайн Claude Code** (`routing/statusline-autoreger.sh`) показывает внизу CLI живой баланс активного ключа (`$`) и контекстное окно (`⧉`), при устаревшем кеше сам дёргает рефреш через дашборд.
 
 <div align="center">
 
+### Активные провайдеры
+
 | Модуль | Что делает |
 | :--- | :--- |
-| **Switcher** | Переключатель бэкенда + глобальная шкала запаса. Правит `settings.json` (с `.bak`). |
-| **FreeModel** | Аккаунты `freemodel.dev` + пул Telegram для привязки + **авто-ротация** ключей. |
-| **Aerolink** | Ручной пул `email + ключ` (`capi.aerolink.lat`), активация через API Helper. |
-| **Cun** | Пул ключей `cun.ai` (Anthropic-совместимый), выбор модели, активация через `AUTH_TOKEN`. |
-| **Evomap** | Ручной пул `email + ключ` (`api.evomap.ai`), активация через API Helper. |
-| **Ourtoken** | Ручной пул `email + ключ` (`api.ourtoken.ai`) + автореги Playwright. |
-| **Conduit** | Аккаунты `conduit.ozdoev.net`, авторег **из Telegram** (device-code, без Playwright). |
-| **AgentRouter** | Пул ключей `agentrouter.org` (WAF — пускает только Claude Code). `claude-*` напрямую, `gpt-*` через локальный прокси `:20132` с **Cyrillic-bypass** (обход WAF «sensitive words detected»). |
-| **HelpCoder** | Аккаунты `helpcoder.cc` (New-API, `gpt-5.*`/codex), авторег чистым HTTP (без email/капчи), $200 бонуса на акк. |
-| **SuperGrok** | Сессии grok.com (device-auth через Camoufox), квоты, cooldown после rate-limit. |
-| **Video / Картинки API** | Хранилища ключей видео- и картинко-провайдеров (CRUD + триал-каталог). |
-| **Плагины** | Вкл/выкл плагинов Claude Code (тоггл `enabledPlugins`) + ★ рекомендованные. |
-| **Telegram-пульт** (`tgbot/`) | Управление дашбордом и живая claude-сессия прямо из Telegram. |
-| _Архив_ | TokenRouter · Notion · Devin — «чтим память», не развиваются. |
+| **AgentRouter** | Пул ключей `agentrouter.org`. WAF пускает только Claude Code. `claude-*` → keepalive `:20133`, `gpt-*` → конвертер `:20132`. Маппинг claude-тиров, баланс (`grant+bonus+referral−spent`), чек-ин «+25»/рефка «+100», вход в ЛК через GitHub. |
+| **GoRouter** | Пул ключей `gorouter.app`. Активация через SSE keepalive `:20156`. GitHub-вход, share/import, баланс (`grant+bonus−spent`, чек-ин «+5»). |
+| **Tabi Token** | Пул ключей `tabitoken.com`. Активация через SSE keepalive `:20155`. GitHub-вход, share/import, баланс (`grant+bonus−spent`). |
+| **GitHub аккаунты** | Хранилище купленных аккаунтов: логин/пароль/2FA-секрет/recovery/ник, **TOTP локально в браузере** (RFC 6238), профиль браузера на аккаунт, показ секретов через меню. |
+| **Health** | Что запущено и что упало: процессы, git-состояние, сервисы/порты. |
+| **Claude Code** | Активный маршрут в `settings.json` + подключение официального Claude по OAuth (зануляет провайдерские переменные). |
+
+### Легаси (вкладки в дашборде ещё есть, не развиваются)
+
+| Модуль | Статус |
+| :--- | :--- |
+| **FreeModel** | сессии + квоты + авто-ротация |
+| **VyceAI · Custom** | OpenAI-совместимые пулы через локальные прокси |
+| **Aerolink · Cun · Evomap · Ourtoken · Conduit · Svrtr · HelpCoder** | ручные пулы ключей, API Helper |
+| **AnyModel · SuperGrok** | автореги/сессии сторонних моделей |
+| **Video / Картинки API** | CRUD-хранилища ключей провайдеров |
+| **Telegram-пульт** (`tgbot/`) | управление дашбордом с телефона |
+| _Архив_ | OmniRoute · TokenRouter · Notion · Devin — «чтим память» |
 
 </div>
 
@@ -45,9 +53,17 @@
 
 | Порт | Сервис | Файл |
 | :--- | :--- | :--- |
-| `8200` | **Switcher / Dashboard** — UI `/__switch` + все `/__switch/api/*` | `routing/transparent-proxy.js` |
-| `20126` | **FreeModel Key Rotator** | `routing/freemodel-rotator.js` |
-| `20128` | **OmniRoute** (внешний Docker, опц.) — backend `/v1` | docker `ghcr.io/diegosouzapw/omniroute` |
+| `8200` | **Dashboard** — UI `/__switch` + все `/__switch/api/*` | `routing/transparent-proxy.js` |
+| `20133` | **AgentRouter keepalive** (SSE, claude-*) | `routing/keepalive-proxy.js` |
+| `20132` | **AgentRouter proxy** (gpt-* → Anthropic→OpenAI конвертер) | `routing/agentrouter-proxy.js` |
+| `20155` | **Tabi Token keepalive** (SSE) | `routing/keepalive-proxy.js` |
+| `20156` | **GoRouter keepalive** (SSE) | `routing/keepalive-proxy.js` |
+| `20150–20250` | **Custom OpenAI proxies** (динамически, на активацию) | `routing/custom-openai-proxy.js` |
+| `20126` | FreeModel Key Rotator *(легаси)* | `routing/freemodel-rotator.js` |
+| `20130` | FreeModel OpenAI Proxy *(легаси)* | `routing/freemodel-openai-proxy.js` |
+| `20131` | VyceAI OpenAI Proxy *(легаси)* | `routing/vyceai-openai-proxy.js` |
+| `20128` | OmniRoute (внешний Docker, опц., *архив*) | docker `ghcr.io/diegosouzapw/omniroute` |
+| `8190` | Notion manager *(архив)* | `notion/` |
 | — | **Telegram-пульт** — long-poll, порт не слушает | `tgbot/bot.js` |
 
 ---
@@ -134,7 +150,7 @@ py -3.11 -m venv tools/tg-venv
 tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt
 
 # 7. запуск
-routing/restart-dashboard.bat              # rotator :20126 + дашборд :8200 + откроет UI
+routing/restart-dashboard.bat              # keepalive-прокси + дашборд :8200 + откроет UI
 npm run tgbot                              # опц.: ТГ-пульт
 ```
 </details>
@@ -143,133 +159,96 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 ## Дашборд
 
-`http://localhost:8200/__switch`. Сайдбар: **Switcher · FreeModel · Aerolink · Cun · Evomap · Ourtoken · Conduit · Svrtr · AgentRouter · HelpCoder · Video API · Картинки API · SuperGrok · Плагины · Настройки** (+ архив «Чтим память»).
+`http://localhost:8200/__switch`. Сайдбар: **Health · Claude Code · FreeModel · VyceAI · Aerolink · Cun · Evomap · Ourtoken · Custom · Conduit · Svrtr · HelpCoder · AgentRouter · GoRouter · Tabi Token · GitHub аккаунты · AnyModel · Video API · Картинки API · SuperGrok · Плагины / MCP · Настройки** (+ архив «Чтим память»: TokenRouter · Devin · Notion). Порядок и видимость настраиваются кнопкой **⋮ Настроить вкладки**.
 
-### Switcher
+Активные вкладки — **AgentRouter · GoRouter · Tabi Token · GitHub аккаунты**. Остальные провайдеры — легаси (см. таблицу выше).
 
-Переключает Claude Code между бэкендами одним кликом — переписывает `~/.claude/settings.json` (с `.bak-<timestamp>`). После прямого свича — **перезапустить Claude Code**; в режимах API Helper (FM/Aerolink/Evomap/Ourtoken/Conduit/Svrtr/HelpCoder) перезапуск не нужен. Сверху — **глобальная шкала запаса** (считает FreeModel-пул).
+### Claude Code
+
+Главная вкладка: активный маршрут из `~/.claude/settings.json` (имя + base URL + режим) и кнопка **🎫 Подключить** — официальный Claude по OAuth (`api.anthropic.com`, не трогает `/login`-сессию).
 
 ### AgentRouter
 
-Пул ключей `agentrouter.org`. **WAF пускает только реальный Claude Code**: probe/models обязаны нести CC-заголовки, `apiKeyHelper` не работает — ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN` (прямой режим, base `https://agentrouter.org` БЕЗ `/v1`).
+Пул ключей `agentrouter.org`. **WAF пускает только реальный Claude Code**: probe/models обязаны нести CC-заголовки, `apiKeyHelper` не работает — ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN` (base `https://agentrouter.org` БЕЗ `/v1`).
 
-- **Выбор модели** — клик по модели → `ar-active-model.txt` + `settings.model`. `claude-*` → напрямую в agentrouter; `gpt-*` → через локальный прокси `:20132` (конвертация Anthropic→OpenAI).
-- **Маппинг claude-тиров** — блок «Маппинг claude-тиров» на вкладке AgentRouter: `opus`/`sonnet`/`haiku` → модель agentrouter. Применяется в прокси `:20132` и keepalive `:20133` на каждый запрос по mtime (БЕЗ рестарта). Закрывает сабагентов (`claude-haiku-4-5` от Explore и т.п.) — дефолт `haiku → gpt-5.6-sol`; пустой тир = не маппить.
-- **Cyrillic-bypass** — WAF на OpenAI-эндпоинте режет запросы с «чувствительными словами» (`500 sensitive words detected`, падал весь реальный CC). Прокси заменяет английскую `c` → кириллическую `с` (U+0441) в тексте промпта, WAF не видит сигнатуру, на ответе — обратная замена. Полный CC-запрос (91 тул) теперь проходит 200.
-- Прокси спавнится автоматически при выборе gpt-модели; статус — `/__agentrouter/api/status` на `:20132`.
+- **Маршрутизация моделей** — клик по модели → `~/.claude/ar-active-model.txt` + `settings.model`. `claude-*` → SSE keepalive `:20133` (pass-through в agentrouter.org); `gpt-*` → прокси `:20132` (Anthropic→OpenAI конвертер).
+- **Маппинг claude-тиров** — блок «Маппинг claude-тиров»: `opus`/`sonnet`/`haiku` → модель agentrouter (`routing/ar-modelmap.json`). Применяется прокси/keepalive на каждый запрос по mtime (БЕЗ рестарта). Закрывает сабагентов (дефолт `haiku → gpt-5.6-sol`); пустой тир = не маппить.
+- **Баланс** — сервис отдаёт только `total_usage` (центы), выдача угадывается по шагу $25 (`max(175, …)`). `balance = grant + bonus + referral − spent`. Кнопки **«+25»** (чек-ин в ЛК) и **«+100»** (реферал), **✏️ из $X** — ручная выдача, **💳 Балансы всех** — пакетный прогон.
+- **🌐 ЛК** — вход в кабинет для чек-ина через GitHub: видимый Chromium с персональным профилем `agentrouter/profiles/<label>/`.
+- **WAF «sensitive words»** — раньше резал латиницу (`500 sensitive words detected`), обходили заменой `c→с`. **С 2026-08-15 WAF обновился: детектит кириллические хомоглифы → `400 content-blocked`, чистую латиницу пропускает.** Bypass отключён флагом `CYR_BYPASS_ENABLED=false`; если WAF снова начнёт резать латиницу — поднять флаг.
 
-### HelpCoder
+![AgentRouter](docs/agentrouter.png)
 
-Аккаунты `helpcoder.cc` — New-API инстанс, модели `gpt-5.*`/codex. **WAF нет** — работает как обычный OpenAI/Anthropic-совместимый endpoint через API Helper (`hc-active-key.txt`), без прокси и bypass.
+### GoRouter
 
-- **Авторег** — `helpcoder/helpcoder_autoreg.js [N]`: чистый HTTP (register+token), без email и капчи. Новый акк = $200 бонуса.
-- **Квоты** — cookie-fetch `/api/user/self`, кнопка 🔄 на сессии. 401/403 = мёртвый.
+Пул ключей `gorouter.app`. GitHub-вход в консоль, **активация через SSE keepalive `:20156`** (`routing/keepalive-proxy.js` → gorouter.app: режет `[1m]`, count_tokens fallback, держит SSE-паузы thinking-моделей).
 
-### FreeModel
+- **Баланс** — как у AgentRouter, но шаг бонуса **$5**: `balance = grant + bonus − spent`, кнопка **«+5»** (чек-ин), **✏️** — ручная выдача. База выдачи `GO_DEFAULT_GRANT = 70`.
+- **Маппинг claude-тиров** — `routing/gorouter-modelmap.json` (по mtime, БЕЗ рестарта).
+- **Share / import** — поделиться сессией, вставить аккаунт из буфера.
 
-Менеджер сессий `freemodel.dev` с квотами (окна 5h/7d, `$`) и пулом Telegram-привязок.
+![GoRouter](docs/gorouter.png)
 
-- **Режим ключа** — бейдж 🔑 **Прямой ключ** (`env.ANTHROPIC_API_KEY`) или 🤝 **API Helper** (`apiKeyHelper` читает `~/.claude/fm-active-key.txt`). Тумблер на каждой сессии.
-- **➕ Создать v3** — реги пачкой · **🔄 Квоты (~2 мин)** — перепрогон через headless Chrome.
-- **Авто-ротация** — держит активным наименее использованный ключ, переписывает `fm-active-key.txt` без перезапуска CC. Настройки: интервал (90с) + потолок used% (70%). Лог свитчей, состояние в `logs/.freemodel_autorotate.json` (переживает рестарт).
+### Tabi Token
 
-### Aerolink
+Пул ключей `tabitoken.com`. GitHub-вход, **активация через SSE keepalive `:20155`** (как gorouter).
 
-Ручной пул `email + ключ` (`capi.aerolink.lat`). Пинг `/v1/me` → статус, активация через API Helper (`al-active-key.txt`). Данные — `routing/al-sessions.json` (gitignored).
+- **Баланс** — `balance = grant + bonus − spent`. Дефолт выдачи $100, бонус за приведённого по рефке $20. **✏️** — ручная выдача.
+- **Маппинг claude-тиров** — `routing/tabi-modelmap.json` (по mtime, БЕЗ рестарта).
+- **Share / import** — как у gorouter.
 
-### Cun
+![Tabi Token](docs/tabi.png)
 
-Пул ключей `cun.ai` (Anthropic-совместимый gateway). Активация пишет `ANTHROPIC_AUTH_TOKEN` + `BASE_URL=https://www.cun.ai` в `settings.json`, выбор модели per-ключ. Данные — `routing/cun-sessions.json` (gitignored).
+### GitHub аккаунты
 
-### Evomap
+Хранилище купленных аккаунтов GitHub (нужны для чек-ина бонусов AgentRouter/GoRouter/Tabi).
 
-Ручной пул `email + ключ` (`api.evomap.ai/v1`, ключи `sk-evomap-*`). Пинг `/v1/models` → статус (`Bearer`-токен), активация через API Helper (`ev-active-key.txt`). Данные — `routing/evomap-sessions.json` (gitignored).
+- **Поля** — логин/пароль/2FA-секрет (TOTP)/recovery-коды/ник/`apiToken`/заметка. Показ секретов — через меню (👁/📋), маска по умолчанию.
+- **TOTP считается локально в браузере** — base32 + HMAC-SHA1 (RFC 6238), обратный отсчёт 30с, без внешних сервисов.
+- **Профиль браузера на аккаунт** — клик «🌐» открывает Chromium с персональным профилем `github/profiles/<id>/` (сохраняет GitHub-сессию).
+- **Импорт форматов** — пачкой (логин:пароль:секрет и т.п.), статусы live/cooldown/dead вручную.
 
-### Ourtoken
+### Health
 
-Ручной пул `email + ключ` (`api.ourtoken.ai/v1`, ключи `usTHAz8-*`). Пинг `/v1/models` → статус (`Bearer`-токен), активация через API Helper (`ot-active-key.txt`). Данные — `routing/ourtoken-sessions.json` (gitignored). Автореги через Playwright + instanttempemail — `ourtoken/ourtoken_autoreg.js`.
+Что запущено и что упало: wired-процессы, git-состояние репо, сервисы по портам. Клик по строке = детальнее.
 
-### Conduit
+### Плагины / MCP
 
-Аккаунты `conduit.ozdoev.net` (Anthropic-совместимый, ключи `sk-cdt-`), авторизация кабинета **только через Telegram** (device-code, без Playwright).
-
-- **Автореги из ТГ** — `conduit/conduit_autoreger.js` берёт ТГ из **общего пула** с FreeModel, подписывается на канал, поллит авторизацию. Реф-цепочка парами 2+2.
-- Баланс/план/лимиты + **шкала запаса**, активация ключа через API Helper (`cdt-active-key.txt`).
-
-### SuperGrok
-
-Сессии grok.com для Grok CLI: device-auth через Camoufox (`grok-launcher/`), профили `~/.grok-<name>/auth.json`, активация подставляет auth активного профиля в `~/.grok`. Квоты/план, ручной cooldown после rate-limit (обычно 4ч).
-
-### Telegram — пул сессий (общий для FreeModel и Conduit)
-
-Готовые TG-аккаунты в дашборде: **импорт → хранение → привязка → ✈ открыть в Telegram Desktop**. Один аккаунт = `auth_key + dc_id`, номер опционален. Импорт списком (`phone|hex:dc`, `hex:dc`, …) или `.session`-файлом. **🩺 Health-чек** (`getMe()`, read-only). Один ТГ можно регать и на FreeModel, и на Conduit.
-
-> ✈ Открыть требует `tools/tg-venv` + портативный Telegram — см. установщик (шаг 8) или ручной блок.
-
-### Video / Картинки API
-
-Два близнецовых модуля — чистый CRUD-стор ключей провайдеров (видео и картинок: NanoBanana, fal, Replicate, Imagen, …). Фильтр по провайдеру, маска ключа (👁/📋), триал-каталог. Файлы `routing/{video,image}-keys.json` (gitignored, есть `*.example`).
-
-### Плагины
-
-Вкл/выкл плагинов Claude Code — тоггл `enabledPlugins` через `/api/settings/apply`. Кнопка **★ Включить рекомендованные** добавляет курируемый набор, не трогая остальное.
+Слева — плагины Claude Code (тоггл `enabledPlugins`, **★ Включить рекомендованные**), справа — MCP-серверы из `~/.claude.json` (тоггл через `/api/mcp/*`).
 
 ### Настройки
 
-- **OmniRoute** — `OMNIROUTE_BASE_URL` + `OMNIROUTE_API_KEY` (scope **manage**) → пишется в `routing/.env`, применяется сразу.
-- **Бэкапы `settings.json`** — создать / ↩ восстановить / 🗑 удалить (`~/.claude/settings-backups/`).
+- **Обновление дашборда** — `git pull` + рестарт одной кнопкой.
+- **Тоггл статус-бара CC и автокомпакта** — вкл/выкл `statusLine.command` и `autoCompactEnabled` через `/api/settings/apply`.
+- **JSON-редактор `settings.json`** + бэкапы (`~/.claude/settings-backups/`, создать/восстановить/удалить).
+- **OmniRoute env** — `OMNIROUTE_BASE_URL` + `OMNIROUTE_API_KEY` → `routing/.env`.
 
 ---
 
-## Telegram-пульт (`tgbot/`)
+## Статуслайн Claude Code
 
-Удалёнка с телефона: переключать бэкенды/ключи как на дашборде + живая claude-сессия. Тонкий HTTP-клиент к `:8200`, логику ротации не дублирует.
+Строка внизу CLI: `tabi/claude-sonnet-4-5 │ $93.34 │ ⧉ 139k/1M`. Скрипт — `routing/statusline-autoreger.sh` (прописывается в `statusLine.command`).
 
-- **Whitelist обязателен** (`ALLOWED_USERS` — Telegram ID): бот выполняет произвольный код через `claude --dangerously-skip-permissions`.
-- Команды: `/status`, `/backends` (inline-свич), `/cd`, `/pwd`, `/new`, `/stop`; свободный текст → claude.
-- Запуск: `npm run tgbot`. Подробности — [`tgbot/README.md`](tgbot/README.md).
+- **Баланс `$`** — для AgentRouter / GoRouter / Tabi: читает блок активного ключа из `*-sessions.json` (кеш дашборда), `~` = устаревший кеш; при протухании >90с сам дёргает `GET /__switch/api/{ar,tb,go}/balance` (fire-and-forget) — следующий рендер уже свежий.
+- **Контекст `⧉`** — `total_input_tokens/context_window_size` из payload Claude Code; при отсутствии — `⧉ ?`.
+- Провайдер определяется по `apiKeyHelper`/`ANTHROPIC_BASE_URL` из `settings.json` без сети.
 
 ---
 
-## OpenCode
+## Легаси (кратко)
 
-OmniRoute — обычный OpenAI-совместимый endpoint, в него можно ходить и из [OpenCode](https://opencode.ai). Добавь провайдер в `opencode.json` — ключ тот же `OMNIROUTE_API_KEY`, что и в `routing/.env`. Бонус: разные агенты → разные модели через один OmniRoute.
+Вкладки существуют, но не развиваются. Данные/логика не удалены — см. `ARCHITECTURE.md`:
 
-<details>
-<summary><b>opencode.json</b> — провайдер OmniRoute + пример агентов</summary>
+- **FreeModel** — сессии `freemodel.dev` + квоты (5h/7d, `$`) + авто-ротация ключей через API Helper (`fm-active-key.txt`).
+- **Aerolink / Evomap / Ourtoken / Conduit / Svrtr / HelpCoder** — ручные пулы ключей через `apiKeyHelper` + `*-active-key.txt`.
+- **VyceAI / Custom** — Anthropic→OpenAI конвертеры (`:20131` / `20150–20250`).
+- **Cun** — пул ключей `cun.ai` через `AUTH_TOKEN`.
+- **SuperGrok** — сессии grok.com (device-auth через Camoufox).
+- **AnyModel** — автореги сторонних моделей.
+- **Video / Картинки API** — CRUD-хранилища ключей (NanoBanana, fal, Replicate, Imagen…).
+- **Telegram-пульт** (`tgbot/`) — переключение бэкендов с телефона + живая claude-сессия. Команды `/status`, `/backends`, `/cd`, `/pwd`, `/new`, `/stop`. Запуск `npm run tgbot`.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "omniroute/tokenrouter/kimi-k2p7-code",
-  "small_model": "omniroute/tokenrouter/deepseek-v4-flash",
-  "provider": {
-    "omniroute": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "OmniRoute",
-      "options": {
-        "baseURL": "http://localhost:20128/v1",
-        "apiKey": "<OMNIROUTE_API_KEY>",
-        "timeout": 600000
-      },
-      "models": {
-        "tokenrouter/deepseek-v4-pro":      { "name": "DeepSeek V4 Pro" },
-        "tokenrouter/kimi-k2p7-code":       { "name": "Kimi K2.7 Code" },
-        "tokenrouter/qwen3p7-plus":         { "name": "Qwen 3.7 Plus" }
-      }
-    }
-  },
-  "agent": {
-    "review": {
-      "description": "Баг-хантер",
-      "model": "omniroute/tokenrouter/deepseek-v4-pro",
-      "prompt": "You are a senior code reviewer. Find bugs, security issues, and bad patterns. Be concise.",
-      "tools": { "write": false, "edit": false, "bash": false }
-    }
-  }
-}
-```
-</details>
+---
 
 ## Reference
 
@@ -277,16 +256,15 @@ OmniRoute — обычный OpenAI-совместимый endpoint, в него
 <summary><b>Скрипты</b></summary>
 
 ```bash
-# FreeModel автореги (N подряд, override стартового инвайта)
-node freemodel/freemodel_autoreger_v3.js [N] [FRE-invite]
-
-# Conduit автореги (из общего ТГ-пула)
-node conduit/conduit_autoreger.js [N]
-
-# Routing
-routing/restart-dashboard.bat            # рестарт rotator :20126 + switcher :8200
+# Dashboard
+routing/restart-dashboard.bat            # рестарт keepalive-прокси + дашборда :8200, откроет UI
 routing/PANIC-restore-omniroute.bat      # откат settings.json на OmniRoute
-node routing/transparent-proxy.js        # switcher вручную
+node routing/transparent-proxy.js        # дашборд вручную
+
+# ЛК/сессии провайдеров (GitHub-вход, чек-ин бонусов)
+node agentrouter/open-session.js <label>  # вход в кабинет AgentRouter (+$25 чек-ин)
+node tabi/open-session.js <label>         # вход в кабинет Tabi Token
+node gorouter/open-session.js <label>     # вход в кабинет GoRouter
 ```
 </details>
 
@@ -296,23 +274,22 @@ node routing/transparent-proxy.js        # switcher вручную
 | Папка / файл | Что |
 | :--- | :--- |
 | `install.sh` | Интерактивный установщик с нуля |
-| `routing/transparent-proxy.js` | Switcher :8200 + HTTP API дашборда |
-| `routing/agentrouter-proxy.js` | AgentRouter-прокси :20132 (claude passthrough + gpt конвертер с Cyrillic-bypass + маппинг claude-тиров) |
-| `routing/ar-modelmap.json` | Маппинг claude-тиров AgentRouter (редактируется на вкладке) |
+| `routing/transparent-proxy.js` | Dashboard :8200 + HTTP API + пулы ключей |
+| `routing/keepalive-proxy.js` | SSE keepalive для agentrouter :20133 / tabi :20155 / gorouter :20156 (параметризован env: `PORT`/`UPSTREAM`/`KEY_FILE`/`MODELMAP_FILE`) |
+| `routing/agentrouter-proxy.js` | AgentRouter gpt-конвертер :20132 (Anthropic→OpenAI) |
+| `routing/{agentrouter,gorouter,tabi}-sessions.json` | Пулы ключей + кеш балансов (gitignored) |
+| `routing/{ar,gorouter,tabi}-modelmap.json` | Маппинг claude-тиров (редактируется на вкладках) |
+| `routing/github-accounts.json` | Хранилище GitHub-аккаунтов: логин/пароль/TOTP/recovery (gitignored) |
+| `routing/statusline-autoreger.sh` | Статус-лайн CC: провайдер/модель · $баланс · ⧉ контекст |
 | `routing/proxy-dashboard.html` | UI (Tailwind) |
-| `routing/freemodel-rotator.js` | Ротатор FreeModel-ключей :20126 |
-| `routing/{video,image}-keys.json` | Хранилища ключей провайдеров (gitignored, есть `*.example`) |
-| `routing/al-sessions.json` | Пул Aerolink (gitignored, есть `*.example`) |
-| `routing/evomap-sessions.json` | Пул Evomap (gitignored, есть `*.example`) |
-| `routing/ourtoken-sessions.json` | Пул Ourtoken (gitignored, есть `*.example`) |
-| `routing/.env` | **Секреты** (gitignored) — `OMNIROUTE_API_KEY` |
-| `internal/dashboard-api.js` | Прослойка CLI ↔ HTTP (FreeModel + Conduit) |
-| `internal/freemodel-manager.js` | FreeModel-сессии + квоты + TG-пул |
-| `conduit/` | Conduit: клиент, менеджер, автореги, рекордер сессии |
-| `helpcoder/` | HelpCoder: cookie-клиент (`lib/helpcoder-api.js`), менеджер аккаунтов, авторег |
-| `freemodel/lib/tg-*.js` · `tools/tg-open.py` | Telegram: пул, парсер `.session`, привязка, health, открытие |
+| `agentrouter/` · `tabi/` · `gorouter/` | open-session.js (вход в ЛК), профили браузера |
+| `github/` | open-session.js + профили браузеров по id |
+| `routing/custom-openai-proxy.js` · `routing/custom-providers.json` | Custom-провайдеры |
+| `internal/dashboard-api.js` | Прослойка CLI ↔ HTTP |
+| `freemodel/` · `conduit/` · `svrtr/` · `helpcoder/` · `anymodel/` · `vyceai/` | Легаси-провайдеры |
 | `tgbot/` | Telegram-пульт (`bot.js` + `.env`) |
-| `~/.claude/settings.json` | Активный backend (Switcher редактирует) |
+| `~/.claude/settings.json` | Активный backend (дашборд редактирует) |
+| `~/.claude/{ar,tabi,gorouter}-active-key.txt` · `-active-model.txt` | Активный ключ/модель провайдера |
 | `manual_sessions/` · `ready_to_sell/` · `tools/{tg-venv,telegram-portable,tg-profiles}` | _gitignored_ |
 | `menu.js` | TUI-меню (всё-в-одном) |
 
@@ -327,42 +304,46 @@ node routing/transparent-proxy.js        # switcher вручную
   <td>В <code>settings.json</code> попал не тот ключ →&nbsp; <code>routing/PANIC-restore-omniroute.bat</code></td>
 </tr>
 <tr>
-  <td>Ключи не ротируются «на лету» / нужен релогин после свича</td>
-  <td>Claude Code не <code>2.1.153</code> или включён авто-апдейт. Зафиксируй версию + <code>autoUpdates:false</code> (см. Установка)</td>
+  <td>Статус-бар CC не показывает баланс <code>$</code></td>
+  <td>Активный провайдер вне {agentrouter, tabi, gorouter} (у легаси gauge нет) или кеш ещё не заполнен — нажми «💳 Балансы всех» на вкладке провайдера</td>
 </tr>
 <tr>
   <td>Дашборд не открывается / <code>:8200</code> занят</td>
-  <td><code>routing/restart-dashboard.bat</code> — сам убивает старый процесс на :8200 (и legacy :8300)</td>
+  <td><code>routing/restart-dashboard.bat</code> — сам убивает старый процесс на :8200</td>
 </tr>
 <tr>
-  <td>Квоты в кеше устарели</td>
-  <td>Кнопка <b>🔄 Квоты (~2 мин)</b> в табе — перепрогон через headless Chrome</td>
+  <td>AgentRouter: <code>400 content-blocked</code></td>
+  <td>WAF режет кириллические хомоглифы (c→с). Чистая латиница проходит — проверь, что не включён <code>CYR_BYPASS_ENABLED</code></td>
 </tr>
 <tr>
-  <td>AgentRouter: gpt-модель даёт <code>500 sensitive words detected</code></td>
-  <td>WAF режет контент на OpenAI-эндпоинте. Проверь, что активен прокси <code>:20132</code> (спавнится при выборе gpt-модели) — Cyrillic-bypass встроен. Если нет — кликни gpt-модель заново или подними <code>routing/agentrouter-proxy.js</code></td>
+  <td>AgentRouter gpt-модель не отвечает</td>
+  <td>Не поднят прокси <code>:20132</code> — выбери gpt-модель заново или подними <code>routing/agentrouter-proxy.js</code></td>
 </tr>
 <tr>
-  <td><b>✈ Открыть</b> падает / <code>нет tools/tg-venv</code></td>
-  <td>Не создан venv или нет бинаря Telegram — перезапусти <code>bash install.sh</code> (шаг 8). Проверка: <code>tools/tg-venv/Scripts/python.exe tools/tg-open.py &lt;phone&gt; --check</code></td>
+  <td>Tabi/GoRouter не активируются</td>
+  <td>Не работает SSE keepalive <code>:20155</code>/<code>:20156</code> — рестарт дашборда (<code>restart-dashboard.bat</code>) пересоздаёт прокси</td>
+</tr>
+<tr>
+  <td>Ключи не ротируются «на лету» / нужен релогин после свича</td>
+  <td>Claude Code не <code>2.1.153</code> или включён авто-апдейт. Зафиксируй версию + <code>autoUpdates:false</code> (см. Установка)</td>
 </tr>
 </table>
 
 ## Безопасность
 
-- Реальные API-ключи — в `routing/.env` + `*-active-key.txt` (gitignored); роутер подменяет их на лету, CC получает только литеральный токен.
+- Реальные API-ключи/пароли — в `routing/*.json` (gitignored) + `~/.claude/*-active-key.txt`; дашборд маскирует их в UI (👁/📋).
 - `settings.json` бэкапится перед каждым изменением (`*.bak-<timestamp>`).
-- Gitignored: `routing/.env` · `tgbot/.env` · `routing/{al-sessions,video-keys,image-keys}.json` · `manual_sessions/` · `ready_to_sell/` · `freemodel/{sessions,tg_pool.json}` · `conduit/accounts/` · `tools/{tg-venv,telegram-portable,tg-profiles}` · `*.png`.
+- Gitignored: `routing/.env` · `tgbot/.env` · `routing/*-sessions.json` · `routing/github-accounts.json` · `routing/{video,image}-keys.json` · `~/.claude/*-active-key.txt` · `freemodel/{sessions,tg_pool.json}` · `conduit/accounts/` · `agentrouter/profiles/` · `tabi/{profiles,sessions}/` · `github/profiles/` · `tools/{tg-venv,telegram-portable,tg-profiles}` · `*.png`.
 
 Перед коммитом:
 
 ```bash
-git diff --cached | grep -E "sk-[a-z]{2,}-[a-f0-9]+|auth_key_hex|fe_oa_|aero_live_" || echo "OK: no keys in staged diff"
+git diff --cached | grep -E "sk-[a-z]{2,}-[a-f0-9]+|auth_key_hex|fe_oa_|aero_live_|totpSecret|recoveryCodes|ghp_" || echo "OK: no keys in staged diff"
 ```
 
 ## Disclaimer
 
-Образовательные цели. Используй в рамках ToS соответствующих сервисов (FreeModel, Conduit, Aerolink, Anthropic).
+Образовательные цели. Используй в рамках ToS соответствующих сервисов (AgentRouter, GoRouter, Tabi Token, Anthropic).
 
 ## License
 

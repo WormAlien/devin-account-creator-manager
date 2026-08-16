@@ -138,6 +138,8 @@ parse_dollars_sum() {  # print sum of "$X.XX" values in file
 
 stale_age_s=0
 stale=0
+balance_age_s=-1   # возраст цифры баланса в секундах; -1 = провайдер без кеша баланса
+balance_err=""     # непустая = последняя проверка баланса не удалась (таймаут/dead)
 active_name=""
 
 # Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter):
@@ -147,7 +149,7 @@ active_name=""
 # GET /__switch/api/<endpoint_path>?api_key=… если кеш протух (> <stale_s>).
 gauge_from_balance_cache() {
     local sessions_file="$1" active_key_file="$2" endpoint_path="$3" stale_threshold="$4"
-    local key raw after before head_obj tail_obj block bal grant chk bal_i grant_i chk_ts now_s
+    local key raw after before head_obj tail_obj block bal grant bonus referral chk bal_i grant_i chk_ts now_s
     have_gauge=0
 
     key=""; read -r key < "$active_key_file" 2>/dev/null || true
@@ -168,26 +170,38 @@ gauge_from_balance_cache() {
     bal=0;   [[ "$block" =~ \"balance\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\.[0-9]+)?) ]] && bal="${BASH_REMATCH[1]}"
     grant=0; [[ "$block" =~ \"grant\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && grant="${BASH_REMATCH[1]}"
     chk="";  [[ "$block" =~ \"balanceCheckedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && chk="${BASH_REMATCH[1]}"
-    # avail_sum = баланс как есть; pct = bal/grant. Целочисленная арифметика bash
-    # (без awk-форков): дробь режем по точке.
+    # balanceError пишет сервер, когда billing не ответил — цифра не просто стара, а под вопросом
+    balance_err=""; [[ "$block" =~ \"balanceError\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && balance_err="${BASH_REMATCH[1]}"
+    # avail_sum = баланс как есть; pct = bal/(grant+bonus+referral) — тот же знаменатель,
+    # из которого сервер считал balance, иначе шкала уезжает за 100% и не двигается.
+    bonus=0;    [[ "$block" =~ \"bonus\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && bonus="${BASH_REMATCH[1]}"
+    referral=0; [[ "$block" =~ \"referral\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && referral="${BASH_REMATCH[1]}"
     [[ "$bal" == -* ]] && bal=0
     avail_sum="$bal"
-    bal_i="${bal%.*}"; grant_i="${grant%.*}"
+    bal_i="${bal%.*}"; grant_i=$(( ${grant%.*} + ${bonus%.*} + ${referral%.*} ))
     if [ "${grant_i:-0}" -gt 0 ] 2>/dev/null; then pct=$(( bal_i * 100 / grant_i )); else pct=0; fi
 
-    # свежесть по balanceCheckedAt (ISO). Порог 90с: billing-эндпоинт медленный
-    # (~1-2с) и это реальные деньги — чаще дёргать незачем.
+    # свежесть по balanceCheckedAt (ISO). balance_age_s наружу — рендер строки
+    # показывает возраст цифры, чтобы было видно, обновляется квота или залипла.
     if [ -n "$chk" ]; then
         chk_ts="$(date -d "$chk" +%s 2>/dev/null || echo 0)"
         now_s="$(date +%s)"
         [ "$chk_ts" -gt 0 ] && stale_age_s=$(( now_s - chk_ts ))
         [ "$stale_age_s" -lt 0 ] && stale_age_s=0
+    else
+        # штампа нет вообще — цифра неизвестного возраста, считаем протухшей
+        stale_age_s=$(( stale_threshold + 1 ))
     fi
+    balance_age_s="$stale_age_s"
     if [ "$stale_age_s" -gt "$stale_threshold" ]; then
         stale=1
-        # fire-and-forget: curl рвётся за 0.5с, но дашборд-хендлер дофетчит и
-        # запишет кеш сам (fetch не привязан к res) — как у freemodel-рефреша.
-        ("$CURL_BIN" -s -m 0.5 "http://localhost:8200/__switch/api/$endpoint_path?api_key=$key" >/dev/null 2>&1 &) >/dev/null 2>&1
+        # Только ПИНАЕМ дашборд: `nudge=1` отвечает мгновенно и считает баланс в
+        # своём процессе. Раньше здесь висел `curl -m 0.5 … &`, который должен был
+        # дождаться медленного (1-2с) billing-эндпоинта — но statusline завершается
+        # через ~50мс, и сиротский фоновый curl на Windows сносило вместе с группой
+        # процессов, часто ДО отправки запроса. Итог: balanceCheckedAt не двигался
+        # часами, а пинок уходил на каждом промпте. Дедуп и троттлинг — на сервере.
+        ("$CURL_BIN" -s -m 1 "http://localhost:8200/__switch/api/$endpoint_path?api_key=$key&nudge=1" >/dev/null 2>&1 &) >/dev/null 2>&1
     fi
 }
 
@@ -257,6 +271,7 @@ if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] &
             now_ms="$(date +%s%3N 2>/dev/null || echo 0)"
             [ "$upd" -gt 0 ] && stale_age_s=$(( (now_ms - upd) / 1000 ))
             [ "$stale_age_s" -lt 0 ] && stale_age_s=0
+            balance_age_s="$stale_age_s"   # возраст цифры → в рендер (см. age_mark)
 
             # lazy refresh: асинхронный дёрг рефреша (пишет в общий кэш).
             # Порог 30с, а не 180: рефреш идёт по JSON-API (~1.5с), браузер не
@@ -294,17 +309,29 @@ MONEY=$'\033[38;5;42m'
 printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
 
 if [ "$have_gauge" = "1" ]; then
+    # Возраст цифры показываем текстом: раньше был только тусклый `~`, по которому
+    # нельзя было понять «обновляется, просто чуть отстало» или «залипло часы назад».
+    # Свежее порога — цвет денег без пометки; протухло — тускло + возраст (2м/3ч/5д).
+    age_mark=""
     if [ "$stale" = "1" ]; then
         money_col="$DIM"
-        stale_mark="~"
+        if [ "${balance_age_s:--1}" -ge 0 ] 2>/dev/null; then
+            if   [ "$balance_age_s" -lt 3600 ];  then age_mark="~$(( balance_age_s / 60 ))м"
+            elif [ "$balance_age_s" -lt 86400 ]; then age_mark="~$(( balance_age_s / 3600 ))ч"
+            else                                      age_mark="~$(( balance_age_s / 86400 ))д"
+            fi
+        else
+            age_mark="~"
+        fi
+        # ошибка последней проверки (таймаут billing / dead-ключ) — цифра не просто стара
+        [ -n "$balance_err" ] && age_mark="$age_mark⚠"
     else
         money_col="$MONEY"
-        stale_mark=""
     fi
 
     printf ' %s│%s %s$%s%s%s' \
         "$SEP" "$RESET" \
-        "$money_col" "$avail_sum" "$stale_mark" "$RESET"
+        "$money_col" "$avail_sum" "$age_mark" "$RESET"
 
     # ⏳ перезарядка: окно выжрано, аккаунт живой и ждёт налива
     if [ -n "$cool_str" ]; then

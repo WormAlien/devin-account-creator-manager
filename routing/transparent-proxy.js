@@ -95,16 +95,24 @@ const SQLITE_EXE = process.env.SQLITE3
     ].find(p => fs.existsSync(p))
     || path.join(os.homedir(), 'bin', 'sqlite3.exe');
 
+// Порт keepalive-прокси AgentRouter нужен уже здесь, в BACKENDS, а канонические
+// AR_*-константы объявлены ниже (~5150) — держим один литерал с перекрёстной ссылкой.
+// При смене порта править оба места (ниже стоит ассерт на расхождение).
+const AR_KEEPALIVE_URL_EARLY = 'http://localhost:20133';
+
 const BACKENDS = {
     agentrouter: {
         label: 'AgentRouter (opus-5 1M)',
-        base_url: 'https://agentrouter.org',
+        // База — локальный keepalive :20133, а НЕ голый agentrouter.org: у gpt-моделей
+        // /v1/messages сломан, нужен конвертер за keepalive (см. arTargetFor). Голый
+        // домен здесь ранее тихо разламывал весь AR-путь, если кто-то дёргал
+        // POST /__switch/api/switch {target:'agentrouter'} в обход вкладки.
+        base_url: AR_KEEPALIVE_URL_EARLY,
         api_key: agentRouterKey(),
-        model: 'claude-opus-5[1m]',
+        // model: undefined = не трогать. Источник правды — ar-active-model.txt
+        // (handleArSetModel/handleArActivate), иначе клик по чипу gpt-5.6-sol
+        // затирался бы жёстко прописанным claude-opus-5[1m].
         clear_helper: true,
-        // Окно контекста — свойство ID модели, не апстрима: суффикс [1m] заставляет
-        // CC заявлять 1M вместо дефолтных 200k. Держим его здесь (settings.model),
-        // а НЕ в env.ANTHROPIC_MODEL — тот стирается clearOtEnv() при каждом switch.
     },
     omniroute: {
         label: 'FreeModel (OmniRoute)',
@@ -413,7 +421,12 @@ async function handleSettingsApply(req, res) {
         writeSettings(next);
         // AgentRouter: пресет не знает ключ — подставляем активный из ar-active-key.txt,
         // а helper убираем (WAF agentrouter пускает только AUTH_TOKEN-путь).
-        if ((next.env && next.env.ANTHROPIC_BASE_URL || '').startsWith(AR_BASE_URL)) {
+        // Ловим и голый домен, и локальные прокси :20133/:20132 — пресет указывает
+        // keepalive, а не домен (у gpt /v1/messages сломан, нужен конвертер).
+        const applyBase = (next.env && next.env.ANTHROPIC_BASE_URL) || '';
+        const isArBase = applyBase.startsWith(AR_BASE_URL)
+            || /^https?:\/\/(localhost|127\.0\.0\.1):(20133|20132)\b/.test(applyBase);
+        if (isArBase) {
             next.env = next.env || {};
             delete next.apiKeyHelper;
             delete next.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
@@ -5163,6 +5176,12 @@ const AR_KEEPALIVE_PORT = 20133;
 const AR_KEEPALIVE_URL = `http://localhost:${AR_KEEPALIVE_PORT}`;
 const KEEPALIVE_PROXY_FILE = 'keepalive-proxy.js';
 
+// Ранний литерал в BACKENDS (~строка 100) обязан совпадать с каноническим URL:
+// падаем на старте, а не молча уводим трафик на мёртвый порт.
+if (AR_KEEPALIVE_URL_EARLY !== AR_KEEPALIVE_URL) {
+    throw new Error(`AR keepalive URL расходится: BACKENDS=${AR_KEEPALIVE_URL_EARLY} vs ${AR_KEEPALIVE_URL}`);
+}
+
 // ????????? agentrouter-proxy.js (:) ???? ???? ???????? ? ???????? ??? Claude Code:
 // claude-* ? pass-through ? agentrouter /v1/messages, gpt-* ? ??????????? ? OpenAI /v1/chat/completions.
 async function arProxySpawn() {
@@ -5235,6 +5254,26 @@ function arLoad() {
 }
 function arSave(arr) {
     fs.writeFileSync(AR_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+// Мерж-запись для обновлений баланса/статуса. Раньше каждый хендлер делал
+// arLoad() → правка → arSave(ВЕСЬ файл). Пока «💳 Балансы всех» идёт ~10 секунд,
+// параллельный пойк от статусбара перезаписывал файл снимком, снятым ДО батча —
+// свежие цифры терялись, и в баре баланс откатывался назад. Здесь перечитываем
+// диск и накладываем только переданные объекты по api_key.
+// ВНИМАНИЕ: Object.assign не удаляет поля — для удаления ключей/полей
+// (delete, set-grant со сбросом) по-прежнему нужен arSave() целиком.
+function arSaveMerge(changed) {
+    const list = Array.isArray(changed) ? changed : [changed];
+    const disk = arLoad();
+    const byKey = new Map(disk.map(s => [s.api_key, s]));
+    for (const upd of list) {
+        if (!upd || !upd.api_key) continue;
+        const cur = byKey.get(upd.api_key);
+        if (cur) Object.assign(cur, upd);
+        else disk.push(upd);
+    }
+    arSave(disk);
 }
 function arReadActiveModel() {
     try { return fs.readFileSync(AR_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -5321,13 +5360,18 @@ async function handleArSessions(req, res) {
             for (let i = 0; i < sessions.length; i += 3) {
                 await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await arProbe(s.api_key); }));
             }
-            arSave(sessions);
+            arSaveMerge(sessions);   // мерж: пинг статусов не должен затирать параллельный чек баланса
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
                 await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s.api_key, s.grantManual, s.bonus, s.referral))));
+                // Мержим каждую порцию сразу: батч идёт ~10с, и если сохранять только
+                // в конце, всё это время бар видит старые цифры (а при обрыве — теряет их).
+                arSaveMerge(sessions.slice(i, i + 3));
             }
-            arSave(sessions);
+            // Отмечаем ключи как только что проверенные — чтобы автотик и ленивые
+            // триггеры не пошли следом дублировать свежий батч.
+            for (const s of sessions) AR_BALANCE_LAST.set(s.api_key, Date.now());
         }
         jsonRes(res, 200, { sessions, activeModel: arReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -5335,9 +5379,14 @@ async function handleArSessions(req, res) {
 
 // Пишем результат arBalance в объект сессии (персистентный кеш — переживает F5 и рестарт).
 // grantManual НЕ трогаем — это ручная настройка пользователя, живёт отдельно от посчитанного grant.
+// balanceCheckedAt ставим ВСЕГДА, а не только при live: раньше при таймауте billing
+// (а он медленный, 1-2с) штамп оставался старым → статусбар считал кеш протухшим и
+// дёргал обновление на КАЖДОМ рендере строки, т.е. на каждом промпте. Теперь неудача
+// тоже отмечена — бар подождёт до следующего порога, а ошибку видно в balanceError.
 function arApplyBalance(target, bal) {
     if (!target || !bal) return bal;
     target.status = bal.status;
+    target.balanceCheckedAt = new Date().toISOString();
     if (bal.status === 'live') {
         target.spent = bal.spent;
         target.grant = bal.grant;
@@ -5346,7 +5395,10 @@ function arApplyBalance(target, bal) {
         target.balance = bal.balance;
         target.accessUntil = bal.accessUntil;
         target.grantSource = bal.grantSource;
-        target.balanceCheckedAt = new Date().toISOString();
+        delete target.balanceError;
+    } else {
+        // Цифры оставляем прошлые (лучше устаревшие, чем нули), но помечаем причину.
+        target.balanceError = bal.error || bal.status;
     }
     return bal;
 }
@@ -5360,21 +5412,104 @@ async function handleArPing(req, res) {
         const status = await arProbe(api_key);
         const sessions = arLoad();
         const target = sessions.find(s => s.api_key === api_key);
-        if (target) { target.status = status; arSave(sessions); }
+        if (target) { target.status = status; arSaveMerge(target); }
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ── Обновление баланса: один в полёте на ключ + автотик по активному ключу ──
+// Проблема, которую это решает: statusline при протухшем кеше делал
+// fire-and-forget `curl -m 0.5 … &` и сразу завершался. Фоновый curl оставался
+// сиротой в группе умирающего процесса — на Windows его сносило часто ДО того,
+// как запрос уходил. Итог: `balanceCheckedAt` не двигался часами, а бар при этом
+// пытался обновиться на каждом промпте (никогда не успевая).
+// Теперь долгую работу делает ЭТОТ процесс — он живой и запрос доводит.
+const AR_BALANCE_INFLIGHT = new Map();     // api_key → Promise (дедуп параллельных)
+const AR_BALANCE_MIN_GAP_MS = 60_000;      // не чаще раза в минуту на ключ: billing медленный и это реальные деньги
+const AR_BALANCE_LAST = new Map();         // api_key → ts последней ПОПЫТКИ (не только успешной)
+
+// Считает баланс и мержит в сессию. Параллельные вызовы по одному ключу
+// переиспользуют один промис — в billing уйдёт ровно один запрос.
+function arBalanceOnce(apiKey) {
+    const running = AR_BALANCE_INFLIGHT.get(apiKey);
+    if (running) return running;
+    const p = (async () => {
+        const target = arLoad().find(s => s.api_key === apiKey);
+        const bal = await arBalance(apiKey, target && target.grantManual, target && target.bonus, target && target.referral);
+        if (target) {
+            arApplyBalance(target, bal);
+            arSaveMerge(target);   // мерж, а не перезапись файла: не затираем параллельный батч
+        }
+        return bal;
+    })();
+    AR_BALANCE_INFLIGHT.set(apiKey, p);
+    AR_BALANCE_LAST.set(apiKey, Date.now());
+    p.catch(() => {}).finally(() => AR_BALANCE_INFLIGHT.delete(apiKey));
+    return p;
+}
+
+// Не чаще AR_BALANCE_MIN_GAP_MS и не параллельно — для автотика и ленивых триггеров.
+function arBalanceMaybe(apiKey) {
+    if (!apiKey) return;
+    if (AR_BALANCE_INFLIGHT.has(apiKey)) return;
+    const last = AR_BALANCE_LAST.get(apiKey) || 0;
+    if (Date.now() - last < AR_BALANCE_MIN_GAP_MS) return;
+    arBalanceOnce(apiKey).catch(e => logLine(`agentrouter balance tick: ${e.message}`));
+}
+
+// Автотик: пока agentrouter активен, сам обновляем баланс активного ключа.
+// Статусбару больше не нужно ничего инициировать — он только читает кеш, поэтому
+// цифра в баре перестаёт зависеть от того, выжил ли его фоновый curl.
+const AR_BALANCE_TICK_MS = 120_000;
+setInterval(() => {
+    let key = '';
+    try { key = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { return; }
+    if (!key.startsWith('sk-')) return;
+    // Тикаем только когда провайдер реально выбран — иначе зря дёргаем биллинг.
+    let base = '';
+    try {
+        const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+        base = (JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw).env || {}).ANTHROPIC_BASE_URL || '';
+    } catch { return; }
+    const isAr = base.startsWith(AR_BASE_URL)
+        || /^https?:\/\/(localhost|127\.0\.0\.1):(20133|20132)\b/.test(base);
+    if (!isAr) return;
+    arBalanceMaybe(key);
+}, AR_BALANCE_TICK_MS).unref?.();
+
+// Гвард для nudge-режима остальных провайдеров (GoRouter/Tabi): один пересчёт
+// на ключ в полёте. У AgentRouter своя, более полная машинерия выше
+// (AR_BALANCE_INFLIGHT + троттлинг + автотик) — это лёгкий аналог для тех,
+// у кого автотика нет.
+const BALANCE_NUDGE_INFLIGHT = new Set();
+function nudgeBalanceOnce(tag, worker) {
+    if (BALANCE_NUDGE_INFLIGHT.has(tag)) return false;
+    BALANCE_NUDGE_INFLIGHT.add(tag);
+    Promise.resolve().then(worker)
+        .catch(e => logLine(`balance nudge ${tag}: ${e.message}`))
+        .finally(() => BALANCE_NUDGE_INFLIGHT.delete(tag));
+    return true;
+}
+
 // GET /__switch/api/ar/balance?api_key=… → считает баланс и пишет в сессию (кеш).
+// Единственный писатель баланса: статусбар и дашборд ходят сюда, дедуп через
+// arBalanceOnce гарантирует, что параллельные вызовы по одному ключу шлют
+// в billing ОДИН запрос, а не пачку.
+// &nudge=1 → отвечаем СРАЗУ и считаем в фоне. Для статусбара это принципиально:
+// он живёт ~50мс и его фоновый curl умирает вместе с ним, поэтому ответ должен
+// прийти мгновенно, а долгую работу делает этот процесс (он не умрёт).
 async function handleArBalance(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
         const api_key = q.searchParams.get('api_key');
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
-        const sessions = arLoad();
-        const target = sessions.find(s => s.api_key === api_key);
-        const bal = await arBalance(api_key, target && target.grantManual, target && target.bonus, target && target.referral);
-        if (target) { arApplyBalance(target, bal); arSave(sessions); }
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = !AR_BALANCE_INFLIGHT.has(api_key)
+                && Date.now() - (AR_BALANCE_LAST.get(api_key) || 0) >= AR_BALANCE_MIN_GAP_MS;
+            arBalanceMaybe(api_key);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        const bal = await arBalanceOnce(api_key);
         jsonRes(res, 200, bal);
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -5809,15 +5944,39 @@ function arMigrateIds() {
     }
 }
 
-// Прямой режим: claude-* → SSE keepalive прокси :20133 (вставляет `: keepalive`
-// при длинных thinking-паузах и ретраит транзиентные ошибки, форвардит в
-// agentrouter.org 1-в-1); gpt-* → через локальный прокси :20132 (нужна конвертация в OpenAI).
+// Прямой режим: ВСЁ идёт в SSE keepalive прокси :20133 — он вставляет `: keepalive`
+// при длинных thinking-паузах, ретраит транзиентные ошибки и хеджирует.
+// claude-* он форвардит в agentrouter.org 1-в-1, а gpt-* сам переправляет в :20132
+// (Anthropic→OpenAI конвертер: у agentrouter gpt живёт только на OpenAI-эндпоинте).
+// Раньше gpt ходил на :20132 напрямую — а там НЕТ ретраев и нет keepalive-пингов,
+// поэтому транзиентная 5xx/429 всплывала в Claude Code жёсткой ошибкой, а длинная
+// пауза на reasoning рвала стрим по watchdog'у. Двойной хоп проверен: стрим
+// gpt-5.6-sol через :20133 отдаёт корректный Anthropic-SSE (2026-08-16).
+// Аргумент model больше не влияет на выбор базы (раньше влиял) — оставлен, чтобы
+// call-site'ы читались как «куда идёт эта модель», и на случай новых развилок.
 function arTargetFor(model) {
-    const isGpt = /(^|[-_.\/])?(gpt|o[0-9]|davinci|chatgpt)/i.test(String(model || ''))
-        || String(model || '').toLowerCase().includes('gpt');
-    return isGpt ? { base: AR_PROXY_URL, needProxy: true, keepalive: false }
-                 : { base: AR_KEEPALIVE_URL, needProxy: true, keepalive: true };
-}// Клик по ключу → активный: пишем ключ в ar-active-key.txt — оба прокси (:20133/:20132)
+    return { base: AR_KEEPALIVE_URL, needProxy: true, keepalive: true };
+}
+
+// Модель для settings.json. Окно контекста — свойство ID модели, а не апстрима: без
+// суффикса [1m] Claude Code считает окно 200k и режет историю втрое раньше (та же
+// грабля, что в FreeModel-ветке на :2093). agentrouter отдаёт claude-* с 1M, поэтому
+// дотягиваем суффикс; gpt-* не трогаем — у них своё окно.
+function arSettingsModel(model) {
+    const m = String(model || '').trim();
+    return /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+}
+
+// Поднимаем ОБА прокси независимо от модели: keepalive (:20133) стоит спереди, а
+// конвертер (:20132) нужен не только для gpt-основной модели — по ar-modelmap.json
+// туда же уходят haiku-вызовы сабагентов (дефолт haiku → gpt-5.6-sol), т.е. он
+// требуется даже когда основная модель claude-*. Спавн идемпотентен: занятый порт → no-op.
+async function arSpawnBoth() {
+    await arKeepaliveSpawn();
+    await arProxySpawn();
+}
+
+// Клик по ключу → активный: пишем ключ в ar-active-key.txt — оба прокси (:20133/:20132)
 // читают его на каждый запрос, поэтому смена активного ключа работает на лету без рестарта Claude Code.
 async function handleArActivate(req, res) {
     try {
@@ -5838,21 +5997,25 @@ async function handleArActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-ar');
             settings.env = settings.env || {};
-            const curModel = arReadActiveModel() || settings.model || '';
-            const target = arTargetFor(curModel);
-            settings.env.ANTHROPIC_BASE_URL = target.base;
+            // Источник правды по модели — ar-active-model.txt. settings.model сюда НЕ
+            // подмешиваем: там может лежать модель чужого провайдера (ComboWombo от
+            // OmniRoute), которой у agentrouter нет.
+            const curModel = arReadActiveModel() || '';
+            const arTarget = arTargetFor(curModel);
+            settings.env.ANTHROPIC_BASE_URL = arTarget.base;
             delete settings.apiKeyHelper;   // agentrouter-WAF не пускает helper-путь
-            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
+            // НЕ удаляем модель: активация ключа не должна сбрасывать выбор с чипа
+            // моделей (был баг — клик по ключу после клика по gpt-5.6-sol возвращал CC
+            // на дефолт). Если активной модели нет — сбрасываем залипшую чужую, как раньше.
+            if (curModel) settings.model = arSettingsModel(curModel);
+            else delete settings.model;
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;   // токен рулит авторизацией
             clearOtEnv(settings);    // снести AUTH_TOKEN/маппинги от other пулов — потом ставим свой
             settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // заглушка: реальный ключ прокси берут из ar-active-key.txt на каждый запрос
             fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
             settingsOk = true;
-if (target.needProxy) {
-                if (target.keepalive) await arKeepaliveSpawn();
-                else await arProxySpawn();
-            }
+            await arSpawnBoth();
         } catch (e) {
             logLine(`agentrouter activate: settings.json FAILED: ${e.message}`);
         }
@@ -5898,18 +6061,18 @@ async function handleArModels(req, res) {
 }
 
 // Сменить активную модель: пишет ar-active-model.txt + settings.model.
+// Это и есть «один клик» по чипу модели: полностью настраивает Claude Code под
+// agentrouter (модель, base, токен, оба прокси). ar-modelmap.json НЕ трогает —
+// маппинг тиров правится руками в блоке ниже на вкладке.
 async function handleArSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
         const m = String(body.model || '').trim();
         if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
-        // Окно контекста — свойство ID модели, а не апстрима: без суффикса [1m] Claude Code
-        // считает окно 200k и режет историю втрое раньше (та же грабля, что в FreeModel-ветке
-        // на :2093). agentrouter отдаёт claude-* с 1M, поэтому дотягиваем суффикс.
-        // gpt-* не трогаем — у них своё окно.
-        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        const settingsModel = arSettingsModel(m);
         fs.writeFileSync(AR_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
         let settingsOk = false;
+        let activeKey = '';
         try {
             const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
@@ -5922,7 +6085,6 @@ async function handleArSetModel(req, res) {
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
-            let activeKey = '';
             try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
             if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = activeKey;   // прямой режим
             else delete settings.env.ANTHROPIC_AUTH_TOKEN;
@@ -5932,12 +6094,15 @@ async function handleArSetModel(req, res) {
             logLine(`agentrouter set-model: settings.json FAILED: ${e.message}`);
         }
         const target = arTargetFor(m);
-        if (target.needProxy) {
-            if (target.keepalive) await arKeepaliveSpawn();
-            else await arProxySpawn();
-        }
-        logLine(`agentrouter set-model: ${m} (base ${target.base})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: AR_ACTIVE_MODEL_FILE, base: target.base, needRestart: true });
+        await arSpawnBoth();
+        logLine(`agentrouter set-model: ${m} (base ${target.base}${activeKey ? '' : ', БЕЗ активного ключа'})`);
+        // warn: без ключа конфиг записан, но первый же запрос упадёт 401 — на свежей
+        // установке это главная причина «нажал и не работает». Дашборд это показывает.
+        jsonRes(res, 200, {
+            ok: true, model: m, settingsModel, settingsUpdated: settingsOk,
+            modelFile: AR_ACTIVE_MODEL_FILE, base: target.base, needRestart: true,
+            warn: activeKey ? undefined : 'нет активного ключа — кликни по ключу в списке ниже, иначе будет 401',
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6122,6 +6287,9 @@ async function goBalance(apiKey, grantOverride, bonusOverride) {
 function goApplyBalance(target, bal) {
     if (!target || !bal) return bal;
     target.status = bal.status;
+    // Штамп ставим при любом исходе — иначе при таймауте billing статусбар считает
+    // кеш протухшим и пинает обновление на каждом промпте (см. arApplyBalance).
+    target.balanceCheckedAt = new Date().toISOString();
     if (bal.status === 'live') {
         target.spent = bal.spent;
         target.grant = bal.grant;
@@ -6129,7 +6297,9 @@ function goApplyBalance(target, bal) {
         target.balance = bal.balance;
         target.accessUntil = bal.accessUntil;
         target.grantSource = bal.grantSource;
-        target.balanceCheckedAt = new Date().toISOString();
+        delete target.balanceError;
+    } else {
+        target.balanceError = bal.error || bal.status;
     }
     return bal;
 }
@@ -6174,11 +6344,20 @@ async function handleGoBalance(req, res) {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
         const api_key = q.searchParams.get('api_key');
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
-        const sessions = goLoad();
-        const target = sessions.find(s => s.api_key === api_key);
-        const bal = await goBalance(api_key, target && target.grantManual, target && target.bonus);
-        if (target) { goApplyBalance(target, bal); goSave(sessions); }
-        jsonRes(res, 200, bal);
+        const recalc = async () => {
+            const sessions = goLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await goBalance(api_key, target && target.grantManual, target && target.bonus);
+            if (target) { goApplyBalance(target, bal); goSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('go:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        jsonRes(res, 200, await recalc());
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6778,6 +6957,8 @@ async function tbBalance(apiKey, grantOverride, bonusOverride) {
 function tbApplyBalance(target, bal) {
     if (!target || !bal) return bal;
     target.status = bal.status;
+    // Штамп при любом исходе — см. arApplyBalance (иначе бар долбит обновление).
+    target.balanceCheckedAt = new Date().toISOString();
     if (bal.status === 'live') {
         target.spent = bal.spent;
         target.grant = bal.grant;
@@ -6785,7 +6966,9 @@ function tbApplyBalance(target, bal) {
         target.balance = bal.balance;
         target.accessUntil = bal.accessUntil;
         target.grantSource = bal.grantSource;
-        target.balanceCheckedAt = new Date().toISOString();
+        delete target.balanceError;
+    } else {
+        target.balanceError = bal.error || bal.status;
     }
     return bal;
 }
@@ -6830,11 +7013,19 @@ async function handleTbBalance(req, res) {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
         const api_key = q.searchParams.get('api_key');
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
-        const sessions = tbLoad();
-        const target = sessions.find(s => s.api_key === api_key);
-        const bal = await tbBalance(api_key, target && target.grantManual, target && target.bonus);
-        if (target) { tbApplyBalance(target, bal); tbSave(sessions); }
-        jsonRes(res, 200, bal);
+        const recalc = async () => {
+            const sessions = tbLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await tbBalance(api_key, target && target.grantManual, target && target.bonus);
+            if (target) { tbApplyBalance(target, bal); tbSave(sessions); }
+            return bal;
+        };
+        // nudge=1: мгновенный ответ, пересчёт в своём процессе (см. handleGoBalance).
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('tb:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        jsonRes(res, 200, await recalc());
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 

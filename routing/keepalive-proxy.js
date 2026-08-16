@@ -66,6 +66,15 @@ const HAIKU_GPT_PROXY = process.env.HAIKU_GPT_PROXY || 'http://127.0.0.1:20132';
 const AR_MODELMAP_FILE = process.env.MODELMAP_FILE
     || path.join(__dirname, 'ar-modelmap.json');
 
+// Заголовки, по которым WAF agentrouter узнаёт Claude Code. Ставим только те,
+// которых нет в запросе клиента (см. makeUpstream). Копия CC_HEADERS из
+// agentrouter-proxy.js — при обновлении версии CLI менять в обоих местах.
+const CC_FALLBACK_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'x-app': 'cli',
+};
+
 const modelMapCache = { data: null, mtime: 0 };
 function readModelMap() {
     try {
@@ -90,6 +99,25 @@ function tierTargetFor(model) {
 }
 function isGptLike(model) {
     return /gpt|o[0-9]|davinci|chatgpt/i.test(String(model || ''));
+}
+
+// ── Имя модели в ОТВЕТЕ: возвращаем клиенту то, что он просил ──
+// Шлюзы (gorouter/agentrouter) отдают в ответе своё внутреннее имя модели,
+// например `anthropic/claude-opus-5-ps-aws-dst` вместо `claude-opus-5`. Claude Code
+// берёт его из ответа и показывает в статусбаре, дописывая наш суффикс окна:
+// `gorouter/anthropic/claude-opus-5-ps-aws-dst[1m]`. Мало того что это мусор в баре —
+// по такому имени не понять, какое окно реально активно, и юзер лезет набирать
+// /model руками, теряя суффикс [1m] и получая 200k вместо 1M.
+// Поэтому подменяем имя обратно на запрошенное клиентом.
+// Работает и для ремапа тиров: haiku-вызов сабагента вернётся как haiku, а не как
+// целевая модель — CC ожидает ровно то, что отправлял.
+// MODEL_ECHO=0 выключает (для отладки: увидеть реальное имя модели у шлюза).
+const MODEL_ECHO = process.env.MODEL_ECHO !== '0';
+const MODEL_FIELD_RE = /"model"\s*:\s*"(?:[^"\\]|\\.)*"/;
+function rewriteModelJson(text, clientModel) {
+    if (!MODEL_ECHO || !clientModel) return text;
+    if (!MODEL_FIELD_RE.test(text)) return text;
+    return text.replace(MODEL_FIELD_RE, `"model":${JSON.stringify(clientModel)}`);
 }
 
 const upstream = new URL(UPSTREAM);
@@ -219,6 +247,12 @@ function shouldRetryStatus(status) {
 }
 
 const RETRY_NO = /invalid|authentication|api[ _-]?key|expired|billing|quota|permission|denied|bad request|missing|required|incorrect|not supported|bad gateway upstream/i;
+// Отклонение контента шлюзом — ДЕТЕРМИНИРОВАННОЕ: тот же body даёт тот же ответ,
+// ретрай только жжёт запросы (проверено 2026-08-16: фраза из блок-листа → 500
+// "sensitive words detected" стабильно 12/12). Без этого правила такая ошибка
+// проваливалась в fallback `status >= 500` и уходила наверх maxAttempts раз.
+// Нейтрализация самих фраз — в agentrouter-proxy.js (WAF_PHRASES).
+const RETRY_NO_CONTENT = /sensitive words|content-blocked/i;
 // Постоянные ошибки New API на китайском (не ретраить): нет прав, неверный/
 // просроченный токен, нет средств/квоты, модель/канал не существует.
 const RETRY_NO_ZH = /无权|权限|无效|过期|余额|额度|欠费|不存在|认证|封禁|禁用/;
@@ -227,7 +261,7 @@ const RETRY_OK = /unauthorized client detected|overloaded|too many|rate limit|in
 function isTransientBody(status, buf) {
   const s = buf.toString('utf8');
   if (!s.trim()) return true;
-  if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s)) return false;
+  if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s) || RETRY_NO_CONTENT.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
 }
@@ -288,9 +322,12 @@ function wantsStream(method, reqPath, headers, body) {
 //   • claude-* с суффиксом контекста ([1m], [200k] и т.п.) → срезаем суффикс,
 //                      шлём в agentrouter как есть (таких имён у него в /v1/models нет → 503);
 //   • claude-*        → null (passthrough напрямую в agentrouter).
+// HAIKU_REMAP=0 выключает ТОЛЬКО маппинг тиров (haiku и ar-modelmap.json). Роутинг
+// gpt-моделей на конвертер :20132 под флаг не попадает: у agentrouter gpt живёт лишь
+// на OpenAI-эндпоинте, и «выключенный ремап» означал бы gpt голым в /v1/messages —
+// т.е. ровно ту поломку, ради которой конвертер и написан.
 // Возвращает { body, requester, hostname, port, base, host } или null.
 function remapHaiku(method, reqPath, body) {
-  if (!HAIKU_REMAP) return null;
   if (method !== 'POST') return null;
   const p = reqPath.replace(/\?.*$/, '');
   if (p !== '/v1/messages') return null;
@@ -302,6 +339,12 @@ function remapHaiku(method, reqPath, body) {
   }
   if (typeof j.model !== 'string') return null;
   const model = j.model;
+  // gpt-модели уходят на конвертер всегда — до и независимо от маппинга тиров.
+  if (isGptLike(model)) {
+    log(`${method} ${reqPath} ${model} via ${HAIKU_GPT_PROXY}`);
+    return { body, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
+  }
+  if (!HAIKU_REMAP) return null;
   // Суффикс контекстного окна вида `[1m]`, `[200k]` — у agentrouter таких моделей нет.
   const bare = model.replace(/\s*\[[^\]]*\]\s*$/, '');
   let newBody = null;
@@ -326,9 +369,6 @@ function remapHaiku(method, reqPath, body) {
   if (/haiku/i.test(model)) {
     newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: HAIKU_TO_MODEL })), 'utf8');
     label = `haiku→${HAIKU_TO_MODEL}`;
-  } else if (/gpt|o[0-9]|davinci|chatgpt/i.test(model)) {
-    newBody = body;
-    label = model;
   } else if (bare !== model) {
     newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: bare })), 'utf8');
     label = `${model}→${bare}`;
@@ -358,6 +398,8 @@ const server = http.createServer((req, res) => {
   let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
   let tgt = null;                 // результат remapHaiku
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
+  let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
+  let modelEchoDone = false;      // имя модели в ответе уже подменено (message_start)
 
   // Служебные пути: статус (health-check дашборда), состояние, runtime-конфиг.
   if (req.url.startsWith('/__')) {
@@ -400,6 +442,14 @@ const server = http.createServer((req, res) => {
   const tick = () => {
     sseTimer = null;
     if (aborted || res.writableEnded) return;
+    // model-echo придерживает начало потока до границы события (`\n\n`). Если пауза
+    // случилась ПОСРЕДИ первого события, придержанное обязано уйти клиенту раньше
+    // keepalive-вставки: иначе `tail` не знает о недописанном `data:`, тик считает
+    // поток стоящим на границе и вставляет полное `event: ping` внутрь чужого
+    // события (test-hedge F). Ждать границу дольше паузы всё равно нельзя — ради
+    // косметики имени модели рвать поток нельзя, поэтому здесь эхо сдаётся.
+    const heldEcho = flushSseEcho();
+    if (heldEcho) { res.write(heldEcho); noteBytes(heldEcho); }
     const t = tail.toString('utf8');
     if (t.length === 0 || t.endsWith('\n\n')) {
       res.write(PING);
@@ -458,6 +508,42 @@ const server = http.createServer((req, res) => {
     res.end();
   };
 
+  // Подмена имени модели в SSE-потоке. Имя приходит один раз, в message_start —
+  // первом событии. Чтобы не напороться на разрыв события между TCP-чанками,
+  // придерживаем начало потока до границы события (`\n\n`), патчим ТОЛЬКО этот
+  // префикс, а хвост чанка отдаём сырыми байтами и дальше не вмешиваемся вообще.
+  // Важно резать по границе, а не гонять весь буфер через toString/Buffer.from:
+  // многобайтный UTF-8 (кириллица) может быть разорван на стыке чанков, и
+  // round-trip через строку испортил бы символ.
+  const ECHO_MAX_HOLD = 65536;   // страховка: не придерживать поток бесконечно
+  let echoBuf = null;
+  const patchSseChunk = (chunk) => {
+    if (!MODEL_ECHO || modelEchoDone || !clientModel) return chunk;
+    echoBuf = echoBuf ? Buffer.concat([echoBuf, chunk]) : chunk;
+    const boundary = echoBuf.indexOf('\n\n');
+    if (boundary < 0) {
+      // границы события всё ещё нет — ждём, но не дольше ECHO_MAX_HOLD
+      if (echoBuf.length < ECHO_MAX_HOLD) return null;
+      modelEchoDone = true;
+      const raw = echoBuf; echoBuf = null;
+      log(`${req.method} ${reqPath} model-echo: границы события нет в ${ECHO_MAX_HOLD}Б — отдаю как есть`);
+      return raw;
+    }
+    modelEchoDone = true;
+    const head = echoBuf.subarray(0, boundary + 2);
+    const tailRaw = echoBuf.subarray(boundary + 2);
+    echoBuf = null;
+    const patched = Buffer.from(rewriteModelJson(head.toString('utf8'), clientModel), 'utf8');
+    return tailRaw.length ? Buffer.concat([patched, tailRaw]) : patched;
+  };
+  // Поток кончился, границы события так и не было — отдаём придержанное как есть.
+  const flushSseEcho = () => {
+    if (!echoBuf) return null;
+    modelEchoDone = true;
+    const raw = echoBuf; echoBuf = null;
+    return raw;
+  };
+
   const forward = (status, headers, stream) => {
     const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
     stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
@@ -478,11 +564,18 @@ const server = http.createServer((req, res) => {
       if (status >= 200 && status < 300 && isSSE && !compressed) {
         if (res.socket) res.socket.setNoDelay(true);
         stream.on('data', (chunk) => {
-          res.write(chunk);
-          noteBytes(chunk);
+          const out = patchSseChunk(chunk);
+          if (out === null) return;          // придержали до границы события
+          res.write(out);
+          noteBytes(out);
           armTimer();
         });
-        stream.on('end', () => { stopTimer(); if (!res.writableEnded) res.end(); });
+        stream.on('end', () => {
+          const rest = flushSseEcho();
+          if (rest) { res.write(rest); noteBytes(rest); }
+          stopTimer();
+          if (!res.writableEnded) res.end();
+        });
         stream.on('error', (err) => {
           stopTimer();
           log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
@@ -514,27 +607,45 @@ const server = http.createServer((req, res) => {
         hdrs = Object.assign({}, headers, { 'content-type': ct.replace(/^text\/plain/i, 'application/json') });
       }
     }
-    res.writeHead(status, hdrs);
 
     if (!isSSE) {
+      // Не-stream ответ: тело целиком уже в буфере (forwardBuffered), можно
+      // подменить имя модели и пересчитать content-length.
+      const bufs = [];
+      stream.on('data', (c) => bufs.push(c));
+      stream.on('end', () => {
+        if (res.writableEnded || res.destroyed) return;
+        let body = Buffer.concat(bufs);
+        if (MODEL_ECHO && clientModel && /json/i.test(String(hdrs['content-type'] || ''))) {
+          const patched = Buffer.from(rewriteModelJson(body.toString('utf8'), clientModel), 'utf8');
+          if (patched.length !== body.length) hdrs = Object.assign({}, hdrs, { 'content-length': String(patched.length) });
+          body = patched;
+        }
+        res.writeHead(status, hdrs);
+        res.end(body);
+      });
       stream.on('error', (err) => {
         log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
         if (!res.writableEnded && !res.destroyed) res.destroy(err);
       });
-      stream.pipe(res);
       return;
     }
 
+    res.writeHead(status, hdrs);
     if (res.socket) res.socket.setNoDelay(true);
     res.flushHeaders();
     armTimer();
 
     stream.on('data', (chunk) => {
-      res.write(chunk);
-      noteBytes(chunk);
+      const out = patchSseChunk(chunk);
+      if (out === null) return;            // придержали до границы события
+      res.write(out);
+      noteBytes(out);
       armTimer();
     });
     stream.on('end', () => {
+      const rest = flushSseEcho();
+      if (rest) { res.write(rest); noteBytes(rest); }
       stopTimer();
       res.end();
     });
@@ -613,6 +724,14 @@ const server = http.createServer((req, res) => {
     const body = reqBody;
     const t = tgt || { requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
     const headers = Object.assign({}, req.headers, { host: t.host });
+    // WAF agentrouter пускает только запросы, похожие на Claude Code: смотрит на
+    // user-agent (`claude-cli/…` → 200, `curl/8.0` → 401 "unauthorized client detected",
+    // проверено 2026-08-16). Живой CC эти заголовки присылает сам, поэтому подставляем
+    // ТОЛЬКО отсутствующие — свои значения клиента не перебиваем. Мирроринг CC_HEADERS
+    // из agentrouter-proxy.js: там та же защита, но для gpt-конвертера.
+    for (const [k, v] of Object.entries(CC_FALLBACK_HEADERS)) {
+      if (!headers[k]) headers[k] = v;
+    }
     // Активный ключ agentrouter из ar-active-key.txt (смена на лету): перекрываем
     // клиентский AUTH_TOKEN-заглушку реальным ключом из файла.
     try {
@@ -716,6 +835,8 @@ const server = http.createServer((req, res) => {
   });
   req.on('end', () => {
     const rawBody = Buffer.concat(bodyChunks, bodySize);
+    // Модель ДО ремапа — её ждёт клиент в ответе (см. rewriteModelJson).
+    try { clientModel = String(JSON.parse(rawBody.toString('utf8') || '{}').model || ''); } catch (e) { clientModel = ''; }
     const remapped = remapHaiku(req.method, reqPath, rawBody);
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
@@ -762,10 +883,18 @@ if (process.argv[2] === 'selftest') {
   let savedCfg = null;
   try { savedCfg = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch (e) { /* файла нет */ }
 
-  // ремап: haiku без маппинга в ar-modelmap.json -> fallback HAIKU_TO_MODEL (gpt)
+  // ремап haiku: приоритет у ar-modelmap.json (правится на вкладке), env HAIKU_TO_MODEL —
+  // только fallback для пустого тира. Ассерт читает живой файл, поэтому сверяемся с
+  // ним, а не с env: иначе смена haiku-тира в дашборде «ломала» бы selftest.
+  const mapHaiku = (readModelMap() || {}).haiku || '';
   const h = remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [] })));
   assert.ok(h, 'haiku должен ремапиться');
-  assert.strictEqual(parse(h.body).model, HAIKU_TO_MODEL, 'haiku -> HAIKU_TO_MODEL');
+  assert.strictEqual(parse(h.body).model, mapHaiku || HAIKU_TO_MODEL, 'haiku -> тир из маппинга (или env-fallback)');
+  // и уходит туда, куда указывает тип цели: gpt-цель → конвертер, claude-цель → agentrouter
+  assert.strictEqual(
+    h.host,
+    isGptLike(mapHaiku || HAIKU_TO_MODEL) ? gptProxy.host : upstream.host,
+    'haiku-цель роутится по своему типу');
   // ремап: не-маппленная модель (не haiku, не gpt, без суффикса) — passthrough (null)
   const o = Buffer.from(JSON.stringify({ model: 'custom-model-x' }));
   assert.strictEqual(remapHaiku('POST', '/v1/messages', o), null, 'не-маппленная модель без изменений');
@@ -773,11 +902,45 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(remapHaiku('POST', '/v1/messages', Buffer.from('not json')), null, 'не-JSON без изменений');
   // ремап: не /v1/messages не трогаем
   assert.strictEqual(remapHaiku('POST', '/v1/count_tokens', o), null, 'не /v1/messages без изменений');
+  // роутинг gpt: уходит на конвертер :20132, тело не переписывается
+  const g = remapHaiku('POST', '/v1/messages?beta=true', Buffer.from(JSON.stringify({ model: 'gpt-5.6-sol', messages: [] })));
+  assert.ok(g, 'gpt должен уходить на конвертер');
+  assert.strictEqual(g.host, gptProxy.host, 'gpt -> gpt-прокси');
+  assert.strictEqual(parse(g.body).model, 'gpt-5.6-sol', 'модель gpt не переписывается');
+  // роутинг gpt не зависит от HAIKU_REMAP: флаг про маппинг тиров, а не про конвертер.
+  // Само поведение при HAIKU_REMAP=0 в одном процессе не проверить (const), но
+  // gpt-ветка стоит ДО этой проверки в remapHaiku — см. комментарий там.
+
+  // ── имя модели в ответе: возвращаем клиенту то, что он просил ──
+  // Шлюз отдаёт внутреннее имя (anthropic/…-ps-aws-dst) → в статусбаре мусор.
+  assert.strictEqual(
+    rewriteModelJson('{"type":"message","model":"anthropic/claude-opus-5-ps-aws-dst","role":"assistant"}', 'claude-opus-5'),
+    '{"type":"message","model":"claude-opus-5","role":"assistant"}',
+    'имя модели в ответе подменяется на запрошенное');
+  // message_start в SSE — там же, где CC читает модель для бара
+  assert.ok(
+    rewriteModelJson('event: message_start\ndata: {"type":"message_start","message":{"id":"x","model":"anthropic/claude-opus-5-ps-aws-dst"}}\n\n', 'claude-opus-5[1m]')
+      .includes('"model":"claude-opus-5[1m]"'),
+    'подмена работает в message_start');
+  // патчим ТОЛЬКО первое вхождение (имя модели), остальной JSON не трогаем
+  assert.strictEqual(
+    rewriteModelJson('{"model":"up","messages":[{"model":"nested"}]}', 'req'),
+    '{"model":"req","messages":[{"model":"nested"}]}',
+    'патчится только первое поле model');
+  // пустой clientModel = не трогаем ничего
+  assert.strictEqual(rewriteModelJson('{"model":"up"}', ''), '{"model":"up"}', 'без clientModel без изменений');
+  // тело без поля model не ломается
+  assert.strictEqual(rewriteModelJson('{"type":"ping"}', 'claude-opus-5'), '{"type":"ping"}', 'нет поля model — как есть');
 
   // классификатор: китайский «нет доступа» — постоянная ошибка, НЕ ретраить
   assert.strictEqual(
     isTransientBody(403, Buffer.from('{"error":{"message":"该令牌无权访问模型 claude-haiku-4-5"}}')),
     false, 'zh 无权访问 = постоянная');
+  // классификатор: отклонение контента шлюзом детерминировано — НЕ ретраить
+  assert.strictEqual(
+    isTransientBody(500, Buffer.from('{"error":{"message":"sensitive words detected (request id: 2026)"}}')),
+    false, 'sensitive words = постоянная, ретрай только жжёт запросы');
+  assert.strictEqual(isTransientBody(400, Buffer.from('content-blocked')), false, 'content-blocked = постоянная');
   // классификатор: транзиентное всё ещё ретраим
   assert.strictEqual(isTransientBody(403, Buffer.from('unauthorized client detected')), true, 'транзиентное ретраим');
   assert.strictEqual(isTransientBody(429, Buffer.from('')), true, 'пустое тело ретраим');

@@ -17,8 +17,8 @@
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
 | `20150-20250`| **Custom OpenAI Proxies** (динамически) | `routing/custom-openai-proxy.js` | Anthropic→OpenAI конвертер для Custom-провайдеров с заполненным `modelMap`. Спавнится на активацию (детached), конфиг `~/.claude/custom-<id>-proxy.json`, ключ из `~/.claude/custom-active-key.txt`. Убивается при деактивации/удалении. |
-| `20133`| **AgentRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для agentrouter.org (`claude-*` pass-through): держит SSE-паузы thinking-моделей, режет `[1m]`-суффиксы, count_tokens fallback. `PORT=20133`, `KEY_FILE=ar-active-key.txt`, `MODELMAP_FILE=ar-modelmap.json`. |
-| `20132`| **AgentRouter Proxy** | `routing/agentrouter-proxy.js` | Фронтенд для agentrouter.org: `claude-*` → pass-through в `/v1/messages`, `gpt-*` → конвертер Anthropic→OpenAI `/v1/chat/completions`. Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false` (с 2026-08-15 WAF режет кириллические хомоглифы `400 content-blocked`, чистую латиницу пускает). **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки от клиента. Спавнится автоматически при выборе gpt-модели. |
+| `20133`| **AgentRouter keepalive** | `routing/keepalive-proxy.js` | **Единая точка входа для agentrouter** (и `claude-*`, и `gpt-*`): держит SSE-паузы thinking-моделей, ретраит транзиентные ошибки, хеджирует. `claude-*` форвардит в agentrouter.org 1-в-1, `gpt-*` переправляет в конвертер `:20132`. Режет `[1m]`-суффиксы, count_tokens отвечает локальной оценкой. Отказы content-filter (`sensitive words`/`content-blocked`) классифицированы как **постоянные** — не ретраятся. `PORT=20133`, `KEY_FILE=ar-active-key.txt`, `MODELMAP_FILE=ar-modelmap.json`. |
+| `20132`| **AgentRouter Proxy** (конвертер) | `routing/agentrouter-proxy.js` | Anthropic→OpenAI конвертер для `gpt-*` (`/v1/chat/completions`); `claude-*` — pass-through в `/v1/messages`. Стоит **за** keepalive `:20133`, напрямую из CC больше не адресуется. `wafSanitize`/`WAF_PHRASES` нейтрализуют фразы из блок-листа шлюза на сериализованном теле (иначе `/model gpt-*` падает `500 sensitive words detected`). Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false`. **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки собирает сам. Самопроверка: `node routing/agentrouter-proxy.js selftest`. |
 | `20155`| **Tabi Token keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для tabitoken.com. `PORT=20155`, `KEY_FILE=tabi-active-key.txt`, `MODELMAP_FILE=tabi-modelmap.json`. |
 | `20156`| **GoRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для gorouter.app. `PORT=20156`, `KEY_FILE=gorouter-active-key.txt`, `MODELMAP_FILE=gorouter-modelmap.json`. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
@@ -83,11 +83,12 @@
   `ANTHROPIC_BASE_URL=https://api.svrtr.org`, TTL=0. Anthropic-совместимый endpoint
   (ключи `sk-sr-v1-`), авторег через @svrtrbot (одна кнопка Login Start в боте).
   Файлы: `svrtr/lib/svrtr-api.js`, `svrtr/svrtr_autoreger.js`.
-- **agentrouter** (прямой режим) — `ANTHROPIC_BASE_URL=https://agentrouter.org` (БЕЗ `/v1`),
-  ключ пишется **литералом** в `ANTHROPIC_AUTH_TOKEN` (не apiKeyHelper — WAF agentrouter
-  не пускает helper-путь). `apiKeyHelper` удаляется, модель из `~/.claude/ar-active-model.txt`.
-  Роутинг моделей: `claude-*` → SSE keepalive `http://localhost:20133`, `gpt-*` → локальный прокси
-  `http://localhost:20132` (нужна конвертация в OpenAI). Пул: `routing/agentrouter-sessions.json`.
+- **agentrouter** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20133` (SSE keepalive,
+  форвард в agentrouter.org БЕЗ `/v1`), ключ пишется **литералом** в `ANTHROPIC_AUTH_TOKEN`
+  (не apiKeyHelper — WAF agentrouter не пускает helper-путь). `apiKeyHelper` удаляется,
+  модель из `~/.claude/ar-active-model.txt`. Роутинг: и `claude-*`, и `gpt-*` идут в
+  `:20133`, который сам переправляет gpt в конвертер `:20132`. Пул:
+  `routing/agentrouter-sessions.json`.
 - **gorouter** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20156` (SSE keepalive,
   форвард в gorouter.app), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `gorouter-active-key.txt`,
   модель из `~/.claude/gorouter-active-model.txt` + `gorouter-modelmap.json`. Пул:
@@ -269,27 +270,79 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
 - **apiKeyHelper-путь WAF не пускает** — при активации `apiKeyHelper` удаляется,
   ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN` (как в конфиге, который работает
   «как у друга»). `ANTHROPIC_API_KEY` чистится.
-- **Маршрутизация моделей** (`arTargetFor`): `claude-*` → `agentrouter.org` напрямую
-  (pass-through, работает как есть); `gpt-*` → локальный прокси `:20132`, т.к. gpt-модели
-  у agentrouter живут на OpenAI-эндпоинте и нужна конвертация Anthropic→OpenAI.
+- **Маршрутизация моделей** (`arTargetFor`): **всё** идёт в keepalive `:20133`, и claude-*,
+  и gpt-*. Keepalive форвардит `claude-*` в `agentrouter.org` 1-в-1, а `gpt-*` сам
+  переправляет в конвертер `:20132` (у agentrouter gpt живёт только на OpenAI-эндпоинте).
+  Раньше gpt шёл на `:20132` напрямую — там нет ни ретраев, ни keepalive-пингов, поэтому
+  транзиентная 5xx всплывала жёсткой ошибкой, а длинная reasoning-пауза рвала стрим по
+  watchdog'у Claude Code. Оба прокси поднимаются вместе (`arSpawnBoth`): конвертер нужен
+  даже при claude-основной модели, т.к. туда уходят haiku-вызовы сабагентов по маппингу.
 - **Маппинг claude-тиров** (`routing/ar-modelmap.json`, `{opus, sonnet, haiku}`): правится
   на вкладке AgentRouter (`GET/POST /__switch/api/ar/modelmap`). Прокси `:20132` и keepalive
   `:20133` перечитывают файл по mtime на каждый запрос — правка применяется **без рестарта**.
   Модель запроса (в т.ч. `claude-haiku-4-5` от Explore-агента) матчится по тиру → подменяется
   на целевую модель agentrouter; gpt-цель уходит через OpenAI-конвертер, claude-цель — pass-through.
-  Дефолт: `haiku → gpt-5.6-sol` (закрывает сабагентов, у agentrouter своих haiku-моделей нет).
+  У agentrouter своих haiku-моделей нет, поэтому тир haiku закрывает сабагентов. Клик по
+  чипу модели маппинг **не трогает** — это ручная настройка.
+- **Каталог у agentrouter маленький** (на 2026-08-16 — 3 модели): `claude-opus-4-8`,
+  `claude-opus-5` (anthropic+openai) и `gpt-5.6-sol` (**только** openai). Модели с
+  `supported_endpoint_types` без `anthropic` помечены на вкладке бейджем `openai` —
+  они идут только через конвертер.
 
-### WAF «sensitive words detected» и Cyrillic-bypass
+### Два разных фильтра: WAF (по заголовкам) и content-filter (по фразам)
 
-На OpenAI-эндпоинте WAF agentrouter **сканирует контент запроса** и режет его.
-ВАЖНО (2026-08-15): WAF обновился — теперь он **детектит кириллические хомоглифы**
-(замену `c`→`с`) и отвечает `400 content-blocked`, а **чистую латиницу пропускает**
-(проверено: реальная сигнатура CC-system `You are Claude Code, Anthropic official
-tool. Version: 2.1.158 (external, sdk-cli)` + obsidian-тулы + вики tool_result + stream
-→ 200). Раньше было наоборот (латиница резалась `500 sensitive words detected`,
-c→с обходило), поэтому в `agentrouter-proxy.js` есть `cyrEncode`/`cyrDecode`, но
-**кодирование отключено** флагом `CYR_BYPASS_ENABLED = false` — body идёт как есть.
-Если WAF снова начнёт резать латиницу — поднять флаг и перечитать этот раздел.
+Их легко спутать — ошибки разные и лечатся по-разному.
+
+**1. WAF — смотрит на заголовки.** Пускает только запросы, похожие на Claude Code.
+Ключевой признак — `user-agent`: `claude-cli/…` → 200, `curl/8.0` → `401 unauthorized
+client detected` (проверено 2026-08-16, при прочих равных заголовках). `agentrouter-proxy.js`
+собирает `CC_HEADERS` с нуля, `keepalive-proxy.js` форвардит клиентские и добивает
+отсутствующие из `CC_FALLBACK_HEADERS` (`user-agent`/`anthropic-version`/`x-app`;
+`anthropic-beta` намеренно НЕ ставим — инстансы `:20155`/`:20156` ходят на другие шлюзы).
+
+**2. Content-filter — смотрит на текст.** На OpenAI-эндпоинте `/v1/chat/completions`
+шлюз режет **точные подстроки** из своего блок-листа и отвечает `500 sensitive words
+detected`. Проверено 2026-08-16, замеры:
+
+| текст в system / user / tool_result | итог |
+|---|---|
+| `You are a helpful assistant.` | ⛔ 500 |
+| `You are a helpful assistant` (без точки) | ✅ 200 |
+| `You are a helpful AI assistant.` | ✅ 200 |
+| `Act as a helpful assistant.` / `helpful assistant.` | ✅ 200 |
+| та же фраза в `description` тула | ✅ 200 (не сканируется) |
+| та же фраза на claude-модели (Anthropic-passthrough) | ✅ 200 |
+
+То есть блок-лист — регистронезависимая подстрока **с точкой на конце**, и только на
+gpt-пути. Практический эффект: **пробник валидации модели у Claude Code** (в логе
+прокси `stream=false msgs=2 tools=0`) шлёт ровно эту generic-фразу как system, поэтому
+`/model gpt-5.6-sol` падал `500` детерминированно (12/12), хотя обычный чат работал —
+именно это ломало gpt на свежей установке.
+
+Лечение — `WAF_PHRASES` + `wafSanitize()` в `agentrouter-proxy.js`: правка делается
+**один раз на сериализованном теле** перед отправкой (единственная точка, которую нельзя
+обойти — мультимодальная ветка конвертера отдаёт `parts` сырыми, а
+`tool_calls[].function.arguments` вообще мимо текстовых хелперов). Замена семантически
+нейтральная (`+ AI`), срабатывание пишется в лог (`waf sanitize: N hit(s)`) и в
+`stats.sanitized` — молча менять текст запроса нельзя. Таблицу держим **узкой**: одна
+фраза с датой проверки, не эвристика. Расширится блок-лист — добавится строка.
+
+В `keepalive-proxy.js` такой отказ классифицирован как **постоянный**
+(`RETRY_NO_CONTENT = /sensitive words|content-blocked/i`): ответ детерминирован, ретраи
+только жгли платные запросы (раньше проваливалось в fallback `status >= 500`).
+
+**Cyrillic-bypass (историческое, отключено).** Раньше латиница резалась
+`500 sensitive words detected`, и обходили заменой `c`→`с`. С 2026-08-15 наоборот: WAF
+детектит кириллические хомоглифы → `400 content-blocked`, чистую латиницу пропускает.
+Поэтому `cyrEncode`/`cyrDecode` остались, но **отключены** флагом
+`CYR_BYPASS_ENABLED = false`. Если снова начнёт резать латиницу целиком — поднять флаг.
+
+### Самопроверки прокси
+
+`node routing/agentrouter-proxy.js selftest` и `node routing/keepalive-proxy.js selftest` —
+оба стоят до `server.listen` и выходят через `process.exit(0)`, порт не занимают, поэтому
+безопасны при поднятых рабочих прокси. Покрывают `wafSanitize` (в т.ч. мультимодальную
+ветку), роутинг gpt→конвертер, классификатор ретраев и ручки хеджа.
 
 ### Статус прокси
 

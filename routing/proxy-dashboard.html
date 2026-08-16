@@ -1488,7 +1488,7 @@
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">agentrouter.org</code> · клик по ключу = активный (пишется в <code class="font-mono text-sky text-xs">~/.claude/ar-active-key.txt</code> — смена на лету) · claude-* → <code class="font-mono text-sky text-xs">:20133</code> keepalive · gpt-* → <code class="font-mono text-sky text-xs">:20132</code> proxy · base БЕЗ /v1 · WAF пускает только Claude Code запросы</p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
-            <button data-connect-backend="agentrouter" onclick="applyPreset('agentRouter')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
+            <button data-connect-backend="agentrouter" onclick="arConnect()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-emerald/60 hover:text-emerald font-medium transition">🔌 Подключить</button>
             <button onclick="loadArSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadArSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
             <button onclick="arCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
@@ -2638,8 +2638,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -3056,7 +3056,10 @@ function getDefaultPresets() {
         apiKeyHelper: null,
         model: null,
         env: {
-          ANTHROPIC_BASE_URL: 'https://agentrouter.org',
+          // Локальный keepalive, а НЕ голый agentrouter.org: он держит SSE пингами,
+          // ретраит транзиентные ошибки и переправляет gpt-* в конвертер :20132
+          // (у agentrouter gpt на /v1/messages сломан). Ключ подставляет сервер.
+          ANTHROPIC_BASE_URL: 'http://localhost:20133',
           ANTHROPIC_AUTH_TOKEN: null,
           ANTHROPIC_API_KEY: null
         }
@@ -3189,10 +3192,22 @@ async function copyModelId(id) {
     toast('📋 ' + id, 'success', 2500);
   } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
+// Модель для /model и settings.json: у claude-opus/sonnet дотягиваем суффикс окна
+// [1m]. Без него Claude Code считает окно 200k и режет историю втрое раньше — а
+// шлюзы (agentrouter/gorouter/tabi) отдают эти модели с 1M. Зеркало серверного
+// arSettingsModel() в transparent-proxy.js — править синхронно.
+function withCtxSuffix(id) {
+  const s = String(id || '').trim();
+  return /^claude-(opus|sonnet)-/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
+}
+
 async function copyModelCmd(id) {
+  // Копируем ВСЕГДА с суффиксом: юзер вставляет `/model claude-opus-5` без него и
+  // молча получает 200k вместо 1M (реальная жалоба, 2026-08-17).
+  const cmd = '/model ' + withCtxSuffix(id);
   try {
-    await navigator.clipboard.writeText('/model ' + id);
-    toast('📋 /model ' + id, 'success', 2500);
+    await navigator.clipboard.writeText(cmd);
+    toast('📋 ' + cmd, 'success', 2500);
   } catch (e) { toast('copy: ' + e.message, 'error'); }
 }
 function table(headers, rows, footer) {
@@ -4923,23 +4938,44 @@ function customRender() {
 function arPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
   let sumBalance = 0, sumGrant = 0, withBalance = 0;
+  let staleKeys = 0, errKeys = 0, freshestTs = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
     else if (s.status === 'dead') dead++;
     if (typeof s.balance === 'number') {
       sumBalance += s.balance;
-      const g = s.grant || 175;
-      sumGrant += g;
+      // Знаменатель — ПОЛНАЯ выдача (grant+bonus+referral), т.е. ровно то, из чего
+      // сервер считал balance. С одним grant шкала уезжала за 100% и залипала там
+      // (у пула было 1794.80/1550 = 115% → clamp 100%, из-за чего казалось, что она мертва).
+      sumGrant += (s.grant || 175) + (s.bonus || 0) + (s.referral || 0);
       withBalance++;
     }
+    if (s.balanceError) errKeys++;
+    const ts = s.balanceCheckedAt ? Date.parse(s.balanceCheckedAt) : 0;
+    if (ts > freshestTs) freshestTs = ts;
+    if (!ts || Date.now() - ts > 15 * 60_000) staleKeys++;
   }
   const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
-  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct };
+  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct, staleKeys, errKeys, freshestTs };
+}
+
+// «5с / 12м / 3ч / 2д назад» — короткий возраст цифры для шапки шкалы.
+function agoShort(ts) {
+  if (!ts) return 'никогда';
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return s + 'с';
+  if (s < 3600) return Math.floor(s / 60) + 'м';
+  if (s < 86400) return Math.floor(s / 3600) + 'ч';
+  return Math.floor(s / 86400) + 'д';
 }
 
 function renderArGauge() {
   const st = arPoolStats(state.agentrouter);
+  // Баланс активного ключа — та же цифра, что в статусбаре Claude Code. Раньше в
+  // шапке была только Σ по пулу, и расхождение с баром выглядело как «баланс не едет».
+  const act = (state.agentrouter || []).find(s => s.active);
+  const actBal = act && typeof act.balance === 'number' ? act.balance : null;
   renderEnergyGauge($('ar-energy'), {
     title: 'AgentRouter · запас пула',
     pct: st.remPct,
@@ -4948,11 +4984,13 @@ function renderArGauge() {
       `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
       st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
       st.sumBalance > 0 ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
-      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+      actBal !== null ? `<span class="text-amber" title="эта же цифра в статусбаре Claude Code">★ активный $${actBal.toFixed(2)}</span>` : '',
+      `<span class="text-faint" title="возраст самой свежей проверки баланса">обновлено ${agoShort(st.freshestTs)} назад</span>`,
+      st.errKeys > 0 ? `<span class="text-crimson/80" title="последняя проверка баланса не удалась (таймаут billing / dead-ключ)">${st.errKeys} ⚠ ошибка чека</span>` : '',
     ].filter(Boolean).join(''),
     note: st.withBalance && st.withBalance < st.total
-      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
-      : 'WAF пропускает только Claude Code запросы (CC-заголовки) — пинг со стороны прокси работает, обычный curl — нет.',
+      ? 'Запас считается по известным балансам (Σ balance / Σ выдачи). Клик 💰 у ключа = чек баланса.'
+      : 'Баланс активного ключа дашборд обновляет сам (тик ~2 мин) — статусбар читает тот же кеш. Клик 💰 = чек вручную.',
   });
 }
 
@@ -5023,12 +5061,19 @@ async function renderArModels(models) {
     if (j.ok && j.model) { state.arActiveModel = j.model; active = j.model; }
   } catch {}
   $('ar-models-list').innerHTML = list.map(m => {
-    const id = m.trail ? 'agentrouter/' + m.id : m.id;
+    const id = m.id;
     const isActive = active && id === active;
+    // openai-only модель (у agentrouter это gpt-*): /v1/messages у неё сломан, идёт
+    // через конвертер :20132 за keepalive. Показываем, чтобы клик не выглядел лотереей.
+    const types = m.supported_endpoint_types || [];
+    const openaiOnly = types.length && !types.includes('anthropic');
+    const badge = openaiOnly
+      ? ` <span class="text-[9px] text-amber/80" title="только OpenAI-эндпоинт — идёт через конвертер :20132">openai</span>`
+      : '';
     return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-emerald/15 border border-emerald/50 text-emerald' : 'bg-sky/10 border border-sky/30 text-sky'}"
       onclick='arSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + ar-active-model.txt · без /model) · 📋 = копия">
-      ${esc(id)}
+      ${esc(id)}${badge}
       <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
@@ -5040,6 +5085,24 @@ async function renderArModels(models) {
 // Выбор модели пишет settings.json + ar-active-model.txt. ВАЖНО: Claude Code читает
 // settings.model ОДИН РАЗ при старте процесса — на живую сессию запись не влияет.
 // Поэтому тост прямо говорит: нужен рестарт CC (или /model в самой сессии).
+// «🔌 Подключить» на вкладке AgentRouter. Пресет agentRouter знает только домен и
+// стирает model — для gpt это нерабочий конфиг (у agentrouter /v1/messages для gpt
+// сломан, нужен конвертер за keepalive). Поэтому после пресета дожимаем моделью:
+// источник правды — ar-active-model.txt + arTargetFor() на сервере.
+async function arConnect() {
+  await applyPreset('agentRouter');
+  let m = state.arActiveModel;
+  if (!m) {
+    try {
+      const r = await fetch('/__switch/api/ar/active-model');
+      const j = await r.json();
+      if (j.ok && j.model) m = j.model;
+    } catch {}
+  }
+  if (m) await arSelectModel(m);
+  else toast('База указана, но модель не выбрана — кликни модель в списке ниже', 'warn', 7000);
+}
+
 async function arSelectModel(id) {
   if (!id) return toast('нет model id', 'warn');
   try {
@@ -5051,9 +5114,19 @@ async function arSelectModel(id) {
     const data = await res.json();
     if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
     state.arActiveModel = data.model || id;
+    // Провайдер сменился этим же кликом (base → :20133). Без обновления state.current
+    // шапка вкладки продолжала показывать «🔌 Подключить» сразу после подключения.
+    try {
+      const s = await fetch('/__switch/api/status');
+      if (s.ok) { const j = await s.json(); state.current = j.current; paintStatus(); }
+    } catch {}
+    // Нет активного ключа — конфиг записан, но первый запрос упадёт 401. Это главная
+    // причина «нажал и не работает» на свежей установке, поэтому говорим прямо.
+    if (data.warn) toast('⚠ ' + data.warn, 'warn', 9000);
     const written = data.settingsModel && data.settingsModel !== data.model
       ? ` (в settings.json как ${data.settingsModel})` : '';
-    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+    const via = data.base ? ` · через ${data.base.replace(/^https?:\/\//, '')}` : '';
+    toast('✓ ' + (data.model || id) + written + via + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
       + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
     renderArModels(state.arModels);
   } catch (e) { toast('arSelectModel: ' + e.message, 'error'); }
@@ -5074,7 +5147,8 @@ async function loadArModelMap() {
 async function renderArModelMap() {
   const mm = state.arModelMap || {};
   const models = (state.arModels || []).map(m => m.id);
-  const opts = ['', ...models];
+  // см. renderGoModelMap: сохранённые цели всегда в опциях, иначе «— как есть —».
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
   const sel = (name) => {
     const val = mm[name] || '';
     const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
@@ -5848,6 +5922,9 @@ async function renderGoModels(models) {
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderGoModelMap();
 }
 
 async function goSelectModel(id) {
@@ -6284,7 +6361,11 @@ async function loadGoModelMap() {
 async function renderGoModelMap() {
   const mm = state.goModelMap || {};
   const models = (state.goModels || []).map(m => m.id);
-  const opts = ['', ...models];
+  // Сохранённые цели держим в опциях ВСЕГДА: /go/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя gorouter-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
   const sel = (name) => {
     const val = mm[name] || '';
     const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
@@ -6428,6 +6509,8 @@ async function renderTbModels(models) {
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
+  // как в renderArModels/renderGoModels: без этого селекты маппинга остаются пустыми.
+  renderTbModelMap();
 }
 
 async function tbSelectModel(id) {
@@ -6861,7 +6944,8 @@ async function loadTbModelMap() {
 async function renderTbModelMap() {
   const mm = state.tbModelMap || {};
   const models = (state.tbModels || []).map(m => m.id);
-  const opts = ['', ...models];
+  // см. renderGoModelMap: сохранённые цели всегда в опциях, иначе «— как есть —».
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
   const sel = (name) => {
     const val = mm[name] || '';
     const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');

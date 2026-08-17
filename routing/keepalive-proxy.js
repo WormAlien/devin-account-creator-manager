@@ -136,6 +136,14 @@ const upBase = upstream.pathname.replace(/\/+$/, '');
 const gptProxy = new URL(HAIKU_GPT_PROXY);
 const gptRequester = gptProxy.protocol === 'https:' ? https.request : http.request;
 const gptBase = gptProxy.pathname.replace(/\/+$/, '');
+// Конвертер :20132 — агентроутеровский: он ходит на agentrouter.org и берёт ключ из
+// ar-active-key.txt. Уводить туда gpt-запросы инстанса, который смотрит на ДРУГОЙ шлюз
+// (tabi :20155 / gorouter :20156), значит молча тратить баланс AgentRouter чужим ключом
+// и ловить его content-filter вместо своего шлюза. Поэтому конвертер включён только для
+// инстанса с UPSTREAM=agentrouter.org; принудительно — GPT_PROXY_FORCE=1.
+// `let`, а не `const`, чтобы selftest мог проверить обе ветки роутинга.
+let GPT_PROXY_ENABLED = !!HAIKU_GPT_PROXY
+  && (process.env.GPT_PROXY_FORCE === '1' || /(^|\.)agentrouter\.org$/i.test(upstream.hostname));
 // Настоящее SSE-событие на границе событий: watchdog клиента считает только
 // реальные события (замер v1tusha), комментарий его НЕ сбрасывает.
 const PING = 'event: ping\ndata: {"type":"ping"}\n\n';
@@ -350,7 +358,10 @@ function remapHaiku(method, reqPath, body) {
   if (typeof j.model !== 'string') return null;
   const model = j.model;
   // gpt-модели уходят на конвертер всегда — до и независимо от маппинга тиров.
+  // Но только если конвертер наш (см. GPT_PROXY_ENABLED): на tabi/gorouter gpt остаётся
+  // на своём шлюзе, иначе запрос уходит чужим ключом на agentrouter.
   if (isGptLike(model)) {
+    if (!GPT_PROXY_ENABLED) return null;
     log(`${method} ${reqPath} ${model} via ${HAIKU_GPT_PROXY}`);
     return { body, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
   }
@@ -366,6 +377,13 @@ function remapHaiku(method, reqPath, body) {
     const target = tm.target;
     if (isGptLike(target)) {
       newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
+      // Конвертера нет (не агентроутеровский инстанс) — маппинг уважаем, но модель
+      // отдаём своему же шлюзу, а не чужому конвертеру.
+      if (!GPT_PROXY_ENABLED) {
+        label = `${tm.tier}→${target} (map, gpt, без конвертера)`;
+        log(`${method} ${reqPath} ${label} via ${upstream.host}`);
+        return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+      }
       label = `${tm.tier}→${target} (map, gpt)`;
       log(`${method} ${reqPath} ${label} via ${HAIKU_GPT_PROXY}`);
       return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
@@ -377,6 +395,9 @@ function remapHaiku(method, reqPath, body) {
   }
 
   if (/haiku/i.test(model)) {
+    // Fallback-цель HAIKU_TO_MODEL — gpt-модель, а значит нужна через конвертер.
+    // Без конвертера рвать haiku некуда: отдаём как есть.
+    if (!GPT_PROXY_ENABLED) return null;
     newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: HAIKU_TO_MODEL })), 'utf8');
     label = `haiku→${HAIKU_TO_MODEL}`;
   } else if (bare !== model) {
@@ -900,7 +921,12 @@ if (process.argv[2] === 'selftest') {
   // только fallback для пустого тира. Ассерт читает живой файл, поэтому сверяемся с
   // ним, а не с env: иначе смена haiku-тира в дашборде «ломала» бы selftest.
   const mapHaiku = (readModelMap() || {}).haiku || '';
+  // Ветку с конвертером проверяем при заведомо включённом гейте: у чужого шлюза
+  // (tabi/gorouter) gpt-цель haiku намеренно не ремапится — это отдельный ассерт ниже.
+  const haikuGate = GPT_PROXY_ENABLED;
+  GPT_PROXY_ENABLED = true;
   const h = remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [] })));
+  GPT_PROXY_ENABLED = haikuGate;
   assert.ok(h, 'haiku должен ремапиться');
   assert.strictEqual(parse(h.body).model, mapHaiku || HAIKU_TO_MODEL, 'haiku -> тир из маппинга (или env-fallback)');
   // и уходит туда, куда указывает тип цели: gpt-цель → конвертер, claude-цель → agentrouter
@@ -915,7 +941,10 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(remapHaiku('POST', '/v1/messages', Buffer.from('not json')), null, 'не-JSON без изменений');
   // ремап: не /v1/messages не трогаем
   assert.strictEqual(remapHaiku('POST', '/v1/count_tokens', o), null, 'не /v1/messages без изменений');
-  // роутинг gpt: уходит на конвертер :20132, тело не переписывается
+  // роутинг gpt: уходит на конвертер :20132, тело не переписывается.
+  // Обе ветки гейта проверяем явно, чтобы прогон не зависел от UPSTREAM инстанса.
+  const gptWas = GPT_PROXY_ENABLED;
+  GPT_PROXY_ENABLED = true;
   const g = remapHaiku('POST', '/v1/messages?beta=true', Buffer.from(JSON.stringify({ model: 'gpt-5.6-sol', messages: [] })));
   assert.ok(g, 'gpt должен уходить на конвертер');
   assert.strictEqual(g.host, gptProxy.host, 'gpt -> gpt-прокси');
@@ -923,6 +952,25 @@ if (process.argv[2] === 'selftest') {
   // роутинг gpt не зависит от HAIKU_REMAP: флаг про маппинг тиров, а не про конвертер.
   // Само поведение при HAIKU_REMAP=0 в одном процессе не проверить (const), но
   // gpt-ветка стоит ДО этой проверки в remapHaiku — см. комментарий там.
+
+  // ── чужой шлюз: конвертер :20132 агентроутеровский, туда нельзя уводить gpt
+  // с инстанса tabi/gorouter (чужой ключ + чужой content-filter). GPT_PROXY_ENABLED=false
+  // → gpt остаётся passthrough на своём upstream.
+  GPT_PROXY_ENABLED = false;
+  try {
+    assert.strictEqual(
+      remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'gpt-5.6-sol', messages: [] }))),
+      null, 'без своего конвертера gpt не уводится на :20132');
+    const hb = remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5', messages: [] })));
+    if (isGptLike(mapHaiku || '')) {
+      assert.strictEqual(hb, null, 'gpt-цель haiku без конвертера не ремапится');
+    } else if (mapHaiku) {
+      // haiku замаплен на claude-цель — маппинг работает и без конвертера
+      assert.strictEqual(hb && hb.host, upstream.host, 'claude-цель haiku идёт на свой шлюз');
+    }
+  } finally {
+    GPT_PROXY_ENABLED = gptWas;
+  }
 
   // ── имя модели в ответе: возвращаем клиенту то, что он просил ──
   // Шлюз отдаёт внутреннее имя (anthropic/…-ps-aws-dst) → в статусбаре мусор.
@@ -1013,4 +1061,5 @@ server.on('clientError', (err, socket) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, хедж ${cfg.hedgeMs ? cfg.hedgeMs + 'ms' : 'off'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
+  log(`gpt-конвертер: ${GPT_PROXY_ENABLED ? HAIKU_GPT_PROXY : 'off (чужой шлюз — gpt остаётся на ' + upstream.host + ')'}`);
 });

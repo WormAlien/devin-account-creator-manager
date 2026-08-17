@@ -3271,9 +3271,9 @@ async function handleHealth(res) {
         { name: 'FreeModel OpenAI',   port: 20130, path: '/__fmoai/api/status' },
         { name: 'VyceAI',             port: 20131, path: '/__vyceai/api/status' },
         { name: 'AgentRouter',        port: 20132, path: '/__agentrouter/api/status' },
-        { name: 'Keepalive',          port: AR_KEEPALIVE_PORT, path: '/__keepalive/api/status' },
-        { name: 'Keepalive GoRouter', port: Number(process.env.GO_KEEPALIVE_PORT || 20156), path: '/__keepalive/api/status' },
-        { name: 'Keepalive Tabi',     port: Number(process.env.TB_KEEPALIVE_PORT || 20155), path: '/__keepalive/api/status' },
+        { name: 'Keepalive',          port: AR_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive GoRouter', port: Number(process.env.GO_KEEPALIVE_PORT || 20156), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Tabi',     port: Number(process.env.TB_KEEPALIVE_PORT || 20155), path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -3308,6 +3308,7 @@ async function handleHealth(res) {
             status,
             ms: Date.now() - t0,
             orphan: !!c.orphan,
+            keepalive: !!c.keepalive,
             custom: c.custom ? { id: c.custom.id, modelMap: c.custom.modelMap } : undefined,
             detail: summarizeStatus(data),
         };
@@ -6900,6 +6901,69 @@ async function tbKeepaliveSpawn() {
     }
 }
 
+// ───── Рестарт keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter) ─────
+// Все три xxKeepaliveSpawn() поднимают процесс ТОЛЬКО если порт свободен, а
+// автоперезапуска нет — после правки keepalive-proxy.js новый код подхватывается
+// лишь пересозданием процесса. Раньше это делали таскиллом руками: порт оставался
+// пустым, и все сессии CC/happy получали ConnectionRefused (settings.json смотрит
+// ровно в один из этих портов). Поэтому убийство и подъём — одной операцией,
+// с ожиданием освобождения порта и живого /__keepalive/api/status.
+function killPortListeners(port) {
+    let killed = 0;
+    try {
+        const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
+        for (const line of out.split(/\r?\n/)) {
+            const m = line.match(new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`));
+            if (m) { try { execFileSync('taskkill', ['/F', '/PID', m[1]]); killed += 1; } catch { } }
+        }
+    } catch { }
+    return killed;
+}
+
+function portIsFree(port) {
+    const net = require('net');
+    return new Promise(resolve => {
+        const sock = net.createServer();
+        sock.once('error', () => resolve(false));
+        sock.listen(port, '127.0.0.1', () => { sock.close(); resolve(true); });
+    });
+}
+
+const napMs = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function keepaliveRestart(port) {
+    const instances = {
+        [AR_KEEPALIVE_PORT]: { name: 'AgentRouter', spawn: arKeepaliveSpawn },
+        [TB_KEEPALIVE_PORT]: { name: 'Tabi', spawn: tbKeepaliveSpawn },
+        [GO_KEEPALIVE_PORT]: { name: 'GoRouter', spawn: goKeepaliveSpawn },
+    };
+    const inst = instances[port];
+    if (!inst) {
+        return { ok: false, error: `:${port} — не keepalive-инстанс (можно ${Object.keys(instances).join(', ')})` };
+    }
+    const killed = killPortListeners(port);
+    // Порт освобождается не мгновенно — иначе spawn увидит занятый порт и молча выйдет.
+    for (let i = 0; i < 20; i += 1) {
+        if (await portIsFree(port)) break;
+        await napMs(100);
+    }
+    const sp = await inst.spawn();
+    if (!sp.ok) return { ok: false, error: sp.error || 'spawn failed', killed };
+    for (let i = 0; i < 40; i += 1) {
+        try {
+            const r = await fetch(`http://127.0.0.1:${port}/__keepalive/api/status`, { signal: AbortSignal.timeout(700) });
+            if (r.ok) {
+                const status = await r.json().catch(() => null);
+                logLine(`keepalive restart: ${inst.name} :${port} поднят (убито ${killed}, pid ${sp.pid || '?'})`);
+                return { ok: true, name: inst.name, port, killed, pid: sp.pid || null, status };
+            }
+        } catch { }
+        await napMs(250);
+    }
+    logLine(`keepalive restart: ${inst.name} :${port} НЕ ответил после спавна`);
+    return { ok: false, error: `спавн прошёл, но :${port} не ответил за 10с`, killed, pid: sp.pid || null };
+}
+
 // Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
 async function tbProbe(apiKey) {
     try {
@@ -7721,6 +7785,22 @@ const server = http.createServer((req, res) => {
             const remote = git('rev-parse', '--short', `origin/${branch}`);
             return jsonRes(res, 200, { branch, behind, local, remote, upToDate: behind === 0 });
         } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+    }
+
+    // POST /__switch/api/keepalive/restart {port} — пересоздать keepalive-инстанс
+    // (:20133/:20155/:20156) одной операцией: kill по порту → spawn с env этого
+    // инстанса → ждём /__keepalive/api/status. Так подхватывается новый код прокси.
+    if (req.method === 'POST' && req.url === '/__switch/api/keepalive/restart') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', async () => {
+            try {
+                const { port } = JSON.parse(body || '{}');
+                const r = await keepaliveRestart(Number(port));
+                jsonRes(res, r.ok ? 200 : 500, r);
+            } catch (e) { jsonRes(res, 400, { error: e.message }); }
+        });
+        return;
     }
 
     // Подтянуть свежий код дашборда (git pull --ff-only). Требует ручного рестарта прокси.

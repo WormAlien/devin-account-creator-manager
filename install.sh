@@ -252,28 +252,34 @@ if ask "Поставить браузеры Playwright: chromium + headless-shel
          npx playwright install chromium && ok "chromium установлен"; }
 fi
 
-# ── 2. Claude Code 2.1.153 ──────────────────────────────────────────────────
-step "2. Claude Code (нужна РОВНО 2.1.153 — новее ломает apiKeyHelper)"
+# ── 2. Claude Code ──────────────────────────────────────────────────────────
+# Раньше здесь был жёсткий пин 2.1.153 (на новых версиях ломался apiKeyHelper), и
+# UPDATE.bat каждый раз ОТКАТЫВАЛ свежий Claude Code — с uninstall'ом, на глазах у
+# юзера. Сейчас основные бэкенды (keepalive-прокси, agentrouter/tabi/gorouter) ключ
+# берут из файла сами, apiKeyHelper нужен только виртуальным режимам apihelper и
+# aerolink. Поэтому стоящую версию НЕ трогаем; ставим только если claude вообще нет.
+# Нужен конкретный пин — CLAUDE_CODE_VERSION=2.1.153 bash install.sh
+step "2. Claude Code"
 CUR=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-if [ "$CUR" = "2.1.153" ]; then
-  ok "уже 2.1.153"
-elif ask "Текущая: ${CUR:-нет}. Поставить 2.1.153?" Y; then
+WANT="${CLAUDE_CODE_VERSION:-}"
+if [ -n "$CUR" ] && { [ -z "$WANT" ] || [ "$CUR" = "$WANT" ]; }; then
+  ok "уже стоит $CUR — не трогаю (CC обновляется сам)"
+elif ask "Текущая: ${CUR:-нет}. Поставить ${WANT:-последнюю}?" Y; then
   npm config delete prefix 2>/dev/null
-  npm uninstall -g @anthropic-ai/claude-code 2>/dev/null
-  npm install -g @anthropic-ai/claude-code@2.1.153 && ok "Claude Code 2.1.153"
+  npm install -g "@anthropic-ai/claude-code${WANT:+@$WANT}" && ok "Claude Code установлен"
   # npm с allow-scripts не запускает postinstall (node install.cjs) без
   # одобрения — из-за этого claude может не завестись или тормозить на
   # первом старте. approve-scripts есть не во всех npm — ошибку глотаем.
   npm approve-scripts @anthropic-ai/claude-code >/dev/null 2>&1 || true
   # Проверяем результат тут же, а не у друга через неделю.
   NEWVER=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-  if [ "$NEWVER" = "2.1.153" ]; then
+  if [ -n "$NEWVER" ]; then
     ok "claude --version → $NEWVER"
   else
-    warn "claude не отвечает после установки (got: ${NEWVER:-ничего})."
+    warn "claude не отвечает после установки."
     warn "В PowerShell npm может блокироваться политикой (PSSecurityException) — лечится:"
     warn "  Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force"
-    warn "Затем перезапусти терминал и повтори: npm install -g @anthropic-ai/claude-code@2.1.153"
+    warn "Затем перезапусти терминал и повтори: npm install -g @anthropic-ai/claude-code"
   fi
 fi
 

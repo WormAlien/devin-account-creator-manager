@@ -5166,6 +5166,18 @@ async function handleConduitSetModel(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── Аккаунт без ключа (AgentRouter / GoRouter / Tabi) ─────────────────────
+// У всех трёх регистрация ручная через GitHub, и ключ появляется ТОЛЬКО после неё.
+// Поэтому аккаунт можно создать заранее (email известен, ключа нет): вместо ключа
+// пишем уникальную заглушку `no-key-…`. Уникальность обязательна — api_key служит
+// идентификатором в кликах активации/баланса, а `add` отбивает дубли по нему.
+// Настоящий ключ у всех трёх (NewAPI) — 'sk-' + 48 символов.
+// Заглушка → статус 'no_key', 🌐 ведёт на регистрацию по рефке, а не в консоль.
+function isRealKey(k) { return /^sk-/.test(String(k || '').trim()); }
+function makeNoKeyStub() {
+    return 'no-key-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
 // ───── AgentRouter (ar) — ручной пул ключей (agentrouter.org), активация через API Helper ─────
 // Дроп-ин для Claude Code: ANTHROPIC_BASE_URL=https://agentrouter.org (БЕЗ /v1), ключ sk-….
 // WAF отбивает запросы, которые не выглядят как Claude Code: все probe/models обязаны
@@ -5298,6 +5310,7 @@ function arReadActiveModel() {
 
 // Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
 async function arProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
         const r = await fetch(`${AR_BASE_URL}/v1/models`, {
             method: 'GET',
@@ -5315,6 +5328,7 @@ async function arProbe(apiKey) {
 // вручную (grantOverride — у разных акков выдача разная: 125/175/личный больше), либо угадываем
 // по шагу $25; balance = grant − spent. hard_limit_usd НЕ баланс (у безлимитных = sentinel 100M).
 async function arBalance(apiKey, grantOverride, bonusOverride, referralOverride) {
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
     const day = ms => new Date(ms).toISOString().slice(0, 10);
     const end = day(Date.now());
     const start = day(Date.now() - 400 * 864e5); // 400 дней назад
@@ -5401,6 +5415,9 @@ async function handleArSessions(req, res) {
 // тоже отмечена — бар подождёт до следующего порога, а ошибку видно в balanceError.
 function arApplyBalance(target, bal) {
     if (!target || !bal) return bal;
+    // Аккаунт без ключа — это не ошибка чека: balanceError бы зажёг «⚠ ошибка чека»
+    // в гейдже пула. Просто помечаем статус и уходим, штамп проверки не ставим.
+    if (bal.status === 'no_key') { target.status = 'no_key'; delete target.balanceError; return bal; }
     target.status = bal.status;
     target.balanceCheckedAt = new Date().toISOString();
     if (bal.status === 'live') {
@@ -5649,38 +5666,44 @@ async function handleArSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
-        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'pipe' });
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
+        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`agentrouter session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
         proc.on('exit', (code, sig) => { arLkPids.delete(label); logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         arLkPids.set(label, proc.pid);
-        logLine(`agentrouter session/open: ${dispName} label=${label} (pid ${proc.pid})`);
-        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+        logLine(`agentrouter session/open: ${dispName} label=${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 async function handleArAdd(req, res) {
     try {
         const { email, api_key, name } = await readJsonBody(req);
-        const key = String(api_key || '').trim();
         const mail = String(email || '').trim();
-        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        // Вместо ключа — уникальная заглушка, дубли проверяем только у настоящих ключей.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
         const sessions = arLoad();
-        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'ar_' + Date.now() + '_' + sessions.length;
         sessions.push({
-            id: 'ar_' + Date.now() + '_' + sessions.length,
+            id,
             email: mail,
             name: String(name || '').trim() || mail.split('@')[0],
             api_key: key,
             active: false,
-            status: 'unknown',
+            status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
         });
         arSave(sessions);
-        logLine(`agentrouter add: ${mail} (***${key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true });
+        logLine(`agentrouter add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, id, noKey });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -5909,6 +5932,9 @@ async function handleArSetKey(req, res) {
         }
         const wasActive = !!target.active;
         target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key', пусть
+        // следующий пинг/баланс поставит реальный статус.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
         if (wasActive) {
             fs.writeFileSync(AR_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
         }
@@ -5999,6 +6025,9 @@ async function handleArActivate(req, res) {
         const body = await readJsonBody(req);
         const key = String(body.api_key || '').trim();
         if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего — иначе она уедет в ar-active-key.txt
+        // и положит активный бэкенд Claude Code.
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
         const sessions = arLoad();
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
@@ -6251,6 +6280,7 @@ async function goKeepaliveSpawn() {
 
 // Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
 async function goProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
         const r = await fetch(`${GO_BASE_URL}/models`, {
             method: 'GET',
@@ -6265,6 +6295,7 @@ async function goProbe(apiKey) {
 
 // Баланс: usage endpoint на КОРНЕ gorouter.app (не /v1). spent = total_usage (центы)/100.
 async function goBalance(apiKey, grantOverride, bonusOverride) {
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
     const day = ms => new Date(ms).toISOString().slice(0, 10);
     const end = day(Date.now());
     const start = day(Date.now() - 400 * 864e5);
@@ -6302,6 +6333,8 @@ async function goBalance(apiKey, grantOverride, bonusOverride) {
 
 function goApplyBalance(target, bal) {
     if (!target || !bal) return bal;
+    // Аккаунт без ключа — не ошибка чека (см. arApplyBalance).
+    if (bal.status === 'no_key') { target.status = 'no_key'; delete target.balanceError; return bal; }
     target.status = bal.status;
     // Штамп ставим при любом исходе — иначе при таймауте billing статусбар считает
     // кеш протухшим и пинает обновление на каждом промпте (см. arApplyBalance).
@@ -6443,15 +6476,17 @@ async function handleGoSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'gorouter', 'open-session.js');
-        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'pipe' });
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`gorouter session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`gorouter session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`gorouter session/open spawn error: ${e.message}`));
         proc.on('exit', (code, sig) => { goLkPids.delete(label); logLine(`gorouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         goLkPids.set(label, proc.pid);
-        logLine(`gorouter session/open: ${label} (pid ${proc.pid})`);
-        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+        logLine(`gorouter session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6589,23 +6624,26 @@ async function handleGoImport(req, res) {
 async function handleGoAdd(req, res) {
     try {
         const { email, api_key, name } = await readJsonBody(req);
-        const key = String(api_key || '').trim();
         const mail = String(email || '').trim();
-        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
         const sessions = goLoad();
-        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'go_' + Date.now() + '_' + sessions.length;
         sessions.push({
-            id: 'go_' + Date.now() + '_' + sessions.length,
+            id,
             email: mail,
             name: String(name || '').trim() || mail.split('@')[0],
             api_key: key,
             active: false,
-            status: 'unknown',
+            status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
         });
         goSave(sessions);
-        logLine(`gorouter add: ${mail} (***${key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true });
+        logLine(`gorouter add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, id, noKey });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6625,6 +6663,8 @@ async function handleGoSetKey(req, res) {
         }
         const wasActive = !!target.active;
         target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
         if (wasActive) {
             fs.writeFileSync(GO_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
         }
@@ -6683,6 +6723,8 @@ async function handleGoActivate(req, res) {
         const body = await readJsonBody(req);
         const key = String(body.api_key || '').trim();
         if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в gorouter-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
         const sessions = goLoad();
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
@@ -6995,6 +7037,7 @@ async function keepaliveRestart(port) {
 
 // Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
 async function tbProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
         const r = await fetch(`${TB_BASE_URL}/v1/models`, {
             method: 'GET',
@@ -7010,6 +7053,7 @@ async function tbProbe(apiKey) {
 // Баланс ключа: usage на КОРНЕ tabitoken.com (не /v1), spent = total_usage (центы)/100.
 // grant = вручную (grantManual) либо авто: база $100 + шаг $20 по потраченному.
 async function tbBalance(apiKey, grantOverride, bonusOverride) {
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
     const day = ms => new Date(ms).toISOString().slice(0, 10);
     const end = day(Date.now());
     const start = day(Date.now() - 400 * 864e5);
@@ -7062,6 +7106,8 @@ async function tbBalance(apiKey, grantOverride, bonusOverride) {
 
 function tbApplyBalance(target, bal) {
     if (!target || !bal) return bal;
+    // Аккаунт без ключа — не ошибка чека (см. arApplyBalance).
+    if (bal.status === 'no_key') { target.status = 'no_key'; delete target.balanceError; return bal; }
     target.status = bal.status;
     // Штамп при любом исходе — см. arApplyBalance (иначе бар долбит обновление).
     target.balanceCheckedAt = new Date().toISOString();
@@ -7199,38 +7245,43 @@ async function handleTbSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'tabi', 'open-session.js');
-        const proc = spawn(process.execPath, [script, label], { detached: true, stdio: 'pipe' });
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`tabi session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`tabi session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`tabi session/open spawn error: ${e.message}`));
         proc.on('exit', (code, sig) => { tbLkPids.delete(label); logLine(`tabi session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         tbLkPids.set(label, proc.pid);
-        logLine(`tabi session/open: ${label} (pid ${proc.pid})`);
-        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+        logLine(`tabi session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 async function handleTbAdd(req, res) {
     try {
         const { email, api_key, name } = await readJsonBody(req);
-        const key = String(api_key || '').trim();
         const mail = String(email || '').trim();
-        if (!mail || !key) return jsonRes(res, 400, { error: 'email и api_key обязательны' });
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
         const sessions = tbLoad();
-        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'tb_' + Date.now() + '_' + sessions.length;
         sessions.push({
-            id: 'tb_' + Date.now() + '_' + sessions.length,
+            id,
             email: mail,
             name: String(name || '').trim() || mail.split('@')[0],
             api_key: key,
             active: false,
-            status: 'unknown',
+            status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
         });
         tbSave(sessions);
-        logLine(`tabi add: ${mail} (***${key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true });
+        logLine(`tabi add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, id, noKey });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -7259,6 +7310,8 @@ async function handleTbActivate(req, res) {
         const body = await readJsonBody(req);
         const key = String(body.api_key || '').trim();
         if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в tabi-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
         const sessions = tbLoad();
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
@@ -7402,6 +7455,8 @@ async function handleTbSetKey(req, res) {
         }
         const wasActive = !!target.active;
         target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
         if (wasActive) {
             fs.writeFileSync(TB_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
         }

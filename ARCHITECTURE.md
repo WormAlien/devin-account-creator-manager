@@ -135,9 +135,9 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **Custom**    | активна   | произвольные провайдеры: имя + baseUrl + пул ключей (`routing/custom-providers.json`), пинг/модели по `{baseUrl}/models`, активация через API Helper (`~/.claude/custom-active-key.txt`). Если задан `modelMap` (opus/sonnet/haiku) — активация поднимает Anthropic→OpenAI конвертер (`custom-openai-proxy.js`) и направляет CC на `localhost:<port>` | `/api/custom/*` |
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
 | **Svrtr**     | активна   | ТГ-аккаунты svrtr.org (api.svrtr.org), кредиты, реги через @svrtrbot, активация через API Helper | `/api/svrtr/*` |
-| **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js для чек-ина +$25), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap}` |
-| **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
-| **Tabi Token** | активна  | ручной пул ключей tabitoken.com, GitHub-вход в консоль, баланс (`grant + bonus − spent`, дефолт $100, реф-бонус $20), маппинг моделей, **активация через SSE keepalive :20155** (keepalive-proxy.js → tabitoken.com, срез `[1m]`, count_tokens fallback) | `/api/tb/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
+| **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js: нет ключа → регистрация по рефке `?aff=`, есть ключ → `/console/topup`, чек-ин +$25), **аккаунт без ключа** (`status: no_key`), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap}` |
+| **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
+| **Tabi Token** | активна  | ручной пул ключей tabitoken.com, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, дефолт $100, реф-бонус $20), маппинг моделей, **активация через SSE keepalive :20155** (keepalive-proxy.js → tabitoken.com, срез `[1m]`, count_tokens fallback) | `/api/tb/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную | `/api/gh/{keys,add,import,delete,update,open}` |
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
@@ -406,16 +406,65 @@ client detected` (проверено 2026-08-16, при прочих равны�
   `gorouter-sessions.json`, UI-кнопка «+5» справа от суммы (`goAddBonus()` / `goBalanceCell()`).
   База выдачи у gorouter — `GO_DEFAULT_GRANT = 70` (не 175).
 
-### Кнопка «🌐 ЛК» (вход в сессию для чек-ина +$25)
+### Кнопка «🌐 ЛК» — рефка для новых, баланс для рабочих (общее для ar/go/tb)
 
-- `POST /api/ar/session/open {api_key}` → `handleArSessionOpen`: спавнит
-  `agentrouter/open-session.js <label>` detached + `unref()`, видимый Chromium
-  с **персональным профилем** `agentrouter/profiles/<label>/` (label = `ar_` +
-  хэш(api_key) — стабильный, переименование аккаунта не рвёт профиль).
+- `POST /api/{ar,go,tb}/session/open {id}` → `handle{Ar,Go,Tb}SessionOpen`: спавнит
+  `<provider>/open-session.js <label> <mode>` detached + `unref()`, видимый Chromium
+  с **персональным профилем** `<provider>/profiles/<label>/` (`label = acct_<id>` —
+  стабильный, смена ключа и переименование не рвут профиль).
   `launchPersistentContext` сам пишет куки+localStorage+GitHub-OAuth на диск.
-- Dedup: `arLkPids` (label → pid), повторный клик при живом pid → `{already:true}`, второй
-  браузер не плодится.
+- **`mode` считает сервер по ключу аккаунта** (`isRealKey()` — настоящий ключ у всех
+  трёх NewAPI-провайдеров это `sk-` + 48):
+  - ключа нет (заглушка `no-key-…`) → `register` → **реф-ссылка владельца**:
+    `agentrouter.org/register?aff=oUm3`, `gorouter.app/sign-up?aff=dzj0`,
+    `tabitoken.com/sign-up?aff=cUG3`;
+  - ключ есть → `console` → страница баланса: `agentrouter.org/console/topup`
+    (там же чек-ин +$25), `gorouter.app/wallet`, `tabitoken.com/wallet`.
+  - `mode` уходит в ответ (`{mode}`) и в `logLine` — дашборд по нему выбирает тост,
+    в Server Logs видно `session/open: … mode=register|console`.
+  - При запуске скрипта руками режим по умолчанию `auto`: чистый профиль = `register`.
+    Импортированный share-код всегда `console` — аккаунт друга уже зарегистрирован.
+- **Реф-ссылки захардкожены в двух местах** (править парой): `REGISTER_URL` в
+  `<provider>/open-session.js` и `href` в шапке/футере вкладки `proxy-dashboard.html`
+  (заголовки вкладок ведут на регистрацию по рефке, а не на корень сайта — чтобы
+  новый пользователь дашборда регистрировался по рефке владельца).
+- **Порядок навигации при регистрации** (`openRegisterViaRef`, 2026-08-17): реф-ссылка →
+  корень → реф-ссылка. Реф-код все три сайта (NewAPI) держат в `localStorage.aff`, и он
+  переживает уход на другие страницы — первый заход сажает код в профиль, корень прогревает
+  SPA (`/api/status`, `cf_clearance`), третий заход показывает страницу регистрации.
+  Скрипт логирует, что код осел: `🤝 реф-код сохранён в профиль: aff=…`.
+- **После GitHub-логина — `settleAfterLogin()`**: сайт часто отвечает
+  «failed to get user information», и лечится это обновлением страницы. Скрипт сам делает
+  `reload`, проверяет текст ошибки на странице и до двух раз перезаходит по реф-ссылке.
+  Если ошибка осталась — честно пишет «обнови страницу вручную (F5)», а не рапортует успех.
+  Ветка `register` ждёт логина **независимо от свежести профиля**: упавшая первая попытка
+  оставляет профиль непустым, а аккаунт — всё ещё без ключа.
+- Dedup: `{ar,go,tb}LkPids` (label → pid), повторный клик при живом pid → `{already:true}`,
+  второй браузер не плодится.
 - `stdio: 'pipe'` + ретрансляция stdout/stderr скрипта в `logLine()` — ошибки видны в Server Logs.
+
+### Аккаунт без ключа (`status: no_key`) — общее для ar/go/tb
+
+Регистрация у всех трёх ручная через GitHub, и ключ появляется только после неё.
+Поэтому `POST /api/{ar,go,tb}/add` принимает **пустой `api_key`**: вместо ключа кладём
+уникальную заглушку `makeNoKeyStub()` = `no-key-<base36>` (уникальность обязательна —
+`api_key` служит идентификатором в кликах активации/баланса, а `add` отбивает дубли).
+Ответ `{ok, id, noKey}`; дашборд при `noKey` сразу открывает 🌐 → регистрацию по рефке.
+
+- `add` → `status: 'no_key'`; `set-key` с настоящим `sk-…` снимает `no_key` → `unknown`.
+- Guard'ы в одном месте на провайдера: `{ar,go,tb}Probe()` → `'no_key'`,
+  `{ar,go,tb}Balance()` → `{status:'no_key'}`. Это закрывает сразу батчи
+  `?probe=1`/`?balance=1`, `ping`, `balance`, `set-grant`, `add-bonus`, `add-referral` —
+  иначе заглушка летела в `/v1/models`, получала 401 и красила свежий аккаунт в 🔴 DEAD.
+- `{ar,go,tb}ApplyBalance()` при `no_key` не ставит `balanceError` и `balanceCheckedAt`:
+  иначе гейдж пула зажигал «⚠ ошибка чека».
+- `activate` на безключевом аккаунте → 400 (иначе заглушка уехала бы в
+  `~/.claude/{ar,gorouter,tabi}-active-key.txt` и положила активный бэкенд).
+- UI (`renderAr/renderGo/renderTb`): вместо кнопки-ключа плашка «🔑 получи API-ключ
+  после регистрации», статус `⚪ нет ключа`, баланс `—`, кнопки 📋/🤝/🩺 скрыты
+  (остаются 🔑 ✏️ 🌐 🗑 🔗). Клиентский `isRealKey()` — зеркало серверного.
+  Старые заглушки, вписанные руками (`"1"`, `"2"`, `"3"`), под правило попадают
+  автоматически — миграция данных не нужна.
 
 ---
 
@@ -427,7 +476,9 @@ count_tokens fallback, держит SSE-паузы thinking-моделей). К�
 `ANTHROPIC_AUTH_TOKEN`, модель из `~/.claude/gorouter-active-model.txt`.
 
 - **GitHub-вход в консоль** — `gorouter/open-session.js` (персональный профиль
-  `gorouter/profiles/<label>/`), там же чек-ин бонуса.
+  `gorouter/profiles/<label>/`), там же чек-ин бонуса. Ключа нет → открывается
+  регистрация по рефке `gorouter.app/sign-up?aff=dzj0`, есть → `gorouter.app/wallet`
+  (см. «Кнопка 🌐 ЛК» и «Аккаунт без ключа» в разделе AgentRouter).
 - **Баланс** — `balance = grant + bonus − spent`. Сервис отдаёт только `total_usage` (центы).
   База выдачи `GO_DEFAULT_GRANT = 70`, шаг бонуса `GO_BONUS_STEP = 5` (кнопка «+5»),
   ручная выдача `grantManual` (✏️). Кеш: `spent/grant/bonus/balance/balanceCheckedAt` прямо
@@ -452,6 +503,8 @@ count_tokens fallback, держит SSE-паузы thinking-моделей). К�
 в `ANTHROPIC_AUTH_TOKEN`, модель из `~/.claude/tabi-active-model.txt`.
 
 - **GitHub-вход в консоль** — `tabi/open-session.js` (профиль `tabi/profiles/<label>/`).
+  Ключа нет → регистрация по рефке `tabitoken.com/sign-up?aff=cUG3`, есть →
+  `tabitoken.com/wallet` (см. «Кнопка 🌐 ЛК» и «Аккаунт без ключа» у AgentRouter).
 - **Баланс** — `balance = grant + bonus − spent`. Дефолт выдачи `TB_DEFAULT_GRANT = 100`,
   реф-бонус `TB_BONUS_STEP = 20` за приведённого, ручная выдача `grantManual` (✏️).
   Кеш в `tabi-sessions.json` (`tbBalance()` / `tbApplyBalance()`).

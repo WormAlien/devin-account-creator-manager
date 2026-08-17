@@ -126,16 +126,44 @@ async function reportRender(page) {
     : '⚠️  белый экран: SPA не поднялась — жми F5, в DevTools ищи 404 на /assets/*.js');
 }
 
-// Первый GitHub-вход с реф-ссылки регулярно заканчивался ошибкой сайта
-// «failed to get user information», и лечилось это руками: вставить реф-ссылку
-// заново и обновить страницу. Автоматизируем ровно этот обход.
-const AUTH_ERROR_RE = /failed to get user info|无法获取用户信息|не удалось получить (данные|информацию)/i;
+// Ответы gorouter (NewAPI) на неудачный GitHub-вход. Раньше скрипт знал только
+// «failed to get user information» и на всё остальное молча ждал логин 10 минут —
+// пользователь видел «дроч» вместо ответа сайта (2026-08-17).
+const SITE_ERRORS = [
+  {
+    code: 'no_register',
+    terminal: true,           // ждать дальше бессмысленно — аккаунт не создать
+    // `\w` в JS — только ASCII, поэтому русские варианты классом [а-яё], а не \w.
+    re: /new (user )?registration (is )?(disabled|closed)|registration (is )?disabled by (the )?admin|(clos|disabl)\w* new (user )?registration|管理员关闭了新用户注册|регистрац[а-яё]* (нов[а-яё]* [а-яё]* )?(закрыт|отключен)|закрыл[а-яё]* регистрацию/i,
+    msg: '❌ gorouter закрыл регистрацию новых аккаунтов (ответ сайта) — этот аккаунт создать нельзя.',
+  },
+  {
+    code: 'git_token',
+    re: /failed to fetch git token|failed to (get|fetch) (github )?(access )?token|无法获取 ?GitHub ?(访问)?令牌/i,
+    msg: '⚠️  сайт не обменял GitHub-code на токен («failed to fetch git token»): одноразовый code уже потрачен. F5 не лечит — жми «Продолжить с GitHub» заново.',
+  },
+  {
+    code: 'state',
+    re: /state parameter is empty or mismatched|state 参数/i,
+    msg: '⚠️  OAuth-state не совпал (страницу дёрнули посреди входа) — начни вход заново кнопкой «Продолжить с GitHub».',
+  },
+  {
+    code: 'user_info',
+    re: /failed to get user info|无法获取用户信息|не удалось получить (данные|информацию)/i,
+    msg: '⚠️  сайт ответил «failed to get user information» — лечится обновлением страницы.',
+  },
+];
 
-async function pageHasAuthError(page) {
-  try {
-    return AUTH_ERROR_RE.test(await page.evaluate(() => document.body ? document.body.innerText : ''));
-  } catch { return false; }
+// Что сайт написал на странице прямо сейчас (тосты NewAPI рисуются в DOM).
+async function siteError(page) {
+  let text = '';
+  try { text = await page.evaluate(() => document.body ? document.body.innerText : ''); } catch { return null; }
+  return SITE_ERRORS.find(e => e.re.test(text)) || null;
 }
+
+// Колбэк GitHub-а: `code` одноразовый, повторный заход/F5 по этому URL сайт
+// встречает уже потраченным кодом и отвечает «failed to fetch git token».
+const OAUTH_CALLBACK_RE = /\/oauth\/(github|oidc)|[?&]code=/i;
 
 // Реф-код сайт хранит в localStorage (ключ `aff`) и переживает уход на другие
 // страницы — проверено пробником. Поэтому сначала заходим по реф-ссылке (сажаем
@@ -147,40 +175,73 @@ async function openRegisterViaRef(page) {
   const aff = await page.evaluate(() => { try { return localStorage.getItem('aff'); } catch { return null; } }).catch(() => null);
   console.log(aff ? `🤝 реф-код сохранён в профиль: aff=${aff}` : '⚠️  реф-код не осел в localStorage — регистрация может не зачесться');
 
+  // Если сайт сам уехал на GitHub-вход (сессия GitHub в профиле уже есть — страница
+  // регистрации продолжает вход без нажатий), прогрев корня НЕ делаем: второй goto
+  // рвёт OAuth-state, и сайт потом отвечает «State parameter is empty or mismatched»
+  // либо «failed to fetch git token». Это и была видимая «дрочь» при клике 🌐.
+  if (/github\.com/i.test(page.url())) {
+    console.log('↪️  сайт сам ушёл на GitHub-вход — не перебиваем редирект');
+    return;
+  }
+
   await page.goto(ROOT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await page.waitForTimeout(1500);
+  if (/github\.com/i.test(page.url())) {
+    console.log('↪️  сайт сам ушёл на GitHub-вход — не перебиваем редирект');
+    return;
+  }
   await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
 }
 
-// После GitHub-логина: обновляем страницу, и если сайт всё-таки ответил
-// «failed to get user information» — заходим по реф-ссылке снова (реф-код уже в
-// localStorage, кредит не теряется). Два прохода: ошибка транзиентная.
+// После GitHub-логина добиваем ошибки сайта. Главное правило: на колбэке OAuth
+// (`/oauth/github?code=…`) НИКАКИХ reload — это второй расход одноразового кода,
+// ровно из-за него вылезает «failed to fetch git token». С колбэка уходим на
+// кошелёк: сессия уже в куках, страница поднимется заново.
 async function settleAfterLogin(page) {
   for (let attempt = 1; attempt <= 2; attempt++) {
-    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    if (OAUTH_CALLBACK_RE.test(page.url())) {
+      await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    } else {
+      await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    }
     await page.waitForTimeout(2000);
-    if (!(await pageHasAuthError(page))) return true;
-    console.log(`⚠️  сайт ответил «failed to get user information» — повтор ${attempt}/2 по реф-ссылке…`);
+
+    const err = await siteError(page);
+    if (!err) return true;
+    console.log(err.msg);
+    if (err.terminal) return false;
+    // Реф-код уже в localStorage — заход по рефке кредит не теряет.
+    console.log(`   повтор ${attempt}/2 по реф-ссылке…`);
     await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
     await page.waitForTimeout(2000);
   }
-  return !(await pageHasAuthError(page));
+  return !(await siteError(page));
 }
 
 // Ждём, пока URL уйдёт со страниц входа/регистрации И появится кука — это значит
 // GitHub-вход прошёл и мы внутри gorouter (консоль/дашборд). Тогда профиль уже
 // сохранён Chromium'ом. /sign-up тоже в списке: на нём куки (csrf и прочее) есть
 // сразу, иначе «вход выполнен» печаталось бы через полторы секунды после старта.
+// Попутно читаем ответ сайта: «регистрация закрыта» — выходим сразу, а не висим
+// 10 минут; про потраченный code и сбитый state пишем по одному разу.
 async function waitForLogin(page, context) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  const seen = new Set();
   while (Date.now() < deadline) {
     const url = page.url();
     const cookies = await context.cookies().catch(() => []);
     const leftAuth = !/\/sign-in|\/sign-up/.test(url);
-    if (leftAuth && hasSessionCookie(cookies)) return true;
+    if (leftAuth && hasSessionCookie(cookies)) return { ok: true };
+
+    const err = await siteError(page);
+    if (err && !seen.has(err.code)) {
+      seen.add(err.code);
+      console.log(err.msg);
+      if (err.terminal) return { ok: false, err };
+    }
     await page.waitForTimeout(1500);
   }
-  return false;
+  return { ok: false };
 }
 
 async function main() {
@@ -232,15 +293,21 @@ async function main() {
       console.log('⚠️  Регистрация по рефке. Зарегайся через GitHub на открывшейся странице,');
       console.log('   затем возьми ключ в консоли gorouter и вставь его кнопкой 🔑 в дашборде.');
 
-      const ok = await waitForLogin(page, context);
-      if (!ok) {
+      const res = await waitForLogin(page, context);
+      if (!res.ok) {
+        if (res.err && res.err.code === 'no_register') {
+          console.error('❌ Регистрация на gorouter закрыта администратором — новый аккаунт не создать.');
+          console.error('   Браузер оставляю открытым: ответ сайта видно на странице.');
+          await new Promise(() => {});
+          return;
+        }
         console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
         process.exit(2);
       }
       const settled = await settleAfterLogin(page);
       console.log(settled
         ? '✅ Вход выполнен, профиль сохранён на диск. Забирай ключ и вставляй кнопкой 🔑.'
-        : '⚠️  Вход прошёл, но сайт всё ещё отдаёт «failed to get user information» — обнови страницу вручную (F5).');
+        : '⚠️  Вход прошёл, но сайт всё ещё отдаёт ошибку (см. строку выше) — дальше руками.');
       console.log('   Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {});
       return;
@@ -259,8 +326,8 @@ async function main() {
     console.log('⚠️  Первый вход. Залогинься в GitHub (кнопка «Продолжить с GitHub»),');
     console.log('   затем возьми ключ в консоли gorouter и вставь его кнопкой 🔑 в дашборде.');
 
-    const ok = await waitForLogin(page, context);
-    if (!ok) {
+    const res = await waitForLogin(page, context);
+    if (!res.ok) {
       console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
       process.exit(2);
     }

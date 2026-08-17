@@ -198,7 +198,26 @@ function readSettings() {
     return JSON.parse(raw.replace(/^п»ї/, ''));
 }
 
+// Единственное место, где решается судьба суффикса [1m]. Claude Code без него
+// считает окно 200k и режет историю втрое раньше. Правило держим здесь, а не в
+// 24 обработчиках: каждый чинил свой путь из двадцати, симптом возвращался.
+// Контекст 1M — свойство ID модели, а не апстрима; прокси суффикс срезают
+// перед форвардом (keepalive-proxy.js:369), поэтому шлюзу он не мешает.
+const CC_DEFAULT_MODEL = 'claude-opus-5[1m]';
+function normalizeCcModel(m) {
+    const s = String(m || '').trim();
+    if (!s) return s;
+    return /^claude-(opus|sonnet)-/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
+}
+
 function writeSettings(obj) {
+    // Чокпоинт суффикса: сюда сходятся ВСЕ записи settings.json (см. tools/check-1m.js —
+    // он валит сборку, если кто-то опять пишет файл напрямую). ANTHROPIC_MODEL правим
+    // тоже: cun/conduit пишут его рядом с top-level model, расхождение = 200k.
+    if (typeof obj.model === 'string') obj.model = normalizeCcModel(obj.model);
+    if (obj.env && typeof obj.env.ANTHROPIC_MODEL === 'string') {
+        obj.env.ANTHROPIC_MODEL = normalizeCcModel(obj.env.ANTHROPIC_MODEL);
+    }
     // timestamped backup before every write
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const bakPath = SETTINGS_FILE + '.bak-' + stamp;
@@ -2532,7 +2551,7 @@ async function handleAlActivate(req, res) {
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
             clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`aerolink activate: settings.json FAILED: ${e.message}`);
@@ -2637,7 +2656,7 @@ async function handleEvActivate(req, res) {
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
             clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`evomap activate: settings.json FAILED: ${e.message}`);
@@ -2752,7 +2771,7 @@ async function handleOtSetModel(req, res) {
                 settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = m;
                 settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = m;
                 settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME = m;
-                fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+                writeSettings(settings);
             }
             settingsOk = otUrl;
         } catch (e) {
@@ -2866,7 +2885,7 @@ async function handleOtActivate(req, res) {
             delete settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME;
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.model;
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`ourtoken activate: settings.json FAILED: ${e.message}`);
@@ -3091,7 +3110,7 @@ function customRepointSettings(url, reason) {
             for (const k of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME', 'ANTHROPIC_SMALL_FAST_MODEL']) delete settings.env[k];
             delete settings.model;
         }
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+        writeSettings(settings);
         return { ok: true };
     } catch (e) {
         logLine(`custom repoint settings (${reason}) FAILED: ${e.message}`);
@@ -3129,7 +3148,7 @@ function customApplyDirect(provider) {
         const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         makeSettingsBackup('settings-custom-direct');
         const warns = customApplyDirectEnv(settings, provider);
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+        writeSettings(settings);
         return { ok: true, warns };
     } catch (e) {
         logLine(`custom apply direct FAILED: ${e.message}`);
@@ -3445,7 +3464,7 @@ async function handleCustomProviderUpdate(req, res) {
                 if (String(settings.apiKeyHelper || '').includes('custom-active-key.txt')) {
                     makeSettingsBackup('settings-custom-update');
                     settings.env.ANTHROPIC_BASE_URL = targetUrl;
-                    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+                    writeSettings(settings);
                 }
             } catch (e) {
                 logLine(`custom provider update: settings.json FAILED: ${e.message}`);
@@ -3683,7 +3702,7 @@ async function handleCustomActivate(req, res) {
             } else {
                 directWarns = customApplyDirectEnv(settings, provider);
             }
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`custom activate: settings.json FAILED: ${e.message}`);
@@ -3889,7 +3908,7 @@ async function handleCustomDeactivate(req, res) {
                 delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
                 for (const k of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME', 'ANTHROPIC_SMALL_FAST_MODEL']) delete settings.env[k];
                 delete settings.model;
-                fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+                writeSettings(settings);
                 settingsOk = true;
             }
         } catch (e) {
@@ -4155,7 +4174,7 @@ async function handleCunActivate(req, res) {
             makeSettingsBackup('settings-cun');
             cunApplyGatewayToSettings(settings, key);
             cunApplyModelToSettings(settings, model, tiers);
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`cun activate: settings.json FAILED: ${e.message}`);
@@ -4209,7 +4228,7 @@ async function handleCunSetModel(req, res) {
             makeSettingsBackup('settings-cun-model');
             cunApplyGatewayToSettings(settings, active.api_key);
             cunApplyModelToSettings(settings, m, tiers);
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`cun set-model: settings.json FAILED: ${e.message}`);
@@ -4357,7 +4376,7 @@ async function handleOmActivate(req, res) {
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`omniroute activate: settings.json FAILED: ${e.message}`);
@@ -4777,7 +4796,7 @@ async function handleSvrtrActivate(req, res) {
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`svrtr activate: settings.json FAILED: ${e.message}`);
@@ -4904,7 +4923,7 @@ async function handleHelpcoderActivate(req, res) {
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`helpcoder activate: settings.json FAILED: ${e.message}`);
@@ -5022,11 +5041,16 @@ async function handleConduitActivate(req, res) {
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = CDT_BASE_URL;
             settings.apiKeyHelper = keyHelperCmd('cdt-active-key.txt');
-            delete settings.model;   // сбросить залипшую model (ComboWombo от OmniRoute)
+            // Была залипшая чужая model (ComboWombo от OmniRoute) → её сносим, но если
+            // у conduit выбрана своя (cdt-active-model.txt) — ставим её: delete = дефолт
+            // Claude Code без [1m] = окно 200k. Суффикс дотянет writeSettings().
+            const cdtCurModel = cdtReadActiveModel() || '';
+            if (cdtCurModel) settings.model = cdtCurModel;
+            else delete settings.model;
             settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS = '0';
             delete settings.env.ANTHROPIC_API_KEY;   // helper рулит авторизацией
             clearOtEnv(settings);    // убрать ourtoken AUTH_TOKEN/маппинги
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`conduit activate: settings.json FAILED: ${e.message}`);
@@ -5147,7 +5171,7 @@ async function handleConduitSetModel(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-cdt-model');
             settings.model = m;
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`conduit set-model: settings.json FAILED: ${e.message}`);
@@ -6049,7 +6073,7 @@ async function handleArActivate(req, res) {
             delete settings.env.ANTHROPIC_API_KEY;   // токен рулит авторизацией
             clearOtEnv(settings);    // снести AUTH_TOKEN/маппинги от other пулов — потом ставим свой
             settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // заглушка: реальный ключ прокси берут из ar-active-key.txt на каждый запрос
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
             await arSpawnBoth();
         } catch (e) {
@@ -6124,7 +6148,7 @@ async function handleArSetModel(req, res) {
             try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
             if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = activeKey;   // прямой режим
             else delete settings.env.ANTHROPIC_AUTH_TOKEN;
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`agentrouter set-model: settings.json FAILED: ${e.message}`);
@@ -6732,12 +6756,18 @@ async function handleGoActivate(req, res) {
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = GO_KEEPALIVE_URL;   // keepalive :20156 → gorouter.app напрямую
             delete settings.apiKeyHelper;
-            delete settings.model;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — gorouter-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const goCurModel = goReadActiveModel() || '';
+            if (goCurModel) settings.model = goCurModel;
+            else { delete settings.model; logLine('gorouter activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
             settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из gorouter-active-key.txt
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`gorouter activate: settings.json FAILED: ${e.message}`);
@@ -6806,7 +6836,7 @@ async function handleGoSetModel(req, res) {
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
             settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`gorouter set-model: settings.json FAILED: ${e.message}`);
@@ -6955,7 +6985,7 @@ function healStatuslinePath() {
         if (fixed === cmd || !fixed.includes(mine)) return null;
         try { makeSettingsBackup('statusline-heal'); } catch { }
         s.statusLine.command = fixed;
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 4) + '\n', 'utf8');
+        writeSettings(s);
         return { from: cmd, to: fixed };
     } catch (e) {
         logLine(`statusline heal skip: ${e.message}`);
@@ -7319,12 +7349,16 @@ async function handleTbActivate(req, res) {
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = TB_KEEPALIVE_URL;
             delete settings.apiKeyHelper;
-            delete settings.model;
+            // Как в handleGoActivate: delete = дефолт CC = 200k. Источник правды —
+            // tabi-active-model.txt, суффикс [1m] дотянет writeSettings().
+            const tbCurModel = tbReadActiveModel() || '';
+            if (tbCurModel) settings.model = tbCurModel;
+            else { delete settings.model; logLine('tabi activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
             delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
             settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из tabi-active-key.txt
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`tabi activate: settings.json FAILED: ${e.message}`);
@@ -7394,7 +7428,7 @@ async function handleTbSetModel(req, res) {
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
             settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`tabi set-model: settings.json FAILED: ${e.message}`);
@@ -7762,7 +7796,7 @@ async function handleVyceaiActivate(req, res) {
             delete settings.model;
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
-            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 4) + '\n', 'utf-8');
+            writeSettings(settings);
             settingsOk = true;
         } catch (e) {
             logLine(`vyceai activate: settings.json FAILED: ${e.message}`);

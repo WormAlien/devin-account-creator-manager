@@ -26,13 +26,24 @@ done
 # ── 2. Свежий код ────────────────────────────────────────────────────────────
 step "2. Обновляю код"
 echo "  было: $(git log --oneline -1 2>/dev/null)"
-if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-  warn "локальные правки → git stash (вернуть: git stash pop)"
-  git stash push -m "fix.sh auto-stash $(date +%F_%T)" >/dev/null
+# Локальное состояние дашборда трекается в git (маппинг тиров, активный бэкенд),
+# поэтому наивный pull падает «local changes would be overwritten» — см.
+# tools/git-pull-safe.js (та же логика, что у кнопки обновления в дашборде).
+PULL_RC=0
+if command -v node >/dev/null 2>&1; then
+  node tools/git-pull-safe.js >/dev/null || PULL_RC=$?
+else
+  PULL_RC=99
 fi
-if ! git pull --ff-only >/dev/null 2>&1; then
-  warn "простой pull не прошёл — принудительно беру origin/master"
-  git fetch origin && git reset --hard origin/master >/dev/null || err "git не смог обновиться (нет интернета?)"
+if [ "$PULL_RC" -ne 0 ]; then
+  if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    warn "локальные правки → git stash (вернуть: git stash pop)"
+    git stash push -m "fix.sh auto-stash $(date +%F_%T)" >/dev/null
+  fi
+  if ! git pull --ff-only >/dev/null 2>&1; then
+    warn "простой pull не прошёл — принудительно беру origin/master"
+    git fetch origin && git reset --hard origin/master >/dev/null || err "git не смог обновиться (нет интернета?)"
+  fi
 fi
 ok "стало: $(git log --oneline -1)"
 

@@ -253,12 +253,11 @@ if ask "Поставить браузеры Playwright: chromium + headless-shel
 fi
 
 # ── 2. Claude Code ──────────────────────────────────────────────────────────
-# Раньше здесь был жёсткий пин 2.1.153 (на новых версиях ломался apiKeyHelper), и
-# UPDATE.bat каждый раз ОТКАТЫВАЛ свежий Claude Code — с uninstall'ом, на глазах у
-# юзера. Сейчас основные бэкенды (keepalive-прокси, agentrouter/tabi/gorouter) ключ
-# берут из файла сами, apiKeyHelper нужен только виртуальным режимам apihelper и
-# aerolink. Поэтому стоящую версию НЕ трогаем; ставим только если claude вообще нет.
-# Нужен конкретный пин — CLAUDE_CODE_VERSION=2.1.153 bash install.sh
+# Раньше здесь был жёсткий пин 2.1.153 с npm uninstall: считалось, что версии новее
+# ломают apiKeyHelper. Это не подтвердилось — ротация ключей на лету работает на всех
+# версиях, а UPDATE.bat при этом каждый раз откатывал свежий Claude Code.
+# Теперь стоящую версию НЕ трогаем, ставим только если claude вообще нет.
+# Если зачем-то нужна конкретная — CLAUDE_CODE_VERSION=2.1.153 bash install.sh
 step "2. Claude Code"
 CUR=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 WANT="${CLAUDE_CODE_VERSION:-}"

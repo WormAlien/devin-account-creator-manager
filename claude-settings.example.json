@@ -4,7 +4,6 @@
   "env": {
     "ANTHROPIC_BASE_URL": "https://capi.aerolink.lat/",
     "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "0",
-    "DISABLE_AUTOUPDATER": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "API_TIMEOUT_MS": "120000",
     "BASH_DEFAULT_TIMEOUT_MS": "300000",
@@ -23,6 +22,5 @@
     "deny": []
   },
   "model": "claude-opus-5[1m]",
-  "autoUpdates": false,
   "theme": "auto"
 }

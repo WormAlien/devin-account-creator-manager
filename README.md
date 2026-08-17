@@ -91,7 +91,7 @@ bash install.sh
 
 1. Проверяет `node`/`npm`/`git`, при нехватке предлагает поставить через `winget`.
 2. `npm install` + (опц.) `npx playwright install chromium`.
-3. Ставит **Claude Code**, если его нет. Уже установленную версию не трогает — откатывать свежий CC не нужно (нужен конкретный пин: `CLAUDE_CODE_VERSION=2.1.153 bash install.sh`).
+3. Ставит **Claude Code**, если его нет. Уже установленную версию не трогает (версию фиксировать не надо; если зачем-то нужна конкретная — `CLAUDE_CODE_VERSION=2.1.153 bash install.sh`).
 4. Создаёт `~/.claude/settings.json` из шаблона (если ещё нет).
 5. Копирует локальные конфиги из `*.example` (`routing/.env`, `al-sessions`, `video-keys`, `image-keys`).
 6. **OmniRoute** в Docker (по желанию) на `:20128`; без Docker можно жить на API Helper-бэкендах.
@@ -107,7 +107,7 @@ bash install.sh
 > **Дашборд не открылся / `:8200` не отвечает?** Запусти **`START.bat`** в корне репо (двойной клик). Он поднимает ротатор + дашборд в видимом окне и **не закрывается** — если что-то падает, текст ошибки останется на экране, сделай скриншот и пришли. Браузер откроется сам на `http://localhost:8200/__switch`.
 
 > [!IMPORTANT]
-> **Виртуальным режимам `apihelper`/`aerolink` нужен Claude Code `2.1.153`.** На версиях новее ломался `apiKeyHelper`-флоу (ротация ключей на лету) — именно поэтому раньше установщик держал жёсткий пин. Остальные бэкенды (keepalive-прокси agentrouter/tabi/gorouter, конвертеры) ключ читают из файла сами и работают на любой свежей версии, поэтому установщик больше НЕ откатывает CC: ставит только если его нет, а пин — по желанию (`CLAUDE_CODE_VERSION=2.1.153`). Шаблон `settings.json` идёт с отключённым авто-апдейтом (`DISABLE_AUTOUPDATER=1`, `autoUpdates:false`, `CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0`).
+> **Версию Claude Code фиксировать не надо.** Исторически в README и установщике стоял пин `2.1.153` («новее ломает `apiKeyHelper`») — это не подтвердилось: ротация ключей на лету работает на всех версиях. Установщик ставит CC только если его нет, уже стоящий не трогает, `DISABLE_AUTOUPDATER`/`autoUpdates:false` из шаблона убраны. Единственное, что реально нужно для `apihelper`/`aerolink`, — `CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0`, чтобы ключ перечитывался на каждый запрос.
 
 <details>
 <summary><b>Вручную, без установщика</b> — те же шаги командами (git-bash)</summary>
@@ -125,12 +125,11 @@ winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--wait
 npm install
 npx playwright install chromium
 
-# 2. Claude Code (пин нужен только для apiKeyHelper-режимов)
+# 2. Claude Code (любая свежая версия, пин не нужен)
 npm config delete prefix
 npm install -g @anthropic-ai/claude-code
-# ... либо конкретная версия: npm install -g @anthropic-ai/claude-code@2.1.153
 
-# 3. базовый settings.json (autoUpdates:false + DISABLE_AUTOUPDATER:1 ОБЯЗАТЕЛЬНЫ)
+# 3. базовый settings.json (для apihelper/aerolink важен CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0)
 cp claude-settings.example.json ~/.claude/settings.json
 
 # 4. локальные конфиги/секреты (gitignored)
@@ -327,7 +326,7 @@ node gorouter/open-session.js <label>     # вход в кабинет GoRouter
 </tr>
 <tr>
   <td>Ключи не ротируются «на лету» / нужен релогин после свича</td>
-  <td>Это про режимы <code>apihelper</code>/<code>aerolink</code>: нужен Claude Code <code>2.1.153</code> + <code>autoUpdates:false</code> (см. Установка). Остальные бэкенды меняют ключ без релогина на любой версии</td>
+  <td>Для <code>apihelper</code>/<code>aerolink</code> проверь <code>CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0</code> в <code>settings.json</code> — без него CC кэширует ключ. Версия CC тут ни при чём</td>
 </tr>
 </table>
 

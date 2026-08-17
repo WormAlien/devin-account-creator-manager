@@ -86,6 +86,19 @@ function makeSettingsBackup(prefix = 'settings') {
 const STATE_FILE = path.join(__dirname, 'proxy-target.json');
 const TOKENROUTER_ACCOUNTS = path.join(__dirname, 'tokenrouter', 'accounts.json');
 
+// Трекаемые в git файлы, которые дашборд перезаписывает сам (локальное состояние:
+// маппинг тиров, активный бэкенд, маппинг claude→gpt). Из-за них `git pull --ff-only`
+// падает с «local changes would be overwritten by merge» у всех, кто хоть раз
+// поменял модель в UI. Обновление дашборда их сохраняет → откатывает → тянет →
+// возвращает назад (см. /__switch/api/dashboard/update-pull). Пути — от корня репо.
+const LOCAL_STATE_FILES = [
+    'routing/ar-modelmap.json',
+    'routing/gorouter-modelmap.json',
+    'routing/tabi-modelmap.json',
+    'routing/proxy-target.json',
+    'routing/fm-openai-config.json',
+];
+
 // For /__switch/api/whoami — look up OmniRoute provider_connections by id prefix.
 const OMNI_DB = path.join(os.homedir(), '.omniroute', 'storage.sqlite');
 const SQLITE_EXE = process.env.SQLITE3
@@ -7711,12 +7724,46 @@ const server = http.createServer((req, res) => {
     }
 
     // Подтянуть свежий код дашборда (git pull --ff-only). Требует ручного рестарта прокси.
+    // Грабля: часть трекаемых JSON'ов — локальное состояние, которое дашборд пишет сам
+    // (LOCAL_STATE_FILES: маппинг тиров, активный бэкенд). Поменял модель в UI → pull
+    // падает «local changes would be overwritten by merge». Лечим сами: содержимое таких
+    // файлов в память → git checkout → pull → пишем назад. Грязный КОД не трогаем — про
+    // него отвечаем 409 со списком файлов, это уже решение юзера (stash/checkout).
     if (req.method === 'POST' && req.url === '/__switch/api/dashboard/update-pull') {
+        const repo = path.join(__dirname, '..');
+        const git = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
         try {
-            const repo = path.join(__dirname, '..');
-            const out = execFileSync('git', ['pull', '--ff-only', '--no-edit'], { cwd: repo, encoding: 'utf8' }).trim();
+            let out, preserved = [];
+            try {
+                out = git('pull', '--ff-only', '--no-edit');
+            } catch (e1) {
+                const err1 = (e1.stderr || e1.stdout || e1.message || '').toString();
+                if (!/would be overwritten|local changes/i.test(err1)) throw e1;
+                const dirty = git('diff', '--name-only', 'HEAD').split('\n').map(s => s.trim()).filter(Boolean);
+                const resettable = dirty.filter(f => LOCAL_STATE_FILES.includes(f));
+                const blocking = dirty.filter(f => !LOCAL_STATE_FILES.includes(f));
+                if (blocking.length) {
+                    return jsonRes(res, 409, {
+                        error: 'Обновлению мешают локальные правки в коде:\n  ' + blocking.join('\n  ')
+                            + '\n\nОткати их (git checkout -- <файл>) или сохрани (git stash) и нажми обновление снова.',
+                        dirty: blocking,
+                    });
+                }
+                if (!resettable.length) throw e1; // грязных трекаемых нет — дело в чём-то другом
+                const backup = new Map();
+                for (const f of resettable) {
+                    try { backup.set(f, fs.readFileSync(path.join(repo, f), 'utf8')); } catch { }
+                }
+                git('checkout', '--', ...resettable);
+                out = git('pull', '--ff-only', '--no-edit');
+                for (const [f, content] of backup) {
+                    try { fs.writeFileSync(path.join(repo, f), content, 'utf8'); preserved.push(f); }
+                    catch (e2) { logLine(`dashboard git pull: не смог вернуть ${f}: ${e2.message}`); }
+                }
+                logLine(`dashboard git pull: локальные настройки сохранены и возвращены (${preserved.join(', ') || '—'})`);
+            }
             logLine(`dashboard git pull:\n${out}`);
-            return jsonRes(res, 200, { ok: true, output: out, restart_required: true });
+            return jsonRes(res, 200, { ok: true, output: out, preserved, restart_required: true });
         } catch (e) {
             const msg = (e.stderr || e.stdout || e.message || '').toString().trim();
             return jsonRes(res, 500, { error: msg || 'git pull failed' });

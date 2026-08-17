@@ -11220,6 +11220,11 @@ async function pullDashboardUpdate() {
     if (!res.ok) throw new Error(d.error || 'fail');
     badge.textContent = '✓ обновлено — нужен перезапуск';
     badge.className = 'shrink-0 text-xs text-emerald';
+    // Локальные правки маппинга/активного бэкенда мешали бы pull'у — прокси их
+    // откатил, подтянул код и вписал назад. Говорим об этом, чтобы не выглядело магией.
+    if (Array.isArray(d.preserved) && d.preserved.length) {
+      toast('Твои настройки сохранены: ' + d.preserved.map(f => f.split('/').pop()).join(', '), 'success', 6000);
+    }
     openDashRestartModal();
   } catch (e) {
     badge.textContent = '✗ ' + e.message; badge.className = 'shrink-0 text-xs text-crimson';

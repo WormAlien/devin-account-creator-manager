@@ -230,6 +230,16 @@ function cyrDecode(s) { return CYR_BYPASS_ENABLED ? String(s).split(CYR_S).join(
 // расширять до \s+ нельзя, иначе начнём переписывать текст, который шлюз пропускает.
 const WAF_PHRASES = [
     { re: /you are a helpful assistant\./gi, to: 'You are a helpful AI assistant.' },
+    // 2026-08-17: Claude Code 2.1.220 вписывает ПЕРВОЙ строкой системного промпта свою
+    // телеметрию `x-anthropic-billing-header: cc_version=2.1.220.04c; cc_entrypoint=cli;`.
+    // Шлюз держит в блок-листе ровно `x-anthropic-billing-header:` (wafbisect свёл живой
+    // 97к-запрос к этим 27 символам), поэтому на gpt-пути 500 ловил КАЖДЫЙ запрос CC —
+    // именно этот апдейт CC и «сломал» gpt, а не наши правки.
+    // Для модели строка смысла не несёт (это биллинговый заголовок, который CC суёт в
+    // промпт), поэтому вырезаем её целиком, а не калечим. Матч анкорен на имени
+    // заголовка и обрывается на границе JSON-строки (`"`/`\`), максимум съедая свой
+    // экранированный перевод строки — соседний текст промпта не задевается.
+    { re: /x-anthropic-billing-header:[^"\\]*(?:\\n)?/gi, to: '' },
 ];
 
 // Правим уже СЕРИАЛИЗОВАННОЕ тело — единственная точка, которую нельзя обойти.
@@ -245,6 +255,39 @@ function wafSanitize(jsonStr) {
         text = text.replace(re, () => { hits++; return to; });   // один проход
     }
     return { text, hits };
+}
+
+// ══════════════════════ ДАМП ЗАБЛОКИРОВАННЫХ ТЕЛ ══════════════════════
+// Отказ content-filter'а детерминирован по тексту, но из сообщения шлюза
+// («sensitive words detected» / «content-blocked») невозможно понять, КАКАЯ подстрока
+// не понравилась, а логи :20132 живут только в RAM-буфере дашборда и умирают с его
+// рестартом — причина терялась вместе с ними. Поэтому тело, которое реально ушло на
+// шлюз, кладём в файл; дальше `node agentrouter-proxy.js wafbisect <файл>` сам сводит
+// его к минимальной блокирующей подстроке (см. ниже).
+const CONTENT_FILTER_RE = /sensitive words|content-blocked/i;
+const DUMP_DIR = require('os').tmpdir();
+const DUMP_PREFIX = 'arpx-blocked-';
+const DUMP_KEEP = 10;
+
+function dumpBlocked(bodyStr, status) {
+    try {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const file = path.join(DUMP_DIR, `${DUMP_PREFIX}${ts}.json`);
+        fs.writeFileSync(file, bodyStr, 'utf8');
+        // Держим только последние DUMP_KEEP дампов, иначе %TEMP% пухнет от длинных сессий.
+        const old = fs.readdirSync(DUMP_DIR).filter(f => f.startsWith(DUMP_PREFIX)).sort();
+        for (const f of old.slice(0, Math.max(0, old.length - DUMP_KEEP))) {
+            try { fs.unlinkSync(path.join(DUMP_DIR, f)); } catch {}
+        }
+        stats.blocked++;
+        stats.lastBlockedDump = file;
+        logLine(`content-filter ${status}: тело запроса сохранено → ${file}`);
+        logLine(`  какая фраза виновата: node routing/agentrouter-proxy.js wafbisect "${file}"`);
+        return file;
+    } catch (e) {
+        logLine(`WARN дамп заблокированного тела не записан: ${e.message}`);
+        return '';
+    }
 }
 
 function convertClaudeToOpenAI(claudeReq) {
@@ -506,7 +549,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
 
 // ══════════════════════ HANDLERS ══════════════════════
 
-const stats = { requests: 0, streamed: 0, errors: 0, sanitized: 0, lastModel: '', started: new Date().toISOString() };
+const stats = { requests: 0, streamed: 0, errors: 0, sanitized: 0, blocked: 0, lastBlockedDump: '', lastModel: '', started: new Date().toISOString() };
 
 function claudeError(res, code, message, errType) {
     stats.errors++;
@@ -571,6 +614,8 @@ function handleMessages(req, res, body) {
                 let message = errBody.slice(0, 500);
                 try { message = JSON.parse(errBody).error?.message || message; } catch {}
                 logLine(`upstream ${upRes.statusCode}: ${message.slice(0, 200)}`);
+                // Отказ content-filter'а: сохраняем тело как есть — иначе фразу не найти.
+                if (CONTENT_FILTER_RE.test(message)) dumpBlocked(sanitized.text, upRes.statusCode);
                 const errType = upRes.statusCode === 401 ? 'authentication_error'
                     : upRes.statusCode === 429 ? 'rate_limit_error'
                     : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error';
@@ -689,6 +734,139 @@ const server = http.createServer((req, res) => {
     claudeError(res, 404, 'not found', 'not_found_error');
 });
 
+// ══════════════════════ WAFBISECT: поиск блокирующей подстроки ══════════════════════
+// `node agentrouter-proxy.js wafbisect <дамп> [--max N]`
+// Берёт дамп заблокированного тела (dumpBlocked), вытаскивает из него весь текст и
+// двоичным сужением находит минимальную подстроку, на которой шлюз всё ещё отвечает
+// отказом. Пробы дешёвые (max_tokens=1, stream=false), заблокированные вообще
+// бесплатны, число проб ограничено бюджетом — по умолчанию 30.
+function keyFromFile() {
+    try { const k = fs.readFileSync(ACTIVE_KEY_FILE, 'utf8').trim(); if (k.startsWith('sk-')) return k; } catch {}
+    return '';
+}
+
+function probeText(model, text, apiKey) {
+    return new Promise(resolve => {
+        const body = JSON.stringify({
+            model, max_tokens: 1, stream: false,
+            messages: [{ role: 'system', content: text }, { role: 'user', content: 'hi' }],
+        });
+        upstreamRequest('/v1/chat/completions', apiKey, body, (res) => {
+            let b = '';
+            res.on('data', c => b += c);
+            res.on('end', () => {
+                let msg = '';
+                try { msg = JSON.parse(b).error?.message || ''; } catch {}
+                resolve({ status: res.statusCode, blocked: res.statusCode !== 200 && CONTENT_FILTER_RE.test(msg || b), msg });
+            });
+        }, (e) => resolve({ status: 0, blocked: false, msg: e.message }));
+    });
+}
+
+// Весь текст, который шлюз реально сканирует: system/user/tool-сообщения + тулзы.
+function textCorpus(body) {
+    const out = [];
+    for (const m of body.messages || []) {
+        if (typeof m.content === 'string') out.push(m.content);
+        else if (Array.isArray(m.content)) for (const p of m.content) if (p && p.type === 'text' && p.text) out.push(p.text);
+        for (const tc of m.tool_calls || []) {
+            if (tc.function && tc.function.name) out.push(tc.function.name);
+            if (tc.function && tc.function.arguments) out.push(tc.function.arguments);
+        }
+    }
+    for (const t of body.tools || []) {
+        const f = t.function || t;
+        if (f.name) out.push(f.name);
+        if (f.description) out.push(f.description);
+        if (f.parameters) out.push(JSON.stringify(f.parameters));
+    }
+    return out.join('\n').split('\n');
+}
+
+// Делим пополам, оставляем ту половину, которая всё ещё блокируется. Если не блокируется
+// ни одна — фраза лежит на стыке, дальше не режем и отдаём текущее окно.
+async function narrowBinary(units, join, probe) {
+    let cur = units;
+    while (cur.length > 1) {
+        const mid = Math.ceil(cur.length / 2);
+        const a = cur.slice(0, mid), b = cur.slice(mid);
+        if (await probe(join(a))) { cur = a; continue; }
+        if (await probe(join(b))) { cur = b; continue; }
+        break;
+    }
+    return cur;
+}
+
+// Срезаем края: двоичный поиск максимума юнитов, которые можно убрать слева (потом
+// справа), не потеряв блокировку. Нужен именно там, где narrowBinary встал — фраза
+// лежала на стыке половин. Опирается на непрерывность блокирующей подстроки.
+async function trimEdges(units, join, probe) {
+    let cur = units;
+    for (const side of ['left', 'right']) {
+        let lo = 0, hi = cur.length - 1;
+        while (lo < hi) {
+            const k = Math.ceil((lo + hi) / 2);
+            const cand = side === 'left' ? cur.slice(k) : cur.slice(0, cur.length - k);
+            if (cand.length && await probe(join(cand))) lo = k; else hi = k - 1;
+        }
+        if (lo > 0) cur = side === 'left' ? cur.slice(lo) : cur.slice(0, cur.length - lo);
+    }
+    return cur;
+}
+
+async function wafBisect(file, maxProbes) {
+    const apiKey = keyFromFile();
+    if (!apiKey) throw new Error('нет ключа в ' + ACTIVE_KEY_FILE);
+    const raw = fs.readFileSync(file, 'utf8');
+    const body = JSON.parse(raw);
+    const model = body.model || 'gpt-5.6-sol';
+    let n = 0;
+    const probe = async (text) => {
+        if (n >= maxProbes) throw new Error(`бюджет проб исчерпан (${maxProbes}), увеличь --max`);
+        n++;
+        const r = await probeText(model, text, apiKey);
+        console.log(`  проба #${n}: ${String(text.length).padStart(6)} симв. → ${r.status}${r.blocked ? ' ⛔ блок' : ' ok'}`);
+        await new Promise(res => setTimeout(res, 700));
+        return r.blocked;
+    };
+
+    const lines = textCorpus(body);
+    console.log(`дамп ${file}\nтело ${raw.length} симв., текстовых строк ${lines.length}, модель ${model}, бюджет ${maxProbes} проб\n`);
+    if (!(await probe(lines.join('\n')))) {
+        console.log('\nвесь текст запроса шлюз пропускает — значит дело не в тексте сообщений.');
+        console.log('Смотри структуру целиком (тулзы, tool_call arguments, размер):', file);
+        return;
+    }
+    const line = await narrowBinary(lines, a => a.join('\n'), probe);
+    let words = line.join('\n').split(/(\s+)/);
+    // Бюджет может кончиться на любом шаге — тогда печатаем лучшее, что успели сузить.
+    try {
+        words = await narrowBinary(words, a => a.join(''), probe);
+        words = await trimEdges(words, a => a.join(''), probe);
+    } catch (e) {
+        console.log(`  (${e.message} — печатаю самое узкое из найденного)`);
+    }
+    const found = words.join('').trim();
+    console.log(`\nпроб потрачено: ${n}`);
+    console.log('минимальная блокирующая подстрока:');
+    console.log('  ' + JSON.stringify(found));
+    console.log('\nстрока для WAF_PHRASES (замену подобрать семантически нейтральную и проверить пробой):');
+    console.log(`    { re: /${found.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')}/gi, to: '<нейтральная замена>' },`);
+}
+
+if (process.argv[2] === 'wafbisect') {
+    const file = process.argv[3];
+    const mi = process.argv.indexOf('--max');
+    const maxProbes = mi > 0 ? (Number(process.argv[mi + 1]) || 30) : 30;
+    if (!file) {
+        console.error('usage: node agentrouter-proxy.js wafbisect <файл-дампа> [--max N]');
+        process.exit(2);
+    }
+    wafBisect(file, maxProbes)
+        .catch(e => console.error('bisect: ' + e.message))
+        .finally(() => process.exit(0));
+}
+
 // Самопроверка нетривиальной логики: `node agentrouter-proxy.js selftest`.
 // Стоит ДО server.listen и завершается process.exit(0) — порт не занимаем,
 // прогон безопасен при уже поднятом рабочем прокси (как в keepalive-proxy.js).
@@ -703,6 +881,25 @@ if (process.argv[2] === 'selftest') {
 
     const s2 = wafSanitize(JSON.stringify({ system: 'You are a helpful assistant' }));
     assert.strictEqual(s2.hits, 0, 'без точки шлюз пропускает — не трогаем');
+
+    // Телеметрия CC 2.1.220 в начале системного промпта: вырезается целиком вместе со
+    // своим переводом строки, остальной промпт остаётся байт-в-байт.
+    const ccSys = 'x-anthropic-billing-header: cc_version=2.1.220.04c; cc_entrypoint=cli;\n'
+        + "You are Claude Code, Anthropic's official CLI for Claude.\nWork as asked.";
+    const sb = wafSanitize(JSON.stringify({ system: ccSys, messages: [{ role: 'user', content: 'qq' }] }));
+    assert.strictEqual(sb.hits, 1, 'биллинговый заголовок ловится один раз');
+    const sbBack = JSON.parse(sb.text);
+    assert.ok(!/x-anthropic-billing-header/i.test(sb.text), 'заголовка не осталось');
+    assert.strictEqual(
+        sbBack.system,
+        "You are Claude Code, Anthropic's official CLI for Claude.\nWork as asked.",
+        'вырезана ровно строка заголовка, промпт цел');
+    assert.strictEqual(sbBack.messages[0].content, 'qq', 'сообщения не тронуты');
+
+    // Текст рядом с именем заголовка, но без него самого, не трогаем.
+    assert.strictEqual(
+        wafSanitize(JSON.stringify({ system: 'см. billing header и cc_version' })).hits,
+        0, 'похожий текст без анкера не режем');
 
     // Регистр и множественные вхождения (system + user + tool_result в одном теле).
     const s3 = wafSanitize(JSON.stringify({
@@ -749,9 +946,13 @@ if (process.argv[2] === 'selftest') {
     process.exit(0);
 }
 
-server.listen(LISTEN_PORT, '127.0.0.1', () => {
-    console.log(`[AgentRouter Proxy] :${LISTEN_PORT} → ${UPSTREAM_BASE}`);
-    console.log(`  claude-* → /v1/messages (passthrough); gpt-* → /v1/chat/completions (openai)`);
-    console.log(`  key: header → ar-active-key.txt`);
-    console.log(`  status: http://localhost:${LISTEN_PORT}/__agentrouter/api/status`);
-});
+// wafbisect — асинхронный: порт не занимаем, иначе при живом рабочем :20132 прогон
+// падал бы EADDRINUSE, а сам bisect ещё только идёт (process.exit — в его .finally).
+if (process.argv[2] !== 'wafbisect') {
+    server.listen(LISTEN_PORT, '127.0.0.1', () => {
+        console.log(`[AgentRouter Proxy] :${LISTEN_PORT} → ${UPSTREAM_BASE}`);
+        console.log(`  claude-* → /v1/messages (passthrough); gpt-* → /v1/chat/completions (openai)`);
+        console.log(`  key: header → ar-active-key.txt`);
+        console.log(`  status: http://localhost:${LISTEN_PORT}/__agentrouter/api/status`);
+    });
+}

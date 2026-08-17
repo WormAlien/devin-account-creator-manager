@@ -2783,6 +2783,7 @@ function renderHealth() {
             ${s.orphan ? `<span class="text-[10px] text-faint">слушает, но не в конфиге</span>` : ''}
             ${s.omni ? `<span class="text-[10px] text-faint">порт 20128 · localhost/v1</span>` : ''}
             ${s.orphan ? `<button onclick="killHealthPort(${s.port})" title="Убить всё, что слушает :${s.port}" class="text-[10px] px-2 py-1 rounded border border-crimson/40 text-crimson hover:bg-crimson/15 transition">💀 убить</button>` : ''}
+            ${s.keepalive ? `<button onclick="restartKeepalive(${s.port})" title="Пересоздать процесс keepalive на :${s.port} (подхватить новый код прокси)" class="text-[10px] px-2 py-1 rounded border border-azure/40 text-azure hover:bg-azure/15 transition">🔄 перезапустить</button>` : ''}
           </div>
           <div class="text-[11px] text-faint mt-0.5 flex items-center gap-2 flex-wrap">
             <span class="font-mono">:${s.port}</span>
@@ -2802,6 +2803,29 @@ function fmtUptime(sec) {
   if (sec == null) return '—';
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
   return h ? `${h}ч ${m}м` : `${m}м`;
+}
+
+// Пересоздать keepalive-инстанс: kill по порту + spawn с его env одной операцией
+// (сервер ждёт, пока новый процесс ответит статусом). Нужно после обновления кода
+// keepalive-proxy.js — иначе в памяти остаётся старая версия.
+async function restartKeepalive(port) {
+  if (!confirm(`Перезапустить keepalive на :${port}?\n\nЗапросы, летящие через него прямо сейчас, оборвутся — секунда простоя.`)) return;
+  toast(`Перезапускаю keepalive :${port}…`, 'info');
+  try {
+    const r = await fetch('/__switch/api/keepalive/restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port }),
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      toast(`Keepalive ${d.name} :${port} поднят (pid ${d.pid || '?'})`, 'success');
+      loadHealth();
+    } else {
+      toast('Рестарт: ' + (d.error || r.status), 'error');
+      loadHealth();
+    }
+  } catch (e) { toast('рестарт keepalive: ' + e.message, 'error'); }
 }
 
 async function killHealthPort(port) {

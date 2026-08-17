@@ -114,6 +114,16 @@ function isGptLike(model) {
 // MODEL_ECHO=0 выключает (для отладки: увидеть реальное имя модели у шлюза).
 const MODEL_ECHO = process.env.MODEL_ECHO !== '0';
 const MODEL_FIELD_RE = /"model"\s*:\s*"(?:[^"\\]|\\.)*"/;
+// Сжатый ответ апстрима. zstd обязателен в списке: свежий Claude Code шлёт
+// `accept-encoding: zstd`, шлюз отвечает zstd — а тело мы для MODEL_ECHO прогоняли
+// через toString('utf8'), где каждый невалидный UTF-8 байт становится U+FFFD.
+// Клиент получал битые байты с `content-encoding: zstd` и падал в
+// ZstdDecompressionError на /model. Сжатые тела не трогаем вообще.
+const RESP_COMPRESSED_RE = /\b(?:gzip|deflate|br|zstd|compress)\b/i;
+function isCompressedBody(headers) {
+    const enc = String((headers && headers['content-encoding']) || '').trim();
+    return enc !== '' && !/^identity$/i.test(enc);
+}
 function rewriteModelJson(text, clientModel) {
     if (!MODEL_ECHO || !clientModel) return text;
     if (!MODEL_FIELD_RE.test(text)) return text;
@@ -616,7 +626,9 @@ const server = http.createServer((req, res) => {
       stream.on('end', () => {
         if (res.writableEnded || res.destroyed) return;
         let body = Buffer.concat(bufs);
-        if (MODEL_ECHO && clientModel && /json/i.test(String(hdrs['content-type'] || ''))) {
+        // Сжатое тело (gzip/zstd/br) — только сквозняком: toString('utf8') по бинарю
+        // подменяет невалидные байты на U+FFFD и клиент получает битый архив.
+        if (MODEL_ECHO && clientModel && !isCompressedBody(hdrs) && /json/i.test(String(hdrs['content-type'] || ''))) {
           const patched = Buffer.from(rewriteModelJson(body.toString('utf8'), clientModel), 'utf8');
           if (patched.length !== body.length) hdrs = Object.assign({}, hdrs, { 'content-length': String(patched.length) });
           body = patched;
@@ -747,11 +759,12 @@ const server = http.createServer((req, res) => {
     if (tgt) {
       headers['content-length'] = Buffer.byteLength(body);
     }
-    // Стримовые запросы: просим НЕ кодировать (иначе gzip-мусор в SSE-канале после
-    // раннего SSE/хеджа ломает поток). v1tusha: accept-encoding identity.
-    if (streaming) {
-      headers['accept-encoding'] = 'identity';
-    }
+    // Просим апстрим НЕ кодировать ответ — и для стрима (gzip-мусор в SSE-канале
+    // после раннего SSE/хеджа ломает поток, v1tusha), и для обычных запросов: тело
+    // нужно читать как текст (MODEL_ECHO, проверка на пустой 200, isTransientBody).
+    // Клиентский `accept-encoding: zstd` не пробрасываем: если шлюз всё же сожмёт,
+    // тело уйдёт клиенту байт-в-байт (isCompressedBody), но уже без эха модели.
+    headers['accept-encoding'] = 'identity';
     const upReq = t.requester({
       hostname: t.hostname,
       port: t.port,
@@ -764,7 +777,7 @@ const server = http.createServer((req, res) => {
       const headers = upRes.headers;
       const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
       const jsonLike = !isSSE && /application\/json|text\/plain/i.test(String(headers['content-type'] || ''));
-      const hasEnc = /gzip|deflate|br/i.test(String(headers['content-encoding'] || ''));
+      const hasEnc = RESP_COMPRESSED_RE.test(String(headers['content-encoding'] || ''));
       const chunks = [];
       let size = 0;
       const drain = (onEnd) => {

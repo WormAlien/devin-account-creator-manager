@@ -18,9 +18,9 @@
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
 | `20150-20250`| **Custom OpenAI Proxies** (динамически) | `routing/custom-openai-proxy.js` | Anthropic→OpenAI конвертер для Custom-провайдеров с заполненным `modelMap`. Спавнится на активацию (детached), конфиг `~/.claude/custom-<id>-proxy.json`, ключ из `~/.claude/custom-active-key.txt`. Убивается при деактивации/удалении. |
 | `20133`| **AgentRouter keepalive** | `routing/keepalive-proxy.js` | **Единая точка входа для agentrouter** (и `claude-*`, и `gpt-*`): держит SSE-паузы thinking-моделей, ретраит транзиентные ошибки, хеджирует. `claude-*` форвардит в agentrouter.org 1-в-1, `gpt-*` переправляет в конвертер `:20132`. Режет `[1m]`-суффиксы, count_tokens отвечает локальной оценкой. Отказы content-filter (`sensitive words`/`content-blocked`) классифицированы как **постоянные** — не ретраятся. `PORT=20133`, `KEY_FILE=ar-active-key.txt`, `MODELMAP_FILE=ar-modelmap.json`. |
-| `20132`| **AgentRouter Proxy** (конвертер) | `routing/agentrouter-proxy.js` | Anthropic→OpenAI конвертер для `gpt-*` (`/v1/chat/completions`); `claude-*` — pass-through в `/v1/messages`. Стоит **за** keepalive `:20133`, напрямую из CC больше не адресуется. `wafSanitize`/`WAF_PHRASES` нейтрализуют фразы из блок-листа шлюза на сериализованном теле (иначе `/model gpt-*` падает `500 sensitive words detected`). Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false`. **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки собирает сам. Самопроверка: `node routing/agentrouter-proxy.js selftest`. |
-| `20155`| **Tabi Token keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для tabitoken.com. `PORT=20155`, `KEY_FILE=tabi-active-key.txt`, `MODELMAP_FILE=tabi-modelmap.json`. |
-| `20156`| **GoRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для gorouter.app. `PORT=20156`, `KEY_FILE=gorouter-active-key.txt`, `MODELMAP_FILE=gorouter-modelmap.json`. |
+| `20132`| **AgentRouter Proxy** (конвертер) | `routing/agentrouter-proxy.js` | Anthropic→OpenAI конвертер для `gpt-*` (`/v1/chat/completions`); `claude-*` — pass-through в `/v1/messages`. Стоит **за** keepalive `:20133`, напрямую из CC больше не адресуется. `wafSanitize`/`WAF_PHRASES` нейтрализуют фразы из блок-листа шлюза на сериализованном теле (иначе `/model gpt-*` падает `500 sensitive words detected`). Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false`. **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки собирает сам. Самопроверка: `node routing/agentrouter-proxy.js selftest`. Отказ content-filter'а (`500 sensitive words` / `400 content-blocked`) кладёт **тело, реально ушедшее на шлюз**, в `%TEMP%\arpx-blocked-*.json` (последние 10) и пишет путь в лог; `node routing/agentrouter-proxy.js wafbisect <дамп> [--max N]` двоичным сужением сводит дамп к минимальной блокирующей подстроке. |
+| `20155`| **Tabi Token keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для tabitoken.com. `PORT=20155`, `KEY_FILE=tabi-active-key.txt`, `MODELMAP_FILE=tabi-modelmap.json`. gpt-модели остаются на своём шлюзе: конвертер `:20132` — агентроутеровский (см. `GPT_PROXY_ENABLED`). |
+| `20156`| **GoRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для gorouter.app. `PORT=20156`, `KEY_FILE=gorouter-active-key.txt`, `MODELMAP_FILE=gorouter-modelmap.json`. gpt — там же, на своём шлюзе. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -284,6 +284,13 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
   на целевую модель agentrouter; gpt-цель уходит через OpenAI-конвертер, claude-цель — pass-through.
   У agentrouter своих haiku-моделей нет, поэтому тир haiku закрывает сабагентов. Клик по
   чипу модели маппинг **не трогает** — это ручная настройка.
+- **Конвертер `:20132` — только для agentrouter-инстанса** (`GPT_PROXY_ENABLED` в
+  `keepalive-proxy.js`): он ходит на `agentrouter.org` ключом из `ar-active-key.txt`,
+  поэтому уводить туда gpt с инстанса `:20155`/`:20156` нельзя — это молча жгло бы баланс
+  AgentRouter чужим ключом и ловило его content-filter, пока в UI выбран другой шлюз.
+  Гейт смотрит на `UPSTREAM` своего инстанса; перебить — `GPT_PROXY_FORCE=1`. Под гейтом
+  же fallback `haiku→HAIKU_TO_MODEL` и gpt-цель тир-маппинга: без конвертера модель уходит
+  на свой шлюз как есть. Состояние гейта пишется в лог при старте (`gpt-конвертер: …`).
 - **Каталог у agentrouter маленький** (на 2026-08-16 — 3 модели): `claude-opus-4-8`,
   `claude-opus-5` (anthropic+openai) и `gpt-5.6-sol` (**только** openai). Модели с
   `supported_endpoint_types` без `anthropic` помечены на вкладке бейджем `openai` —
@@ -301,31 +308,51 @@ client detected` (проверено 2026-08-16, при прочих равны�
 `anthropic-beta` намеренно НЕ ставим — инстансы `:20155`/`:20156` ходят на другие шлюзы).
 
 **2. Content-filter — смотрит на текст.** На OpenAI-эндпоинте `/v1/chat/completions`
-шлюз режет **точные подстроки** из своего блок-листа и отвечает `500 sensitive words
-detected`. Проверено 2026-08-16, замеры:
+шлюз режет **точные подстроки** из своего блок-листа. Замеры (2026-08-16, дополнено
+2026-08-17 — ≈40 проб `max_tokens=1`):
 
 | текст в system / user / tool_result | итог |
 |---|---|
-| `You are a helpful assistant.` | ⛔ 500 |
+| `You are a helpful assistant.` | ⛔ 500 sensitive words |
+| `x-anthropic-billing-header:` | ⛔ 500 sensitive words |
 | `You are a helpful assistant` (без точки) | ✅ 200 |
 | `You are a helpful AI assistant.` | ✅ 200 |
 | `Act as a helpful assistant.` / `helpful assistant.` | ✅ 200 |
 | та же фраза в `description` тула | ✅ 200 (не сканируется) |
 | та же фраза на claude-модели (Anthropic-passthrough) | ✅ 200 |
+| `As an AI`, `api key`, `reminder`, `language model`, `AI model`, `<system>`, `You are Cursor.`, `You are ChatGPT.` | ⛔ 400 content-blocked, но **только в коротком теле** — внутри реалистичного промпта 200 |
 
-То есть блок-лист — регистронезависимая подстрока **с точкой на конце**, и только на
-gpt-пути. Практический эффект: **пробник валидации модели у Claude Code** (в логе
-прокси `stream=false msgs=2 tools=0`) шлёт ровно эту generic-фразу как system, поэтому
-`/model gpt-5.6-sol` падал `500` детерминированно (12/12), хотя обычный чат работал —
-именно это ломало gpt на свежей установке.
+Из этого: блок-лист 500 — регистронезависимая подстрока, режется в **любом** контексте и
+только на gpt-пути. Список 400 срабатывает лишь на маленьких телах, реальный трафик CC им
+не рвётся, поэтому в `WAF_PHRASES` он **не берётся**. Маскировка под `codex_cli_rs`
+(как в гуляющем по гайдам python-прокси) на content-filter **не влияет** — та же фраза
+даёт 500 и с `claude-cli`, и с `codex_cli_rs`; это фильтр по тексту, а не WAF.
+
+Два практических эффекта, оба лечит `WAF_PHRASES`:
+
+- **пробник валидации модели у Claude Code** (в логе прокси `stream=false msgs=2 tools=0`)
+  шлёт generic-фразу `You are a helpful assistant.` как system — `/model gpt-5.6-sol`
+  падал `500` детерминированно (12/12), хотя обычный чат работал;
+- **CC 2.1.220** вписывает ПЕРВОЙ строкой системного промпта телеметрию
+  `x-anthropic-billing-header: cc_version=…; cc_entrypoint=cli;`, а её имя лежит в
+  блок-листе — с этим апдейтом 500 стал ловить **каждый** запрос CC на gpt-пути, даже
+  «qq». Строка для модели бессмысленна, поэтому вырезается целиком.
 
 Лечение — `WAF_PHRASES` + `wafSanitize()` в `agentrouter-proxy.js`: правка делается
 **один раз на сериализованном теле** перед отправкой (единственная точка, которую нельзя
 обойти — мультимодальная ветка конвертера отдаёт `parts` сырыми, а
 `tool_calls[].function.arguments` вообще мимо текстовых хелперов). Замена семантически
-нейтральная (`+ AI`), срабатывание пишется в лог (`waf sanitize: N hit(s)`) и в
-`stats.sanitized` — молча менять текст запроса нельзя. Таблицу держим **узкой**: одна
-фраза с датой проверки, не эвристика. Расширится блок-лист — добавится строка.
+нейтральная (`+ AI` / вырезание телеметрии), срабатывание пишется в лог
+(`waf sanitize: N hit(s)`) и в `stats.sanitized` — молча менять текст запроса нельзя.
+Таблицу держим **узкой**: только фразы, проверенные пробой, с датой; не эвристика.
+
+**Как найти следующую фразу, а не гадать.** Отказ content-filter'а кладёт тело, реально
+ушедшее на шлюз, в `%TEMP%\arpx-blocked-*.json` (счётчики `blocked`/`lastBlockedDump` в
+статусе `:20132`) — до этого логи конвертера жили только в RAM-буфере дашборда и умирали
+с его рестартом. Дальше `node routing/agentrouter-proxy.js wafbisect <дамп> [--max N]`
+сужает дамп двоично (строки → слова → срез краёв) до минимальной блокирующей подстроки:
+живой 97к-запрос свёлся к 27 символам за 14 проб. Пробы дешёвые (`max_tokens=1`,
+заблокированные вообще бесплатны), бюджет ограничен `--max` (по умолчанию 30).
 
 В `keepalive-proxy.js` такой отказ классифицирован как **постоянный**
 (`RETRY_NO_CONTENT = /sensitive words|content-blocked/i`): ответ детерминирован, ретраи
@@ -342,7 +369,10 @@ gpt-пути. Практический эффект: **пробник валид
 `node routing/agentrouter-proxy.js selftest` и `node routing/keepalive-proxy.js selftest` —
 оба стоят до `server.listen` и выходят через `process.exit(0)`, порт не занимают, поэтому
 безопасны при поднятых рабочих прокси. Покрывают `wafSanitize` (в т.ч. мультимодальную
-ветку), роутинг gpt→конвертер, классификатор ретраев и ручки хеджа.
+ветку и вырезание телеметрии CC), роутинг gpt→конвертер в **обеих** ветках гейта
+(`GPT_PROXY_ENABLED` — `let`, прогон переключает его сам, поэтому результат не зависит от
+`UPSTREAM` инстанса), классификатор ретраев и ручки хеджа. `wafbisect` порт тоже не
+занимает — `server.listen` в этом режиме не поднимается.
 
 ### Статус прокси
 

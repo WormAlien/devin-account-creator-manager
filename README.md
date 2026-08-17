@@ -174,7 +174,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 - **Маршрутизация моделей** — клик по модели = полная настройка Claude Code в один клик: `~/.claude/ar-active-model.txt` + `settings.model` + base + токен + оба прокси. Всё идёт в SSE keepalive `:20133`, он форвардит `claude-*` в agentrouter.org и переправляет `gpt-*` в конвертер `:20132` (Anthropic→OpenAI). После клика нужен рестарт Claude Code — `/model` вводить не надо.
 - **Маппинг claude-тиров** — блок «Маппинг claude-тиров»: `opus`/`sonnet`/`haiku` → модель agentrouter (`routing/ar-modelmap.json`). Применяется прокси/keepalive на каждый запрос по mtime (БЕЗ рестарта). Закрывает сабагентов (у agentrouter своих haiku-моделей нет); пустой тир = не маппить. Клик по чипу модели маппинг не трогает.
 - **Баланс** — сервис отдаёт только `total_usage` (центы), выдача угадывается по шагу $25 (`max(175, …)`). `balance = grant + bonus + referral − spent`. Кнопки **«+25»** (чек-ин в ЛК) и **«+100»** (реферал), **✏️ из $X** — ручная выдача, **💳 Балансы всех** — пакетный прогон.
-- **🌐 ЛК** — вход в кабинет для чек-ина через GitHub: видимый Chromium с персональным профилем `agentrouter/profiles/<label>/`.
+- **🌐 ЛК** — браузер аккаунта (видимый Chromium, персональный профиль `agentrouter/profiles/<label>/`). Ключа у аккаунта ещё нет → открывается **регистрация по реф-ссылке** владельца репо; ключ уже вписан → `agentrouter.org/console/topup` (там же чек-ин). Аккаунт можно добавить **без ключа** (поле `api_key` пустым): в списке он помечен «🔑 получи API-ключ после регистрации» / `⚪ нет ключа`, активация и пинг у него выключены, а 🌐 сразу открывает регистрацию. Ключ вписывается потом кнопкой 🔑.
 - **Два фильтра, не путать.** **WAF** смотрит на заголовки (`user-agent: claude-cli/…` → 200, `curl` → `401 unauthorized client detected`) — оба прокси подставляют CC-заголовки. **Content-filter** смотрит на текст и только на gpt-пути: режет точную подстроку `you are a helpful assistant.` (с точкой!) → `500 sensitive words detected`. Из-за этого `/model gpt-5.6-sol` падал детерминированно — пробник валидации модели у CC шлёт ровно эту фразу. Лечится `WAF_PHRASES`/`wafSanitize` в `agentrouter-proxy.js` (правка на сериализованном теле + лог срабатывания). Старый Cyrillic-bypass (`c→с`) отключён флагом `CYR_BYPASS_ENABLED=false` — с 2026-08-15 WAF сам режет хомоглифы (`400 content-blocked`), а чистую латиницу пропускает.
 
 ![AgentRouter](docs/agentrouter.png)
@@ -186,6 +186,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 - **Баланс** — как у AgentRouter, но шаг бонуса **$5**: `balance = grant + bonus − spent`, кнопка **«+5»** (чек-ин), **✏️** — ручная выдача. База выдачи `GO_DEFAULT_GRANT = 70`.
 - **Маппинг claude-тиров** — `routing/gorouter-modelmap.json` (по mtime, БЕЗ рестарта).
 - **Share / import** — поделиться сессией, вставить аккаунт из буфера.
+- **🌐 ЛК** — как у AgentRouter: аккаунт без ключа → регистрация по реф-ссылке, с ключом → `gorouter.app/wallet`.
 
 ![GoRouter](docs/gorouter.png)
 
@@ -196,6 +197,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 - **Баланс** — `balance = grant + bonus − spent`. Дефолт выдачи $100, бонус за приведённого по рефке $20. **✏️** — ручная выдача.
 - **Маппинг claude-тиров** — `routing/tabi-modelmap.json` (по mtime, БЕЗ рестарта).
 - **Share / import** — как у gorouter.
+- **🌐 ЛК** — как у AgentRouter: аккаунт без ключа → регистрация по реф-ссылке, с ключом → `tabitoken.com/wallet`.
 
 ![Tabi Token](docs/tabi.png)
 

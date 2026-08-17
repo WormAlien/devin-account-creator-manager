@@ -6,7 +6,8 @@
 // Сценарий:
 //   1. В дашборде нажимаешь 🌐 «Открыть браузер» на карточке аккаунта.
 //   2. Открывается Chromium с профилем agentrouter/profiles/<label>/ (на аккаунт).
-//   3. Если залогинен раньше — консоль уже открыта. Если нет — войди через GitHub.
+//   3. Ключа у аккаунта ещё нет → открывается РЕГИСТРАЦИЯ по рефке владельца.
+//      Ключ уже вписан → открывается страница баланса/пополнения.
 //   4. Профиль сохраняется автоматически — при следующих открытиях agentrouter
 //      уже залогинен (можно сразу жать чек-ин +$25).
 //
@@ -14,8 +15,11 @@
 // как storageState (cookies + localStorage), тогда GitHub/agentrouter сразу залогинены.
 //
 // Использование:
-//   node agentrouter/open-session.js <label>
+//   node agentrouter/open-session.js <label> [register|console|auto]
 //     label — имя профиля (папка agentrouter/profiles/<label>/)
+//     режим — register: регистрация по рефке (у аккаунта ещё нет sk-ключа),
+//             console:  страница баланса/пополнения (ключ уже есть),
+//             auto (по умолчанию): чистый профиль = register, иначе console.
 //
 // Код возврата 0 = профиль открыт, 2 = таймаут ожидания GitHub-логина (первый вход), 1 = ошибка.
 
@@ -23,7 +27,12 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const CONSOLE_URL = 'https://agentrouter.org/';
+// Рефка владельца: аккаунт без ключа регистрируем ТОЛЬКО по ней (реф-бонус +$100).
+const REGISTER_URL = 'https://agentrouter.org/register?aff=oUm3';
+// Ключ уже вписан → сразу баланс/пополнение, а не корень сайта.
+const CONSOLE_URL = 'https://agentrouter.org/console/topup';
+// Корень нужен для прогрева перед регистрацией (см. openRegisterViaRef).
+const ROOT_URL = 'https://agentrouter.org/';
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
@@ -31,6 +40,7 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitH
 
 const labelArg = process.argv[2];
 const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
+const mode = String(process.argv[3] || 'auto'); // register | console | auto
 const profileDir = path.join(PROFILES_DIR, label);
 
 // Если рядом лежит <label>.json (импортированный чужой share-код) — применяем
@@ -85,14 +95,58 @@ function hasSessionCookie(cookies) {
   return cookies.some(c => /session|token|access|auth/i.test(c.name) && c.value);
 }
 
+// Первый GitHub-вход с реф-ссылки регулярно заканчивался ошибкой сайта
+// «failed to get user information», и лечилось это руками: вставить реф-ссылку
+// заново и обновить страницу. Автоматизируем ровно этот обход.
+const AUTH_ERROR_RE = /failed to get user info|无法获取用户信息|не удалось получить (данные|информацию)/i;
+
+async function pageHasAuthError(page) {
+  try {
+    return AUTH_ERROR_RE.test(await page.evaluate(() => document.body ? document.body.innerText : ''));
+  } catch { return false; }
+}
+
+// Реф-код сайт хранит в localStorage (ключ `aff`) и переживает уход на другие
+// страницы — проверено пробником. Поэтому сначала заходим по реф-ссылке (сажаем
+// код в профиль), потом прогреваем корень (SPA поднимается, /api/status и
+// cf_clearance оседают), и только потом показываем страницу регистрации.
+async function openRegisterViaRef(page) {
+  await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(1500);
+  const aff = await page.evaluate(() => { try { return localStorage.getItem('aff'); } catch { return null; } }).catch(() => null);
+  console.log(aff ? `🤝 реф-код сохранён в профиль: aff=${aff}` : '⚠️  реф-код не осел в localStorage — регистрация может не зачесться');
+
+  await page.goto(ROOT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(1500);
+  await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+}
+
+// После GitHub-логина: обновляем страницу, и если сайт всё-таки ответил
+// «failed to get user information» — заходим по реф-ссылке снова (реф-код уже в
+// localStorage, кредит не теряется). Два прохода: ошибка транзиентная.
+async function settleAfterLogin(page) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(2000);
+    if (!(await pageHasAuthError(page))) return true;
+    console.log(`⚠️  сайт ответил «failed to get user information» — повтор ${attempt}/2 по реф-ссылке…`);
+    await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(2000);
+  }
+  return !(await pageHasAuthError(page));
+}
+
 // Ждём, пока GitHub-вход пройден и появился auth-cookie на agentrouter.org —
 // значит мы внутри консоли. Профиль в этот момент уже сохраняется Chromium'ом на диск.
+// Страницу регистрации/логина в зачёт не берём: на ней куки (csrf и прочее) есть сразу,
+// иначе «вход выполнен» печаталось бы через полторы секунды после старта.
 async function waitForLogin(page, context) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const url = page.url();
     const cookies = await context.cookies('https://agentrouter.org').catch(() => []);
-    if (url.includes('agentrouter.org') && hasSessionCookie(cookies)) return true;
+    const leftAuth = !/\/register|\/login|\/sign-in|\/sign-up/.test(url);
+    if (url.includes('agentrouter.org') && leftAuth && hasSessionCookie(cookies)) return true;
     await page.waitForTimeout(1500);
   }
   return false;
@@ -121,15 +175,45 @@ async function main() {
     appliedSession = await applyImportedSession(context, imported);
   }
 
-  try {
-    await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+  // Импортированный share-код — аккаунт друга уже зарегистрирован, рефка ему не нужна.
+  const wantRegister = appliedSession ? false
+    : mode === 'register' ? true
+    : mode === 'console' ? false
+    : fresh;                                   // 'auto': чистый профиль = регистрация
+  console.log(`🎯 ${wantRegister ? `регистрация по рефке: ${REGISTER_URL}` : `баланс: ${CONSOLE_URL}`}`);
 
+  try {
     if (appliedSession) {
+      await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
       console.log('✅ Импортированная сессия применена (GitHub/agentrouter уже залогинены).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {});
       return;
     }
+
+    // Регистрация: ждём логина и добиваем «failed to get user information» ВСЕГДА,
+    // а не только на чистом профиле. Первая попытка могла упасть именно так —
+    // тогда профиль уже не чистый, а аккаунт всё ещё без ключа.
+    if (wantRegister) {
+      await openRegisterViaRef(page);
+      console.log('⚠️  Регистрация по рефке. Зарегайся через GitHub на открывшейся странице,');
+      console.log('   потом возьми ключ в консоли и вставь его кнопкой 🔑 в дашборде.');
+
+      const ok = await waitForLogin(page, context);
+      if (!ok) {
+        console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
+        process.exit(2);
+      }
+      const settled = await settleAfterLogin(page);
+      console.log(settled
+        ? '✅ Вход выполнен, профиль сохранён на диск. Забирай ключ и вставляй кнопкой 🔑.'
+        : '⚠️  Вход прошёл, но сайт всё ещё отдаёт «failed to get user information» — обнови страницу вручную (F5).');
+      console.log('   Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
+      await new Promise(() => {});
+      return;
+    }
+
+    await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
 
     if (!fresh) {
       console.log('✅ Профиль восстановлен (agentrouter уже залогинен, если заходил раньше).');

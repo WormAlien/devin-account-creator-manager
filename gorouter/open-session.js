@@ -165,20 +165,30 @@ async function siteError(page) {
 // встречает уже потраченным кодом и отвечает «failed to fetch git token».
 const OAUTH_CALLBACK_RE = /\/oauth\/(github|oidc)|[?&]code=/i;
 
-// Реф-код сайт хранит в localStorage (ключ `aff`) и переживает уход на другие
-// страницы — проверено пробником. Поэтому сначала заходим по реф-ссылке (сажаем
-// код в профиль), потом прогреваем корень (SPA поднимается, /api/status и
-// cf_clearance оседают), и только потом показываем страницу регистрации.
+// Реф-код сайт хранит в localStorage (ключ `aff`). Одного захода по реф-ссылке
+// достаточно — проверено: код оседает сразу, страница регистрации на чистом
+// профиле рисуется без прогрева. Поэтому happy path = ОДНА навигация: прыжки
+// рефка → корень → рефка юзер видел как «дрочь», и они же рвали OAuth-state.
+// Корень прогреваем только если код с первого раза не осел.
 async function openRegisterViaRef(page) {
   await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await page.waitForTimeout(1500);
-  const aff = await page.evaluate(() => { try { return localStorage.getItem('aff'); } catch { return null; } }).catch(() => null);
-  console.log(aff ? `🤝 реф-код сохранён в профиль: aff=${aff}` : '⚠️  реф-код не осел в localStorage — регистрация может не зачесться');
+  const readAff = () => page
+    .evaluate(() => { try { return localStorage.getItem('aff'); } catch { return null; } })
+    .catch(() => null);
+
+  const aff = await readAff();
+  if (aff) {
+    console.log(`🤝 реф-код сохранён в профиль: aff=${aff}`);
+    return;                       // страница регистрации уже открыта — больше не трогаем
+  }
+
+  console.log('⚠️  реф-код не осел с первого раза — прогреваю корень и захожу заново');
 
   // Если сайт сам уехал на GitHub-вход (сессия GitHub в профиле уже есть — страница
   // регистрации продолжает вход без нажатий), прогрев корня НЕ делаем: второй goto
   // рвёт OAuth-state, и сайт потом отвечает «State parameter is empty or mismatched»
-  // либо «failed to fetch git token». Это и была видимая «дрочь» при клике 🌐.
+  // либо «failed to fetch git token».
   if (/github\.com/i.test(page.url())) {
     console.log('↪️  сайт сам ушёл на GitHub-вход — не перебиваем редирект');
     return;
@@ -191,6 +201,11 @@ async function openRegisterViaRef(page) {
     return;
   }
   await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(1500);
+  const aff2 = await readAff();
+  console.log(aff2
+    ? `🤝 реф-код сохранён в профиль со второй попытки: aff=${aff2}`
+    : '⚠️  реф-код так и не осел в localStorage — регистрация может не зачесться');
 }
 
 // После GitHub-логина добиваем ошибки сайта. Главное правило: на колбэке OAuth

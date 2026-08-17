@@ -111,6 +111,61 @@ if (src) {
 }
 
 // ---- вывод ------------------------------------------------------------------
+
+// ---- 5. Окно для незнакомых CC моделей (gpt-*) ------------------------------
+// Инвариант: модель есть в routing/model-windows.json → env.CLAUDE_CODE_MAX_CONTEXT_TOKENS
+// равен её окну; модель claude-* → ключа нет вовсе (залипшее значение = переполнение).
+if (src) {
+    const ws = src.match(/function writeSettings\(obj\) \{[\s\S]*?\n\}/);
+    if (ws && !/ccContextTokensFor\(obj\.model\)/.test(ws[0])) {
+        fails.push('writeSettings(): нет ccContextTokensFor() — окно gpt-моделей снова не доедет до статуслайна');
+    }
+    if (ws && !/delete .*CLAUDE_CODE_MAX_CONTEXT_TOKENS/.test(ws[0])) {
+        fails.push('writeSettings(): ключ CLAUDE_CODE_MAX_CONTEXT_TOKENS не снимается для claude-* — залипнет и даст переполнение');
+    }
+    const i = src.indexOf('const MODEL_WINDOWS_FILE');
+    const e = src.indexOf('\n}', src.indexOf('function ccContextTokensFor'));
+    if (i < 0 || e < 0) fails.push('transparent-proxy.js: блок modelWindows()/ccContextTokensFor() не найден');
+    else {
+        let ctxFor;
+        try {
+            ctxFor = new Function('fs', 'path', '__dirname',
+                src.slice(i, e + 2) + '; return ccContextTokensFor;',
+            )(fs, path, path.join(__dirname, '..', 'routing'));
+        } catch (e2) { fails.push(`ccContextTokensFor не исполняется: ${e2.message}`); }
+        if (ctxFor) {
+            const cases = [
+                ['gpt-5.6-sol', 1050000],
+                ['claude-opus-5', null],
+                ['claude-opus-5[1m]', null],   // claude любой формы — не переопределяем
+                ['ComboWombo', null],          // виртуальная модель шлюза
+                ['модели-нет-в-таблице', null],
+                ['', null],
+            ];
+            for (const [input, want] of cases) {
+                const got = ctxFor(input);
+                if (got !== want) fails.push(`ccContextTokensFor(${JSON.stringify(input)}) = ${got}, ожидалось ${want}`);
+            }
+            ok.push(`ccContextTokensFor: ${cases.length} кейсов`);
+        }
+        // живой settings.json против таблицы
+        try {
+            const raw = fs.readFileSync(SETTINGS, 'utf8');
+            const s = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            const want = ctxFor ? ctxFor(s.model) : null;
+            const got = s.env && s.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+            if (want && String(want) !== String(got || '')) {
+                fails.push(`settings.json: model="${s.model}" → окно ${want}, а CLAUDE_CODE_MAX_CONTEXT_TOKENS=${got || '(нет)'}`);
+            } else if (!want && got) {
+                fails.push(`settings.json: model="${s.model}" не требует override, а CLAUDE_CODE_MAX_CONTEXT_TOKENS=${got} залип`);
+            } else if (want) {
+                ok.push(`settings.json: окно ${want} заявлено для "${s.model}"`);
+            }
+        } catch { /* уже предупредили выше */ }
+    }
+}
+
+
 for (const s of ok) console.log(`  ok   ${s}`);
 for (const s of warns) console.log(`  warn ${s}`);
 for (const s of fails) console.log(`  FAIL ${s}`);

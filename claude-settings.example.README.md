@@ -12,10 +12,11 @@ Switcher на `:8200` правит только `apiKeyHelper` + `env.ANTHROPIC_
 - **`CLAUDE_CODE_API_KEY_HELPER_TTL_MS: "0"`** — `0` = читать ключ из `apiKeyHelper`
   на КАЖДОМ запросе. Без этого ротация ключей на лету не работает.
 
-- **`DISABLE_AUTOUPDATER: "1"` + `autoUpdates: false`** — Claude Code обязан
-  остаться на `2.1.153`, новее ломает `apiKeyHelper`. Обе строки выключают
-  авто-обновление. НЕ возвращай `autoUpdatesChannel: "latest"` — оно перетянет
-  на свежую версию.
+- **`DISABLE_AUTOUPDATER: "1"` + `autoUpdates: false`** — нужны, если пользуешься
+  виртуальными режимами `apihelper`/`aerolink`: на версиях новее `2.1.153` у них
+  ломался `apiKeyHelper`-флоу. Остальные бэкенды (keepalive-прокси, конвертеры)
+  читают ключ из файла сами и живут на любой свежей версии — им авто-апдейт не
+  мешает, и установщик CC больше не откатывает.
 
 - **`model`** — поправь под свой бэкенд. Для Aerolink/Notion-цепочек — алиас,
   который есть в `model_map` / OmniRoute. См. `routing/ROUTING.md`.

@@ -7,7 +7,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 SESSION = sys.argv[1] if len(sys.argv) > 1 else 'D:/WORMALIENAIGIGANT/app/grok-cookie-mcp/cookies/3.json'
 OUT_NAME = sys.argv[2] if len(sys.argv) > 2 else 'credits_raw.b64'
-LOG_DIR = Path('C:/Users/WormAlien/Desktop/Autoreger_Clean/routing/tools/probe_out')
+# от самого файла, а не от абсолютного пути: папку репо можно переносить
+LOG_DIR = Path(__file__).resolve().parent / 'probe_out'
 
 cookies = json.load(open(SESSION, encoding='utf-8'))
 SS_MAP = {'no_restriction': 'None', 'lax': 'Lax', 'strict': 'Strict', 'unspecified': 'Lax'}

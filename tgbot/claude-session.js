@@ -31,10 +31,14 @@ function resolveClaude() {
 }
 const CLAUDE = resolveClaude();
 
-// Разрешённые корни для cwd — бот не должен лазить куда попало.
+// Разрешённые корни для cwd — бот не должен лазить куда попало. Корень репо
+// выводим от самого файла: папку репо можно переносить куда угодно, хардкод
+// пути ломал бы бота после переезда. Доп. корни — env EXTRA_ROOTS (через ; или ,).
+const REPO_ROOT = path.resolve(__dirname, '..');
 const ALLOWED_ROOTS = [
-  path.resolve('C:/Users/WormAlien/Desktop/Autoreger_Clean'),
-  path.resolve('D:/WORMALIENAIGIGANT'),
+  REPO_ROOT,
+  ...String(process.env.EXTRA_ROOTS || 'D:/WORMALIENAIGIGANT')
+    .split(/[;,]/).map(s => s.trim()).filter(Boolean).map(p => path.resolve(p)),
 ];
 
 function isAllowedCwd(dir) {
@@ -42,12 +46,23 @@ function isAllowedCwd(dir) {
   return ALLOWED_ROOTS.some(root => r === root || r.startsWith(root + path.sep));
 }
 
+// DEFAULT_CWD из .env может остаться от прежнего места репо — тогда молча
+// работаем от корня репо, а не пытаемся стартовать claude в несуществующей папке.
+function defaultCwd() {
+  const want = String(process.env.DEFAULT_CWD || '').trim();
+  if (!want) return REPO_ROOT;
+  const abs = path.resolve(want);
+  if (isAllowedCwd(abs) && fs.existsSync(abs)) return abs;
+  console.warn(`[tgbot] DEFAULT_CWD=${want} не подходит (нет папки или вне корней) → беру ${REPO_ROOT}`);
+  return REPO_ROOT;
+}
+
 // chatId → { cwd, busy, started }  (один контекст-«разговор» на чат)
 const sessions = new Map();
 
 function getSession(chatId) {
   if (!sessions.has(chatId)) {
-    sessions.set(chatId, { cwd: process.env.DEFAULT_CWD || ALLOWED_ROOTS[0], busy: false, fresh: true });
+    sessions.set(chatId, { cwd: defaultCwd(), busy: false, fresh: true });
   }
   return sessions.get(chatId);
 }

@@ -13,7 +13,7 @@
 
 ## Установка
 ```bash
-cd C:/Users/WormAlien/Desktop/Autoreger_Clean
+cd <папка репо>            # куда клонировали/перенесли Autoreger_Clean
 npm install                       # подтянет telegraf + dotenv
 cp tgbot/.env.example tgbot/.env  # затем впиши BOT_TOKEN и ALLOWED_USERS
 ```

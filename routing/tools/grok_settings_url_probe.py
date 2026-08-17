@@ -10,7 +10,8 @@ from playwright.sync_api import sync_playwright
 sys.stdout.reconfigure(encoding='utf-8')
 
 SESSION = 'D:/WORMALIENAIGIGANT/app/grok-cookie-mcp/cookies/3.json'
-LOG_DIR = Path('C:/Users/WormAlien/Desktop/Autoreger_Clean/routing/tools/probe_out')
+# от самого файла, а не от абсолютного пути: папку репо можно переносить
+LOG_DIR = Path(__file__).resolve().parent / 'probe_out'
 
 cookies = json.load(open(SESSION, encoding='utf-8'))
 SS_MAP = {'no_restriction': 'None', 'lax': 'Lax', 'strict': 'Strict', 'unspecified': 'Lax'}

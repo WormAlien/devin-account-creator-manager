@@ -210,6 +210,38 @@ function normalizeCcModel(m) {
     return /^claude-(opus|sonnet)-/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
 }
 
+// ---- Окно контекста для моделей, которых Claude Code не знает ---------------
+// У gpt-моделей суффикс [1m] не работает (в CC это перечисление, и на gpt-путь он
+// вообще не доедет: keepalive уводит isGptLike() на конвертер ДО среза суффикса).
+// Поэтому окно задаём env-переменной CLAUDE_CODE_MAX_CONTEXT_TOKENS: CC берёт из неё
+// свою веру → и автокомпакт, и знаменатель `⧉ N/M` в статуслайне становятся правдой.
+// Статуслайн НЕ трогаем: врать в баре поверх чужой веры уже пробовали (таблица
+// `real_max`) — получалось 16% при реальной занятости 90%, потому что компактит CC
+// по своему числу, а не по нарисованному.
+const MODEL_WINDOWS_FILE = path.join(__dirname, 'model-windows.json');
+let MODEL_WINDOWS_CACHE = { mtime: 0, map: {} };
+function modelWindows() {
+    try {
+        const st = fs.statSync(MODEL_WINDOWS_FILE);
+        if (st.mtimeMs !== MODEL_WINDOWS_CACHE.mtime) {
+            const raw = fs.readFileSync(MODEL_WINDOWS_FILE, 'utf8');
+            const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            MODEL_WINDOWS_CACHE = { mtime: st.mtimeMs, map: doc.windows || {} };
+        }
+    } catch { /* нет файла — просто не переопределяем окно */ }
+    return MODEL_WINDOWS_CACHE.map;
+}
+
+// Сколько токенов заявить Claude Code для этой модели. null = не заявлять
+// (claude-* и всё незнакомое: у CC своя таблица, а врать наугад хуже, чем молчать).
+function ccContextTokensFor(model) {
+    const m = String(model || '').trim();
+    if (!m || /^claude-/.test(m)) return null;
+    const bare = m.replace(/\s*\[[^\]]*\]\s*$/, '');   // на случай чужого суффикса
+    const n = modelWindows()[bare];
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function writeSettings(obj) {
     // Чокпоинт суффикса: сюда сходятся ВСЕ записи settings.json (см. tools/check-1m.js —
     // он валит сборку, если кто-то опять пишет файл напрямую). ANTHROPIC_MODEL правим
@@ -217,6 +249,16 @@ function writeSettings(obj) {
     if (typeof obj.model === 'string') obj.model = normalizeCcModel(obj.model);
     if (obj.env && typeof obj.env.ANTHROPIC_MODEL === 'string') {
         obj.env.ANTHROPIC_MODEL = normalizeCcModel(obj.env.ANTHROPIC_MODEL);
+    }
+    // Окно для незнакомых CC моделей — сюда же, чтобы не расползлось по хендлерам.
+    // Ключ обязательно СНИМАЕМ, когда модель антропиковская: залипшие 1050000 на
+    // claude-opus-5 (реально 1M) — это переполнение контекста на апстриме.
+    const ctxTokens = ccContextTokensFor(obj.model);
+    if (ctxTokens) {
+        obj.env = obj.env || {};
+        obj.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(ctxTokens);
+    } else if (obj.env) {
+        delete obj.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
     }
     // timestamped backup before every write
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');

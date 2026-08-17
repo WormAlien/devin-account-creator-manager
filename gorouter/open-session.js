@@ -96,6 +96,36 @@ function hasSessionCookie(cookies) {
   return cookies.some(c => /session|token|access|auth/i.test(c.name) && c.value);
 }
 
+// Chromium кеширует и 404-ответы. Если на `/assets/index-<hash>.js` однажды прилетел
+// 404 (деплой сайта / затык WAF), он оседает в кеше профиля — и SPA больше не
+// поднимается НИКОГДА: на каждом открытии белый экран, хотя куки и логин живые
+// (поймано на ar-аккаунтах 2026-08-17, у gorouter/tabi тот же NewAPI-фронт).
+// Кеш профиля чистить вслепую нельзя, поэтому ходим мимо HTTP-кеша: сессия и
+// localStorage остаются на месте. Вешаем и на новые вкладки — GitHub-OAuth
+// умеет открываться попапом.
+async function disableHttpCache(context, page) {
+  const apply = async (p) => {
+    try {
+      const cdp = await context.newCDPSession(p);
+      await cdp.send('Network.enable');
+      await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+    } catch { /* без кеш-бага страница живёт и так — не роняем открытие */ }
+  };
+  context.on('page', p => { apply(p); });
+  await apply(page);
+}
+
+// Белый экран должен быть виден в Server Logs, а не только глазами пользователя.
+async function reportRender(page) {
+  const ok = await page.waitForFunction(
+    () => { const r = document.getElementById('root'); return !!r && r.innerHTML.length > 200; },
+    { timeout: 15000 },
+  ).then(() => true).catch(() => false);
+  console.log(ok
+    ? '✅ страница отрисовалась'
+    : '⚠️  белый экран: SPA не поднялась — жми F5, в DevTools ищи 404 на /assets/*.js');
+}
+
 // Первый GitHub-вход с реф-ссылки регулярно заканчивался ошибкой сайта
 // «failed to get user information», и лечилось это руками: вставить реф-ссылку
 // заново и обновить страницу. Автоматизируем ровно этот обход.
@@ -169,6 +199,7 @@ async function main() {
   });
 
   const page = context.pages()[0] || await context.newPage();
+  await disableHttpCache(context, page);
 
   // Импортированная чужая сессия: подкладываем cookies/localStorage до навигации.
   let appliedSession = false;
@@ -186,6 +217,7 @@ async function main() {
   try {
     if (appliedSession) {
       await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+      await reportRender(page);
       console.log('✅ Импортированная сессия применена (GitHub/gorouter уже залогинены).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {}); // держим открытым, закрытие — вручную
@@ -217,6 +249,7 @@ async function main() {
     await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
 
     if (!fresh) {
+      await reportRender(page);
       console.log('✅ Профиль восстановлен (GitHub/gorouter уже залогинены, если заходил раньше).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {}); // держим открытым, закрытие — вручную

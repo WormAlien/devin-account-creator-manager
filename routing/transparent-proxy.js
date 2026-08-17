@@ -64,7 +64,9 @@ function upsertEnvFile(updates) {
     fs.writeFileSync(ENV_FILE, lines.join('\n'), 'utf8');
 }
 
-const LISTEN_PORT = 8200;
+// Порт дашборда. Env-оверрайд нужен для проверки копии репо в другом каталоге
+// (тест переносимости путей) — рабочий запуск как раньше на :8200.
+const LISTEN_PORT = Number(process.env.SWITCHER_PORT || 8200);
 const SETTINGS_FILE = path.join(os.homedir(), '.claude', 'settings.json');
 const SETTINGS_BACKUP_DIR = path.join(os.homedir(), '.claude', 'settings-backups');
 const BACKUP_NAME_RE = /^settings-[0-9A-Za-z._-]+\.json$/;
@@ -6901,6 +6903,33 @@ async function tbKeepaliveSpawn() {
     }
 }
 
+// ───── Самопочинка внешней ссылки на путь репо ─────────────────────────────
+// В ~/.claude/settings.json statusLine.command — абсолютный путь к
+// routing/statusline-autoreger.sh. Папку репо переносят (Desktop → D:\app\…) и
+// статуслайн молча умирает: CC зовёт скрипт по старому пути. Дашборд знает, где
+// лежит сам, поэтому при старте переписывает ссылку на свою копию скрипта.
+// Всё остальное в settings.json путей репо не содержит (только localhost-порты).
+function healStatuslinePath() {
+    try {
+        if (!fs.existsSync(SETTINGS_FILE)) return null;
+        const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+        const s = JSON.parse(raw);
+        const cmd = s.statusLine && typeof s.statusLine.command === 'string' ? s.statusLine.command : '';
+        if (!cmd || !/statusline-autoreger\.sh/i.test(cmd)) return null;
+        const mine = path.join(__dirname, 'statusline-autoreger.sh').replace(/\\/g, '/');
+        if (cmd.includes(mine)) return null;
+        const fixed = cmd.replace(/[A-Za-z]:[\\/][^"']*?statusline-autoreger\.sh/gi, mine);
+        if (fixed === cmd || !fixed.includes(mine)) return null;
+        try { makeSettingsBackup('statusline-heal'); } catch { }
+        s.statusLine.command = fixed;
+        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 4) + '\n', 'utf8');
+        return { from: cmd, to: fixed };
+    } catch (e) {
+        logLine(`statusline heal skip: ${e.message}`);
+        return null;
+    }
+}
+
 // ───── Рестарт keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter) ─────
 // Все три xxKeepaliveSpawn() поднимают процесс ТОЛЬКО если порт свободен, а
 // автоперезапуска нет — после правки keepalive-proxy.js новый код подхватывается
@@ -9080,6 +9109,16 @@ server.listen(LISTEN_PORT, () => {
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);
+
+    // Папку репо могли перенести — статуслайн в settings.json прописан абсолютным
+    // путём, поправляем ссылку на свою копию скрипта (см. healStatuslinePath).
+    {
+        const healed = healStatuslinePath();
+        if (healed) {
+            console.log(`  statusline: путь поправлен на ${path.join(__dirname, 'statusline-autoreger.sh')}`);
+            logLine(`statusline heal: ${healed.from} → ${healed.to}`);
+        }
+    }
 
     // Одноразовая миграция agentrouter-аккаунтов на стабильный id (модель gorouter):
     // выдаём id и переименовываем старые профили ar_<sha1> → acct_<id>, чтобы не потерять сессии.

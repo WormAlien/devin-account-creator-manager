@@ -242,19 +242,45 @@ const WAF_PHRASES = [
     { re: /x-anthropic-billing-header:[^"\\]*(?:\\n)?/gi, to: '' },
 ];
 
+// ══════════════════════ CONTENT-FILTER: BASE64-ОБРАЗЫ ══════════════════════
+// 2026-08-18: главный источник 400 content-blocked в реальных сессиях — не фразы, а
+// base64-изображения в теле (в одном 12МБ-запросе 31 JPEG + 11 PNG). Классификатор
+// шлюза режет ЛЮБОЙ base64-образ детерминированно: даже `/9j/4AAQSkZJRg==` (16 симв.)
+// → 400 content-blocked, `iVBOR…` → 400, а `[image omitted]` → 200 (проверено пробой
+// 2026-08-18). В длинных сессиях с тулами-картинками body разрастается картинками
+// (7.5МБ из 7.7МБ корпуса!), и падает КАЖДЫЙ запрос. Замена на плейсхолдер сохраняет
+// JSON и прогоняет запрос: реальный 12МБ-дамп → 499КБ → 200.
+//
+// Покрываем: data-url'ы (image_url от конвертера) + сырые блобы известных магиков
+// (JPEG /9j/, PNG iVBOR, GIF R0lGOD, WebP UklGR, BMP Qk0/Qk1, SVG PHN2Zy). Минимум 10
+// символов после магика — защита от ложных срабатываний в обычном тексте (iVBOResque
+// не тронем). Магики не встречаются в нормальном тексте — плейсхолдер семантически
+// нейтрален (модель всё равно не читает base64 как текст).
+const TINY_1PX_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const TINY_PNG_DATAURL = `data:image/png;base64,${TINY_1PX_PNG}`;
+
+// ОДИН проход: data-url ловится раньше, чем магик внутри него (альтернация слева-направо,
+// после замены движок продолжает с конца вставки — вставленную 1x1 PNG не перечитает).
+// Если бы это были два отдельных replace, второй (магик) вырезал бы вставленную tiny PNG.
+const IMAGE_B64_RE = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+|(\/9j\/|iVBOR|R0lGOD|UklGR|Qk0|Qk1|PHN2Zy)[A-Za-z0-9+/=]{10,}/g;
+
 // Правим уже СЕРИАЛИЗОВАННОЕ тело — единственная точка, которую нельзя обойти.
 // (Патчить call-site'ы cyrEncode нельзя: мультимодальная ветка convertClaudeToOpenAI
 // отдаёт parts сырыми, а tool_calls[].function.arguments вообще мимо них — текст рядом
 // с картинкой прошёл бы мимо санитайзера.)
-// Фразы без JSON-специальных символов, поэтому замена в JSON-строке безопасна
-// (base64 картинок не содержит пробелов и точек из фразы — испортить нельзя).
+// Фразы без JSON-специальных символов, поэтому замена в JSON-строке безопасна.
 function wafSanitize(jsonStr) {
     let text = String(jsonStr);
     let hits = 0;
     for (const { re, to } of WAF_PHRASES) {
         text = text.replace(re, () => { hits++; return to; });   // один проход
     }
-    return { text, hits };
+    let b64 = 0;
+    text = text.replace(IMAGE_B64_RE, m => {
+        b64++;
+        return m.startsWith('data:image') ? TINY_PNG_DATAURL : '[image omitted]';
+    });
+    return { text, hits, b64 };
 }
 
 // ══════════════════════ ДАМП ЗАБЛОКИРОВАННЫХ ТЕЛ ══════════════════════
@@ -605,6 +631,10 @@ function handleMessages(req, res, body) {
         // Молча менять текст запроса нельзя — срабатывание должно быть видно в логах.
         logLine(`waf sanitize: ${sanitized.hits} hit(s) — нейтрализована фраза из блок-листа шлюза`);
     }
+    if (sanitized.b64) {
+        stats.sanitized += sanitized.b64;
+        logLine(`waf sanitize: ${sanitized.b64} base64-образ(а) → [image omitted] (иначе 400 content-blocked)`);
+    }
 
     const upReq = upstreamRequest('/v1/chat/completions', apiKey, sanitized.text, (upRes) => {
         if (upRes.statusCode !== 200) {
@@ -919,6 +949,40 @@ if (process.argv[2] === 'selftest') {
     // Безобидный текст не трогаем вообще (санитайзер узкий, не эвристика).
     const s4 = wafSanitize(JSON.stringify({ system: 'Act as a helpful assistant. helpful assistant.' }));
     assert.strictEqual(s4.hits, 0, 'другие формулировки шлюз пропускает — не трогаем');
+
+    // base64-образы режутся шлюзом 400 content-blocked → плейсхолдер (2026-08-18).
+    // data-url от конвертера (image_url) + сырые блобы магиков в tool_result.
+    const b1 = wafSanitize(JSON.stringify({ messages: [{ role: 'user', content: [
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAE=' } },
+    ] }] }));
+    assert.strictEqual(b1.b64, 1, 'data-url с base64 ловится');
+    assert.ok(!/iVBORw0KGgoAAAANSUhEUgAAAAE=/.test(b1.text), 'исходной базы не осталось');
+    assert.ok(/JRU5ErkJggg==/.test(b1.text), 'на месте валидная 1x1 PNG (data-url нельзя текстом: апстрим декодит base64)');
+
+    // Сырой JPEG-блоб, как в tool_result после JSON.stringify блока image.
+    const b2 = wafSanitize(JSON.stringify({ messages: [{ role: 'user', content:
+        '{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"data\":\"/9j/4AAQSkZJRgABAgAAAQABAAD/wAARCAfPBj8DAREAAhEBAxEB\"}}' }] }));
+    assert.strictEqual(b2.b64, 1, 'сырой JPEG-блоб ловится');
+    assert.ok(!/\/9j\//.test(b2.text), 'jpeg-базы не осталось');
+    assert.ok(/\[image omitted\]/.test(JSON.parse(b2.text).messages[0].content), 'JSON валиден, плейсхолдер внутри');
+
+    // Реальный 12МБ-дамп: вырезается всё, структура цела (без сетевого прогона).
+    const dmpFile = path.join(require('os').tmpdir(), 'arpx-blocked-2026-08-17T20-52-10-483Z.json');
+    if (fs.existsSync(dmpFile)) {
+        const dmpRaw = fs.readFileSync(dmpFile, 'utf8');
+        const dUrlCountRaw = (dmpRaw.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g) || []).length;
+        const d = wafSanitize(dmpRaw);
+        assert.ok(d.b64 >= dUrlCountRaw, 'все data-url заменены + сырые блобы');
+        assert.strictEqual((d.text.match(/data:image\/png;base64,/g) || []).length, dUrlCountRaw, 'каждый data-url стал 1x1 PNG');
+        assert.ok(!/\/9j\/|R0lGOD|UklGR/.test(d.text), 'jpeg/gif/webp-магиков не осталось (iVBOR есть в tiny PNG)');
+        const dBody = JSON.parse(d.text);
+        assert.strictEqual(dBody.messages.length, 344, 'структура тела цела');
+        assert.strictEqual((dBody.tools || []).length, 154, 'тулзы целы');
+    }
+
+    // Похожий текст без магика не трогаем.
+    const b3 = wafSanitize(JSON.stringify({ messages: [{ role: 'user', content: 'iVBOResque is not base64; /9j/ too short' }] }));
+    assert.strictEqual(b3.b64, 0, 'похожий текст без настоящего магика не трогаем');
 
     // Роутинг: gpt-модели идут в OpenAI-конвертер, claude — в passthrough.
     assert.strictEqual(isGptModel('gpt-5.6-sol'), true, 'gpt-5.6-sol = gpt');

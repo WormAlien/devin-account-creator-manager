@@ -18,7 +18,7 @@
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
 | `20150-20250`| **Custom OpenAI Proxies** (динамически) | `routing/custom-openai-proxy.js` | Anthropic→OpenAI конвертер для Custom-провайдеров с заполненным `modelMap`. Спавнится на активацию (детached), конфиг `~/.claude/custom-<id>-proxy.json`, ключ из `~/.claude/custom-active-key.txt`. Убивается при деактивации/удалении. |
 | `20133`| **AgentRouter keepalive** | `routing/keepalive-proxy.js` | **Единая точка входа для agentrouter** (и `claude-*`, и `gpt-*`): держит SSE-паузы thinking-моделей, ретраит транзиентные ошибки, хеджирует. `claude-*` форвардит в agentrouter.org 1-в-1, `gpt-*` переправляет в конвертер `:20132`. Режет `[1m]`-суффиксы, count_tokens отвечает локальной оценкой. Отказы content-filter (`sensitive words`/`content-blocked`) классифицированы как **постоянные** — не ретраятся. `PORT=20133`, `KEY_FILE=ar-active-key.txt`, `MODELMAP_FILE=ar-modelmap.json`. |
-| `20132`| **AgentRouter Proxy** (конвертер) | `routing/agentrouter-proxy.js` | Anthropic→OpenAI конвертер для `gpt-*` (`/v1/chat/completions`); `claude-*` — pass-through в `/v1/messages`. Стоит **за** keepalive `:20133`, напрямую из CC больше не адресуется. `wafSanitize`/`WAF_PHRASES` нейтрализуют фразы из блок-листа шлюза на сериализованном теле (иначе `/model gpt-*` падает `500 sensitive words detected`). Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false`. **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки собирает сам. Самопроверка: `node routing/agentrouter-proxy.js selftest`. Отказ content-filter'а (`500 sensitive words` / `400 content-blocked`) кладёт **тело, реально ушедшее на шлюз**, в `%TEMP%\arpx-blocked-*.json` (последние 10) и пишет путь в лог; `node routing/agentrouter-proxy.js wafbisect <дамп> [--max N]` двоичным сужением сводит дамп к минимальной блокирующей подстроке. |
+| `20132`| **AgentRouter Proxy** (конвертер) | `routing/agentrouter-proxy.js` | Anthropic→OpenAI конвертер для `gpt-*` (`/v1/chat/completions`); `claude-*` — pass-through в `/v1/messages`. Стоит **за** keepalive `:20133`, напрямую из CC больше не адресуется. `wafSanitize`/`WAF_PHRASES` нейтрализуют фразы из блок-листа шлюза на сериализованном теле (иначе `/model gpt-*` падает `500 sensitive words detected`), а `IMAGE_B64_RE` вырезает base64-образы (иначе запросы с картинками в сессии падают `400 content-blocked`). Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false`. **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки собирает сам. Самопроверка: `node routing/agentrouter-proxy.js selftest`. Отказ content-filter'а (`500 sensitive words` / `400 content-blocked`) кладёт **тело, реально ушедшее на шлюз**, в `%TEMP%\arpx-blocked-*.json` (последние 10) и пишет путь в лог; `node routing/agentrouter-proxy.js wafbisect <дамп> [--max N]` двоичным сужением сводит дамп к минимальной блокирующей подстроке. |
 | `20155`| **Tabi Token keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для tabitoken.com. `PORT=20155`, `KEY_FILE=tabi-active-key.txt`, `MODELMAP_FILE=tabi-modelmap.json`. gpt-модели остаются на своём шлюзе: конвертер `:20132` — агентроутеровский (см. `GPT_PROXY_ENABLED`). |
 | `20156`| **GoRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для gorouter.app. `PORT=20156`, `KEY_FILE=gorouter-active-key.txt`, `MODELMAP_FILE=gorouter-modelmap.json`. gpt — там же, на своём шлюзе. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
@@ -121,6 +121,55 @@ cat без файла виснет на stdin. Выяснено на чисто�
 > ротация ключей на лету работает на всех версиях. Из установщика и шаблона убраны.
 > Для `apiKeyHelper`-режимов важно только `CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0`
 > (иначе CC кэширует ключ и смена на вкладке не подхватывается).
+
+### Окно контекста: инвариант `[1m]` (иначе 200k)
+
+**Инвариант:** после любой операции дашборда `settings.model` — непустая строка, и если
+она `claude-(opus|sonnet)-*`, в ней есть `[1m]`. Без суффикса Claude Code считает окно
+200k и режет историю втрое раньше; `[1m]` — метка CC, не API-модель, прокси её срезают
+перед форвардом (`keepalive-proxy.js`), поэтому шлюзу она не мешает.
+
+**Чокпоинт — `writeSettings()`** (`transparent-proxy.js`). Все записи `settings.json` идут
+через него, и он же нормализует `model` и `env.ANTHROPIC_MODEL` через `normalizeCcModel()`.
+Отдельные хендлеры суффикс больше не дотягивают — это была причина бессмертного симптома:
+записей в файл было 24, а суффикс добавляли 4 места, каждый агент чинил свой путь.
+Единственная разрешённая прямая запись — восстановление сырого текста из бэкапа
+(`fs.writeFileSync(SETTINGS_FILE, raw, 'utf8')`, там строка, а не объект).
+
+**`delete settings.model` = переход на дефолт Claude Code, то есть на 200k.** Поэтому
+активация ключа модель больше не сбрасывает там, где есть свой источник правды:
+
+| Провайдер | Источник модели при активации |
+|---|---|
+| agentrouter / gorouter / tabi / conduit | `<p>-active-model.txt` → в `settings.model` (суффикс дотянет `writeSettings`) |
+| freemodel | своя модель, иначе явный дефолт `claude-opus-5[1m]` |
+
+Остальные (aerolink, evomap, ourtoken, custom, svrtr, helpcoder, vyceai, omniroute) шлют
+запросы через виртуальную модель шлюза (`ComboWombo` у OmniRoute) либо держат в каталоге
+только `gpt-*` — им `delete` корректен, и **окно там реально 200k**. Пинить модель вслепую
+нельзя: сначала смотреть каталог шлюза, иначе глобальный пин положит запросы. У agentrouter
+на 2026-08-18 в каталоге три модели — `claude-opus-4-8`, `claude-opus-5` (обе
+`supported_endpoint_types: [anthropic, openai]`) и `gpt-5.6-sol` (только `openai`, поэтому
+идёт через конвертер `:20132`).
+
+**У gpt-моделей окна нет ни у кого.** `[1m]` — перечисление внутри Claude Code (в бинаре
+суффикс есть только на `opus|sonnet|fable|opusplan` и `claude-opus-4-6…5` / `claude-sonnet-4-5…5`),
+поэтому к `gpt-5.6-sol` он неприменим — а `gpt-5.6-sol[1m]` ещё и сломает запрос: в
+`keepalive-proxy.js` ветка `isGptLike()` уходит на конвертер **до** среза суффикса, а
+`agentrouter-proxy.js` его не режет. Шлюз длину контекста тоже не публикует: ни `/v1/models`
+(только `id`/`object`/`created`/`owned_by`/`supported_endpoint_types`), ни `/api/pricing`
+(только `model_ratio`/`completion_ratio`/`enable_groups`) её не содержат. Итог: на gpt-модели
+окно — это внутренняя догадка Claude Code, повлиять на неё нечем, и узнать настоящее можно
+только пробой на превышение (ошибка апстрима называет лимит).
+
+**Регресс-тест:** `node tools/check-1m.js` — падает, если в живом `settings.json` модель без
+суффикса, если кто-то пишет `settings.json` напрямую, если из `writeSettings()` убрали
+нормализацию, или если `normalizeCcModel()` перестал держать таблицу кейсов.
+
+**Проверять руками — не по транскрипту** (`message.model` там всегда без суффикса, прокси
+режут): реальное окно последней сессии видно в `~/.claude.json` →
+`projects["<cwd>"].lastModelUsage` (ключ либо `claude-opus-5[1m]`, либо `claude-opus-5`),
+и в статуслайне (`model.id` от самого Claude Code). Подробный разбор — `docs/HANDOFF-model-1m.md`.
 
 ---
 
@@ -348,6 +397,29 @@ client detected` (проверено 2026-08-16, при прочих равны�
 (`waf sanitize: N hit(s)`) и в `stats.sanitized` — молча менять текст запроса нельзя.
 Таблицу держим **узкой**: только фразы, проверенные пробой, с датой; не эвристика.
 
+**Base64-изображения — новый класс 400 (2026-08-18, главный реальный блокер).**
+В отличие от «списка 400», который рвётся только на коротких телах, классификатор
+режет **любой** base64-образ детерминированно, в любом контексте: даже
+`/9j/4AAQSkZJRg==` (16 симв.) → `400 content-blocked`, `iVBOR…` → 400, а
+`[image omitted]` → 200. С тулами-картинками (скриншоты, дампы экрана) сессия
+накапливает образы в tool_result, body разрастается (в одном 12МБ-запросе 31 JPEG +
+11 PNG = 7.5МБ из 7.7МБ корпуса) — и падает **каждый** запрос на gpt-пути. Проверка
+на реальном корпусе: RAW дамп → 400, вырезка base64 → 200. Это та самая причина,
+почему «waf sanitize: 1 hit(s)» в логе не спасал — ловились фразы, а тело резал шлюз.
+
+Лечится в `wafSanitize` одним проходом `IMAGE_B64_RE`:
+- `data:image/…;base64,…` (image_url от конвертера) → **валидная 1x1 PNG** — НЕ текст:
+  апстрим декодирует base64 в image_url и на `[image omitted]` падает
+  `500 failed to decode base64` (проверено живым пробником);
+- сырые блобы магиков `/9j/`, `iVBOR`, `R0lGOD`, `UklGR`, `Qk0`, `Qk1`, `PHN2Zy`
+  (в tool_result после `JSON.stringify` блока image) → `[image omitted]`.
+
+Срабатывание пишется в лог (`waf sanitize: N base64-образ(а) → …`) и в `stats.sanitized`.
+Живым пробником подтверждены оба пути: user-image → 200, tool_result-блоб → 200.
+`wafbisect` по дампу дважды сходился к `(2160,` — это **артефакт**: `textCorpus()`
+не извлекает image-блоки, поэтому реальный блокер (base64) выпадал из корпуса, а
+сужение упиралось в случайные длинные строки рядом.
+
 **Как найти следующую фразу, а не гадать.** Отказ content-filter'а кладёт тело, реально
 ушедшее на шлюз, в `%TEMP%\arpx-blocked-*.json` (счётчики `blocked`/`lastBlockedDump` в
 статусе `:20132`) — до этого логи конвертера жили только в RAM-буфере дашборда и умирали
@@ -452,6 +524,19 @@ client detected` (проверено 2026-08-16, при прочих равны�
 - **`reportRender(page)`** после захода в консоль пишет в Server Logs
   `✅ страница отрисовалась` либо `⚠️ белый экран: SPA не поднялась` — белый экран больше
   не выглядит как «успешно открыл». Проверка: `#root` набрал >200 символов за 15с.
+- **GoRouter, регистрация: ответ сайта вместо «дрочи» (2026-08-17)** — `gorouter/open-session.js`
+  разбирает, что сайт написал на странице (`SITE_ERRORS` + `siteError()`), а не ждёт молча:
+  - `failed to fetch git token` — GitHub-код одноразовый, а `settleAfterLogin()` делал `reload`
+    **на колбэке** `/oauth/github?code=…` и тратил его второй раз. Теперь на колбэке
+    (`OAUTH_CALLBACK_RE`) вместо F5 уход на `CONSOLE_URL`; в логе — «code уже потрачен,
+    жми "Продолжить с GitHub" заново».
+  - `State parameter is empty or mismatched` (сайт отдаёт 403 на `/api/oauth/github`, проверено) —
+    состояние OAuth рвали лишние навигации: `openRegisterViaRef()` больше **не перебивает**
+    редирект, если страница сама уехала на `github.com`.
+  - **Регистрация закрыта** (`new registration disabled by administrator` / `管理员关闭了新用户注册` /
+    русская локаль) — `terminal: true`: скрипт печатает «❌ регистрация закрыта администратором»
+    и не висит 10 минут в `waitForLogin`, браузер оставляет открытым с ответом сайта.
+    `waitForLogin()` теперь возвращает `{ok, err}`.
 - `stdio: 'pipe'` + ретрансляция stdout/stderr скрипта в `logLine()` — ошибки видны в Server Logs.
 
 ### Аккаунт без ключа (`status: no_key`) — общее для ar/go/tb

@@ -116,9 +116,11 @@ cat без файла виснет на stdin. Выяснено на чисто�
 → `apihelper`; с `al-active-key.txt` → `aerolink`; с `ev-active-key.txt` → `evomap`; с `ot-active-key.txt` → `ourtoken`; с `cdt-active-key.txt` → `conduit`; с `hc-active-key.txt` → `helpcoder`;
 прямой ключ → backend по URL (base agentrouter.org → `agentrouter`).
 
-> ⚠️ Для `apiKeyHelper`-режимов нужен Claude Code **2.1.153** + отключённый авто-апдейт
-> (`DISABLE_AUTOUPDATER=1`, `autoUpdates:false`). Новее ломает `apiKeyHelper`.
-> См. `README.md` (Установка) + `claude-settings.example.json`.
+> ⚠️ Версию Claude Code фиксировать НЕ надо. Пин `2.1.153` + `DISABLE_AUTOUPDATER=1`/
+> `autoUpdates:false` был основан на неверном выводе «новее ломает `apiKeyHelper`» —
+> ротация ключей на лету работает на всех версиях. Из установщика и шаблона убраны.
+> Для `apiKeyHelper`-режимов важно только `CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0`
+> (иначе CC кэширует ключ и смена на вкладке не подхватывается).
 
 ---
 

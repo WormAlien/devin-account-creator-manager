@@ -1108,6 +1108,44 @@ tools\fix-paths-after-move.ps1` (есть `-DryRun` и `-OldPath`) →
 десятки ГБ). Перед переносом их проще снести — и MAX_PATH не упрётся, и копирование
 станет быстрым.
 
+## macOS: обёртка-совместимость (ноль правок Windows-кода)
+
+Дашборд рассчитан на Windows, но весь функционал (ключи ar/go/tb, балансы,
+добавление аккаунтов, ЛК-браузеры) работает и на Mac друга через **обёртку**:
+дополнительные файлы в репо, существующий код не тронут.
+
+**Почему это работает.** Весь Windows-код в дашборде сводится к:
+`netstat -ano` + `taskkill /F /PID` (в try/catch, парсинг по regex
+`:PORT\s+\S+\s+LISTENING\s+(\d+)` — transparent-proxy.js ~3487/3295/7573,
+keepalive-spawn.js:23) + `sqlite3` + `python` + `curl.exe`/`clip.exe`.
+Обёртка подменяет их **shim-ами в PATH** и env `SQLITE3=/usr/bin/sqlite3` —
+код начинает работать на macOS без единой правки.
+
+| Файл | Роль |
+|---|---|
+| `mac-support/shims/netstat` | эмитит Windows-формат из `lsof -nP -iTCP -sTCP:LISTEN` (BSD sed, без gawk) |
+| `mac-support/shims/taskkill` | `/F /PID N` → `kill -9 N`, `/F /IM x` → `pkill -9 -x x` |
+| `mac-support/shims/curl.exe`, `clip.exe`, `python`, `python.exe` | прокладки на curl/pbcopy/python3 |
+| `routing/restart-dashboard.sh` | аналог `restart-dashboard.bat`: чистит 8 портов через `lsof -ti`, `PATH`+`SQLITE3`, старт fm-rot :20126 / fm-oa :20130 / vyce :20131 / transparent-proxy :8200, poll статуса, `open` UI |
+| `install-mac.sh` | Xcode CLT → Homebrew → node/git → `npm install` → `npx playwright install chromium` → `npm i -g @anthropic-ai/claude-code` → копирует `*.example` → `chmod +x` + `xattr -cr` |
+| `DASHBOARD.command` | двойной клик: `xattr -cr .` + `bash routing/restart-dashboard.sh` |
+| `docs/MAC-SETUP.md` | инструкция для друга |
+
+Установка одной командой (она же в описании репо на GitHub):
+`git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git && cd vibe-code-account-creator-manager && bash install-mac.sh`
+
+Нюансы:
+- git с Windows **не хранит exec-bit** → `chmod +x` ставит `install-mac.sh`, а
+  `restart-dashboard.sh` самовосстанавливает права на shim-ы при каждом запуске
+  (node зовёт их через `execFile` напрямую, без шелла).
+- Балансы AR/GO/TB — чистый HTTP через `keepalive-proxy.js`, там Windows-вызовов
+  нет; OAuth Keychain macOS уже обработан кодом (transparent-proxy.js ~282-283).
+- `better-sqlite3`/`node-pty` собираются на Mac автоматически (нужен Xcode CLT);
+  `better-sqlite3` нужен для точного баланса (lazy require в newapi-account.js).
+- Автореги (Camoufox/rebrowser/Telegram) — вне охвата обёртки, для сценария
+  «свои аккаунты» не нужны.
+- `.gitattributes`: `mac-support/shims/*` и `*.command` — строго `eol=lf`.
+
 ## Чек-лист: добавляем новый модуль
 
 1. **Бэкенд:** хендлеры в `transparent-proxy.js` (роуты `/__switch/api/<module>/*`),

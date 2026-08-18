@@ -294,10 +294,17 @@ tabi/profiles/
 tabi/sessions/
 routing/tabi-sessions.json
 
+# ── XPeach (вкладка дашборда): приватные данные ───────────────────────────────
+# Профили браузера (куки GitHub/xpeach.codes, логины, кеш) и живые сессии —
+# НИКОГДА не коммитить. xpeach-modelmap.json — безопасный конфиг маппинга, коммитим.
+xpeach/profiles/
+xpeach/sessions/
+routing/xpeach-sessions.json
+
 # ── Cookie-jar New-API (routing/lib/newapi-account.js) ────────────────────────
-# Живые session/refresh-куки и access-токены аккаунтов agentrouter/gorouter/tabi,
-# снятые из профилей Chromium. Refresh-кука одноразовая, поэтому её ротированное
-# значение хранится здесь, а не в профиле. НИКОГДА не коммитить.
+# Живые session/refresh-куки и access-токены аккаунтов agentrouter/gorouter/tabi/
+# xpeach, снятые из профилей Chromium. Refresh-кука одноразовая, поэтому её
+# ротированное значение хранится здесь, а не в профиле. НИКОГДА не коммитить.
 routing/newapi-jar.json
 
 # ── GitHub-аккаунты (вкладка дашборда): приватные данные ──────────────────────

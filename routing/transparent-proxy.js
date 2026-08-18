@@ -1993,30 +1993,125 @@ function tgServicesMap(poolArr) {
     return map;
 }
 
+// Годность ТГ для каждого сервиса — правила СКОПИРОВАНЫ ИЗ САМИХ ПИКЕРОВ, иначе
+// цифры во вкладке разойдутся с тем, что реально возьмёт автореж:
+//   fm  — tgPool.reserve()            : status==='free' && !dead
+//   cdt — conduit_autoreger.pickTg()  : status!=='banned' && !в conduit/.tg_used
+//   sr  — svrtr_autoreger.pickTg()    : status!=='banned' && !в svrtr/.tg_used
+//   am  — anymodel/lib/tg-usage.pick(): status!=='banned' && !dead && !в anymodel/.tg_used
+// `svc` — запись из tgServicesMap (её conduit/anymodel/svrtr читаются ровно из тех
+// же .tg_used.json, что и пикеры), `dead` — из health-кэша. Файлы уже прочитаны
+// вызывающим один раз на запрос, здесь только арифметика.
+//
+// NB: cdt и sr намеренно НЕ отсеивают dead — их пикеры этого не делают. Показываем
+// как есть (годен + бейдж 🔴 dead), а не как хотелось бы.
+function tgFreeFor(entry, svc, dead) {
+    const notBanned = entry.status !== 'banned';
+    return {
+        fm:  entry.status === 'free' && !dead,
+        cdt: notBanned && !svc.conduit,
+        sr:  notBanned && !svc.svrtr,
+        am:  notBanned && !dead && !svc.anymodel,
+    };
+}
+
 function handleTgList(res) {
     try {
         const arr = tgPool.list();
         const health = tgHealth.loadCache();
         const svc = tgServicesMap(arr);
+        const freeForTotals = { fm: 0, cdt: 0, sr: 0, am: 0 };
+        const healthTotals = { alive: 0, dead: 0, error: 0, unchecked: 0 };
         // Маскируем auth_key для UI — полный ключ из дашборда никогда не отдаём.
-        const safe = arr.map(e => ({
-            phone: e.phone,
-            dc_id: e.dc_id,
-            user_id: e.user_id,
-            auth_key_mask: tgPool.maskAuthKey(e.auth_key_hex),
-            status: e.status,
-            source: e.source || (e.isPlaceholderPhone ? 'hex' : 'session'),
-            addedAt: e.addedAt,
-            usedBy: e.usedBy || null,
-            usedAt: e.usedAt || null,
-            banReason: e.banReason || null,
-            isPlaceholderPhone: !!e.isPlaceholderPhone,
-            health: health[e.phone] || null,
-            services: svc[String(e.phone)] || {},   // { freemodel?:true, conduit?:true }
-        }));
-        jsonRes(res, 200, { entries: safe, stats: tgPool.stats() });
+        const safe = arr.map(e => {
+            const mySvc = svc[String(e.phone)] || {};
+            const h = health[e.phone] || null;
+            const freeFor = tgFreeFor(e, mySvc, h && h.status === 'dead');
+            for (const k of Object.keys(freeForTotals)) if (freeFor[k]) freeForTotals[k]++;
+            healthTotals[h ? (h.status in healthTotals ? h.status : 'error') : 'unchecked']++;
+            return {
+                phone: e.phone,
+                dc_id: e.dc_id,
+                user_id: e.user_id,
+                auth_key_mask: tgPool.maskAuthKey(e.auth_key_hex),
+                status: e.status,
+                source: e.source || (e.isPlaceholderPhone ? 'hex' : 'session'),
+                addedAt: e.addedAt,
+                usedBy: e.usedBy || null,
+                usedAt: e.usedAt || null,
+                banReason: e.banReason || null,
+                isPlaceholderPhone: !!e.isPlaceholderPhone,
+                health: h,
+                services: mySvc,   // { freemodel?:true, conduit?:true } — им живёт renderTgPool в 4 вкладках
+                // Короткие ключи в пару к freeFor — для вкладки-менеджера.
+                usedOn: { fm: !!mySvc.freemodel, cdt: !!mySvc.conduit, sr: !!mySvc.svrtr, am: !!mySvc.anymodel },
+                freeFor,
+            };
+        });
+        jsonRes(res, 200, {
+            entries: safe,
+            stats: { ...tgPool.stats(), freeFor: freeForTotals, health: healthTotals },
+        });
     } catch (e) {
         jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// Фоновый прогон health-чека. Состояние живёт в памяти процесса: рестарт прокси его
+// теряет, но health-кэш пишется инкрементально после каждого аккаунта — проверенное
+// не пропадает. Зачем фон: прогон последовательный (одно подключение с твоего IP за
+// раз, чтобы не выглядеть массовым логином), ~2-6 c на аккаунт → сотни аккаунтов это
+// десятки минут в висящем HTTP-запросе без обратной связи.
+let tgHealthJob = {
+    running: false, scope: null, total: 0, done: 0,
+    alive: 0, dead: 0, error: 0,
+    currentPhone: null, startedAt: null, finishedAt: null,
+};
+
+// scope 'unchecked' = не-banned, которых ещё нет в health-кэше (дешёвый догон);
+// 'all' = все не-banned, включая уже известных dead (полная перепроверка).
+function tgHealthTargets(scope) {
+    const cache = tgHealth.loadCache();
+    return tgPool.list().filter(e =>
+        e.status !== 'banned' && (scope === 'all' || !(String(e.phone) in cache))
+    );
+}
+
+async function tgHealthRun(scope) {
+    const targets = tgHealthTargets(scope);
+    tgHealthJob = {
+        running: true, scope, total: targets.length, done: 0,
+        alive: 0, dead: 0, error: 0,
+        currentPhone: null, startedAt: new Date().toISOString(), finishedAt: null,
+    };
+    logLine(`tg health: старт (${scope}) — ${targets.length} шт., последовательно`);
+    try {
+        for (const e of targets) {
+            tgHealthJob.currentPhone = String(e.phone);
+            let r;
+            // checkOne сам не бросает, но страховка обязательна: этот промис никто
+            // не ждёт — unhandledRejection уронил бы весь прокси.
+            try { r = await tgHealth.checkOne(e, msg => logLine(msg)); }
+            catch (err) {
+                r = { status: 'error', error: String((err && err.message) || err).slice(0, 140), checkedAt: new Date().toISOString() };
+            }
+            // Кэш пишем сами — checkOne его не трогает (это делают checkAll/checkPhone).
+            // Инкрементально: обрыв на середине не теряет уже проверенное.
+            try {
+                const cache = tgHealth.loadCache();
+                cache[e.phone] = r;
+                tgHealth.saveCache(cache);
+            } catch {}
+            tgHealthJob.done++;
+            if (r.status === 'alive') tgHealthJob.alive++;
+            else if (r.status === 'dead') tgHealthJob.dead++;
+            else tgHealthJob.error++;
+        }
+    } finally {
+        tgHealthJob.running = false;
+        tgHealthJob.currentPhone = null;
+        tgHealthJob.finishedAt = new Date().toISOString();
+        logLine(`tg health: готово (${scope}) alive=${tgHealthJob.alive} dead=${tgHealthJob.dead} error=${tgHealthJob.error}`);
     }
 }
 
@@ -2026,14 +2121,47 @@ async function handleTgHealthCheck(req, res) {
         let body = {};
         try { body = await readJsonBody(req); } catch { body = {}; }
         if (body && body.phone) {
+            // Тот же ключ в двух коннектах = AUTH_KEY_DUPLICATED, и фон бы записал
+            // в кэш свой результат поверх. Пока идёт прогон — одиночный чек не пускаем.
+            if (tgHealthJob.running) {
+                return jsonRes(res, 409, { error: `идёт массовый чек (${tgHealthJob.done}/${tgHealthJob.total})`, job: tgHealthJob });
+            }
             const r = await tgHealth.checkPhone(body.phone, msg => logLine(msg));
             logLine(`tg health: ${body.phone} → ${r.status}`);
             return jsonRes(res, 200, { ok: true, phone: body.phone, ...r });
+        }
+        // Со scope — фоновый прогон, прогресс через GET /tg/health-progress.
+        if (body && body.scope) {
+            const scope = body.scope === 'all' ? 'all' : 'unchecked';
+            if (tgHealthJob.running) {
+                return jsonRes(res, 409, { error: `уже идёт (${tgHealthJob.done}/${tgHealthJob.total})`, job: tgHealthJob });
+            }
+            const total = tgHealthTargets(scope).length;
+            if (!total) return jsonRes(res, 200, { ok: true, started: false, scope, total: 0 });
+            tgHealthRun(scope).catch(e => logLine(`tg health: прогон упал: ${e.message}`));
+            return jsonRes(res, 200, { ok: true, started: true, scope, total });
+        }
+        // Без scope — старый блокирующий путь: им живут блоки пула в 4 вкладках.
+        if (tgHealthJob.running) {
+            return jsonRes(res, 409, { error: `уже идёт (${tgHealthJob.done}/${tgHealthJob.total})`, job: tgHealthJob });
         }
         logLine('tg health: проверка всех не-banned (connect+getMe)…');
         const summary = await tgHealth.checkAll(msg => logLine(msg));
         logLine(`tg health: alive=${summary.alive} dead=${summary.dead} error=${summary.error}`);
         jsonRes(res, 200, { ok: true, ...summary });
+    } catch (e) {
+        jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// Прогресс фонового прогона + сколько осталось непроверенных (для подписей кнопок).
+function handleTgHealthProgress(res) {
+    try {
+        jsonRes(res, 200, {
+            ok: true,
+            job: tgHealthJob,
+            pending: { unchecked: tgHealthTargets('unchecked').length, all: tgHealthTargets('all').length },
+        });
     } catch (e) {
         jsonRes(res, 500, { error: e.message });
     }
@@ -8495,6 +8623,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tg/rename')      return handleTgRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/open')        return handleTgOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tg/health-check') return handleTgHealthCheck(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/tg/health-progress') return handleTgHealthProgress(res);
 
     // ---- AnyModel accounts ----
     if (req.method === 'GET'  && req.url === '/__switch/api/anymodel/accounts') return handleAmodelAccounts(res);

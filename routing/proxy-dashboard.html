@@ -274,6 +274,11 @@
         <span class="flex-1">GitHub аккаунты</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-github">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="telegram">
+        <span class="w-5 text-center text-[14px]">📱</span>
+        <span class="flex-1">Telegram аккаунты</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-telegram" title="годных для FreeModel / всего в пуле">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="anymodel">
         <span class="w-5 text-center text-[14px]">🤖</span>
         <span class="flex-1">AnyModel</span>
@@ -1977,6 +1982,109 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: TELEGRAM (менеджер ТГ-пула) ═════════
+         Тот же пул freemodel/tg_pool.json, что и в блоках «Telegram pool» вкладок
+         FreeModel/Conduit/Svrtr/AnyModel, но своя таблица целиком: контейнер
+         #tgm-list НЕ имеет класса .tg-list — иначе paintTgLists() затрёт её
+         разметкой старого свёрнутого блока. Данные общие: state.tg от loadTgPool(). -->
+    <div data-tab-content="telegram">
+      <div class="px-6 py-8 space-y-4">
+        <header>
+          <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+            <span class="text-azure">📱</span> Telegram аккаунты
+          </h1>
+          <p class="text-sm text-muted mt-1">
+            пул — <code class="font-mono text-azure text-xs">freemodel/tg_pool.json</code> ·
+            health — <code class="font-mono text-azure text-xs">freemodel/.tg_health_cache.json</code>
+          </p>
+        </header>
+
+        <!-- Sticky toolbar: поиск + фильтры + health-чек -->
+        <div class="sticky top-0 z-20 -mx-6 px-6 py-3 space-y-2.5 bg-bg/95 backdrop-blur-md border-b border-line-soft">
+          <div class="flex gap-2 items-center flex-wrap">
+            <input id="tgm-search" oninput="renderTgManager()" placeholder="🔍 номер, ключ, кем занят…"
+                   class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-52 focus:outline-none focus:border-azure/60 focus:ring-2 focus:ring-azure/20">
+            <select id="tgm-status" onchange="renderTgManager()" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-azure/60" title="Статус в пуле (его ставит FreeModel)">
+              <option value="">⚡ статус: все</option>
+              <option value="free">● free</option>
+              <option value="reserved">◐ reserved</option>
+              <option value="used">● used</option>
+              <option value="banned">✕ banned</option>
+            </select>
+            <select id="tgm-health" onchange="renderTgManager()" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-azure/60" title="Результат последнего health-чека (connect+getMe)">
+              <option value="">🩺 health: все</option>
+              <option value="alive">🟢 alive</option>
+              <option value="dead">🔴 dead</option>
+              <option value="error">🟠 error</option>
+              <option value="unchecked">— не проверен</option>
+            </select>
+            <select id="tgm-freefor" onchange="renderTgManager()" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-azure/60" title="Кого реально возьмёт автореж этого сервиса. Один ТГ годится сразу на несколько — used у FreeModel не мешает Conduit/Svrtr/AnyModel.">
+              <option value="">🎯 свободен для: все</option>
+              <option value="fm">🆓 FreeModel</option>
+              <option value="cdt">🚇 Conduit</option>
+              <option value="sr">🛰 Svrtr</option>
+              <option value="am">🤖 AnyModel</option>
+            </select>
+            <select id="tgm-sort" onchange="renderTgManager()" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-azure/60">
+              <option value="date-desc">📅 дата ↓ (новые)</option>
+              <option value="date-asc">📅 дата ↑ (старые)</option>
+              <option value="status">⚡ статус</option>
+              <option value="health">🩺 health</option>
+              <option value="dc">🌐 DC</option>
+            </select>
+            <button onclick="loadTgPool()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <div class="flex items-center gap-1 ml-2 pl-2 border-l border-line-soft">
+              <button id="tgm-check-unchecked" onclick="tgmHealthRun('unchecked')"
+                      class="text-xs px-3 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium"
+                      title="Прочекать только тех, кого ещё ни разу не проверяли. Идёт в фоне — можно уйти со вкладки.">🩺 Чек непроверенных</button>
+              <button id="tgm-check-all" onclick="tgmHealthRun('all')"
+                      class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-amber/60 hover:text-amber"
+                      title="Полная перепроверка всех не-banned, включая известных dead. Последовательно, ~2-6 c на аккаунт — это десятки минут.">🩺 Чек всех</button>
+            </div>
+          </div>
+
+          <!-- Прогресс фонового прогона (скрыт, пока не запущен) -->
+          <div id="tgm-progress" class="hidden text-[11px] font-mono text-azure flex items-center gap-2">
+            <div class="flex-1 h-1.5 bg-elevated rounded-full overflow-hidden max-w-[240px]">
+              <div id="tgm-progress-bar" class="h-full bg-azure transition-all" style="width:0%"></div>
+            </div>
+            <span id="tgm-progress-txt">—</span>
+          </div>
+
+          <!-- Полоса статистики -->
+          <div id="tgm-stats" class="text-[11px] font-mono text-faint">—</div>
+        </div>
+
+        <div id="tgm-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-muted text-xs">—</div>
+        </div>
+
+        <!-- Импорт — свёрнут: те же хендлеры, что в блоке FreeModel -->
+        <details class="rounded-xl bg-surface border border-line-soft">
+          <summary class="cursor-pointer px-5 py-3 text-sm font-semibold flex items-center gap-2 hover:bg-elevated/40 select-none">
+            <span class="text-emerald">➕</span>
+            <span>Добавить аккаунты</span>
+            <span class="text-[10px] text-faint ml-auto">вставить список или импортировать .session</span>
+          </summary>
+          <div class="p-5 pt-2 space-y-2 border-t border-line-soft">
+            <div class="text-[10px] text-faint">
+              форматы: <code class="text-amber">phone|hex:dc</code> · <code class="text-amber">hex:dc</code> · <code class="text-amber">phone hex dc [user_id]</code>
+              — без номера запись получит плейсхолдер <code class="text-amber">tg_xxxx</code>, переименовать можно кнопкой ✏ в таблице
+            </div>
+            <textarea id="tgm-bulk-input" rows="4"
+              placeholder="13678875285|2b58…1306c:1&#10;46ecaff1…f1469:5&#10;+14155551234 abcdef…6789ab 2 8681576074"
+              class="w-full text-[11px] bg-elevated border border-line-soft rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-emerald/60"></textarea>
+            <div class="flex items-center gap-2">
+              <button onclick="addTgBulk('tgm-bulk-input')" class="text-xs px-3 py-1.5 bg-emerald/15 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/25 font-medium">➕ Импортировать всё</button>
+              <button onclick="document.getElementById('tgm-file-input').click()" class="text-xs px-3 py-1.5 bg-surface border border-line-soft rounded-lg hover:border-line">📎 Импорт .session</button>
+              <input id="tgm-file-input" type="file" accept=".session" class="hidden" onchange="pickTgSession(event)">
+              <span id="tgm-bulk-hint" class="text-[10px] text-faint font-mono ml-2">—</span>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: FREEMODEL ═════════ -->
     <div data-tab-content="freemodel">
       <div class="px-6 py-8 space-y-4">
@@ -2611,6 +2719,8 @@ function showTab(name) {
   if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } goLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
+  // Пул перечитываем всегда — его меняют автореги из других вкладок (как в freemodel/conduit/svrtr).
+  if (name === 'telegram') { loadTgPool(); tgmProgressPoll(); }
   if (name === 'svrtr') { loadTgPool(); if (!state.loaded.svrtr) { state.loaded.svrtr = true; loadSvrtrSessions(false).then(() => loadSvrtrModels(false)); } }
   if (name === 'helpcoder') { if (!state.loaded.helpcoder) { state.loaded.helpcoder = true; loadHelpcoderSessions(false).then(() => loadHelpcoderModels(false)); } }
   if (name === 'anymodel') { if (!state.loaded.anymodel) { state.loaded.anymodel = true; loadAmodelAccounts(); } }
@@ -9748,8 +9858,14 @@ async function loadTgPool() {
       `total <b>${s.total}</b>`;
     document.querySelectorAll('.tg-stats').forEach(el => el.innerHTML = statsHtml);
     renderTgPool();
+    // Вкладка-менеджер живёт на тех же данных — держим её свежей из всех ~10
+    // существующих вызовов loadTgPool(), не заводя второй загрузчик.
+    state.tgStats = s;
+    renderTgManager();
+    tgmPaintStats(s);
   } catch (e) {
     document.querySelectorAll('.tg-list').forEach(el => el.innerHTML = `<div class="p-4 text-crimson text-xs">${esc(e.message)}</div>`);
+    const m = $('tgm-list'); if (m) m.innerHTML = `<div class="p-4 text-crimson text-xs">${esc(e.message)}</div>`;
   }
 }
 
@@ -9859,6 +9975,264 @@ function renderTgPool() {
         ? `▾ показать все ${sorted.length} <span class="text-faint">(скрыто ${sorted.length - TG_PREVIEW})</span>`
         : `▴ свернуть`}
     </button>` : ''}`);
+}
+
+// ═══════════════ TG MANAGER (вкладка «Telegram аккаунты») ══════════════════
+//
+// Тот же state.tg, что и у renderTgPool, но своя таблица: все строки, поиск,
+// фильтры, сортировка, годность по сервисам. Контейнер #tgm-list намеренно БЕЗ
+// класса .tg-list — paintTgLists() затирает все .tg-list разметкой старого блока.
+
+const TGM_SVC = [
+  { key: 'fm',  chip: '🆓 FM',  color: 'amber',   name: 'FreeModel' },
+  { key: 'cdt', chip: '🚇 CDT', color: 'violet',  name: 'Conduit' },
+  { key: 'sr',  chip: '🛰 SR',  color: 'azure',   name: 'Svrtr' },
+  { key: 'am',  chip: '🤖 AM',  color: 'emerald', name: 'AnyModel' },
+];
+
+function tgmPaintStats(s) {
+  const el = $('tgm-stats');
+  if (!el || !s) return;
+  const h = s.health || {};
+  const ff = s.freeFor || {};
+  el.innerHTML =
+    `всего <b class="text-ink">${s.total}</b> · ` +
+    `<span class="text-emerald">●</span> free <b class="text-emerald">${s.free}</b>` +
+    (s.deadFree ? ` <span class="text-faint">(из них 🔴 ${s.deadFree})</span>` : '') + ' · ' +
+    (s.reserved ? `<span class="text-azure">◐</span> reserved <b class="text-azure">${s.reserved}</b> · ` : '') +
+    `<span class="text-amber">●</span> used <b class="text-amber">${s.used}</b> · ` +
+    `<span class="text-crimson">✕</span> banned <b class="text-crimson">${s.banned}</b>` +
+    `<span class="mx-2 text-line">│</span>` +
+    `health: 🟢 <b class="text-emerald">${h.alive || 0}</b> 🔴 <b class="text-crimson">${h.dead || 0}</b> ` +
+    `🟠 <b class="text-amber">${h.error || 0}</b> <span class="text-dim">— ${h.unchecked || 0}</span>` +
+    `<span class="mx-2 text-line">│</span>` +
+    `<span title="Сколько кандидатов реально возьмёт автореж каждого сервиса. Числа считаются правилами самих пикеров.">свободен для:</span> ` +
+    TGM_SVC.map(s2 => `<span class="text-${s2.color}">${s2.chip}</span> <b>${ff[s2.key] || 0}</b>`).join(' · ');
+  // Счётчик в сайдбаре — та же семантика, что и у stats().usable: что возьмёт reserve().
+  const nav = $('nav-count-telegram');
+  if (nav) nav.textContent = `${s.usable != null ? s.usable : s.free}/${s.total}`;
+}
+
+function renderTgManager() {
+  const box = $('tgm-list');
+  if (!box) return;
+  const f = {
+    search: ($('tgm-search')?.value || '').trim().toLowerCase(),
+    status: $('tgm-status')?.value || '',
+    health: $('tgm-health')?.value || '',
+    freeFor: $('tgm-freefor')?.value || '',
+    sort: $('tgm-sort')?.value || 'date-desc',
+  };
+  const total = state.tg.length;
+  if (!total) {
+    box.innerHTML = '<div class="p-12 text-center text-muted text-xs">пул пуст — добавь аккаунты в блоке ниже</div>';
+    return;
+  }
+
+  const hStatus = (e) => (e.health && e.health.status) || 'unchecked';
+  let rows = state.tg.filter(e => {
+    if (f.status && e.status !== f.status) return false;
+    if (f.health && hStatus(e) !== f.health) return false;
+    if (f.freeFor && !(e.freeFor || {})[f.freeFor]) return false;
+    if (f.search) {
+      const hay = `${e.phone} ${e.auth_key_mask || ''} ${e.usedBy || ''} ${e.user_id || ''}`.toLowerCase();
+      if (!hay.includes(f.search)) return false;
+    }
+    return true;
+  });
+
+  const statusRank = { free: 0, reserved: 1, used: 2, banned: 3 };
+  const healthRank = { alive: 0, unchecked: 1, error: 2, dead: 3 };
+  const ts = (e) => (e.addedAt ? Date.parse(e.addedAt) : 0);
+  rows.sort((a, b) => {
+    switch (f.sort) {
+      case 'date-asc': return ts(a) - ts(b);
+      case 'status':   return (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) || ts(b) - ts(a);
+      case 'health':   return (healthRank[hStatus(a)] ?? 9) - (healthRank[hStatus(b)] ?? 9) || ts(b) - ts(a);
+      case 'dc':       return (a.dc_id || 0) - (b.dc_id || 0) || ts(b) - ts(a);
+      default:         return ts(b) - ts(a);
+    }
+  });
+
+  if (!rows.length) {
+    box.innerHTML = `<div class="p-12 text-center text-muted text-xs">под фильтры не попал никто <span class="text-faint">(всего ${total})</span></div>`;
+    return;
+  }
+
+  const statusCell = (s) => {
+    const map = { free: ['emerald', '● free'], reserved: ['azure', '◐ reserved'], used: ['amber', '● used'], banned: ['crimson', '✕ banned'] };
+    const [c, l] = map[s] || ['faint', s];
+    return `<span class="text-${c}">${l}</span>`;
+  };
+
+  const body = rows.map(e => {
+    const ph = esc(e.phone);
+    const phoneTxt = e.isPlaceholderPhone ? ph : '+' + ph;
+    const dim = (e.status === 'banned' || hStatus(e) === 'dead') ? 'opacity-60' : '';
+    const src = e.source || (e.isPlaceholderPhone ? 'hex' : 'session');
+    const typeTag = src === 'session'
+      ? `<span class="text-[9px] text-emerald/80" title="Импорт .session (Pyrogram/Telethon)">сессия</span>`
+      : `<span class="text-[9px] text-dim" title="Ручной импорт auth_key (hex:dc)">вручную</span>`;
+    // Banned = ключ отозван, открывать нечего. Красная disabled в том же слоте,
+    // чтобы ширина колонки не плыла.
+    const openBtn = e.status === 'banned'
+      ? `<button disabled title="Аккаунт забанен — ключ отозван, открыть нельзя" class="inline-flex items-center justify-center box-border leading-none text-[10px] w-[88px] h-[24px] bg-crimson/10 border border-crimson/50 text-crimson rounded cursor-not-allowed">🚫 Banned</button>`
+      : `<button onclick="tgOpen('${ph}', this)" title="Открыть в портативном Telegram Desktop" class="inline-flex items-center justify-center box-border leading-none text-[10px] w-[88px] h-[24px] bg-azure/10 border border-azure/50 text-azure rounded hover:bg-azure/20 transition">✈ Открыть</button>`;
+    const renameBtn = e.isPlaceholderPhone
+      ? `<button onclick="tgmRename('${ph}')" title="Подставить настоящий номер вместо плейсхолдера" class="text-[10px] px-1 text-faint hover:text-azure">✏</button>`
+      : '';
+
+    const h = e.health;
+    const healthBadge = h
+      ? (h.status === 'alive'
+          ? `<span class="text-[10px] text-emerald" title="getMe OK${h.username ? ' · @' + esc(h.username) : ''} · ${esc(ageStr(h.checkedAt))}">🟢 alive</span>`
+          : h.status === 'dead'
+            ? `<span class="text-[10px] text-crimson" title="${esc(h.error || 'ключ отозван')} · ${esc(ageStr(h.checkedAt))}">🔴 dead</span>`
+            : `<span class="text-[10px] text-amber" title="${esc(h.error || 'ошибка')} · ${esc(ageStr(h.checkedAt))}">🟠 error</span>`)
+      : `<span class="text-[10px] text-dim" title="health-чек ни разу не запускался">—</span>`;
+
+    // Годность: зелёный = возьмёт автореж; тусклый = там уже использован;
+    // красный = не возьмёт вообще (banned, а для FM/AM ещё и dead).
+    const ff = e.freeFor || {}, uo = e.usedOn || {};
+    const svcChips = TGM_SVC.map(s => {
+      if (ff[s.key]) return `<span class="text-[9px] px-1.5 py-0.5 rounded bg-${s.color}/15 border border-${s.color}/40 text-${s.color}" title="${s.name}: свободен, автореж возьмёт">${s.chip}</span>`;
+      if (uo[s.key]) return `<span class="text-[9px] px-1.5 py-0.5 rounded border border-line-soft text-dim" title="${s.name}: уже использован здесь">${s.chip}</span>`;
+      return `<span class="text-[9px] px-1.5 py-0.5 rounded border border-crimson/25 text-crimson/50" title="${s.name}: не возьмёт (${e.status === 'banned' ? 'banned' : hStatus(e) === 'dead' ? 'ключ мёртв' : 'статус ' + e.status})">${s.chip}</span>`;
+    }).join(' ');
+
+    const usedBy = e.usedBy
+      ? `<span class="text-[10px] text-faint truncate inline-block max-w-[180px] align-middle" title="${esc(e.usedBy)}">${esc(e.usedBy)}</span>`
+      : `<span class="text-[10px] text-dim">—</span>`;
+
+    return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim}">
+      <td class="px-3 py-1.5 whitespace-nowrap">${openBtn}</td>
+      <td class="px-3 py-1.5 font-mono text-xs whitespace-nowrap"><span class="text-azure">📲 ${phoneTxt}</span> ${typeTag}${renameBtn}</td>
+      <td class="px-3 py-1.5 font-mono text-[11px] text-azure">DC${e.dc_id}</td>
+      <td class="px-3 py-1.5 font-mono text-[10px] text-faint">${esc(e.auth_key_mask || '')}</td>
+      <td class="px-3 py-1.5 text-[11px] whitespace-nowrap">${statusCell(e.status)}</td>
+      <td class="px-3 py-1.5 whitespace-nowrap">${healthBadge}
+        <button onclick="tgHealthOne('${ph}', this)" title="Прочекать этот аккаунт" class="ml-1 text-[10px] px-1.5 py-0.5 bg-azure/10 border border-azure/40 text-azure rounded hover:bg-azure/20">🩺</button></td>
+      <td class="px-3 py-1.5 whitespace-nowrap">${svcChips}</td>
+      <td class="px-3 py-1.5">${usedBy}</td>
+      <td class="px-3 py-1.5 text-right whitespace-nowrap">
+        ${(e.status === 'used' || e.status === 'banned' || e.status === 'reserved')
+          ? `<button onclick="tgMarkFree('${ph}')" title="Вернуть в free (снимает used/banned для FreeModel)" class="text-[10px] px-2 py-0.5 bg-emerald/10 border border-emerald/40 text-emerald rounded hover:bg-emerald/20">↺</button>`
+          : ''}
+        <button onclick="tgDelete('${ph}')" title="Удалить из пула" class="text-[10px] px-2 py-0.5 bg-crimson/10 border border-crimson/40 text-crimson rounded hover:bg-crimson/20 ml-1">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  box.innerHTML = `<table class="w-full">
+    <thead class="bg-elevated/60 text-[10px] uppercase tracking-wider text-muted sticky top-0">
+      <tr>
+        <th class="px-3 py-2 text-left">—</th>
+        <th class="px-3 py-2 text-left">ТГ / номер</th>
+        <th class="px-3 py-2 text-left">DC</th>
+        <th class="px-3 py-2 text-left">Auth Key</th>
+        <th class="px-3 py-2 text-left">Статус</th>
+        <th class="px-3 py-2 text-left">Health</th>
+        <th class="px-3 py-2 text-left" title="Кого возьмёт автореж этого сервиса">Свободен для</th>
+        <th class="px-3 py-2 text-left">Занят кем</th>
+        <th class="px-3 py-2 text-right">—</th>
+      </tr>
+    </thead>
+    <tbody>${body}</tbody>
+  </table>
+  <div class="px-3 py-2 border-t border-line-soft text-[11px] font-mono text-faint">показано ${rows.length} из ${total}</div>`;
+}
+
+// Переименование плейсхолдера tg_xxxx → настоящий номер (роут rename был без UI).
+async function tgmRename(phone) {
+  const v = prompt(`Настоящий номер для ${phone} (только цифры, без +):`, '');
+  if (v === null) return;
+  const newPhone = String(v).replace(/^\+/, '').replace(/\s+/g, '');
+  if (!/^\d{6,18}$/.test(newPhone)) return toast('Номер — 6-18 цифр', 'warn');
+  try {
+    const res = await fetch('/__switch/api/tg/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, newPhone }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast(`✓ ${phone} → +${d.phone}`, 'success');
+    loadTgPool();
+  } catch (e) { toast('Rename: ' + e.message, 'error', 6000); }
+}
+
+// ── Фоновый массовый health-чек ────────────────────────────────────────────
+
+async function tgmHealthRun(scope) {
+  if (scope === 'all') {
+    const n = state.tgmPending?.all;
+    if (!confirm(`Полная перепроверка${n ? ` ${n} аккаунтов` : ''}: последовательно, ~2-6 c на каждый — это десятки минут коннектов к Telegram. Продолжить?`)) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/tg/health-check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope }),
+    });
+    const d = await res.json();
+    if (res.status === 409) return toast(`🩺 ${d.error}`, 'warn', 5000);
+    if (!res.ok) throw new Error(d.error || 'fail');
+    if (!d.started) return toast('🩺 Проверять некого — все уже прочеканы', 'info', 4000);
+    toast(`🩺 Запущен чек: ${d.total} шт. (в фоне, можно уйти со вкладки)`, 'success', 5000);
+    tgmProgressPoll();
+  } catch (e) { toast('Health: ' + e.message, 'error', 7000); }
+}
+
+// Поллинг прогресса. Таймер один, сам себя гасит когда прогона нет. Не привязан к
+// активной вкладке нарочно: прогон идёт минутами, тост о финише должен долететь и
+// если пользователь ушёл смотреть другую вкладку. Пока прогона нет — один опрос и
+// стоп (нужен, чтобы подписи кнопок получили актуальные счётчики).
+let tgmPollTimer = null;
+let tgmSawRunning = false;
+
+function tgmProgressPoll() {
+  if (tgmPollTimer) return;
+  const stop = () => {
+    if (tgmPollTimer) { clearInterval(tgmPollTimer); tgmPollTimer = null; }
+    tgmSawRunning = false;
+  };
+  const tick = async () => {
+    let d;
+    try {
+      const res = await fetch('/__switch/api/tg/health-progress');
+      d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'fail');
+    } catch { return stop(); }
+
+    state.tgmPending = d.pending || {};
+    const job = d.job || {};
+    const btnU = $('tgm-check-unchecked'), btnA = $('tgm-check-all');
+    if (btnU) btnU.textContent = `🩺 Чек непроверенных (${d.pending?.unchecked ?? '?'})`;
+    if (btnA) btnA.textContent = `🩺 Чек всех (${d.pending?.all ?? '?'})`;
+    if (btnU) btnU.disabled = !!job.running;
+    if (btnA) btnA.disabled = !!job.running;
+
+    const wrap = $('tgm-progress');
+    if (!wrap) return stop();
+
+    if (job.running) {
+      tgmSawRunning = true;
+      wrap.classList.remove('hidden');
+      const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+      $('tgm-progress-bar').style.width = pct + '%';
+      $('tgm-progress-txt').textContent =
+        `${job.done}/${job.total} (${pct}%) · 🟢 ${job.alive} 🔴 ${job.dead} 🟠 ${job.error}` +
+        (job.currentPhone ? ` · сейчас ${job.currentPhone}` : '');
+      return;
+    }
+
+    wrap.classList.add('hidden');
+    if (tgmSawRunning) {   // только что финишировал — подтянуть таблицу и отчитаться
+      toast(`🩺 Готово: 🟢 ${job.alive} · 🔴 ${job.dead} · 🟠 ${job.error}`, job.dead ? 'warn' : 'success', 7000);
+      loadTgPool();
+    }
+    stop();
+  };
+  tgmPollTimer = setInterval(tick, 2000);
+  tick();
 }
 
 async function addTgBulk(inputId = 'tg-bulk-input') {
@@ -11500,7 +11874,7 @@ function onSettingsFm() {
 // у всех (в т.ч. у тех, у кого уже сохранён конфиг), пока пользователь явно
 // не включит их глазком (тогда ключ попадает в config.shown).
 const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
-const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'tabi', 'grok', 'github', 'settings', 'plugins', 'health'];
+const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'tabi', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },

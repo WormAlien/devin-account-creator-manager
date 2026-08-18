@@ -19,6 +19,8 @@ cd "$ROOT/routing" || { echo "! нельзя зайти в routing/"; exit 1; }
 
 # Shim-ы в начало PATH: transparent-proxy и дочерние процессы найдут их раньше системных
 SHIM_DIR="$ROOT/mac-support/shims"
+# node зовёт их через execFile напрямую — нужен exec-bit (git с Windows его не хранит)
+chmod +x "$SHIM_DIR"/* 2>/dev/null
 export PATH="$SHIM_DIR:$PATH"
 
 # sqlite3 на macOS встроен в систему — говорим коду, где его искать

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# python.exe shim -> python3 (запасной вариант, если кто-то зовёт по Windows-имени).
+exec python3 "$@"

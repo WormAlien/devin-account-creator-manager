@@ -6,6 +6,9 @@
 
 # Unix-скрипты — строго LF.
 *.sh    text eol=lf
+*.command text eol=lf
+# Shim-ы для macOS не имеют расширения .sh — тоже строго LF.
+mac-support/shims/* text eol=lf
 
 # На всякий — нормализуем переводы строк для текстовых исходников.
 *.js    text

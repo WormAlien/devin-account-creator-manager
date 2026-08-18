@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# taskkill shim для macOS/Linux.
+# Код дашборда зовёт:  taskkill /F /PID <pid>   (и, на всякий случай, /F /IM <name>)
+# Здесь:  /PID <n>  ->  kill -9 <n>
+#         /IM <n>   ->  pkill -9 -x <n>
+set -u
+
+prev=""
+for a in "$@"; do
+  case "$prev" in
+    /PID|/pid)
+      kill -9 "$a" 2>/dev/null || true
+      ;;
+    /IM|/im)
+      pkill -9 -x "$a" 2>/dev/null || true
+      ;;
+  esac
+  prev="$a"
+done
+
+exit 0

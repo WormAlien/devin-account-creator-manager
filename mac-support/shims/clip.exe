@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# clip.exe shim -> pbcopy (notion-manager копирует в буфер обмена).
+# pbcopy читает stdin, как и Windows-клип.
+exec pbcopy

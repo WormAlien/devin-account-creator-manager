@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# netstat shim для macOS.
+# Дашборд (transparent-proxy.js / keepalive-spawn.js) вызывает
+#   netstat -ano  и парсит строки вида:
+#     <proto> <local>:<port> <foreign> LISTENING <pid>
+# Эта обёртка эмитит тот же формат, собирая данные из lsof.
+# Для Linux тоже подходит (lsof есть почти везде).
+set -u
+
+if ! command -v lsof >/dev/null 2>&1; then
+  exit 0
+fi
+
+lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | \
+sed -n '1d;s/^[^ ]*[[:space:]]*\([0-9][0-9]*\)[[:space:]].*[[:space:]]TCP[[:space:]]*\([^ (]*\)[[:space:]]*(LISTEN)/TCP    \2    0.0.0.0:0    LISTENING    \1/p'
+
+exit 0

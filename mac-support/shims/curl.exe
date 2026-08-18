@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# curl.exe shim -> системный curl (freemodel/10minutemail зовёт curl.exe напрямую).
+exec curl "$@"

@@ -53,10 +53,15 @@ function authKind(host) {
 //
 // Зачем он нужен: на jwt-инстансах refresh-кука ОДНОРАЗОВАЯ — сервер отдаёт новое
 // значение в set-cookie при каждом обмене. Кука в профиле Chromium после первого же
-// нашего запроса становится недействительной, а писать обратно в зашифрованную
-// живую БД профиля нельзя. Поэтому держим свой оверлей: значения из jar
-// приоритетнее профильных, а после каждого ответа мержим set-cookie обратно.
+// нашего запроса становится недействительной, а в живую БД профиля (браузер открыт)
+// писать нельзя. Поэтому держим свой оверлей: значения из jar приоритетнее профильных,
+// а после каждого ответа мержим set-cookie обратно.
 // Сюда же кешируем access-токен, чтобы не жечь refresh на каждый чек.
+//
+// Но jar сам по себе создавал вторую беду: браузерный профиль оставался со старым
+// значением, и при ручном открытии ЛК Chromium шёл refresh'ем по уже погашенной куке →
+// 401 → разлогин. Поэтому есть writeProfileCookies/syncJarToProfile: когда браузер этого
+// профиля закрыт, ротированное значение уезжает в профиль, и jar с профилем сходятся.
 
 const JAR_FILE = path.join(__dirname, '..', 'newapi-jar.json');
 
@@ -97,21 +102,44 @@ function mergeSetCookie(jar, key, setCookieList) {
         if (cleared) { if (name in entry.cookies) { delete entry.cookies[name]; changed = true; } continue; }
         if (entry.cookies[name] !== value) { entry.cookies[name] = value; changed = true; }
     }
-    if (changed) entry.updatedAt = new Date().toISOString();
+    // cookiesAt — время именно КУКОВОЙ ротации. Отдельно от updatedAt, потому что тот
+    // бампается ещё и при кеше access-токена, а нам нужно честно сравнивать давность
+    // с last_update_utc из профиля (см. effectiveCookieHeader / syncJarToProfile).
+    if (changed) { entry.updatedAt = new Date().toISOString(); entry.cookiesAt = entry.updatedAt; }
     return changed;
 }
 
-// Итоговый Cookie-заголовок: профиль как база, jar сверху.
+// Когда jar последний раз получал куку от сервера (мс epoch).
+function jarCookiesAt(entry) {
+    if (!entry) return 0;
+    const t = Date.parse(entry.cookiesAt || entry.updatedAt || '');
+    return isFinite(t) ? t : 0;
+}
+
+// Итоговый Cookie-заголовок: профиль как база, jar сверху — но с оглядкой на давность.
+// Ротация двусторонняя: куку обновляем и мы (через refresh), и сам браузер, когда
+// ты сидишь в ЛК. Если слепо класть jar поверх профиля, то после ручного входа в ЛК
+// мы бы ходили нашим УЖЕ ПОГАШЕННЫМ значением и снова всё ломали. Поэтому сравниваем
+// last_update_utc куки в профиле с updatedAt записи jar: чья ротация свежее, той и верим.
 function effectiveCookieHeader(host, profileDir, jar) {
-    const base = new Map();
+    const base = new Map();   // name → { value, at }
     if (profileDir) {
         for (const c of readProfileCookies(profileDir)) {
-            if (c.host === host || c.host.endsWith('.' + host)) base.set(c.name, c.value);
+            if (c.host === host || c.host.endsWith('.' + host)) {
+                base.set(c.name, { value: c.value, at: c.lastUpdate || 0 });
+            }
         }
     }
     const entry = jar[jarKey(host, profileDir)];
-    if (entry && entry.cookies) for (const [k, v] of Object.entries(entry.cookies)) base.set(k, v);
-    return [...base.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+    const jarAt = jarCookiesAt(entry);
+    if (entry && entry.cookies) {
+        for (const [k, v] of Object.entries(entry.cookies)) {
+            const prof = base.get(k);
+            if (prof && prof.at && jarAt && prof.at > jarAt) continue;   // браузер новее — не мешаем
+            base.set(k, { value: v, at: jarAt });
+        }
+    }
+    return [...base.entries()].map(([k, v]) => `${k}=${v.value}`).join('; ');
 }
 
 // access_expires_at приходит по-разному (сек / мс / ISO) — нормализуем в мс.
@@ -173,9 +201,30 @@ function decryptCookieValue(enc, key) {
     } catch { return null; }
 }
 
+// Зеркало decryptCookieValue: собираем ровно тот формат, который Chromium ждёт при
+// чтении, включая 32-байтный префикс SHA-256 от host_key (проверено на живом профиле:
+// у всех записей плейнтекст начинается именно им). Без префикса браузер сочтёт куку
+// испорченной и молча её выбросит.
+function encryptCookieValue(value, key, hostKey) {
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const prefix = crypto.createHash('sha256').update(String(hostKey)).digest();
+    const body = Buffer.concat([
+        c.update(Buffer.concat([prefix, Buffer.from(String(value), 'utf8')])),
+        c.final(),
+    ]);
+    return Buffer.concat([Buffer.from('v10', 'latin1'), iv, body, c.getAuthTag()]);
+}
+
+// Время Chromium — микросекунды от 1601-01-01.
+const CHROME_EPOCH_OFFSET_MS = 11644473600000;
+const chromeTimeToMs = utc => Math.round(Number(utc) / 1000) - CHROME_EPOCH_OFFSET_MS;
+const msToChromeTime = ms => (Number(ms) + CHROME_EPOCH_OFFSET_MS) * 1000;
+
 // Читаем Default/Network/Cookies. Работаем по КОПИИ: живой браузер держит файл,
 // а readonly-открытие оригинала всё равно требует создать -wal/-shm рядом.
-// Возвращаем [{ host, name, value }]; host без ведущей точки.
+// Возвращаем [{ host, name, value, lastUpdate }]; host без ведущей точки,
+// lastUpdate — мс epoch (по нему решаем, чья ротация свежее, см. effectiveCookieHeader).
 function readProfileCookies(profileDir) {
     const src = path.join(profileDir, 'Default', 'Network', 'Cookies');
     if (!fs.existsSync(src)) return [];
@@ -194,12 +243,17 @@ function readProfileCookies(profileDir) {
         const db = new Database(tmp, { readonly: true });
         let rows;
         try {
-            rows = db.prepare('SELECT host_key, name, encrypted_value FROM cookies').all();
+            rows = db.prepare('SELECT host_key, name, encrypted_value, last_update_utc FROM cookies').all();
         } finally { db.close(); }
         const out = [];
         for (const r of rows) {
             const value = decryptCookieValue(r.encrypted_value, key);
-            if (value) out.push({ host: String(r.host_key || '').replace(/^\./, ''), name: r.name, value });
+            if (value) out.push({
+                host: String(r.host_key || '').replace(/^\./, ''),
+                name: r.name,
+                value,
+                lastUpdate: r.last_update_utc ? chromeTimeToMs(r.last_update_utc) : 0,
+            });
         }
         return out;
     } catch {
@@ -207,6 +261,110 @@ function readProfileCookies(profileDir) {
     } finally {
         for (const f of copied) { try { fs.unlinkSync(f); } catch {} }
     }
+}
+
+// Записать куки обратно в профиль. Нужно потому, что refresh-кука одноразовая: наш
+// чек баланса её ротирует, профиль остаётся со старой, и при ручном открытии ЛК
+// браузер разлогинивается (проверено: у 9 из 10 tabi-аккаунтов значения расходились).
+//
+// ВАЖНО: звать только когда браузер этого профиля ЗАКРЫТ. Chromium держит куки в
+// памяти и на выходе пишет своё — наша правка потерялась бы, а при неудачном стыке
+// могла бы и БД покорёжить. Проверку «браузер жив» делает вызывающая сторона: у неё
+// есть карты pid'ов открытых ЛК. Здесь только вторая линия — busy_timeout и отказ
+// по SQLITE_BUSY.
+//
+// Только UPDATE существующих строк: вставка потребовала бы выдумывать десяток
+// NOT NULL-полей Chromium, а нам нужен ровно случай «строка есть, значение устарело».
+// → { ok, written: [names], missing: [names], busy, error }
+function writeProfileCookies(profileDir, host, cookies) {
+    const names = Object.keys(cookies || {});
+    if (!names.length) return { ok: true, written: [], missing: [] };
+    const src = path.join(profileDir, 'Default', 'Network', 'Cookies');
+    if (!fs.existsSync(src)) return { ok: false, error: 'в профиле нет БД куки' };
+    const key = profileAesKey(profileDir);
+    if (!key) return { ok: false, error: 'нет AES-ключа профиля' };
+    let Database;
+    try { Database = require('better-sqlite3'); }
+    catch (e) { return { ok: false, error: 'better-sqlite3 недоступен' }; }
+    let db = null;
+    try {
+        db = new Database(src);
+        db.pragma('busy_timeout = 2000');
+        const sel = db.prepare(
+            'SELECT rowid, host_key, name FROM cookies WHERE name = ? AND (host_key = ? OR host_key = ?)'
+        );
+        const upd = db.prepare(
+            'UPDATE cookies SET value = \'\', encrypted_value = ?, last_update_utc = ?, last_access_utc = ? WHERE rowid = ?'
+        );
+        const written = [], missing = [];
+        const now = msToChromeTime(Date.now());
+        db.transaction(() => {
+            for (const name of names) {
+                const row = sel.get(name, host, '.' + host);
+                if (!row) { missing.push(name); continue; }
+                // Префикс считаем от host_key ИМЕННО этой строки: у части куки он
+                // с ведущей точкой, и хеш от другого варианта браузер не примет.
+                upd.run(encryptCookieValue(cookies[name], key, row.host_key), now, now, row.rowid);
+                written.push(name);
+            }
+        })();
+        return { ok: true, written, missing };
+    } catch (e) {
+        const busy = /SQLITE_BUSY|database is locked/i.test(e.message || '');
+        return { ok: false, busy, error: e.message };
+    } finally {
+        if (db) { try { db.close(); } catch {} }
+    }
+}
+
+// Слить куки хоста из jar в профиль — чтобы браузер стартовал со свежим значением,
+// а не с тем, что мы уже погасили своим refresh'ем.
+//
+// Ротация ДВУСТОРОННЯЯ, и это главная тонкость: если ты сам входил в ЛК, то куку
+// последним ротировал браузер, и в jar лежит уже мёртвое значение. Записать его в
+// профиль — значит своими руками разлогинить живую сессию. Поэтому пишем только те
+// куки, чья версия в jar новее профильной (сравнение по cookiesAt vs last_update_utc).
+function syncJarToProfile(host, profileDir, jar = null) {
+    if (!profileDir) return { ok: false, error: 'нет профиля' };
+    const j = jar || loadJar();
+    const entry = j[jarKey(host, profileDir)];
+    if (!entry || !entry.cookies || !Object.keys(entry.cookies).length) {
+        return { ok: true, written: [], missing: [], empty: true };
+    }
+    const jarAt = jarCookiesAt(entry);
+    const profile = new Map();
+    for (const c of readProfileCookies(profileDir)) {
+        if (c.host === host || c.host.endsWith('.' + host)) profile.set(c.name, c);
+    }
+    const fresh = {}, skipped = [];
+    for (const [name, value] of Object.entries(entry.cookies)) {
+        const prof = profile.get(name);
+        if (prof && prof.value === value) continue;                       // уже совпадает
+        if (prof && jarAt && prof.lastUpdate > jarAt) { skipped.push(name); continue; }
+        fresh[name] = value;
+    }
+    if (!Object.keys(fresh).length) {
+        dropStaleJarCookies(host, profileDir, skipped);
+        return { ok: true, written: [], missing: [], skipped, empty: !skipped.length };
+    }
+    const r = writeProfileCookies(profileDir, host, fresh);
+    dropStaleJarCookies(host, profileDir, skipped);
+    return { ...r, skipped };
+}
+
+// Выкинуть из jar куки, которые браузер успел ротировать после нас: они гарантированно
+// погашены сервером, и таскать их дальше — только путать себя (effectiveCookieHeader их
+// и так игнорирует по давности, но пусть мусор не накапливается). Перечитываем диск и
+// правим только свой ключ — пачка балансов идёт параллельно, снимок целиком писать нельзя.
+function dropStaleJarCookies(host, profileDir, names) {
+    if (!names || !names.length) return;
+    const k = jarKey(host, profileDir);
+    const j = loadJar();
+    const e = j[k];
+    if (!e || !e.cookies) return;
+    let changed = false;
+    for (const n of names) if (n in e.cookies) { delete e.cookies[n]; changed = true; }
+    if (changed) { e.updatedAt = new Date().toISOString(); saveJar(j); }
 }
 
 function cookieHeaderFor(cookies, host) {
@@ -623,6 +781,7 @@ async function listAccountKeysInner({ host, profileDir, userId, reveal }) {
 module.exports = {
     QUOTA_PER_UNIT_DEFAULT, HOST_AUTH, authKind,
     profileAesKey, readProfileCookies, cookieHeaderFor, githubLogin,
+    writeProfileCookies, syncJarToProfile,
     sessionUserId, userIdFromUsername,
     quotaPerUnit, quotaToUsd, hostGate,
     loadJar, saveJar, jarKey, effectiveCookieHeader,

@@ -5424,6 +5424,49 @@ function newapiProfileDir(host, profileLabel) {
     try { return fs.existsSync(dir) ? dir : null; } catch { return null; }
 }
 
+// Открыт ли прямо сейчас браузер этого профиля. Профили заводит и открывает только
+// *SessionOpen-хендлер, поэтому карты pid'ов — достоверный ответ; ключ карты и есть
+// метка профиля (label = 'acct_' + id). Нужно перед записью в БД куки: Chromium
+// держит куки в памяти и на выходе перезапишет файл своим состоянием.
+function newapiLkBusy(profileLabel) {
+    const label = String(profileLabel || '');
+    if (!label) return false;
+    for (const [pids, alive] of [[arLkPids, arPidAlive], [goLkPids, goPidAlive], [tbLkPids, tbPidAlive]]) {
+        try { if (alive(pids.get(label))) return true; } catch {}
+    }
+    return false;
+}
+
+// Слить ротированные куки из jar в профиль Chromium. Зачем: refresh-кука на jwt-инстансах
+// одноразовая — наш чек баланса её гасит и новое значение кладёт в jar, а профиль остаётся
+// со старым. При ручном открытии ЛК браузер шёл refresh'ем по погашенной куке и получал
+// разлогин (замерено: у 9 из 10 tabi-аккаунтов значения в профиле и в jar расходились).
+// Зовём перед открытием ЛК и после успешного точного чека. Провал не критичен: jar всё
+// равно остаётся источником правды для наших собственных запросов.
+function newapiSyncProfile(host, profileLabel, why) {
+    try {
+        const lib = newapiLib();
+        if (!lib || !lib.syncJarToProfile) return;
+        const dir = newapiProfileDir(host, profileLabel);
+        if (!dir) return;
+        if (newapiLkBusy(profileLabel)) {
+            logLine(`куки → профиль ${profileLabel}: пропуск, браузер открыт`);
+            return;
+        }
+        const r = lib.syncJarToProfile(host, dir);
+        if (r && r.written && r.written.length) {
+            logLine(`куки → профиль ${profileLabel} (${why}): ${r.written.join(', ')}`);
+        }
+        if (r && r.skipped && r.skipped.length) {
+            // Браузер ротировал куку позже нас — его версия живая, наша погашена.
+            logLine(`куки → профиль ${profileLabel}: ${r.skipped.join(', ')} свежее в профиле, наши сняты из jar`);
+        }
+        if (r && !r.ok && !r.empty) {
+            logLine(`куки → профиль ${profileLabel}: ${r.busy ? 'БД занята' : r.error}`);
+        }
+    } catch (e) { logLine(`куки → профиль ${profileLabel}: ${e.message}`); }
+}
+
 const round2 = v => Math.round(Number(v) * 100) / 100;
 
 // Чистка легаси-полей старой схемы (grant/grantManual/bonus/referral). Анкер из них
@@ -5512,6 +5555,10 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 userId: target.newApiUserId || null,
             });
             if (me.ok && me.balance != null) {
+                // Точный чек мог ротировать одноразовую refresh-куку. Сразу отдаём новое
+                // значение профилю, пока браузер закрыт, — чтобы следующее открытие ЛК
+                // не наткнулось на погашенную сессию и не разлогинилось.
+                if (target.profile) newapiSyncProfile(host, target.profile, 'после чека');
                 return {
                     status: 'live',
                     balanceSource: 'self',
@@ -5908,6 +5955,10 @@ async function newapiMapProfiles(req, res, { tag, host, load, save }) {
                     c.keysOk = r.ok;
                     c.keyError = r.ok ? null : r.error;
                     for (const k of r.keys || []) if (k.key) keyOwner.set(k.key, c);
+                    // Список ключей на jwt-инстансах тоже идёт через refresh, а значит
+                    // тоже гасит одноразовую куку в профиле. Возвращаем ротированное
+                    // значение обратно, иначе сопоставление профилей разлогинивало ЛК.
+                    newapiSyncProfile(host, path.basename(c.dir), 'после сопоставления');
                 } catch (e) { c.keysOk = false; c.keyError = e.message; }
             }));
         }
@@ -6025,6 +6076,9 @@ async function handleArSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
+        // Перед запуском отдаём профилю ротированные куки: иначе браузер пойдёт со
+        // значением, которое наш чек баланса уже погасил, и разлогинится.
+        newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
         const mode = isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
@@ -6761,6 +6815,8 @@ async function handleGoSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'gorouter', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('gorouter.app', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
         const mode = isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
@@ -7438,6 +7494,9 @@ async function handleTbSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'tabi', 'open-session.js');
+        // tabitoken — jwt-инстанс, refresh-кука одноразовая: без этой синхронизации
+        // браузер уходит на refresh с погашенным значением и разлогинивается.
+        newapiSyncProfile('tabitoken.com', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
         const mode = isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });

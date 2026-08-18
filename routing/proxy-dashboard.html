@@ -5779,17 +5779,35 @@ async function arCheckAllBalances() {
   try {
     const res = await fetch('/__switch/api/ar/sessions?balance=1');
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    // data.error проверяем наравне с res.ok: у длинного батча заголовки уходят раньше
+    // тела (keepalive, см. jsonKeepalive), и код ответа на поздней ошибке остаётся 200.
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
     state.agentrouter = data.sessions || [];
     renderAr();
     renderArGauge();
-    const exact = state.agentrouter.filter(s => s.balanceSource === 'self').length;
-    const withBal = state.agentrouter.filter(s => typeof s.balance === 'number').length;
-    toast(`✓ балансы посчитаны (${withBal}, из них точных ${exact})`, 'success');
+    balanceBatchToast(state.agentrouter);
   } catch (e) {
     $('ar-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
     toast('балансы: ' + e.message, 'error');
   }
+}
+
+// Итог батча балансов. Если точных цифр нет, тост НАЗЫВАЕТ самую частую причину:
+// у пользователя на другой машине из всей диагностики был только текст уведомления,
+// и «посчитано 11» не объясняло ничего. Теперь причина видна без наведения на бейдж.
+function balanceBatchToast(list) {
+  const withBal = list.filter(s => typeof s.balance === 'number').length;
+  const exact = list.filter(s => s.balanceSource === 'self').length;
+  let msg = `✓ балансы посчитаны (${withBal}, из них точных ${exact})`;
+  if (exact < withBal) {
+    const why = {};
+    for (const s of list) {
+      if (s.balanceSource !== 'self' && s.selfError) why[s.selfError] = (why[s.selfError] || 0) + 1;
+    }
+    const top = Object.entries(why).sort((a, b) => b[1] - a[1])[0];
+    if (top) msg += ` · без точной цифры ${top[1]}: ${top[0]}`;
+  }
+  toast(msg, exact ? 'success' : 'warn', exact ? 4000 : 12000);
 }
 
 function arSetBalance(api_key) {
@@ -6454,13 +6472,11 @@ async function goCheckAllBalances() {
   try {
     const res = await fetch('/__switch/api/go/sessions?balance=1');
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
     state.gorouter = data.sessions || [];
     renderGo();
     renderGoGauge();
-    const exact = state.gorouter.filter(s => s.balanceSource === 'self').length;
-    const withBal = state.gorouter.filter(s => typeof s.balance === 'number').length;
-    toast(`✓ балансы посчитаны (${withBal}, из них точных ${exact})`, 'success');
+    balanceBatchToast(state.gorouter);
   } catch (e) {
     $('go-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
     toast('балансы: ' + e.message, 'error');
@@ -6973,13 +6989,11 @@ async function tbCheckAllBalances() {
   try {
     const res = await fetch('/__switch/api/tb/sessions?balance=1');
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
     state.tabi = data.sessions || [];
     renderTb();
     renderTbGauge();
-    const exact = state.tabi.filter(s => s.balanceSource === 'self').length;
-    const withBal = state.tabi.filter(s => typeof s.balance === 'number').length;
-    toast(`✓ балансы посчитаны (${withBal}, из них точных ${exact})`, 'success');
+    balanceBatchToast(state.tabi);
   } catch (e) {
     $('tb-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
     toast('балансы: ' + e.message, 'error');

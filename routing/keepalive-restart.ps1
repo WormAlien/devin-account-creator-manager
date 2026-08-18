@@ -1,6 +1,6 @@
 # Recreates the keepalive-proxy.js process on the given port (default :20133).
 #   powershell -NoProfile -ExecutionPolicy Bypass -File keepalive-restart.ps1 -Port 20155
-# Instances: 20133 = AgentRouter, 20155 = Tabi, 20156 = GoRouter.
+# Instances: 20133 = AgentRouter, 20155 = Tabi, 20156 = GoRouter, 20157 = XPeach.
 #
 # Normal path is the dashboard button (Health tab -> POST /__switch/api/keepalive/restart).
 # This script is the fallback for when the dashboard itself is down.
@@ -31,9 +31,11 @@ $perPort = @{
              MODELMAP_FILE = (Join-Path $dir 'tabi-modelmap.json') }
   20156 = @{ UPSTREAM = 'https://gorouter.app'; KEY_FILE = "$profileDir\.claude\gorouter-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'gorouter-modelmap.json') }
+  20157 = @{ UPSTREAM = 'https://xpeach.codes'; KEY_FILE = "$profileDir\.claude\xpeach-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'xpeach-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157)"; exit 1
 }
 
 # Kill the current listener

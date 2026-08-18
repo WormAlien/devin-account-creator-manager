@@ -179,6 +179,17 @@ const BACKENDS = {
         // Активация через handleGoActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
         // ключ живёт в gorouter-active-key.txt и инжектится прокси на каждый запрос.
     },
+    xpeach: {
+        label: 'XPeach',
+        base_url: 'http://localhost:20157',
+        api_key: 'dummy',           // real key keepalive reads from xpeach-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20157) → xpeach.codes (БЕЗ /v1).
+        // Активация через handleXpActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в xpeach-active-key.txt и инжектится прокси на каждый запрос.
+        // claude-* ходят нативно: в каталоге они помечены anthropic+openai.
+    },
 };
 
 const LOG_BUFFER = [];
@@ -626,10 +637,11 @@ function makeKeepaliveHandlers(port) {
     return { state: handleState, config: handleConfig };
 }
 
-// Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156.
+// Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156, XPeach :20157.
 const keepaliveAr = makeKeepaliveHandlers(Number(process.env.AR_KEEPALIVE_PORT || 20133));
 const keepaliveTb = makeKeepaliveHandlers(Number(process.env.TB_KEEPALIVE_PORT || 20155));
 const keepaliveGo = makeKeepaliveHandlers(Number(process.env.GO_KEEPALIVE_PORT || 20156));
+const keepaliveXp = makeKeepaliveHandlers(Number(process.env.XP_KEEPALIVE_PORT || 20157));
 
 
 // ---- /__switch/api/whoami --------------------------------------------------
@@ -3502,6 +3514,7 @@ async function handleHealth(res) {
         { name: 'Keepalive',          port: AR_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive GoRouter', port: Number(process.env.GO_KEEPALIVE_PORT || 20156), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Tabi',     port: Number(process.env.TB_KEEPALIVE_PORT || 20155), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive XPeach',   port: Number(process.env.XP_KEEPALIVE_PORT || 20157), path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -5582,6 +5595,7 @@ const NEWAPI_PROFILE_DIRS = {
     'agentrouter.org': path.join(__dirname, '..', 'agentrouter', 'profiles'),
     'gorouter.app':    path.join(__dirname, '..', 'gorouter', 'profiles'),
     'tabitoken.com':   path.join(__dirname, '..', 'tabi', 'profiles'),
+    'xpeach.codes':    path.join(__dirname, '..', 'xpeach', 'profiles'),
 };
 
 function newapiLib() {
@@ -6252,6 +6266,9 @@ function handleGoMapProfiles(req, res) {
 }
 function handleTbMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'tabi', host: 'tabitoken.com', load: tbLoad, save: tbSave });
+}
+function handleXpMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'xpeach', host: 'xpeach.codes', load: xpLoad, save: xpSave });
 }
 
 // POST /__switch/api/ar/set-github { api_key, ghId } → привязать/сменить/отвязать GitHub-аккаунт
@@ -7558,7 +7575,7 @@ function healStatuslinePath() {
     }
 }
 
-// ───── Рестарт keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter) ─────
+// ───── Рестарт keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter / :20157 XPeach) ─────
 // Все три xxKeepaliveSpawn() поднимают процесс ТОЛЬКО если порт свободен, а
 // автоперезапуска нет — после правки keepalive-proxy.js новый код подхватывается
 // лишь пересозданием процесса. Раньше это делали таскиллом руками: порт оставался
@@ -7593,6 +7610,7 @@ async function keepaliveRestart(port) {
         [AR_KEEPALIVE_PORT]: { name: 'AgentRouter', spawn: arKeepaliveSpawn },
         [TB_KEEPALIVE_PORT]: { name: 'Tabi', spawn: tbKeepaliveSpawn },
         [GO_KEEPALIVE_PORT]: { name: 'GoRouter', spawn: goKeepaliveSpawn },
+        [XP_KEEPALIVE_PORT]: { name: 'XPeach', spawn: xpKeepaliveSpawn },
     };
     const inst = instances[port];
     if (!inst) {
@@ -8108,6 +8126,602 @@ async function handleTbImport(req, res) {
         } catch (e) { logLine(`tabi import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`tabi import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── XPeach (xp) — автономная вкладка (NewAPI, GitHub-вход) ────────────
+// xpeach.codes («🍑 Code» / XPeachCode) — New-API той же ветки, что tabitoken.com:
+// кука `new_api_refresh` на пути /api/user/auth, обмен на JWT (HOST_AUTH='jwt').
+// Anthropic-эндпоинт живой: 8 claude-моделей каталога помечены
+// supported_endpoint_types:[anthropic,openai] и /v1/messages отвечает 200 —
+// значит claude-* форвардятся keepalive'ом напрямую, конвертер :20132 не нужен.
+// Свой пул ключей (xpeach-sessions.json), свой активный ключ/модель, свой
+// modelmap (xpeach-modelmap.json). GitHub-вход: xpeach/open-session.js + share/import.
+//
+// ⚠ Валюта шлюза — 🍑 (`custom_currency_symbol`), но `custom_currency_exchange_rate`
+// = 1 и `quota_per_unit` = 500000, то есть арифметика newapiBalance() ровно та же,
+// что у ar/go/tb — отличается ТОЛЬКО символ в UI. Чек-ина нет (checkin_enabled=false).
+const XP_SESSIONS_FILE = path.join(__dirname, 'xpeach-sessions.json');
+const XP_MODELMAP_FILE = path.join(__dirname, 'xpeach-modelmap.json');
+const XP_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'xpeach-active-key.txt');
+const XP_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'xpeach-active-model.txt');
+const XP_BASE_URL = 'https://xpeach.codes';   // БЕЗ /v1 (usage на корне, как AR/GO/TB)
+// Резерв «угадать грант» (см. newapiBalance): выдача нового аккаунта 10 🍑.
+const XP_GRANT_STEP = 10;
+const XP_DEFAULT_GRANT = 10;
+const XP_KEEPALIVE_PORT = 20157;
+const XP_KEEPALIVE_URL = `http://localhost:${XP_KEEPALIVE_PORT}`;
+const XP_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const XP_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function xpLoad() {
+    try {
+        const raw = fs.readFileSync(XP_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция (как tabi/gorouter): стабильный id нужен для share/import/rename/setKey.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'xp_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { xpSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function xpSave(arr) {
+    fs.writeFileSync(XP_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function xpReadActiveModel() {
+    try { return fs.readFileSync(XP_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function xpReadActiveKey() {
+    try { return fs.readFileSync(XP_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для xpeach: четвёртый экземпляр keepalive-proxy.js на :20157.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с чужими инстансами.
+async function xpKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(XP_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(XP_KEEPALIVE_PORT),
+                UPSTREAM: XP_BASE_URL,
+                KEY_FILE: XP_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: XP_MODELMAP_FILE,
+                PRE_COMMIT_MS: process.env.XP_PRE_COMMIT_MS || '10000',
+            },
+        });
+        child.unref();
+        logLine(`xpeach keepalive proxy spawn: :${XP_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`xpeach keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+async function xpProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${XP_BASE_URL}/v1/models`, {
+            method: 'GET',
+            headers: { ...XP_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс ключа: usage на КОРНЕ xpeach.codes (не /v1). Точный остаток — через
+// обмен refresh-куки на JWT (jwt-инстанс, как tabitoken); резервы (анкер,
+// угадывание) см. newapiBalance.
+async function xpBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'xpeach.codes',
+        ccHeaders: XP_CC_HEADERS,
+        usageUrl: `${XP_BASE_URL}/dashboard/billing/usage`,
+        subUrl: `${XP_BASE_URL}/v1/dashboard/billing/subscription`,
+        guessGrant: spent => Math.max(XP_DEFAULT_GRANT, Math.ceil(spent / XP_GRANT_STEP) * XP_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+
+function xpApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
+
+async function handleXpSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = xpLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await xpProbe(s.api_key); }));
+            }
+            xpSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => xpApplyBalance(s, await xpBalance(s))));
+            }
+            xpSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: xpReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleXpPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await xpProbe(api_key);
+        const sessions = xpLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; xpSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleXpBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = xpLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await xpBalance(target || { api_key }, { force });
+            if (target) { xpApplyBalance(target, bal); xpSave(sessions); }
+            return bal;
+        };
+        // nudge=1: мгновенный ответ, пересчёт в своём процессе (см. handleGoBalance).
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('xp:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        jsonRes(res, 200, await recalc(true));   // клик по цифре — только свежий self
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleXpSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'xpeach', load: xpLoad, save: xpSave, balanceFn: xpBalance, applyFn: xpApplyBalance });
+}
+
+const xpLkPids = new Map();
+function xpPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleXpSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xpLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        const label = 'acct_' + id;
+
+        const prevPid = xpLkPids.get(label);
+        if (xpPidAlive(prevPid)) {
+            logLine(`xpeach session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'xpeach', 'open-session.js');
+        // xpeach — jwt-инстанс, refresh-кука одноразовая: без этой синхронизации
+        // браузер уходит на refresh с погашенным значением и разлогинивается.
+        newapiSyncProfile('xpeach.codes', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`xpeach session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`xpeach session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`xpeach session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => { xpLkPids.delete(label); logLine(`xpeach session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.unref();
+        xpLkPids.set(label, proc.pid);
+        newapiLkVisited(label);   // в ЛК могли пополнить — кеш точной цифры снят
+        logLine(`xpeach session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleXpAdd(req, res) {
+    try {
+        const { email, api_key, name } = await readJsonBody(req);
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = xpLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'xp_' + Date.now() + '_' + sessions.length;
+        sessions.push({
+            id,
+            email: mail,
+            name: String(name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+        });
+        xpSave(sessions);
+        logLine(`xpeach add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, id, noKey });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleXpDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xpLoad();
+        const target = sessions.find(s => s.id === idKey);
+        xpSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === xpReadActiveKey()) {
+            try { fs.rmSync(XP_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(XP_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`xpeach delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация через SSE keepalive-прокси :20157 (как tabi): пишем ключ в
+// xpeach-active-key.txt, прокси инжектит его на каждый запрос. В settings.json —
+// заглушка AUTH_TOKEN='dummy'.
+async function handleXpActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в xpeach-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = xpLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(XP_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        xpSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-xpeach');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = XP_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            // Как в handleTbActivate: delete = дефолт CC = 200k. Источник правды —
+            // xpeach-active-model.txt, суффикс [1m] дотянет writeSettings().
+            const xpCurModel = xpReadActiveModel() || '';
+            if (xpCurModel) settings.model = xpCurModel;
+            else { delete settings.model; logLine('xpeach activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из xpeach-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`xpeach activate: settings.json FAILED: ${e.message}`);
+        }
+        await xpKeepaliveSpawn();
+        logLine(`xpeach activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${XP_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleXpModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (XP_MODELS_CACHE.data && Date.now() - XP_MODELS_CACHE.ts < XP_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: XP_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${XP_BASE_URL}/v1/models`, {
+            signal: controller.signal,
+            headers: { ...XP_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        XP_MODELS_CACHE.data = models;
+        XP_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (XP_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: XP_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет xpeach-active-model.txt + settings.model. Прокси
+// :20157 читает активный ключ по mtime, modelmap — свой xpeach-modelmap.json.
+// [1m] дотягиваем для claude-opus/sonnet (окно контекста — свойство ID, а не апстрима).
+async function handleXpSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(XP_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-xpeach-model');
+            settings.model = settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = XP_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`xpeach set-model: settings.json FAILED: ${e.message}`);
+        }
+        await xpKeepaliveSpawn();
+        logLine(`xpeach set-model: ${m} (base ${XP_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: XP_ACTIVE_MODEL_FILE, base: XP_KEEPALIVE_URL, needRestart: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function xpReadModelMap() {
+    try {
+        const raw = fs.readFileSync(XP_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { return {}; }
+}
+
+// GET/POST /__switch/api/xp/modelmap → маппинг claude-тиров → xpeach-модели
+// (читается keepalive-прокси :20157 по mtime — правка без рестарта).
+async function handleXpModelMap(req, res) {
+    try {
+        if (req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const mm = {
+                opus: String(body.opus || '').trim() || '',
+                sonnet: String(body.sonnet || '').trim() || '',
+                haiku: String(body.haiku || '').trim() || '',
+            };
+            fs.writeFileSync(XP_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+            logLine(`xpeach modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+            return jsonRes(res, 200, { ok: true, modelMap: mm });
+        }
+        jsonRes(res, 200, { ok: true, modelMap: xpReadModelMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (как tabi set-key).
+async function handleXpSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = xpLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(XP_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        xpSave(sessions);
+        logLine(`xpeach set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleXpRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xpLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        xpSave(sessions);
+        logLine(`xpeach rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── XPeach: share/import (передать аккаунт другу и принять чужой) ──────────
+// Формат тот же, что у tabi/gorouter: base64url(JSON { v:1, provider:'xpeach',
+// email, name, api_key, meta:{…}, session:{cookies,origins} }).
+// storageState из xpeach/profiles/acct_<id>/.
+const XP_SHARE_SCRIPT = path.join(__dirname, '..', 'xpeach', 'share-session.js');
+const XP_SESSIONS_DIR = path.join(__dirname, '..', 'xpeach', 'sessions');
+
+function xpB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function xpB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/xp/share { id } → снять storageState профиля и собрать строку.
+async function handleXpShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xpLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = xpLkPids.get(label);
+        if (xpPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        const stateFile = path.join(XP_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [XP_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code2, sig) => resolve({ code: code2, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`xpeach share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'xpeach',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = xpB64UrlEncode(JSON.stringify(payload));
+        logLine(`xpeach share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/xp/import { share } → разобрать строку и добавить аккаунт.
+async function handleXpImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(xpB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'xpeach' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не xpeach-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = xpLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'xp_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        xpSave(sessions);
+
+        try {
+            fs.mkdirSync(XP_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(XP_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`xpeach import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`xpeach import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance ' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -8818,13 +9432,15 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/rename')   return handleArRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/key')      return handleArSetKey(req, res);
 
-    // Keepalive-мост (хедж-конфиг :20133/:20155/:20156) — реальное время без рестарта.
+    // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157) — реальное время без рестарта.
     if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/keepalive/config') return keepaliveAr.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/tb/keepalive/state')  return keepaliveTb.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/keepalive/config') return keepaliveTb.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/xp/keepalive/state')  return keepaliveXp.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/keepalive/config') return keepaliveXp.config(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
@@ -8865,6 +9481,26 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tb/session/open') return handleTbSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/share')    return handleTbShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/import')   return handleTbImport(req, res);
+
+    // ---- XPeach (xp) — автономная вкладка, keepalive :20157 → xpeach.codes ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/sessions')) return handleXpSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/ping'))     return handleXpPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/balance'))  return handleXpBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/models'))   return handleXpModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/xp/active-model') return jsonRes(res, 200, { model: xpReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/xp/modelmap') return jsonRes(res, 200, { ok: true, modelMap: xpReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/add')       return handleXpAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/key')       return handleXpSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/rename')    return handleXpRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/delete')    return handleXpDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/activate')  return handleXpActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/set-model') return handleXpSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/set-balance') return handleXpSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/map-profiles') return handleXpMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/modelmap')  return handleXpModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/session/open') return handleXpSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/share')    return handleXpShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/import')   return handleXpImport(req, res);
 
     // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);

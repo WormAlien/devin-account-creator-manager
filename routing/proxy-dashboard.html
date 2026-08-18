@@ -269,6 +269,11 @@
         <span class="flex-1">Tabi Token</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-tabi">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="xpeach">
+        <span class="w-5 text-center text-[14px]">🍑</span>
+        <span class="flex-1">XPeach</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-xpeach">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="github">
         <span class="w-5 text-center text-[14px]">🐙</span>
         <span class="flex-1">GitHub аккаунты</span>
@@ -1852,6 +1857,131 @@
       </div>
     </div>
 
+    <!-- ═════════ TAB: XPEACH ═════════ -->
+    <div data-tab-content="xpeach">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-rose">🍑</span> <a href="https://xpeach.codes/sign-up?aff=0lre" target="_blank" rel="noopener" title="регистрация по реф-ссылке владельца" class="text-ink underline underline-offset-4 hover:text-rose">XPeach</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-rose text-xs">xpeach.codes</code> · клик по ключу = активный (через keepalive <code class="font-mono text-rose text-xs">:20157</code>) · claude-* нативно (anthropic-эндпоинт) · base БЕЗ /v1 · GitHub-вход в консоль · выдача 10 🍑</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadXpSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button onclick="loadXpSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+            <button onclick="xpCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+            <button onclick="xpMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+            <button onclick="xpShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+            <button onclick="xpShowImport()" class="text-xs px-3 py-2 bg-rose/10 border border-rose/50 text-rose rounded-lg hover:bg-rose/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          </div>
+        </header>
+
+        <div id="xp-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <!-- Models list -->
+        <div id="xp-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadXpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="xp-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Model map (настраиваемый маппинг claude-тиров, как в AgentRouter) -->
+        <div id="xp-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — читается прокси :20157 по mtime, применяется БЕЗ рестарта</h2>
+            <button onclick="loadXpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="xp-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20157) -->
+        <div id="xp-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20157 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="xpLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="xp-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <input id="xp-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <input id="xp-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="xp-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="xpApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <span id="xp-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div id="xp-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="xp-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="xp-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="xp-stat-keepalives" class="text-ink">—</b></span>
+            <span>хеджей: <b id="xp-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="xp-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="xp-stat-errors" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="xp-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="xp-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="xp-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="xpAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="xpShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="xp-import-form" class="hidden rounded-xl bg-surface border border-rose/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="xpShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/xpeach уже залогинены).</p>
+          <textarea id="xp-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-rose/60"></textarea>
+          <div id="xp-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="xpImport()" class="text-xs px-4 py-2 bg-rose/10 border border-rose/50 text-rose rounded-lg hover:bg-rose/20 font-medium">Импортировать</button>
+            <button onclick="xpShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="xp-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20157</code> keepalive → <code class="text-ink">xpeach.codes</code> (БЕЗ /v1)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери на <code class="text-ink">/console/token</code> после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>валюта шлюза 🍑, курс к единице квоты как у $ (1:500000)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://xpeach.codes/sign-up?aff=0lre" target="_blank" class="text-rose hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: GITHUB ACCOUNTS ═════════ -->
     <div data-tab-content="github">
       <div class="px-6 py-8 space-y-4">
@@ -2529,7 +2659,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, tabi: false, custom: false, helpcoder: false, github: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -2557,6 +2687,10 @@ const state = {
   tbModels: [],
   tbActiveModel: '',
   tbModelMap: {},
+  xpeach: [],
+  xpModels: [],
+  xpActiveModel: '',
+  xpModelMap: {},
   github: [],
   ghReveal: {},          // id -> { pass:bool, secret:bool, rec:bool }
   ghMenuOpen: null,      // id открытого меню «⋯»
@@ -2718,6 +2852,7 @@ function showTab(name) {
   if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } arLoadKeepalive(); }
   if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } goLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
+  if (name === 'xpeach') { if (!state.loaded.xpeach) { state.loaded.xpeach = true; loadXpSessions(false); } xpLoadKeepalive(); }
   if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
   // Пул перечитываем всегда — его меняют автореги из других вкладок (как в freemodel/conduit/svrtr).
   if (name === 'telegram') { loadTgPool(); tgmProgressPoll(); }
@@ -2751,8 +2886,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -2825,7 +2960,16 @@ function renderHealth() {
   if (!d) return;
   const svc = d.services || [];
 
-  const downs = svc.filter(s => s.status === 'down');
+  // Keepalive-инстансы (:20155 Tabi / :20156 GoRouter / :20157 XPeach) спавнятся
+  // ТОЛЬКО при активации своего провайдера, автоспавна у них нет. Поэтому лежащий
+  // keepalive — норма, а не авария, и красное «упал» на нём было ложной тревогой
+  // (три красных строки в Health при полностью здоровой системе). Красным остаётся
+  // тот единственный порт, в который реально смотрит Claude Code: если лёг он —
+  // это настоящая поломка, её же отдельно подсвечивает блок «Текущий бэкенд».
+  const wiredPort = (d.wired || {}).port || null;
+  const isIdle = (s) => s.keepalive && s.status !== 'up' && s.port !== wiredPort;
+
+  const downs = svc.filter(s => s.status === 'down' && !isIdle(s));
   const badge = $('nav-health-badge');
   if (badge) {
     badge.textContent = downs.length ? `${downs.length}↓` : `${svc.length}✓`;
@@ -2879,11 +3023,12 @@ function renderHealth() {
     const rows = svc.map(s => {
       const up = s.status === 'up';
       const warn = s.warn && up;
+      const idle = isIdle(s);
       const badgeCls = up
         ? (warn ? 'bg-amber/10 border-amber/40 text-amber'
               : (s.orphan ? 'bg-amber/10 border-amber/40 text-amber' : 'bg-emerald/10 border-emerald/40 text-emerald'))
-        : 'bg-crimson/10 border-crimson/40 text-crimson';
-      const dotCls = up ? (warn ? 'bg-amber' : (s.orphan ? 'bg-amber' : 'bg-emerald')) : 'bg-crimson';
+        : (idle ? 'bg-white/5 border-white/15 text-muted' : 'bg-crimson/10 border-crimson/40 text-crimson');
+      const dotCls = up ? (warn ? 'bg-amber' : (s.orphan ? 'bg-amber' : 'bg-emerald')) : (idle ? 'bg-faint' : 'bg-crimson');
       const extra = s.custom
         ? `<span class="hidden lg:block text-[10px] text-faint font-mono shrink-0">opus→${esc(s.custom.modelMap.opus)} · sonnet→${esc(s.custom.modelMap.sonnet)} · haiku→${esc(s.custom.modelMap.haiku)}</span>`
         : '';
@@ -2891,8 +3036,9 @@ function renderHealth() {
         <span class="relative inline-block size-2 rounded-full ${dotCls} ${up ? 'pulse-dot' : ''} shrink-0"></span>
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-sm font-medium ${up ? '' : 'text-crimson'}">${esc(s.name)}</span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${badgeCls}">${up ? (warn ? 'внимание' : (s.orphan ? 'осиротел' : 'жив')) : 'упал'}</span>
+            <span class="text-sm font-medium ${up ? '' : (idle ? 'text-muted' : 'text-crimson')}">${esc(s.name)}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${badgeCls}">${up ? (warn ? 'внимание' : (s.orphan ? 'осиротел' : 'жив')) : (idle ? 'не запущен' : 'упал')}</span>
+            ${idle ? `<span class="text-[10px] text-faint">поднимется при активации провайдера</span>` : ''}
             ${s.orphan ? `<span class="text-[10px] text-faint">слушает, но не в конфиге</span>` : ''}
             ${s.omni ? `<span class="text-[10px] text-faint">порт 20128 · localhost/v1</span>` : ''}
             ${s.orphan ? `<button onclick="killHealthPort(${s.port})" title="Убить всё, что слушает :${s.port}" class="text-[10px] px-2 py-1 rounded border border-crimson/40 text-crimson hover:bg-crimson/15 transition">💀 убить</button>` : ''}
@@ -5409,6 +5555,8 @@ const goLoadKeepalive   = () => loadKeepaliveCard('go', '/__switch/api/go/keepal
 const goApplyKeepalive  = () => applyKeepaliveCard('go', '/__switch/api/go/keepalive');
 const tbLoadKeepalive   = () => loadKeepaliveCard('tb', '/__switch/api/tb/keepalive');
 const tbApplyKeepalive  = () => applyKeepaliveCard('tb', '/__switch/api/tb/keepalive');
+const xpLoadKeepalive   = () => loadKeepaliveCard('xp', '/__switch/api/xp/keepalive');
+const xpApplyKeepalive  = () => applyKeepaliveCard('xp', '/__switch/api/xp/keepalive');
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.
@@ -5416,6 +5564,7 @@ const KEEPALIVE_POLL_TABS = {
   agentrouter: ['ar', '/__switch/api/keepalive'],
   gorouter: ['go', '/__switch/api/go/keepalive'],
   tabi: ['tb', '/__switch/api/tb/keepalive'],
+  xpeach: ['xp', '/__switch/api/xp/keepalive'],
 };
 async function pollKeepaliveStats() {
   if (document.hidden) return;
@@ -5573,13 +5722,15 @@ function balanceColor(v) {
   return v >= 20 ? 'text-emerald' : v >= 5 ? 'text-amber' : 'text-crimson';
 }
 
-// prov — 'ar' | 'go' | 'tb': из него собираются имена обработчиков вкладки.
-function newapiBalanceCell(s, kJ, prov) {
+// prov — 'ar' | 'go' | 'tb' | 'xp': из него собираются имена обработчиков вкладки.
+// sym — символ валюты шлюза. У ar/go/tb это $, у xpeach — 🍑 (курс к единице квоты
+// тот же 1:500000, отличается только вывеска), поэтому цифру не пересчитываем.
+function newapiBalanceCell(s, kJ, prov, sym = '$') {
   if (!isRealKey(s.api_key)) return NO_KEY_BALANCE;   // ключа нет — считать нечего
   if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
 
   const editTip = s.balanceSource === 'anchor'
-    ? `Вписать баланс заново (сейчас $${(s.balanceAnchor ?? 0).toFixed(2)} от ${s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '—'}). Пусто = сбросить.`
+    ? `Вписать баланс заново (сейчас ${sym}${(s.balanceAnchor ?? 0).toFixed(2)} от ${s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '—'}). Пусто = сбросить.`
     : 'Вписать текущий баланс из ЛК. Дальше он убывает сам по расходу.';
   const edit = `<button onclick='${prov}SetBalance(${kJ})' title="${esc(editTip)}"
     class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
@@ -5588,16 +5739,16 @@ function newapiBalanceCell(s, kJ, prov) {
 
   if (typeof s.balance === 'number') {
     // Отрицательный баланс физически невозможен — это признак устаревшей привязки.
-    // Показываем $0.00 и объясняем в подсказке, а не рисуем минус как раньше.
+    // Показываем 0.00 и объясняем в подсказке, а не рисуем минус как раньше.
     const raw = s.balance;
     const shown = Math.max(0, raw);
     const color = balanceColor(shown);
-    const spentTip = typeof s.spent === 'number' ? ` · потрачено $${s.spent.toFixed(2)}` : '';
-    const negTip = raw < 0 ? ` · расчёт дал −$${Math.abs(raw).toFixed(2)}: привязка устарела, впиши баланс заново` : '';
-    const tip = `Остаток $${shown.toFixed(2)} (${(BAL_SRC[s.balanceSource] || {}).label || 'источник неизвестен'})${spentTip}${negTip} · клик = пересчитать`;
+    const spentTip = typeof s.spent === 'number' ? ` · потрачено ${sym}${s.spent.toFixed(2)}` : '';
+    const negTip = raw < 0 ? ` · расчёт дал −${sym}${Math.abs(raw).toFixed(2)}: привязка устарела, впиши баланс заново` : '';
+    const tip = `Остаток ${sym}${shown.toFixed(2)} (${(BAL_SRC[s.balanceSource] || {}).label || 'источник неизвестен'})${spentTip}${negTip} · клик = пересчитать`;
     return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center">`
       + `<button onclick='${prov}CheckBalance(${kJ})' title="${esc(tip)}"`
-      + ` class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${shown.toFixed(2)}</button>`
+      + ` class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">${sym}${shown.toFixed(2)}</button>`
       + `${balanceSourceBadge(s)}${balanceFreshMark(s)}</span>${edit}</span>`;
   }
   return `<span class="inline-flex flex-col items-center">${actBtn(`${prov}CheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
@@ -7074,6 +7225,524 @@ async function tbSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.tbModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ XPEACH ════════════════════════════════════════════
+// Провайдер xpeach.codes («🍑 Code», NewAPI той же ветки, что tabitoken: jwt-auth).
+// Пул ключей + балансы (выдача 10 🍑) + keepalive-активация через прокси :20157 +
+// share/import. Аккаунт идентифицируется id (не api_key).
+// claude-модели каталога помечены anthropic+openai — ходят нативно, конвертер не нужен.
+const XP_SYM = '🍑';   // валюта шлюза; курс к единице квоты как у $ (quota/500000)
+
+function xpPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (typeof s.balance === 'number') {
+      sumBalance += s.balance;
+      sumGrant += balanceDenom(s, 10);
+      withBalance++;
+    }
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct };
+}
+
+function renderXpGauge() {
+  const st = xpPoolStats(state.xpeach);
+  renderEnergyGauge($('xp-energy'), {
+    title: 'XPeach · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-emerald">${XP_SYM}${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ выдача). Клик 💰 у ключа = чек баланса.'
+      : `Активация → keepalive http://localhost:20157 → xpeach.codes (БЕЗ /v1). Выдача 10 ${XP_SYM}, чек-ина нет.`,
+  });
+}
+
+async function loadXpSessions(probe) {
+  if (probe) $('xp-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/xp/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.xpeach = data.sessions || [];
+    if (data.activeModel) state.xpActiveModel = data.activeModel;
+    if ($('nav-count-xpeach')) $('nav-count-xpeach').textContent = state.xpeach.length;
+    renderXp();
+    renderXpGauge();
+    loadXpModels();
+    loadXpModelMap();
+    if (probe) toast('✓ XPeach: статусы обновлены', 'success');
+  } catch (e) {
+    $('xp-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadXpSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/xp/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.xpeach = data.sessions || [];
+    if ($('nav-count-xpeach')) $('nav-count-xpeach').textContent = state.xpeach.length;
+    renderXp();
+    renderXpGauge();
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+
+async function loadXpModels(force) {
+  const keys = state.xpeach
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('xp-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('xp-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/xp/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderXpModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('xp-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderXpModels(models) {
+  if (models) state.xpModels = models;
+  const list = state.xpModels || [];
+  let active = state.xpActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/xp/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.xpActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('xp-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // Модель без anthropic в supported_endpoint_types на этом шлюзе пойдёт только
+    // через OpenAI-эндпоинт — keepalive её не вытянет, поэтому помечаем бейджем.
+    const eps = m.supported_endpoint_types || [];
+    const openaiOnly = eps.length && !eps.includes('anthropic');
+    const badge = openaiOnly ? `<span class="text-[9px] px-1 rounded bg-amber/15 text-amber border border-amber/40" title="только OpenAI-эндпоинт: keepalive :20157 её не отдаст">openai</span>` : '';
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-emerald/15 border border-emerald/50 text-emerald' : 'bg-rose/10 border border-rose/30 text-rose'}"
+      onclick='xpSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + xpeach-active-model.txt) · 📋 = копия">
+      ${esc(id)}${badge}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderTbModels: без этого селекты маппинга остаются пустыми.
+  renderXpModelMap();
+}
+
+async function xpSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/xp/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.xpModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.xpActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderXpModels(state.xpModels);
+  } catch (e) { toast('xpSelectModel: ' + e.message, 'error'); }
+}
+
+function renderXp() {
+  const all = state.xpeach.slice().sort((a, b) => {
+    const sa = a.status === 'dead' ? 1 : 0;
+    const sb = b.status === 'dead' ? 1 : 0;
+    if (sa !== sb) return sa - sb;
+    return (b.created || '').localeCompare(a.created || '');
+  });
+  if (!all.length) {
+    $('xp-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке) или 📥 Вставить аккаунт</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-emerald text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
+    const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = xpBalanceCell(s, kJ);
+    const keyCell = noKey ? NO_KEY_CELL : `<button onclick='xpActivate(${kJ})' title="Сделать активным (keepalive :20157 → xpeach.codes)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-rose hover:border-rose/50'} transition">${esc(keyMask)}</button>`;
+    return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`xpCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`xpShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'rose')}
+        ${actBtn(`xpSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`xpRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`xpActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`xpPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${actBtn(`xpOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс xpeach)', '🌐', 'rose')}
+        ${actBtn(`xpDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('xp-list').innerHTML = table(
+    [
+      { label: 'Email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16' },
+      { label: 'Баланс', align: 'center', w: 'w-24' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    `${all.length} ключей`
+  );
+}
+
+function xpBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'xp', XP_SYM); }
+
+function xpShowAdd(show = true) {
+  $('xp-add-form').classList.toggle('hidden', !show);
+  if (show) { $('xp-add-email').value = ''; $('xp-add-key').value = ''; $('xp-add-email').focus(); }
+}
+
+async function xpAdd() {
+  const email = $('xp-add-email').value.trim();
+  const api_key = $('xp-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/xp/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      xpShowAdd(false);
+      loadXpSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) xpOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function xpDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/xp/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadXpSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function xpShare(id) {
+  const cur = state.xpeach.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/xp/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'XPeach',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс ${XP_SYM}${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function xpShowImport(show = true) {
+  $('xp-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('xp-import-text').value = '';
+    $('xp-import-preview').innerHTML = '';
+    $('xp-import-text').focus();
+  }
+}
+
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function xpImport() {
+  const share = $('xp-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('xp-import-preview').innerHTML = '<span class="text-rose">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/xp/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('xp-import-preview').innerHTML = '';
+    xpShowImport(false);
+    const bal = typeof data.balance === 'number' ? ` · баланс ${XP_SYM}${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadXpSessions(false);
+  } catch (e) {
+    $('xp-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся на /console/token).
+async function xpSetKey(id) {
+  const cur = state.xpeach.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся на xpeach.codes/console/token после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/xp/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadXpSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+
+async function xpRename(id) {
+  const cur = state.xpeach.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/xp/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadXpSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function xpActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/xp/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'xpeach';
+      state.urls.xpeach = 'http://localhost:20157';
+      paintStatus();
+      loadXpSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+async function xpPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/xp/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.xpeach.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.xpeach[idx].status = data.status;
+    renderXp();
+    renderXpGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function xpCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/xp/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.xpeach.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderXp();
+    renderXpGauge();
+    if (data.status === 'live') {
+      const lbl = (BAL_SRC[data.balanceSource] || {}).label || '?';
+      toast(`💰 баланс ${XP_SYM}${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${XP_SYM}${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+
+async function xpCheckAllBalances() {
+  $('xp-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/xp/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.xpeach = data.sessions || [];
+    renderXp();
+    renderXpGauge();
+    balanceBatchToast(state.xpeach);
+  } catch (e) {
+    $('xp-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function xpSetBalance(api_key) {
+  return newapiSetBalanceUI('xp', api_key, () => state.xpeach, () => { renderXp(); renderXpGauge(); });
+}
+
+function xpMapProfiles() {
+  return newapiMapProfilesUI('xp', () => loadXpSessions(false));
+}
+
+async function xpOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/xp/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function xpCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+// Настраиваемый маппинг opus/sonnet/haiku → xpeach-модели (как в AgentRouter/Tabi).
+async function loadXpModelMap() {
+  try {
+    const res = await fetch('/__switch/api/xp/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.xpModelMap = data.modelMap || {};
+    renderXpModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderXpModelMap() {
+  const mm = state.xpModelMap || {};
+  const models = (state.xpModels || []).map(m => m.id);
+  // см. renderTbModelMap: сохранённые цели всегда в опциях, иначе «— как есть —».
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="xp-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('xp-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='xpSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function xpSaveModelMap() {
+  const mm = {
+    opus: $('xp-mm-opus')?.value || '',
+    sonnet: $('xp-mm-sonnet')?.value || '',
+    haiku: $('xp-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/xp/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.xpModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -8870,9 +9539,9 @@ function trLiveStats(accounts, usageMap) {
 }
 
 // Главный счётчик. В «Общий запас» входят ТОЛЬКО провайдеры с правдиво считаемым
-// балансом (реальные $ по ключам): AgentRouter, GoRouter, Tabi Token. Протухшие
-// (FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin) — не считаются:
-// их баланс не является деньгами или уже не начисляется.
+// балансом (реальные $ по ключам): AgentRouter, GoRouter, Tabi Token, XPeach.
+// Протухшие (FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin) — не
+// считаются: их баланс не является деньгами или уже не начисляется.
 async function renderGlobalGauge() {
   // Правдивые провайдеры. Добавить нового = одна запись. fetchData возвращает
   // массив аккаунтов вида { api_key, status, balance, grant }.
@@ -8952,6 +9621,33 @@ async function renderGlobalGauge() {
         return { total, live, dead, withBalance, sumBalance, sumGrant };
       },
     },
+    {
+      // XPeach считает в 🍑, но курс к единице квоты тот же (quota/500000), поэтому
+      // цифры складываются с остальными без пересчёта. База выдачи — 10.
+      id: 'xpeach', label: 'XPeach', icon: '🍑', color: 'rose', sym: '🍑',
+      fetchData: async () => {
+        if (state.xpeach && state.xpeach.length) return state.xpeach;
+        const res = await fetch('/__switch/api/xp/sessions');
+        const data = await res.json();
+        if (res.ok) { state.xpeach = data.sessions || []; return state.xpeach; }
+        return [];
+      },
+      stat: (accounts) => {
+        let live = 0, dead = 0, total = 0;
+        let sumBalance = 0, sumGrant = 0, withBalance = 0;
+        for (const s of (accounts || [])) {
+          total++;
+          if (s.status === 'live') live++;
+          else if (s.status === 'dead') dead++;
+          if (typeof s.balance === 'number') {
+            sumBalance += s.balance;
+            sumGrant += balanceDenom(s, 10);
+            withBalance++;
+          }
+        }
+        return { total, live, dead, withBalance, sumBalance, sumGrant };
+      },
+    },
   ];
 
   let sumBalance = 0, sumGrant = 0, accounts = 0, providers = 0;
@@ -8970,7 +9666,7 @@ async function renderGlobalGauge() {
       <span><span class="text-ink font-semibold">${st.total}</span> ключей</span>
       ${st.live > 0 ? `<span class="text-emerald">${st.live} 🟢 LIVE</span>` : ''}
       ${st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : ''}
-      ${st.withBalance ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '<span class="text-faint">баланс не опрошен</span>'}
+      ${st.withBalance ? `<span class="text-emerald">${p.sym || '$'}${st.sumBalance.toFixed(2)} доступно</span>` : '<span class="text-faint">баланс не опрошен</span>'}
     </div>`;
   }
 
@@ -8988,7 +9684,7 @@ async function renderGlobalGauge() {
     pct,
     sub,
     extra,
-    note: 'В запас входят провайдеры с реальным балансом: AgentRouter, GoRouter, Tabi Token. FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin — протухли, не считаются.',
+    note: 'В запас входят провайдеры с реальным балансом: AgentRouter, GoRouter, Tabi Token, XPeach (🍑 пеггед 1:1 к единице квоты, поэтому складывается с остальными). FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin — протухли, не считаются.',
   });
 }
 
@@ -11888,7 +12584,7 @@ function onSettingsFm() {
 // у всех (в т.ч. у тех, у кого уже сохранён конфиг), пока пользователь явно
 // не включит их глазком (тогда ключ попадает в config.shown).
 const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
-const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'tabi', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
+const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'tabi', 'xpeach', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -12146,6 +12842,7 @@ function autoRefreshTick() {
       case 'agentrouter':   loadArSessionsLight(); break;
       case 'gorouter':      loadGoSessionsLight(); break;
       case 'tabi':          loadTbSessionsLight(); break;
+      case 'xpeach':        loadXpSessionsLight(); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
       case 'helpcoder':     loadHelpcoderSessions(false); break;
       case 'video':         loadVideoKeys(); break;
@@ -12162,6 +12859,36 @@ function autoRefreshTick() {
 // ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
+
+// ── Счётчики сайдбара и бейдж Health на старте ──────────────────────────────
+// `nav-count-*` заполнялся ТОЛЬКО внутри load-функции своей вкладки, а та висела
+// на ленивой загрузке в showTab(). Итог: после рестарта дашборда весь сайдбар
+// стоял в «—», пока по вкладкам не прокликаешь руками. То же с бейджем Health —
+// loadHealth() звался лишь при открытой вкладке.
+//
+// Один дешёвый проход на boot. Всё, что здесь вызывается, читает ЛОКАЛЬНЫЙ JSON
+// и в сеть не ходит: у ar/go/tb/xp взяты *SessionsLight (без ?probe=1/?balance=1
+// и без loadXxModels — те бьют по шлюзу и попали бы под рейт-лимит WAF на каждом
+// открытии дашборда). `state.loaded.*` намеренно НЕ трогаем: первый заход на
+// вкладку по-прежнему делает полную загрузку со списком моделей.
+async function bootNavCounts() {
+  const jobs = [
+    ['agentrouter', loadArSessionsLight],
+    ['gorouter',    loadGoSessionsLight],
+    ['tabi',        loadTbSessionsLight],
+    ['xpeach',      loadXpSessionsLight],
+    ['github',      loadGhKeys],
+    ['telegram',    loadTgPool],
+    ['custom',      loadCustomProviders],
+    ['plugins',     loadPlugins],
+  ];
+  await Promise.all(jobs.map(async ([name, fn]) => {
+    try { await fn(); } catch (e) { console.warn('[boot] счётчик', name, 'не заполнился:', e.message); }
+  }));
+}
+bootNavCounts();
+loadHealth();   // бейдж N✓ / N↓ — пробы только по локальным портам, один раз
+
 // Health — опрос только когда вкладка открыта (проба всех портов дороже)
 setInterval(() => {
   const el = document.querySelector('[data-tab-content="health"]');

@@ -1,6 +1,7 @@
 // routing/lib/newapi-account.js
 //
-// Точный баланс аккаунта New-API: agentrouter.org, gorouter.app, tabitoken.com.
+// Точный баланс аккаунта New-API: agentrouter.org, gorouter.app, tabitoken.com,
+// xpeach.codes.
 //
 // Зачем: по API-ключу сервис отдаёт только потраченное (/dashboard/billing/usage,
 // причём это расход ТОКЕНА, а не аккаунта). Остаток приходилось угадывать от
@@ -17,9 +18,11 @@
 //     id лежит В САМОЙ куке: gorilla/sessions её подписывает, но не шифрует
 //     (см. sessionUserId).
 //
-//   jwt (tabitoken.com rc.23)
+//   jwt (tabitoken.com rc.23, xpeach.codes)
 //     POST /api/user/auth/refresh с Cookie: new_api_refresh=… → { access_token }
 //     дальше Authorization: Bearer <access_token>
+//     У xpeach.codes ответ refresh сразу несёт user{quota,used_quota} — отдельный
+//     /api/user/self не нужен (та же ветка, что tabitoken).
 //
 // Куки берём НАПРЯМУЮ из персистентных Chromium-профилей (<provider>/profiles/<label>),
 // без запуска браузера: схема шифрования у них v10 (не app-bound v20), ключ лежит
@@ -74,6 +77,9 @@ const HOST_AUTH = {
     'agentrouter.org': 'classic',
     'gorouter.app': 'classic',
     'tabitoken.com': 'jwt',
+    // xpeach.codes — та же ветка New-API, что tabitoken: кука new_api_refresh на
+    // пути /api/user/auth, обмен на JWT. Проверено живым refresh 2026-08-18.
+    'xpeach.codes': 'jwt',
 };
 
 function authKind(host) {

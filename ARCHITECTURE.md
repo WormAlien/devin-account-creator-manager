@@ -21,6 +21,7 @@
 | `20132`| **AgentRouter Proxy** (конвертер) | `routing/agentrouter-proxy.js` | Anthropic→OpenAI конвертер для `gpt-*` (`/v1/chat/completions`); `claude-*` — pass-through в `/v1/messages`. Стоит **за** keepalive `:20133`, напрямую из CC больше не адресуется. `wafSanitize`/`WAF_PHRASES` нейтрализуют фразы из блок-листа шлюза на сериализованном теле (иначе `/model gpt-*` падает `500 sensitive words detected`), а `IMAGE_B64_RE` вырезает base64-образы (иначе запросы с картинками в сессии падают `400 content-blocked`). Cyrillic-bypass **отключён** флагом `CYR_BYPASS_ENABLED=false`. **Маппинг claude-тиров** (`ar-modelmap.json`) применяется на каждый запрос по mtime — БЕЗ рестарта. Ключ из `~/.claude/ar-active-key.txt`, CC-заголовки собирает сам. Самопроверка: `node routing/agentrouter-proxy.js selftest`. Отказ content-filter'а (`500 sensitive words` / `400 content-blocked`) кладёт **тело, реально ушедшее на шлюз**, в `%TEMP%\arpx-blocked-*.json` (последние 10) и пишет путь в лог; `node routing/agentrouter-proxy.js wafbisect <дамп> [--max N]` двоичным сужением сводит дамп к минимальной блокирующей подстроке. |
 | `20155`| **Tabi Token keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для tabitoken.com. `PORT=20155`, `KEY_FILE=tabi-active-key.txt`, `MODELMAP_FILE=tabi-modelmap.json`. gpt-модели остаются на своём шлюзе: конвертер `:20132` — агентроутеровский (см. `GPT_PROXY_ENABLED`). |
 | `20156`| **GoRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для gorouter.app. `PORT=20156`, `KEY_FILE=gorouter-active-key.txt`, `MODELMAP_FILE=gorouter-modelmap.json`. gpt — там же, на своём шлюзе. |
+| `20157`| **XPeach keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для xpeach.codes. `PORT=20157`, `KEY_FILE=xpeach-active-key.txt`, `MODELMAP_FILE=xpeach-modelmap.json`. claude-модели каталога помечены `anthropic+openai` → форвардятся нативно, конвертер не нужен. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -97,6 +98,10 @@
   форвард в tabitoken.com), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `tabi-active-key.txt`,
   модель из `~/.claude/tabi-active-model.txt` + `tabi-modelmap.json`. Пул:
   `routing/tabi-sessions.json`.
+- **xpeach** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20157` (SSE keepalive,
+  форвард в xpeach.codes), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `xpeach-active-key.txt`,
+  модель из `~/.claude/xpeach-active-model.txt` + `xpeach-modelmap.json`. Пул:
+  `routing/xpeach-sessions.json`. Валюта шлюза — 🍑 (курс к единице квоты как у $).
 - **helpcoder** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/hc-active-key.txt`,
   `ANTHROPIC_BASE_URL=https://helpcoder.cc`, TTL=0. OpenAI-совместимый New-API инстанс
   (ключи `sk-`), понимает и Anthropic-формат `/v1/messages`. Все модели `gpt-*`
@@ -141,7 +146,7 @@ cat без файла виснет на stdin. Выяснено на чисто�
 
 | Провайдер | Источник модели при активации |
 |---|---|
-| agentrouter / gorouter / tabi / conduit | `<p>-active-model.txt` → в `settings.model` (суффикс дотянет `writeSettings`) |
+| agentrouter / gorouter / tabi / xpeach / conduit | `<p>-active-model.txt` → в `settings.model` (суффикс дотянет `writeSettings`) |
 | freemodel | своя модель, иначе явный дефолт `claude-opus-5[1m]` |
 
 Остальные (aerolink, evomap, ourtoken, custom, svrtr, helpcoder, vyceai, omniroute) шлют
@@ -215,6 +220,7 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js: нет ключа → регистрация по рефке `?aff=`, есть ключ → `/console/topup`, чек-ин +$25), **аккаунт без ключа** (`status: no_key`), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap}` |
 | **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **Tabi Token** | активна  | ручной пул ключей tabitoken.com, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, дефолт $100, реф-бонус $20), маппинг моделей, **активация через SSE keepalive :20155** (keepalive-proxy.js → tabitoken.com, срез `[1m]`, count_tokens fallback) | `/api/tb/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
+| **XPeach** | активна    | ручной пул ключей xpeach.codes («🍑 Code», New-API ветки tabitoken → `HOST_AUTH='jwt'`), GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=0lre`, есть → `/console/topup`), **аккаунт без ключа** (`status: no_key`), **точный баланс** из `/api/user/auth/refresh` (валюта 🍑, курс к единице квоты как у $), маппинг моделей, **активация через SSE keepalive :20157**. Каталог 32 модели: 8 claude `anthropic+openai` (ходят нативно) + grok/gpt-5.x/картинки/видео — они `openai`-only и помечены бейджем. Чек-ина нет (`checkin_enabled=false`) | `/api/xp/{sessions,ping,balance,set-balance,map-profiles,session/open,add,key,rename,delete,activate,set-model,modelmap,models,share,import}` |
 | **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную | `/api/gh/{keys,add,import,delete,update,open}` |
 | **Telegram аккаунты** | активна | менеджер общего ТГ-пула `freemodel/tg_pool.json`: **вся таблица целиком** (в отличие от блока «Telegram pool», свёрнутого до 3 строк), поиск (номер/ключ/кем занят), фильтры (статус, health, «свободен для сервиса»), сортировка, открытие в портативном Telegram Desktop, **переименование плейсхолдеров** `tg_xxxx` (роут `rename` до этого был без UI), **health-чек фоновый** (scope `unchecked`/`all` + прогресс, вместо блокирующего запроса на десятки минут), **колонки годности по сервисам** FM/CDT/SR/AM | `/api/tg/{list,add-bulk,add-session,delete,mark-free,rename,open,health-check,health-progress}` |
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
@@ -225,6 +231,41 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **TokenRouter** | архив («Чтим память») | аккаунты, usage, health   | `/api/tokenrouter/*` |
 | **Devin**     | архив     | сессии + квоты (daily/weekly %)     | `/api/session/*` |
 | **Notion**    | архив     | сессии + карты                      | `/api/notion/*` |
+
+### Сайдбар: счётчики и бейдж Health заполняются на старте
+
+`nav-count-*` исторически ставился **только внутри load-функции своей вкладки**, а та
+висела на ленивой загрузке в `showTab()`. Итог: после рестарта дашборда весь сайдбар
+стоял в `—`, пока по вкладкам не прокликаешь руками; то же с бейджем Health
+(`loadHealth()` звался лишь при открытой вкладке).
+
+Лечится `bootNavCounts()` в блоке INIT (`proxy-dashboard.html`) — один проход на boot:
+`loadArSessionsLight` / `loadGoSessionsLight` / `loadTbSessionsLight` /
+`loadXpSessionsLight` / `loadGhKeys` / `loadTgPool` / `loadCustomProviders` /
+`loadPlugins`, каждый в своём `try` (падение одного не глотает остальные), плюс
+`loadHealth()`.
+
+⚠️ Здесь можно вызывать **только то, что читает локальный JSON**. У ar/go/tb/xp взяты
+именно `*SessionsLight`: полные `loadXxSessions()` тянут ещё `loadXxModels()`, а это
+запрос к шлюзу — он попал бы под рейт-лимит WAF на **каждом** открытии дашборда.
+`?probe=1` / `?balance=1` по той же причине не передаются. `state.loaded.*`
+намеренно НЕ трогается: первый заход на вкладку по-прежнему делает полную загрузку.
+
+### Health: «не запущен» ≠ «упал»
+
+Keepalive-инстансы `:20155` / `:20156` / `:20157` спавнятся **только при активации
+своего провайдера** (boot-спавнится один `:20133`). Лежащий keepalive — нормальное
+состояние покоя, поэтому красное «упал» на нём было ложной тревогой: при полностью
+здоровой системе Health показывал три красные строки и бейдж `5↓`.
+
+`isIdle(s)` в `renderHealth()` = `s.keepalive && status !== 'up' && s.port !== wired.port`
+→ серый бейдж «не запущен» + подсказка «поднимется при активации провайдера», и такие
+строки **не считаются** в бейдж сайдбара. Красным остаётся порт, в который реально
+смотрит Claude Code (`wired.port`): если лёг он — это настоящая поломка.
+
+Custom-конвертеры под правило НЕ попадают сознательно: у них `proxyPort` в
+`custom-providers.json` выставлен только на время активации, поэтому «порт в конфиге
+есть, процесса нет» — это протухшее состояние, а не покой, и его надо видеть.
 
 ---
 
@@ -537,8 +578,8 @@ client detected` (проверено 2026-08-16, при прочих равны�
 ### Баланс ключа (продажа на FunPay)
 
 Точный остаток берётся из **аккаунтного** эндпоинта New-API, а не выводится из ключа.
-Общий модуль на все три вкладки — `routing/lib/newapi-account.js`, общий расчёт —
-`newapiBalance()` в `transparent-proxy.js` (одна реализация вместо трёх копий).
+Общий модуль на все четыре вкладки (ar/go/tb/xp) — `routing/lib/newapi-account.js`, общий
+расчёт — `newapiBalance()` в `transparent-proxy.js` (одна реализация вместо четырёх копий).
 
 **Три источника, первый сработавший побеждает** (поле `balanceSource` в записи):
 
@@ -555,7 +596,8 @@ client detected` (проверено 2026-08-16, при прочих равны�
 - **Авторизация аккаунтная, не ключевая**, и различается по версиям New-API:
   `agentrouter.org` / `gorouter.app` (classic) — cookie `session` + заголовок `New-Api-User: <id>`,
   причём **id читается локально из самой куки** (gorilla/sessions подписывает, но не шифрует);
-  `tabitoken.com` (rc.23) — `POST /api/user/auth/refresh` с кукой `new_api_refresh` → JWT.
+  `tabitoken.com` (rc.23) и `xpeach.codes` — `POST /api/user/auth/refresh` с кукой
+  `new_api_refresh` → JWT. Схема на хост — `HOST_AUTH` в `newapi-account.js`.
 - **Куки берутся прямо из профилей Chromium** (`<provider>/profiles/<label>`), без запуска
   браузера: схема `v10`, ключ в `Local State` под DPAPI (раскрывается через PowerShell
   `ProtectedData.Unprotect`), сама БД читается копией через `better-sqlite3`.
@@ -775,6 +817,53 @@ count_tokens fallback, держит SSE-паузы thinking-моделей). К�
   Кеш в `tabi-sessions.json` (`tbBalance()` / `tbApplyBalance()`).
 - **Маппинг claude-тиров** — `routing/tabi-modelmap.json`, применяется keepalive по mtime.
 - **Share / import** — как у gorouter.
+
+---
+
+## XPeach (xp) — New-API «🍑 Code», SSE keepalive :20157
+
+Пул в `routing/xpeach-sessions.json`. Активация/работа — через **SSE keepalive `:20157`**
+(четвёртый экземпляр `keepalive-proxy.js`, форвард в `https://xpeach.codes`, БЕЗ `/v1`).
+Ключ литералом в `ANTHROPIC_AUTH_TOKEN`, модель из `~/.claude/xpeach-active-model.txt`.
+
+Разведка живыми пробами 2026-08-18 (`/api/status`, `/v1/models`, `/v1/messages`,
+`/api/user/auth/refresh`) — вкладка сделана **клоном Tabi**, потому что все ключевые
+свойства совпали:
+
+| Свойство | Значение | Следствие |
+|---|---|---|
+| Схема New-API | кука `new_api_refresh` на пути `/api/user/auth` → JWT | `HOST_AUTH['xpeach.codes']='jwt'`, как tabitoken rc.23 |
+| Anthropic-эндпоинт | `/v1/messages` → **200** (haiku ответил) | keepalive форвардит claude-* нативно, конвертер `:20132` не нужен |
+| `quota_per_unit` | 500000 (стандарт) | арифметика `newapiBalance()` без правок |
+| Валюта | `custom_currency_symbol: 🍑`, `custom_currency_exchange_rate: 1` | цифра та же, что была бы в $ — меняется **только символ** |
+| Живость ключа | `/dashboard/billing/usage` на корне → `total_usage` (центы) | как у ar/go/tb |
+| Чек-ин | `checkin_enabled: false` | кнопки «+$25» нет |
+| Вход | GitHub OAuth + passkey + Google + email/пароль (`email_verification`, turnstile) | `xpeach/open-session.js` идёт GitHub-путём |
+
+- **Валюта 🍑 в UI** — `newapiBalanceCell(s, kJ, prov, sym)` получил четвёртый
+  необязательный параметр (дефолт `'$'`), вкладка передаёт `XP_SYM = '🍑'`. Форк общей
+  ячейки ради символа делать не стали: курс к единице квоты тот же, врать долларом —
+  единственное, чего нельзя. В «Общий запас» цифры складываются без пересчёта.
+- **GitHub-вход в консоль** — `xpeach/open-session.js` (профиль `xpeach/profiles/<label>/`).
+  Ключа нет → регистрация по рефке `xpeach.codes/sign-up?aff=0lre`, есть →
+  `xpeach.codes/console/topup` (см. «Кнопка 🌐 ЛК» и «Аккаунт без ключа» у AgentRouter).
+  Маршруты взяты из бандла SPA (`/static/js/index.<hash>.js`), не угаданы: там же
+  `/console/token` — страница, где берётся сам ключ.
+- **Каталог 32 модели.** 8 claude (`claude-fable-5`, `opus-4-6/4-7/4-8/5`, `sonnet-4-6/5`,
+  `haiku-4-5-20251001`) помечены `anthropic+openai` — ходят через keepalive. Остальные
+  (grok-*, gpt-5.x, `gpt-image-*`, `grok-imagine-video`) — `openai`-only, на вкладке
+  помечены бейджем `openai`: keepalive их не отдаст. Владелец каталога — китайский
+  реселлер (`owned_by: Claude｜Max 号池`).
+- **Резерв «угадать грант»** — `XP_DEFAULT_GRANT = 10`, `XP_GRANT_STEP = 10` (выдача
+  нового аккаунта 10 🍑). Работает только когда точная цифра недоступна.
+- **Маппинг claude-тиров** — `routing/xpeach-modelmap.json`, применяется keepalive по mtime.
+- **Share / import** — как у tabi/gorouter (`provider: 'xpeach'` в payload).
+- ⚠️ **`:20157` НЕ в списке KILLPORT** у `start-switcher.bat` / `restart-dashboard.bat` —
+  ровно как `:20155`/`:20156`. Автоспавна у них нет (boot-спавнится только `:20133`),
+  поэтому убийство порта оставило бы активный бэкенд без слушателя. Рестарт — кнопкой
+  в Health или `keepalive-restart.ps1 -Port 20157`.
+- ⚠️ **В статуслайне правило `:20157` стоит ДО catch-all Custom-конвертеров**
+  (`*localhost:2015[0-9]*` → `custom`), иначе xpeach определялся бы как Custom.
 
 ---
 
@@ -1026,8 +1115,16 @@ tools\fix-paths-after-move.ps1` (есть `-DryRun` и `-OldPath`) →
 2. **Сайдбар:** кнопка `<button class="nav-btn" data-tab="<module>">` в `<nav>`
    (`proxy-dashboard.html`, ~строка 106). Активные модули — в основном списке,
    архивные — в блоке «Чтим память».
-3. **Вкладка:** `<div data-tab-content="<module>">…</div>` в `<main>`.
-4. **Загрузка:** ветка в `showTab()` (ленивая загрузка при первом открытии).
-5. **Счётчик:** `#nav-count-<module>` + обновление в load-функции.
-6. **Шкала (опц.):** если у модуля есть квота — переиспользовать `renderEnergyGauge`.
-7. **Обнови этот файл.**
+3. **⚠ Whitelist видимости:** добавить имя в `DEFAULT_TABS_VISIBLE`
+   (`proxy-dashboard.html`, ~строка 12576). Без этого `applyTabsConfig()` ставит
+   кнопке класс `hidden` — вкладка есть в DOM, но в сайдбаре её не видно, и
+   выглядит это как «вкладка не добавилась».
+4. **Вкладка:** `<div data-tab-content="<module>">…</div>` в `<main>`.
+5. **Загрузка:** ветка в `showTab()` (ленивая загрузка при первом открытии).
+6. **Счётчик:** `#nav-count-<module>` + обновление в load-функции.
+7. **Шкала (опц.):** если у модуля есть квота — переиспользовать `renderEnergyGauge`.
+8. **Обнови этот файл.**
+
+Для нового NewAPI-провайдера по образцу ar/go/tb/xp список длиннее — см. раздел
+«XPeach (xp)»: там же перечислены грабли (whitelist сайдбара, порядок правил в
+статуслайне относительно catch-all Custom, отсутствие `:2015x` в KILLPORT).

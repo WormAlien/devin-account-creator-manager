@@ -216,6 +216,7 @@ cat без файла виснет на stdin. Выяснено на чисто�
 | **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **Tabi Token** | активна  | ручной пул ключей tabitoken.com, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, дефолт $100, реф-бонус $20), маппинг моделей, **активация через SSE keepalive :20155** (keepalive-proxy.js → tabitoken.com, срез `[1m]`, count_tokens fallback) | `/api/tb/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную | `/api/gh/{keys,add,import,delete,update,open}` |
+| **Telegram аккаунты** | активна | менеджер общего ТГ-пула `freemodel/tg_pool.json`: **вся таблица целиком** (в отличие от блока «Telegram pool», свёрнутого до 3 строк), поиск (номер/ключ/кем занят), фильтры (статус, health, «свободен для сервиса»), сортировка, открытие в портативном Telegram Desktop, **переименование плейсхолдеров** `tg_xxxx` (роут `rename` до этого был без UI), **health-чек фоновый** (scope `unchecked`/`all` + прогресс, вместо блокирующего запроса на десятки минут), **колонки годности по сервисам** FM/CDT/SR/AM | `/api/tg/{list,add-bulk,add-session,delete,mark-free,rename,open,health-check,health-progress}` |
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |
@@ -332,6 +333,56 @@ Endpoint `conduit.ozdoev.net` — Anthropic-совместимый (`/api/v1`, �
   открыть в браузере (🌐, только для аккаунтов с session.json), пресет «Conduit ·
   API Helper» на главной. ТГ-пул — **зеркало** блока из FreeModel (общий пул:
   `renderTgPool` рисует во все `.tg-list`/`.tg-stats`).
+
+---
+
+## ТГ-пул — кто кого возьмёт (`status: used` ≠ «занят навсегда»)
+
+Пул `freemodel/tg_pool.json` общий, но **`status` в нём — маркер только FreeModel**.
+Остальные сервисы ведут свои `.tg_used.json` и `used` в пуле игнорируют, поэтому один ТГ
+законно регается на несколько сервисов. На 2026-08-18 в пуле 300 записей: `free 2`,
+`used 158`, `banned 140` — но кандидатов у Conduit 156, у Svrtr 150, у AnyModel 116.
+`banned` — **единственный глобальный** статус (мёртвый ТГ мёртв везде).
+
+| Сервис | Что реально возьмёт пикер | Где |
+|---|---|---|
+| FreeModel | `status === 'free' && !dead` | `tgPool.reserve()` — `freemodel/lib/tg-pool.js` |
+| Conduit | `status !== 'banned' && !в conduit/.tg_used.json` | `pickTg()` — `conduit/conduit_autoreger.js` |
+| Svrtr | `status !== 'banned' && !в svrtr/.tg_used.json` | `pickTg()` — `svrtr/svrtr_autoreger.js` |
+| AnyModel | `status !== 'banned' && !dead && !в anymodel/.tg_used.json` | `pick()` — `anymodel/lib/tg-usage.js` |
+
+`dead` — по `freemodel/.tg_health_cache.json` (`tgPool.isDead`). **Conduit и Svrtr его не
+смотрят** — их пикер отдаст отозванный ключ; вкладка Telegram показывает это как есть
+(годен + бейдж 🔴 dead), а не как хотелось бы.
+
+Эти же правила продублированы в `tgFreeFor()` (`transparent-proxy.js`) — она считает поля
+`freeFor`/`usedOn` записи и `stats.freeFor` для `/api/tg/list`. **Меняешь пикер — меняй и
+её**, иначе цифры во вкладке разойдутся с реальностью. Проверка расхождения:
+
+```bash
+curl -s localhost:8200/__switch/api/tg/list | node -e "…stats.freeFor…"
+node -e "console.log(require('./svrtr/svrtr_autoreger').svrtrAvail())"      # == freeFor.sr
+node -e "console.log(require('./conduit/conduit_autoreger').conduitAvail())" # == freeFor.cdt
+node -e "console.log(require('./anymodel/lib/tg-usage').stats().available)"  # == freeFor.am
+node -e "console.log(require('./freemodel/lib/tg-pool').stats().usable)"     # == freeFor.fm
+```
+
+**Health-чек** (`freemodel/lib/tg-health.js`) — read-only connect+getMe, безбанный,
+**последовательный** (одно подключение с твоего IP за раз, ~2-6 c на аккаунт). Массовый
+прогон поэтому фоновый: `POST /api/tg/health-check {scope}` стартует и сразу отвечает,
+состояние в памяти прокси (`tgHealthJob`), опрос — `GET /api/tg/health-progress`.
+`scope:'unchecked'` = только те, кого нет в health-кэше; `'all'` = все не-banned.
+Кэш пишется после **каждого** аккаунта, так что рестарт прокси на середине = стоп-кран
+без потери проверенного. Пока прогон идёт, одиночный чек и повторный старт отдают `409`
+(тот же ключ в двух коннектах = `AUTH_KEY_DUPLICATED`). **Отмены нет** — только рестарт
+дашборда. Запрос **без** `scope` — старый блокирующий `checkAll`, им живут блоки пула в
+4 вкладках.
+
+**Грабля UI:** `paintTgLists()` затирает **все** контейнеры с классом `.tg-list` разметкой
+свёрнутого блока (он один на FreeModel/Conduit/Svrtr/AnyModel). Таблица вкладки Telegram
+живёт в `#tgm-list` **без** этого класса и рисуется своей `renderTgManager()`; данные общие
+— `state.tg`, наполняется `loadTgPool()`, которая в конце дёргает оба рендера. Новый
+контейнер пула вешать на `.tg-list` — да; новую независимую таблицу — нет.
 
 ---
 

@@ -33,6 +33,37 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
+// better-sqlite3 — нативный модуль, и на свежей машине он может не собраться (нет
+// prebuild под её версию Node, отвалился node-gyp, установка шла с --ignore-scripts).
+// Раньше это выглядело как «в профиле нет куки»: точный баланс молча деградировал в
+// прикидку, а причина не читалась ниоткуда — у пользователя на другой машине из всей
+// диагностики был только текст уведомления. Теперь ошибку загрузки помним и называем.
+let SQLITE_ERROR = null;
+function sqliteModule() {
+    try { return require('better-sqlite3'); }
+    catch (e) { SQLITE_ERROR = (e && (e.message || String(e))) || 'не загружается'; return null; }
+}
+
+// Готовность бэкенда куки — для громкой строки в логе прокси при старте.
+function cookieBackendReady() {
+    return sqliteModule() ? { ok: true } : { ok: false, error: String(SQLITE_ERROR).split('\n')[0].slice(0, 120) };
+}
+
+// Почему у профиля не нашлось куки — текст прямо в UI, без обращения к машине владельца.
+// Дёшево: модуль в require-кеше, AES-ключ профиля кеширован на процесс.
+function cookieFailReason(profileDir, host) {
+    if (!sqliteModule()) {
+        return `better-sqlite3 не собран → npm rebuild better-sqlite3 (${String(SQLITE_ERROR).split('\n')[0].slice(0, 70)})`;
+    }
+    try {
+        if (!fs.existsSync(path.join(profileDir, 'Default', 'Network', 'Cookies'))) {
+            return 'в профиле нет БД куки — открой ЛК (🌐) и войди в аккаунт';
+        }
+    } catch {}
+    if (!profileAesKey(profileDir)) return 'ключ профиля не расшифровался (Local State / DPAPI)';
+    return `в профиле нет куки для ${host} — сессия не сохранилась, войди в ЛК заново`;
+}
+
 const QUOTA_PER_UNIT_DEFAULT = 500000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 const TIMEOUT_MS = 15000;
@@ -237,9 +268,8 @@ function readProfileCookies(profileDir) {
         for (const suf of ['-wal', '-shm']) {
             if (fs.existsSync(src + suf)) { fs.copyFileSync(src + suf, tmp + suf); copied.push(tmp + suf); }
         }
-        let Database;
-        try { Database = require('better-sqlite3'); }
-        catch { return []; }   // модуль есть в package.json, но не падаем если не собран
+        let Database = sqliteModule();
+        if (!Database) return [];   // модуль есть в package.json, но не падаем если не собран
         const db = new Database(tmp, { readonly: true });
         let rows;
         try {
@@ -283,9 +313,8 @@ function writeProfileCookies(profileDir, host, cookies) {
     if (!fs.existsSync(src)) return { ok: false, error: 'в профиле нет БД куки' };
     const key = profileAesKey(profileDir);
     if (!key) return { ok: false, error: 'нет AES-ключа профиля' };
-    let Database;
-    try { Database = require('better-sqlite3'); }
-    catch (e) { return { ok: false, error: 'better-sqlite3 недоступен' }; }
+    const Database = sqliteModule();
+    if (!Database) return { ok: false, error: cookieFailReason(profileDir, host) };
     let db = null;
     try {
         db = new Database(src);
@@ -624,7 +653,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
         return { ok: false, error: 'нет профиля с куками' };
     }
     const cookie = effectiveCookieHeader(host, profileDir, jar);
-    if (!cookie) return { ok: false, error: `в профиле нет куки для ${host}` };
+    if (!cookie) return { ok: false, error: cookieFailReason(profileDir, host) };
 
     if (kind === 'jwt') {
         const rt = await refreshAccessToken(host, cookie, jar, jarK);
@@ -726,7 +755,7 @@ async function listAccountKeysInner({ host, profileDir, userId, reveal }) {
     const jar = loadJar();
     const jarK = jarKey(host, profileDir);
     const cookie = effectiveCookieHeader(host, profileDir, jar);
-    if (!cookie) return { ok: false, error: 'нет куки', keys: [] };
+    if (!cookie) return { ok: false, error: cookieFailReason(profileDir, host), keys: [] };
 
     let auth;
     if (kind === 'jwt') {
@@ -781,6 +810,7 @@ async function listAccountKeysInner({ host, profileDir, userId, reveal }) {
 module.exports = {
     QUOTA_PER_UNIT_DEFAULT, HOST_AUTH, authKind,
     profileAesKey, readProfileCookies, cookieHeaderFor, githubLogin,
+    cookieBackendReady, cookieFailReason,
     writeProfileCookies, syncJarToProfile,
     sessionUserId, userIdFromUsername,
     quotaPerUnit, quotaToUsd, hostGate,

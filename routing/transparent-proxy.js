@@ -511,8 +511,54 @@ async function handleSettingsApply(req, res) {
 }
 
 function jsonRes(res, code, body) {
+    if (res.writableEnded) return;
+    // Заголовки могли уйти раньше — это keepalive длинного батча (см. jsonKeepalive).
+    // Код ответа тогда уже не сменить, поэтому ошибку несёт поле error в теле; фронт
+    // проверяет его наравне с res.ok.
+    if (res.headersSent) { res.end(JSON.stringify(body)); return; }
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(body));
+}
+
+// ---- Keepalive для длинных батч-роутов ------------------------------------
+// «💳 Балансы всех» и «🔗 Профили» считают минутами (запросы к хосту сериализованы
+// шлюзом частоты: 2.5с на agentrouter, и до 15с на каждый неотвечающий fetch) и до
+// самого конца не отдают ни байта. Такое молчание рвут веб-антивирусы с MITM на
+// localhost, расширения и корп-прокси: в браузере это `TypeError: Failed to fetch`,
+// хотя расчёт на сервере прошёл нормально и уже лёг на диск (батч мержит каждую
+// тройку сразу). Поймано у пользователя на другой машине, где кроме текста
+// уведомления диагностики не было вообще.
+//
+// Лечение: если работа тянется дольше KEEPALIVE_AFTER_MS, отдаём заголовки и капаем
+// по пробелу — соединение живое. Ведущие пробелы легальны в JSON, `res.json()` и
+// `JSON.parse` их игнорируют, поэтому разбор на фронте не меняется.
+//
+// Капаем ЛЕНИВО намеренно: ранние отказы (модуль не загрузился, файл не читается)
+// успевают отдать честный 500 и код ответа сохраняется. Позднюю ошибку видно только
+// по полю error в теле — из-за этого guard `data.error` в дашборде обязателен.
+const KEEPALIVE_AFTER_MS = 4000;
+const KEEPALIVE_EVERY_MS = 5000;
+
+function jsonKeepalive(res) {
+    let arm = null, drip = null;
+    const stop = () => {
+        if (arm) { clearTimeout(arm); arm = null; }
+        if (drip) { clearInterval(drip); drip = null; }
+    };
+    arm = setTimeout(() => {
+        arm = null;
+        if (res.writableEnded || res.headersSent) return;
+        try { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); }
+        catch { return; }
+        drip = setInterval(() => {
+            if (res.writableEnded) return stop();
+            try { res.write(' '); } catch { stop(); }
+        }, KEEPALIVE_EVERY_MS);
+        if (drip.unref) drip.unref();
+    }, KEEPALIVE_AFTER_MS);
+    if (arm.unref) arm.unref();
+    res.on('close', stop);
+    return stop;
 }
 
 // ---- Keepalive-мост (хедж-конфиг :20133/:20155/:20156) ---------------------
@@ -5552,6 +5598,35 @@ function newapiProfileDir(host, profileLabel) {
     try { return fs.existsSync(dir) ? dir : null; } catch { return null; }
 }
 
+// Профиль записи: сначала сопоставленная метка, потом ДЕТЕРМИНИРОВАННАЯ `acct_<id>`.
+// Зачем второе: метку `profile` ставит только сопоставление (кнопка «🔗 Профили»), а
+// саму папку профиля создаёт кнопка «🌐 ЛК» под именем 'acct_' + id ТОЙ ЖЕ записи
+// (см. handle*SessionOpen). На свежей машине — обновился, залогинил все ЛК, про кнопку
+// сопоставления не знает — точный баланс молча деградировал в «~ прикидку» с причиной
+// «профиль не сопоставлен». Связка по id локальная, бесплатная и не может подцепить
+// чужой аккаунт: имя папки выведено из id самой записи. Найденная метка сохраняется в
+// запись при первом успешном чеке (profileUsed → newapiApplyBalance).
+function newapiResolveProfile(host, target) {
+    const mapped = newapiProfileDir(host, target && target.profile);
+    if (mapped) return { dir: mapped, label: target.profile };
+    const byId = target && target.id ? 'acct_' + target.id : null;
+    const dir = byId ? newapiProfileDir(host, byId) : null;
+    return dir ? { dir, label: byId, viaId: true } : { dir: null, label: null };
+}
+
+// Когда ЛК профиля последний раз открывали. Нужно кешу точного баланса: чек-ин и
+// пополнение поднимают `quota`, НЕ меняя `used_quota`, поэтому «расход не сдвинулся»
+// перестало быть признаком «остаток тот же». Поймано живьём на agentrouter: после
+// чек-ина на +$25 дашборд ещё 15 минут показывал прежние $175 с бейджем «точный»,
+// а сервер уже отдавал $200 — и вписанные вручную $200 этой же стряпнёй перебивались.
+const NEWAPI_LK_OPENED = new Map();   // label → ts
+function newapiLkVisited(label) {
+    if (label) NEWAPI_LK_OPENED.set(String(label), Date.now());
+}
+function newapiLkOpenedAt(label) {
+    return NEWAPI_LK_OPENED.get(String(label || '')) || 0;
+}
+
 // Открыт ли прямо сейчас браузер этого профиля. Профили заводит и открывает только
 // *SessionOpen-хендлер, поэтому карты pid'ов — достоверный ответ; ключ карты и есть
 // метка профиля (label = 'acct_' + id). Нужно перед записью в БД куки: Chromium
@@ -5620,7 +5695,8 @@ function newapiMigrateAnchors(sessions) {
 
 // Общий расчёт. target — запись пула (нужен api_key; profile/anchor опциональны).
 // guessGrant(spent) — легаси-угадывание провайдера, вызывается только как резерв.
-async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessGrant }) {
+// force — не переиспользовать сохранённую точную цифру (явный клик пользователя).
+async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessGrant, force = false }) {
     const apiKey = target && target.api_key;
     if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
     const lib = newapiLib();
@@ -5655,16 +5731,23 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     }
 
     // ── 2. self: точный остаток аккаунта ──
-    // Экономия запросов. Точная цифра меняется ТОЛЬКО когда что-то потрачено, поэтому
-    // если предыдущий self прошёл недавно и расход с тех пор не сдвинулся — берём
-    // сохранённое значение и на шлюз не идём. Без этого повторное нажатие «Балансы
-    // всех» шлёт по запросу на каждый аккаунт, Aliyun WAF у agentrouter и rate-limit
-    // у tabitoken включают защиту, и точные цифры деградируют до прикидок.
+    // Экономия запросов. Если предыдущий self прошёл недавно и с тех пор ничего не
+    // изменилось — берём сохранённое значение и на шлюз не идём. Без этого повторное
+    // нажатие «Балансы всех» шлёт по запросу на каждый аккаунт, Aliyun WAF у agentrouter
+    // и rate-limit у tabitoken включают защиту, и точные цифры деградируют до прикидок.
+    //
+    // «Ничего не изменилось» = расход тот же И в ЛК с тех пор не заходили. Второе
+    // обязательно: чек-ин/пополнение поднимает quota при нулевом расходе, и без этой
+    // проверки кеш 20 минут врал на величину бонуса (ловил $175 против живых $200).
+    // Явный клик по цифре приходит с force — он всегда спрашивает сервер.
     const SELF_REUSE_MS = 20 * 60_000;
-    if (target.balanceSource === 'self' && target.selfCheckedAt
+    const prof = newapiResolveProfile(host, target);
+    const selfAt = target.selfCheckedAt ? new Date(target.selfCheckedAt).getTime() : 0;
+    if (!force && target.balanceSource === 'self' && selfAt
         && typeof target.balance === 'number'
         && Number(target.usageSpentAtSelf) === usageSpent
-        && Date.now() - new Date(target.selfCheckedAt).getTime() < SELF_REUSE_MS) {
+        && newapiLkOpenedAt(prof.label) < selfAt
+        && Date.now() - selfAt < SELF_REUSE_MS) {
         return {
             status: 'live', balanceSource: 'self', reused: true,
             balance: target.balance, spent: target.spent, usageSpent,
@@ -5672,7 +5755,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             newApiUsername: target.newApiUsername, selfCheckedAt: target.selfCheckedAt,
         };
     }
-    const profileDir = newapiProfileDir(host, target.profile);
+    const profileDir = prof.dir;
     let selfError = null;
     if (lib && (profileDir || target.accessToken)) {
         try {
@@ -5686,7 +5769,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 // Точный чек мог ротировать одноразовую refresh-куку. Сразу отдаём новое
                 // значение профилю, пока браузер закрыт, — чтобы следующее открытие ЛК
                 // не наткнулось на погашенную сессию и не разлогинилось.
-                if (target.profile) newapiSyncProfile(host, target.profile, 'после чека');
+                if (prof.label) newapiSyncProfile(host, prof.label, 'после чека');
                 return {
                     status: 'live',
                     balanceSource: 'self',
@@ -5696,13 +5779,16 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                     granted: me.granted,
                     newApiUserId: me.userId,
                     newApiUsername: me.username,
+                    profileUsed: prof.label,
                     selfCheckedAt: new Date().toISOString(),
                 };
             }
             selfError = me.error || 'self не ответил';
         } catch (e) { selfError = e.message; }
     } else if (lib && !profileDir) {
-        selfError = target.profile ? 'профиль не найден на диске' : 'профиль не сопоставлен';
+        selfError = target.profile
+            ? 'профиль не найден на диске'
+            : 'профиля аккаунта нет — открой ЛК кнопкой 🌐 и войди, тогда баланс станет точным';
     }
 
     // ── 3. anchor: вписанный руками баланс, убывает по расходу ──
@@ -5760,7 +5846,8 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
 }
 
 // Баланс ключа AgentRouter. Точный — из /api/user/self; резервы см. newapiBalance.
-async function arBalance(target) {
+// opts.force — не брать сохранённую цифру, спросить сервис (явный клик пользователя).
+async function arBalance(target, opts = {}) {
     return newapiBalance({
         target: typeof target === 'string' ? { api_key: target } : (target || {}),
         host: 'agentrouter.org',
@@ -5768,10 +5855,13 @@ async function arBalance(target) {
         usageUrl: `${AR_BASE_URL}/dashboard/billing/usage`,
         subUrl: `${AR_BASE_URL}/v1/dashboard/billing/subscription`,
         guessGrant: spent => Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP),
+        force: !!opts.force,
     });
 }
 
 async function handleArSessions(req, res) {
+    // probe/balance-батчи идут минутами и до конца молчат — держим соединение живым.
+    const stopKeepalive = jsonKeepalive(res);
     try {
         const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
         const probe = params.get('probe') === '1';
@@ -5796,6 +5886,7 @@ async function handleArSessions(req, res) {
         }
         jsonRes(res, 200, { sessions, activeModel: arReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
 }
 
 // Пишем результат newapiBalance в объект сессии (персистентный кеш — переживает F5 и рестарт).
@@ -5820,6 +5911,10 @@ function newapiApplyBalance(target, bal) {
         if (bal.accessUntil != null) target.accessUntil = bal.accessUntil;
         if (bal.newApiUserId) target.newApiUserId = bal.newApiUserId;
         if (bal.newApiUsername) target.newApiUsername = bal.newApiUsername;
+        // Профиль, которым чек реально прошёл. Записываем, чтобы связка, найденная по
+        // `acct_<id>` (см. newapiResolveProfile), закрепилась в пуле и её было видно в UI —
+        // иначе она заново выводилась бы на каждом чеке и выглядела как «не сопоставлено».
+        if (bal.profileUsed && target.profile !== bal.profileUsed) target.profile = bal.profileUsed;
         // Отметка последнего успешного self и расход на тот момент — по ним решается,
         // можно ли переиспользовать точную цифру вместо нового запроса (см. SELF_REUSE_MS).
         if (bal.balanceSource === 'self') {
@@ -5867,21 +5962,25 @@ const AR_BALANCE_LAST = new Map();         // api_key → ts последней 
 
 // Считает баланс и мержит в сессию. Параллельные вызовы по одному ключу
 // переиспользуют один промис — в billing уйдёт ровно один запрос.
-function arBalanceOnce(apiKey) {
+function arBalanceOnce(apiKey, force = false) {
     const running = AR_BALANCE_INFLIGHT.get(apiKey);
-    if (running) return running;
+    // Форсированный чек НЕ подхватывает уже летящий мягкий: тот мог вернуть цифру из
+    // кеша, а пользователь кликнул именно затем, чтобы увидеть свежую.
+    if (running && (!force || running.force)) return running.p;
     const p = (async () => {
         const target = arLoad().find(s => s.api_key === apiKey);
-        const bal = await arBalance(target || { api_key: apiKey });
+        const bal = await arBalance(target || { api_key: apiKey }, { force });
         if (target) {
             arApplyBalance(target, bal);
             arSaveMerge(target);   // мерж, а не перезапись файла: не затираем параллельный батч
         }
         return bal;
     })();
-    AR_BALANCE_INFLIGHT.set(apiKey, p);
+    AR_BALANCE_INFLIGHT.set(apiKey, { p, force });
     AR_BALANCE_LAST.set(apiKey, Date.now());
-    p.catch(() => {}).finally(() => AR_BALANCE_INFLIGHT.delete(apiKey));
+    p.catch(() => {}).finally(() => {
+        if (AR_BALANCE_INFLIGHT.get(apiKey) && AR_BALANCE_INFLIGHT.get(apiKey).p === p) AR_BALANCE_INFLIGHT.delete(apiKey);
+    });
     return p;
 }
 
@@ -5946,7 +6045,8 @@ async function handleArBalance(req, res) {
             arBalanceMaybe(api_key);
             return jsonRes(res, 200, { ok: true, queued });
         }
-        const bal = await arBalanceOnce(api_key);
+        // Явный запрос цифры (клик по балансу в дашборде) — только со свежим self.
+        const bal = await arBalanceOnce(api_key, true);
         jsonRes(res, 200, bal);
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -5978,10 +6078,13 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn 
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
 
         // Проверочный чек: он и живость ключа даёт, и текущий расход для привязки.
-        // Его падение НЕ должно ронять вписывание: пользователь назвал число, сохранить
+        // force обязателен: пользователь вписывает то, что ВИДИТ в ЛК прямо сейчас, а
+        // сохранённая цифра могла быть снята до чек-ина — именно так вписанные $200
+        // перебивались кешированными $175 с бейджем «точный».
+        // Падение чека НЕ должно ронять вписывание: пользователь назвал число, сохранить
         // его обязаны в любом случае. Раньше сетевой обрыв отдавал наверх
         // `error: 'fetch failed'`, фронт считал это провалом — хотя анкер уже был записан.
-        const probe = await balanceFn(target);
+        const probe = await balanceFn(target, { force: true });
         const probeOk = probe && probe.status === 'live';
         const basis = (probe && probe.usageSpent != null) ? probe.usageSpent : (Number(target.spent) || 0);
 
@@ -5999,7 +6102,7 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn 
         if (val === null) {
             // Сброс — единственный случай, где нужен повторный расчёт: probe считался
             // ДО удаления анкера и всё ещё показывал его.
-            bal = await balanceFn(target);
+            bal = await balanceFn(target, { force: true });
         } else if (probeOk && probe.balanceSource === 'self') {
             bal = probe;   // точная цифра приоритетнее вписанной
         } else {
@@ -6044,6 +6147,8 @@ function handleArSetBalance(req, res) {
 // Отдельно возвращаем «бесхозные» профили — аккаунты, живые на диске, но
 // отсутствующие в пуле (у GoRouter их четыре).
 async function newapiMapProfiles(req, res, { tag, host, load, save }) {
+    // Сопоставление ходит в сеть по каждому профилю — тоже долгий молчащий запрос.
+    const stopKeepalive = jsonKeepalive(res);
     try {
         const lib = newapiLib();
         if (!lib) return jsonRes(res, 500, { error: 'модуль newapi-account недоступен' });
@@ -6136,6 +6241,7 @@ async function newapiMapProfiles(req, res, { tag, host, load, save }) {
             profilesWithAuth: candidates.length,
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
 }
 
 function handleArMapProfiles(req, res) {
@@ -6216,6 +6322,9 @@ async function handleArSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { arLkPids.delete(label); logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         arLkPids.set(label, proc.pid);
+        // Отметка визита: в ЛК могли сделать чек-ин, и сохранённая точная цифра
+        // перестаёт быть годной, даже если расход не сдвинулся (см. newapiLkVisited).
+        newapiLkVisited(label);
         logLine(`agentrouter session/open: ${dispName} label=${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -6843,7 +6952,7 @@ async function goProbe(apiKey) {
 
 // Баланс: usage endpoint на КОРНЕ gorouter.app (не /v1). Точный остаток — из
 // /api/user/self куками профиля; резервы (анкер, угадывание) см. newapiBalance.
-async function goBalance(target) {
+async function goBalance(target, opts = {}) {
     return newapiBalance({
         target: typeof target === 'string' ? { api_key: target } : (target || {}),
         host: 'gorouter.app',
@@ -6851,12 +6960,14 @@ async function goBalance(target) {
         usageUrl: 'https://gorouter.app/dashboard/billing/usage',
         subUrl: null,
         guessGrant: spent => Math.max(GO_DEFAULT_GRANT, Math.ceil(spent / GO_GRANT_STEP) * GO_GRANT_STEP),
+        force: !!opts.force,
     });
 }
 
 function goApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
 
 async function handleGoSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
     try {
         const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
         const probe = params.get('probe') === '1';
@@ -6876,6 +6987,7 @@ async function handleGoSessions(req, res) {
         }
         jsonRes(res, 200, { sessions, activeModel: goReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
 }
 
 async function handleGoPing(req, res) {
@@ -6896,10 +7008,10 @@ async function handleGoBalance(req, res) {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
         const api_key = q.searchParams.get('api_key');
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
-        const recalc = async () => {
+        const recalc = async (force = false) => {
             const sessions = goLoad();
             const target = sessions.find(s => s.api_key === api_key);
-            const bal = await goBalance(target || { api_key });
+            const bal = await goBalance(target || { api_key }, { force });
             if (target) { goApplyBalance(target, bal); goSave(sessions); }
             return bal;
         };
@@ -6909,7 +7021,8 @@ async function handleGoBalance(req, res) {
             const queued = nudgeBalanceOnce('go:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
-        jsonRes(res, 200, await recalc());
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6954,6 +7067,7 @@ async function handleGoSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { goLkPids.delete(label); logLine(`gorouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         goLkPids.set(label, proc.pid);
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`gorouter session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -7525,7 +7639,7 @@ async function tbProbe(apiKey) {
 // Баланс ключа: usage на КОРНЕ tabitoken.com (не /v1). Точный остаток — из
 // /api/user/self (tabitoken это rc.23, там сперва обмен refresh-куки на JWT);
 // резервы (анкер, угадывание) см. newapiBalance.
-async function tbBalance(target) {
+async function tbBalance(target, opts = {}) {
     return newapiBalance({
         target: typeof target === 'string' ? { api_key: target } : (target || {}),
         host: 'tabitoken.com',
@@ -7533,12 +7647,14 @@ async function tbBalance(target) {
         usageUrl: `${TB_BASE_URL}/dashboard/billing/usage`,
         subUrl: `${TB_BASE_URL}/v1/dashboard/billing/subscription`,
         guessGrant: spent => Math.max(TB_DEFAULT_GRANT, Math.ceil(spent / TB_GRANT_STEP) * TB_GRANT_STEP),
+        force: !!opts.force,
     });
 }
 
 function tbApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
 
 async function handleTbSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
     try {
         const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
         const probe = params.get('probe') === '1';
@@ -7558,6 +7674,7 @@ async function handleTbSessions(req, res) {
         }
         jsonRes(res, 200, { sessions, activeModel: tbReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
 }
 
 async function handleTbPing(req, res) {
@@ -7578,10 +7695,10 @@ async function handleTbBalance(req, res) {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
         const api_key = q.searchParams.get('api_key');
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
-        const recalc = async () => {
+        const recalc = async (force = false) => {
             const sessions = tbLoad();
             const target = sessions.find(s => s.api_key === api_key);
-            const bal = await tbBalance(target || { api_key });
+            const bal = await tbBalance(target || { api_key }, { force });
             if (target) { tbApplyBalance(target, bal); tbSave(sessions); }
             return bal;
         };
@@ -7590,7 +7707,7 @@ async function handleTbBalance(req, res) {
             const queued = nudgeBalanceOnce('tb:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
-        jsonRes(res, 200, await recalc());
+        jsonRes(res, 200, await recalc(true));   // клик по цифре — только свежий self
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -7634,6 +7751,7 @@ async function handleTbSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { tbLkPids.delete(label); logLine(`tabi session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         tbLkPids.set(label, proc.pid);
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`tabi session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -9524,6 +9642,18 @@ server.listen(LISTEN_PORT, () => {
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);
+
+    // Громко про нативный модуль: без собранного better-sqlite3 куки профилей не
+    // читаются вообще, и точный баланс AR/GO/TB молча превращается в «~ прикидку».
+    // На свежей машине это самая частая причина, а по UI она раньше не читалась.
+    try {
+        const nlib = newapiLib();
+        const be = nlib && nlib.cookieBackendReady ? nlib.cookieBackendReady() : null;
+        if (be && !be.ok) {
+            console.log(`  ⚠ better-sqlite3 не собран (${be.error})`);
+            console.log(`    → точный баланс AgentRouter/GoRouter/Tabi работать НЕ будет: npm rebuild better-sqlite3`);
+        }
+    } catch {}
 
     // Папку репо могли перенести — статуслайн в settings.json прописан абсолютным
     // путём, поправляем ссылку на свою копию скрипта (см. healStatuslinePath).

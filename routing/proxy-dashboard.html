@@ -1492,6 +1492,7 @@
             <button onclick="loadArSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadArSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
             <button onclick="arCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+            <button onclick="arMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
             <button onclick="arShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
             <button onclick="arShowImport()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
           </div>
@@ -1614,6 +1615,7 @@
             <button onclick="loadGoSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadGoSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
             <button onclick="goCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+            <button onclick="goMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
             <button onclick="goShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
             <button onclick="goShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
           </div>
@@ -1736,6 +1738,7 @@
             <button onclick="loadTbSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadTbSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
             <button onclick="tbCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+            <button onclick="tbMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
             <button onclick="tbShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
             <button onclick="tbShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
           </div>
@@ -4973,7 +4976,7 @@ function customRender() {
 function arPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
   let sumBalance = 0, sumGrant = 0, withBalance = 0;
-  let staleKeys = 0, errKeys = 0, freshestTs = 0;
+  let staleKeys = 0, errKeys = 0, inexactKeys = 0, freshestTs = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
@@ -4983,16 +4986,24 @@ function arPoolStats(sessions) {
       // Знаменатель — ПОЛНАЯ выдача (grant+bonus+referral), т.е. ровно то, из чего
       // сервер считал balance. С одним grant шкала уезжала за 100% и залипала там
       // (у пула было 1794.80/1550 = 115% → clamp 100%, из-за чего казалось, что она мертва).
-      sumGrant += (s.grant || 175) + (s.bonus || 0) + (s.referral || 0);
+      sumGrant += balanceDenom(s, 175);
       withBalance++;
     }
+    // «Не проверено» — только когда провалился usage-эндпоинт, т.е. мы не знаем даже,
+    // жив ли ключ. selfError сюда НЕ идёт: он значит лишь «точную цифру взять не вышло»,
+    // и степень точности уже видна бейджем ⚡/✏️/~ в самой строке.
+    // Аккаунты БЕЗ привязанного профиля (личные — wa/vitka/tabi/WormAlien) не считаем
+    // и здесь: у них ручной ввод — это норма навсегда, а не то, что надо чинить.
+    // Флажок оставляем только для действительно исправимого: профиль привязан, но
+    // точный баланс не берётся (пауза шлюза, истекла сессия — лечится входом в ЛК).
     if (s.balanceError) errKeys++;
+    else if (s.selfError && s.balanceSource !== 'self' && s.profile) inexactKeys++;
     const ts = s.balanceCheckedAt ? Date.parse(s.balanceCheckedAt) : 0;
     if (ts > freshestTs) freshestTs = ts;
     if (!ts || Date.now() - ts > 15 * 60_000) staleKeys++;
   }
   const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
-  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct, staleKeys, errKeys, freshestTs };
+  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct, staleKeys, errKeys, inexactKeys, freshestTs };
 }
 
 // «5с / 12м / 3ч / 2д назад» — короткий возраст цифры для шапки шкалы.
@@ -5021,7 +5032,8 @@ function renderArGauge() {
       st.sumBalance > 0 ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
       actBal !== null ? `<span class="text-amber" title="эта же цифра в статусбаре Claude Code">★ активный $${actBal.toFixed(2)}</span>` : '',
       `<span class="text-faint" title="возраст самой свежей проверки баланса">обновлено ${agoShort(st.freshestTs)} назад</span>`,
-      st.errKeys > 0 ? `<span class="text-crimson/80" title="последняя проверка баланса не удалась (таймаут billing / dead-ключ)">${st.errKeys} ⚠ ошибка чека</span>` : '',
+      st.errKeys > 0 ? `<span class="text-crimson/80" title="usage-эндпоинт не ответил — не знаем даже, жив ли ключ. Показана прошлая цифра.">${st.errKeys} ⚠ не проверено</span>` : '',
+      st.inexactKeys > 0 ? `<span class="text-faint" title="точный баланс из ЛК взять не удалось (пауза шлюза, профиль не сопоставлен, сессия истекла) — показана вписанная цифра или прикидка. Ключи при этом живые.">${st.inexactKeys} ~ без точной цифры</span>` : '',
     ].filter(Boolean).join(''),
     note: st.withBalance && st.withBalance < st.total
       ? 'Запас считается по известным балансам (Σ balance / Σ выдачи). Клик 💰 у ключа = чек баланса.'
@@ -5396,92 +5408,162 @@ function balanceFreshMark(s) {
   return `<span class="text-faint text-[10px] leading-none" title="кеш устарел ${fmt} назад — статус-бар обновит при следующей проверке">~</span>`;
 }
 
-function arBalanceCell(s, kJ) {
+// ── Ячейка баланса: цифра + бейдж источника + одна кнопка (общее для AR/GO/TB) ──
+//
+// Раньше здесь было три ручки: «✏️ из $175» (изначальная выдача), «+25» (чек-ин),
+// «+100» (рефка). Баланс считался как выдача + бонусы − потраченное, выдачу
+// приходилось подгонять руками под цифру из ЛК, и подгонка разъезжалась с первой же
+// тратой — в UI висели минусы вроде −$7.40. Теперь баланс приходит точным из
+// /api/user/self, а ручной ввод — одна кнопка «вписать текущий баланс», после
+// которой цифра убывает сама.
+const BAL_SRC = {
+  self:   { icon: '⚡', cls: 'text-emerald', label: 'точный'   },
+  anchor: { icon: '✏️', cls: 'text-sky',     label: 'вручную'  },
+  guess:  { icon: '~',  cls: 'text-faint',   label: 'прикидка' },
+};
+
+function balanceSourceBadge(s) {
+  const src = BAL_SRC[s.balanceSource];
+  if (!src) return '';
+  let tip;
+  if (s.balanceSource === 'self') {
+    tip = `Точный остаток из ЛК аккаунта${s.newApiUsername ? ` (${s.newApiUsername})` : ''}`
+      + `${typeof s.granted === 'number' ? ` · выдано всего $${s.granted.toFixed(2)}` : ''}`;
+  } else if (s.balanceSource === 'anchor') {
+    const drawn = (typeof s.spent === 'number' && typeof s.anchorSpent === 'number')
+      ? Math.max(0, s.spent - s.anchorSpent) : 0;
+    const when = s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '';
+    tip = `Вписан вручную: $${(s.balanceAnchor ?? 0).toFixed(2)}${when ? ` (${when})` : ''}`
+      + `, с тех пор потрачено $${drawn.toFixed(2)}`
+      + `${s.selfError ? ` · точный недоступен: ${s.selfError}` : ''}`;
+  } else {
+    tip = 'Прикидка: выдача угадана, точной цифры нет.'
+      + ' Нажми ✏️ и впиши баланс из ЛК, либо сопоставь профиль кнопкой «🔗 Профили».'
+      + `${s.selfError ? ` Причина: ${s.selfError}` : ''}`;
+  }
+  return `<span class="${src.cls} text-[10px] leading-none ml-1" title="${esc(tip)}">${src.icon}</span>`;
+}
+
+// Знаменатель шкалы «сколько осталось от того, что было». Приоритет тот же, из
+// которого сервер считал balance, иначе шкала уезжает за 100% и залипает там:
+//   granted       — точная сумма выданного (остаток+расход) из /api/user/self
+//   balanceAnchor — вписанный руками баланс
+//   легаси grant+bonus+referral — записи, не прошедшие миграцию
+// fallback — база провайдера, только чтобы не делить на ноль.
+function balanceDenom(s, base) {
+  if (Number(s.granted) > 0) return Number(s.granted);
+  if (Number(s.balanceAnchor) > 0) return Number(s.balanceAnchor);
+  const legacy = (Number(s.grant) || 0) + (Number(s.bonus) || 0) + (Number(s.referral) || 0);
+  if (legacy > 0) return legacy;
+  return Math.max(base, Number(s.balance) || 0);
+}
+
+// Пороги абсолютные: при точном балансе никакого «гранта» нет, брать долю не от чего.
+function balanceColor(v) {
+  return v >= 20 ? 'text-emerald' : v >= 5 ? 'text-amber' : 'text-crimson';
+}
+
+// prov — 'ar' | 'go' | 'tb': из него собираются имена обработчиков вкладки.
+function newapiBalanceCell(s, kJ, prov) {
   if (!isRealKey(s.api_key)) return NO_KEY_BALANCE;   // ключа нет — считать нечего
   if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
-  const manual = s.grantSource === 'manual';
-  const gLabel = typeof s.grant === 'number' ? `из $${s.grant.toFixed(0)}` : 'задать выдачу';
-  const gTip = manual
-    ? `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — вписана вручную. Клик = изменить.`
-    : `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — угадана автоматически. Клик = вписать точную.`;
-  const edit = `<button onclick='arSetGrant(${kJ})' title="${esc(gTip)}"
+
+  const editTip = s.balanceSource === 'anchor'
+    ? `Вписать баланс заново (сейчас $${(s.balanceAnchor ?? 0).toFixed(2)} от ${s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '—'}). Пусто = сбросить.`
+    : 'Вписать текущий баланс из ЛК. Дальше он убывает сам по расходу.';
+  const edit = `<button onclick='${prov}SetBalance(${kJ})' title="${esc(editTip)}"
     class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
-    ${manual ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
-    hover:bg-sky/25 hover:border-sky/70 hover:text-sky">✏️ ${gLabel}</button>`;
+    ${s.balanceSource === 'anchor' ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
+    hover:bg-sky/25 hover:border-sky/70 hover:text-sky">✏️ вписать</button>`;
 
   if (typeof s.balance === 'number') {
-    const grant = (s.grant || 175) + (s.bonus || 0) + (s.referral || 0);
-    const frac = grant > 0 ? s.balance / grant : 0;
-    const color = frac > 0.3 ? 'text-emerald' : frac >= 0.1 ? 'text-amber' : 'text-crimson';
-    const bonusTip = (s.bonus || 0) > 0 ? ` + чек-ин $${(s.bonus || 0).toFixed(0)}` : '';
-    const refTip = (s.referral || 0) > 0 ? ` + ревралы $${(s.referral || 0).toFixed(0)}` : '';
-    const tip = `остаток $${s.balance.toFixed(2)} = выдано $${(s.grant ?? 0).toFixed(0)} (${manual ? 'вручную' : 'авто'})${bonusTip}${refTip} − потрачено $${(s.spent ?? 0).toFixed(2)} · клик = пересчитать`;
-    const bonusBtn = `<button onclick='arAddBonus(${kJ})' title="Чек-ин в ЛК дал +$25 — засчитать бонус. Уже: $${(s.bonus || 0).toFixed(0)}"
-      class="ml-1 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
-      ${(s.bonus || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
-      hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+25</button>`;
-    const referralBtn = `<button onclick='arAddReferral(${kJ})' title="За реврала дали +$100 — засчитать. Уже: $${(s.referral || 0).toFixed(0)}"
-      class="ml-1 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
-      ${(s.referral || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
-      hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+100</button>`;
-    return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center"><button onclick='arCheckBalance(${kJ})' title="${esc(tip)}"
-      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}${referralBtn}${balanceFreshMark(s)}</span>${edit}</span>`;
+    // Отрицательный баланс физически невозможен — это признак устаревшей привязки.
+    // Показываем $0.00 и объясняем в подсказке, а не рисуем минус как раньше.
+    const raw = s.balance;
+    const shown = Math.max(0, raw);
+    const color = balanceColor(shown);
+    const spentTip = typeof s.spent === 'number' ? ` · потрачено $${s.spent.toFixed(2)}` : '';
+    const negTip = raw < 0 ? ` · расчёт дал −$${Math.abs(raw).toFixed(2)}: привязка устарела, впиши баланс заново` : '';
+    const tip = `Остаток $${shown.toFixed(2)} (${(BAL_SRC[s.balanceSource] || {}).label || 'источник неизвестен'})${spentTip}${negTip} · клик = пересчитать`;
+    return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center">`
+      + `<button onclick='${prov}CheckBalance(${kJ})' title="${esc(tip)}"`
+      + ` class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${shown.toFixed(2)}</button>`
+      + `${balanceSourceBadge(s)}${balanceFreshMark(s)}</span>${edit}</span>`;
   }
-  return `<span class="inline-flex flex-col items-center">${actBtn(`arCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
+  return `<span class="inline-flex flex-col items-center">${actBtn(`${prov}CheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
 }
 
-// POST /__switch/api/ar/add-bonus { api_key } → чек-ин в ЛК дал +$25. Бонус копится отдельно от
-// выдачи: баланс = grant + bonus − spent. После ответа обновляем кеш сессии и перерисовываем.
-// Параметр — api_key (kJ = JSON.stringify(s.api_key)), ищем сессию по find, как arSetGrant/arCheckBalance.
-async function arAddBonus(api_key) {
-  const s = state.agentrouter.find(x => x.api_key === api_key);
-  if (!s) return;
-  const has = (s.bonus || 0) > 0;
-  if (!confirm(`Чек-ин в ЛК дал +$25?${has ? `\nУже засчитано: $${s.bonus.toFixed(0)}. Добавить ещё +$25.` : ''}`)) return;
+// POST /__switch/api/{ar,go,tb}/set-balance — вписать текущий баланс из ЛК.
+// Запоминается вместе с текущим расходом, поэтому дальше убывает сам: клик нужен
+// один раз на аккаунт, а не после каждой траты (чек-ин на бонус = вписать заново).
+async function newapiSetBalanceUI(prov, api_key, list, rerender) {
+  const s = (list() || []).find(x => x.api_key === api_key);
+  const cur = s && typeof s.balanceAnchor === 'number' ? s.balanceAnchor.toFixed(2)
+            : s && typeof s.balance === 'number' ? Math.max(0, s.balance).toFixed(2) : '';
+  const spent = s && typeof s.spent === 'number' ? s.spent.toFixed(2) : '?';
+  const msg = [
+    s && s.balanceSource === 'self'
+      ? 'У этого аккаунта баланс уже читается ТОЧНО из ЛК — вписывать ничего не нужно.'
+        + '\nЕсли впишешь, значение сохранится, но показываться будет точное.'
+      : 'Открой ЛК аккаунта и впиши остаток, который там показан.',
+    '',
+    `Сейчас потрачено $${spent}. Вписанный баланс дальше убывает сам по расходу,`,
+    'поэтому кликать надо один раз, а не после каждой траты.',
+    '',
+    'Пустое поле + OK = сбросить ручную привязку.',
+  ].join('\n');
+
+  const raw = prompt(msg, cur);
+  if (raw === null) return;
+  const val = raw.trim() === '' ? null : Number(raw.trim().replace(',', '.'));
+  if (val !== null && !(isFinite(val) && val >= 0)) return toast('баланс должен быть числом не меньше 0', 'warn');
   try {
-    const res = await fetch('/__switch/api/ar/add-bonus', {
+    const res = await fetch(`/__switch/api/${prov}/set-balance`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
+      body: JSON.stringify({ api_key, balance: val }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    const idx = state.agentrouter.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const t = state.agentrouter[idx];
-      t.bonus = (t.bonus || 0) + 25;
-      if (data.status === 'live') { t.spent = data.spent; t.grant = data.grant; t.balance = data.balance; t.grantSource = data.grantSource; }
+    if (s) {
+      if (val === null) { delete s.balanceAnchor; delete s.anchorSpent; delete s.anchoredAt; }
+      else { s.balanceAnchor = val; s.anchorSpent = data.usageSpent; s.anchoredAt = new Date().toISOString(); }
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted;
+      }
+      s.balanceCheckedAt = new Date().toISOString();
     }
-    renderAr();
-    renderArGauge();
-    toast(`✓ +$25 засчитано` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
-  } catch (e) { toast('add-bonus: ' + e.message, 'error'); }
+    rerender();
+    toast(data.note || (val === null ? '↩ привязка сброшена'
+      : `✓ баланс $${Number(data.balance).toFixed(2)}`), data.note ? 'warn' : 'success', 4000);
+  } catch (e) { toast('set-balance: ' + e.message, 'error'); }
 }
 
-// POST /__switch/api/ar/add-referral { api_key } → реврал принёс +$100. Поле referral копится
-// отдельно от bonus: баланс = grant + bonus + referral − spent.
-async function arAddReferral(api_key) {
-  const s = state.agentrouter.find(x => x.api_key === api_key);
-  if (!s) return;
-  const has = (s.referral || 0) > 0;
-  if (!confirm(`За реврала дали +$100?${has ? `\nУже засчитано: $${s.referral.toFixed(0)}. Добавить ещё +$100.` : ''}`)) return;
+// POST /__switch/api/{ar,go,tb}/map-profiles — связать записи с браузерными профилями.
+// Без связки точный баланс недоступен: /api/user/self авторизуется куками аккаунта,
+// а не ключом. Сверка идёт по самому ключу, поэтому это реальные запросы — кнопка
+// ручная, автоматически не дёргается.
+async function newapiMapProfilesUI(prov, reload) {
+  if (!confirm('Сопоставить записи с браузерными профилями?\n\nПройдёт по профилям аккаунтов и сверит ключи — это несколько запросов к провайдеру.')) return;
+  toast('сопоставляю профили…', 'info', 15000);
   try {
-    const res = await fetch('/__switch/api/ar/add-referral', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
-    });
+    const res = await fetch(`/__switch/api/${prov}/map-profiles`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    const idx = state.agentrouter.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const t = state.agentrouter[idx];
-      t.referral = (t.referral || 0) + 100;
-      if (data.status === 'live') { t.spent = data.spent; t.grant = data.grant; t.bonus = data.bonus; t.balance = data.balance; t.grantSource = data.grantSource; }
+    const parts = [`Сопоставлено: ${data.mappedCount} из ${data.total} (профилей с авторизацией: ${data.profilesWithAuth})`];
+    if (data.unmatched && data.unmatched.length) {
+      parts.push('Без профиля (останутся на ручном вводе):\n  ' + data.unmatched.map(u => u.account).join(', '));
     }
-    renderAr();
-    renderArGauge();
-    toast(`✓ +$100 засчитано` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
-  } catch (e) { toast('add-referral: ' + e.message, 'error'); }
+    if (data.orphans && data.orphans.length) {
+      parts.push('Живые профили, которых нет в пуле:\n  ' + data.orphans.map(o => `${o.github || '?'} (${o.profile})`).join('\n  '));
+    }
+    alert(parts.join('\n\n'));
+    await reload();
+    toast(`✓ сопоставлено ${data.mappedCount}/${data.total}`, 'success');
+  } catch (e) { toast('map-profiles: ' + e.message, 'error'); }
 }
+
+function arBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'ar'); }
 
 function arShowAdd(show = true) {
   $('ar-add-form').classList.toggle('hidden', !show);
@@ -5552,23 +5634,30 @@ async function arPing(api_key) {
     toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
   } catch (e) { toast('ping: ' + e.message, 'error'); }
 }
-
-// Чек баланса одного ключа. Бэк считает spent/grant/balance и пишет в sessions.json (кеш).
+// Чек баланса одного ключа. Бэк берёт точный остаток из /api/user/self, а при
+// отсутствии куки откатывается на вписанный вручную анкер (см. newapiBalance).
 async function arCheckBalance(api_key) {
   try {
     toast('💰 считаю баланс…', 'info', 2000);
     const res = await fetch('/__switch/api/ar/balance?api_key=' + encodeURIComponent(api_key));
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    const idx = state.agentrouter.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const s = state.agentrouter[idx];
+    const s = state.agentrouter.find(x => x.api_key === api_key);
+    if (s) {
       s.status = data.status;
-      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; s.accessUntil = data.accessUntil; }
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted;
+        s.accessUntil = data.accessUntil; s.selfError = data.selfError;
+      }
+      s.balanceCheckedAt = new Date().toISOString();
     }
     renderAr();
     renderArGauge();
-    if (data.status === 'live') toast(`💰 баланс $${data.balance.toFixed(2)} (выдано $${data.grant} · потрачено $${data.spent.toFixed(2)})`, 'success', 4000);
+    if (data.status === 'live') {
+      const lbl = (BAL_SRC[data.balanceSource] || {}).label || '?';
+      toast(`💰 баланс $${Number(data.balance).toFixed(2)} (${lbl} · потрачено $${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
     else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
     else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
   } catch (e) { toast('balance: ' + e.message, 'error'); }
@@ -5584,55 +5673,21 @@ async function arCheckAllBalances() {
     state.agentrouter = data.sessions || [];
     renderAr();
     renderArGauge();
+    const exact = state.agentrouter.filter(s => s.balanceSource === 'self').length;
     const withBal = state.agentrouter.filter(s => typeof s.balance === 'number').length;
-    toast(`✓ балансы посчитаны (${withBal})`, 'success');
+    toast(`✓ балансы посчитаны (${withBal}, из них точных ${exact})`, 'success');
   } catch (e) {
     $('ar-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
     toast('балансы: ' + e.message, 'error');
   }
 }
 
-// Задать изначальную выдачу вручную (у разных акков разная: 125/175/личный больше).
-// Пустая строка → сброс на авто-угадывание. Бэк сразу пересчитывает баланс.
-// Текст промпта показывает реальные цифры этого аккаунта, чтобы не гадать что вписывать.
-async function arSetGrant(api_key) {
-  const cur = state.agentrouter.find(x => x.api_key === api_key);
-  const now = cur && cur.grantManual ? String(cur.grantManual) : '';
-  const spent = cur && typeof cur.spent === 'number' ? cur.spent.toFixed(2) : '?';
-  const grantNow = cur && typeof cur.grant === 'number' ? cur.grant.toFixed(0) : '?';
-  const isManual = cur && cur.grantSource === 'manual';
+function arSetBalance(api_key) {
+  return newapiSetBalanceUI('ar', api_key, () => state.agentrouter, () => { renderAr(); renderArGauge(); });
+}
 
-  const msg = [
-    'Сколько денег было НА АККАУНТЕ ИЗНАЧАЛЬНО (когда его зарегали)?',
-    '',
-    `Сейчас: выдано $${grantNow} (${isManual ? 'вписано тобой' : 'дашборд угадал сам'}), потрачено $${spent}.`,
-    'Остаток = выдано − потрачено. Поэтому если выдача указана неверно — врёт и остаток.',
-    '',
-    'Впиши число: 125, 175, или сколько реально дали (личный акк — больше).',
-    'Оставь поле пустым и нажми OK — дашборд снова будет угадывать сам.',
-  ].join('\n');
-
-  const val = prompt(msg, now);
-  if (val === null) return; // отмена
-  const grant = val.trim() === '' ? null : Number(val.trim());
-  if (grant !== null && !(grant > 0)) return toast('выдача должна быть числом больше 0', 'warn');
-  try {
-    const res = await fetch('/__switch/api/ar/set-grant', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key, grant }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    const idx = state.agentrouter.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const s = state.agentrouter[idx];
-      if (grant === null) delete s.grantManual; else s.grantManual = grant;
-      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; s.grantSource = data.grantSource; }
-    }
-    renderAr();
-    renderArGauge();
-    toast(grant === null ? '↩ выдача сброшена на авто' : `✓ выдача $${grant}` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
-  } catch (e) { toast('set-grant: ' + e.message, 'error'); }
+function arMapProfiles() {
+  return newapiMapProfilesUI('ar', () => loadArSessions(false));
 }
 
 // Открыть браузер аккаунта. Бэк спавнит видимый Chromium (open-session.js) и сам решает,
@@ -5876,8 +5931,7 @@ function goPoolStats(sessions) {
     else if (s.status === 'dead') dead++;
     if (typeof s.balance === 'number') {
       sumBalance += s.balance;
-      const g = s.grant || 70;
-      sumGrant += g;
+      sumGrant += balanceDenom(s, 70);
       withBalance++;
     }
   }
@@ -6062,60 +6116,7 @@ function renderGo() {
   );
 }
 
-function goBalanceCell(s, kJ) {
-  if (!isRealKey(s.api_key)) return NO_KEY_BALANCE;   // ключа нет — считать нечего
-  if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
-  const manual = s.grantSource === 'manual';
-  const gLabel = typeof s.grant === 'number' ? `из $${s.grant.toFixed(0)}` : 'задать выдачу';
-  const gTip = manual
-    ? `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — вписана вручную. Клик = изменить.`
-    : `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — угадана автоматически (база $70). Клик = вписать точную.`;
-  const edit = `<button onclick='goSetGrant(${kJ})' title="${esc(gTip)}"
-    class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
-    ${manual ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
-    hover:bg-sky/25 hover:border-sky/70 hover:text-sky">✏️ ${gLabel}</button>`;
-
-  if (typeof s.balance === 'number') {
-    const grant = (s.grant || 70) + (s.bonus || 0);
-    const frac = grant > 0 ? s.balance / grant : 0;
-    const color = frac > 0.3 ? 'text-emerald' : frac >= 0.1 ? 'text-amber' : 'text-crimson';
-    const bonusTip = (s.bonus || 0) > 0 ? ` + чек-ин $${(s.bonus || 0).toFixed(0)}` : '';
-    const tip = `остаток $${s.balance.toFixed(2)} = выдано $${(s.grant ?? 0).toFixed(0)} (${manual ? 'вручную' : 'авто'})${bonusTip} − потрачено $${(s.spent ?? 0).toFixed(2)} · клик = пересчитать`;
-    const bonusBtn = `<button onclick='goAddBonus(${kJ})' title="Чек-ин в ЛК дал +$5 — засчитать бонус. Уже: $${(s.bonus || 0).toFixed(0)}"
-      class="ml-1 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
-      ${(s.bonus || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
-      hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+5</button>`;
-    return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center"><button onclick='goCheckBalance(${kJ})' title="${esc(tip)}"
-      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}${balanceFreshMark(s)}</span>${edit}</span>`;
-  }
-  return `<span class="inline-flex flex-col items-center">${actBtn(`goCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
-}
-
-// POST /__switch/api/go/add-bonus { api_key } → чек-ин в ЛК дал +$5. Бонус копится отдельно от
-// выдачи: баланс = grant + bonus − spent. После ответа обновляем кеш сессии и перерисовываем.
-async function goAddBonus(api_key) {
-  const s = state.gorouter.find(x => x.api_key === api_key);
-  if (!s) return;
-  const has = (s.bonus || 0) > 0;
-  if (!confirm(`Чек-ин в ЛК дал +$5?${has ? `\nУже засчитано: $${s.bonus.toFixed(0)}. Добавить ещё +$5.` : ''}`)) return;
-  try {
-    const res = await fetch('/__switch/api/go/add-bonus', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    const idx = state.gorouter.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const t = state.gorouter[idx];
-      t.bonus = (t.bonus || 0) + 5;
-      if (data.status === 'live') { t.spent = data.spent; t.grant = data.grant; t.balance = data.balance; t.grantSource = data.grantSource; }
-    }
-    renderGo();
-    renderGoGauge();
-    toast(`✓ +$5 засчитано` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
-  } catch (e) { toast('add-bonus: ' + e.message, 'error'); }
-}
+function goBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'go'); }
 
 function goShowAdd(show = true) {
   $('go-add-form').classList.toggle('hidden', !show);
@@ -6318,15 +6319,21 @@ async function goCheckBalance(api_key) {
     const res = await fetch('/__switch/api/go/balance?api_key=' + encodeURIComponent(api_key));
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    const idx = state.gorouter.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const s = state.gorouter[idx];
+    const s = state.gorouter.find(x => x.api_key === api_key);
+    if (s) {
       s.status = data.status;
-      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; }
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+      }
+      s.balanceCheckedAt = new Date().toISOString();
     }
     renderGo();
     renderGoGauge();
-    if (data.status === 'live') toast(`💰 баланс $${data.balance.toFixed(2)} (выдано $${data.grant} · потрачено $${data.spent.toFixed(2)})`, 'success', 4000);
+    if (data.status === 'live') {
+      const lbl = (BAL_SRC[data.balanceSource] || {}).label || '?';
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
     else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
     else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
   } catch (e) { toast('balance: ' + e.message, 'error'); }
@@ -6341,56 +6348,23 @@ async function goCheckAllBalances() {
     state.gorouter = data.sessions || [];
     renderGo();
     renderGoGauge();
+    const exact = state.gorouter.filter(s => s.balanceSource === 'self').length;
     const withBal = state.gorouter.filter(s => typeof s.balance === 'number').length;
-    toast(`✓ балансы посчитаны (${withBal})`, 'success');
+    toast(`✓ балансы посчитаны (${withBal}, из них точных ${exact})`, 'success');
   } catch (e) {
     $('go-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
     toast('балансы: ' + e.message, 'error');
   }
 }
 
-async function goSetGrant(api_key) {
-  const cur = state.gorouter.find(x => x.api_key === api_key);
-  const now = cur && cur.grantManual ? String(cur.grantManual) : '';
-  const spent = cur && typeof cur.spent === 'number' ? cur.spent.toFixed(2) : '?';
-  const grantNow = cur && typeof cur.grant === 'number' ? cur.grant.toFixed(0) : '?';
-  const isManual = cur && cur.grantSource === 'manual';
-
-  const msg = [
-    'Сколько денег было НА АККАУНТЕ ИЗНАЧАЛЬНО (когда его зарегали)?',
-    '',
-    `Сейчас: выдано $${grantNow} (${isManual ? 'вписано тобой' : 'дашборд угадал сам'}), потрачено $${spent}.`,
-    'Остаток = выдано − потрачено. Поэтому если выдача указана неверно — врёт и остаток.',
-    '',
-    'Впиши число: 70, 75, 125, 175, или сколько реально дали (личный акк — больше).',
-    'Оставь поле пустым и нажми OK — дашборд снова будет угадывать сам (база $70).',
-  ].join('\n');
-
-  const val = prompt(msg, now);
-  if (val === null) return;
-  const grant = val.trim() === '' ? null : Number(val.trim());
-  if (grant !== null && !(grant > 0)) return toast('выдача должна быть числом больше 0', 'warn');
-  try {
-    const res = await fetch('/__switch/api/go/set-grant', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key, grant }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    const idx = state.gorouter.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const s = state.gorouter[idx];
-      if (grant === null) delete s.grantManual; else s.grantManual = grant;
-      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; s.grantSource = data.grantSource; }
-    }
-    renderGo();
-    renderGoGauge();
-    toast(grant === null ? '↩ выдача сброшена на авто' : `✓ выдача $${grant}` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
-  } catch (e) { toast('set-grant: ' + e.message, 'error'); }
+function goSetBalance(api_key) {
+  return newapiSetBalanceUI('go', api_key, () => state.gorouter, () => { renderGo(); renderGoGauge(); });
 }
 
-// Бэк сам решает, куда вести браузер аккаунта: ключа ещё нет (mode=register) →
-// регистрация по реф-ссылке владельца; ключ есть (mode=console) → страница баланса.
+function goMapProfiles() {
+  return newapiMapProfilesUI('go', () => loadGoSessions(false));
+}
+
 async function goOpenLk(id) {
   if (!id) return;
   try {
@@ -6479,8 +6453,7 @@ function tbPoolStats(sessions) {
     else if (s.status === 'dead') dead++;
     if (typeof s.balance === 'number') {
       sumBalance += s.balance;
-      const g = s.grant || 100;
-      sumGrant += g;
+      sumGrant += balanceDenom(s, 100);
       withBalance++;
     }
   }
@@ -6665,60 +6638,7 @@ function renderTb() {
   );
 }
 
-function tbBalanceCell(s, kJ) {
-  if (!isRealKey(s.api_key)) return NO_KEY_BALANCE;   // ключа нет — считать нечего
-  if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
-  const manual = s.grantSource === 'manual';
-  const gLabel = typeof s.grant === 'number' ? `из $${s.grant.toFixed(0)}` : 'задать выдачу';
-  const gTip = manual
-    ? `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — вписана вручную. Клик = изменить.`
-    : `Изначальная выдача $${(s.grant ?? 0).toFixed(0)} — угадана автоматически (база $100). Клик = вписать точную.`;
-  const edit = `<button onclick='tbSetGrant(${kJ})' title="${esc(gTip)}"
-    class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
-    ${manual ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
-    hover:bg-sky/25 hover:border-sky/70 hover:text-sky">✏️ ${gLabel}</button>`;
-
-  if (typeof s.balance === 'number') {
-    const grant = (s.grant || 100) + (s.bonus || 0);
-    const frac = grant > 0 ? s.balance / grant : 0;
-    const color = frac > 0.3 ? 'text-emerald' : frac >= 0.1 ? 'text-amber' : 'text-crimson';
-    const bonusTip = (s.bonus || 0) > 0 ? ` + рефка $${(s.bonus || 0).toFixed(0)}` : '';
-    const tip = `остаток $${s.balance.toFixed(2)} = выдано $${(s.grant ?? 0).toFixed(0)} (${manual ? 'вручную' : 'авто'})${bonusTip} − потрачено $${(s.spent ?? 0).toFixed(2)} · клик = пересчитать`;
-    const bonusBtn = `<button onclick='tbAddBonus(${kJ})' title="Рефка в ЛК дала +$20 — засчитать бонус. Уже: $${(s.bonus || 0).toFixed(0)}"
-      class="ml-1 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
-      ${(s.bonus || 0) > 0 ? 'bg-emerald/15 border-emerald/50 text-emerald' : 'bg-white/5 border-white/15 text-muted'}
-      hover:bg-emerald/25 hover:border-emerald/70 hover:text-emerald">+20</button>`;
-    return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center"><button onclick='tbCheckBalance(${kJ})' title="${esc(tip)}"
-      class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">$${s.balance.toFixed(2)}</button>${bonusBtn}${balanceFreshMark(s)}</span>${edit}</span>`;
-  }
-  return `<span class="inline-flex flex-col items-center">${actBtn(`tbCheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
-}
-
-// POST /__switch/api/tb/add-bonus { api_key } → рефка принесла +$20. Бонус копится отдельно от
-// выдачи: баланс = grant + bonus − spent. После ответа обновляем кеш сессии и перерисовываем.
-async function tbAddBonus(api_key) {
-  const s = state.tabi.find(x => x.api_key === api_key);
-  if (!s) return;
-  const has = (s.bonus || 0) > 0;
-  if (!confirm(`Рефка в ЛК дала +$20?${has ? `\nУже засчитано: $${s.bonus.toFixed(0)}. Добавить ещё +$20.` : ''}`)) return;
-  try {
-    const res = await fetch('/__switch/api/tb/add-bonus', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    const idx = state.tabi.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const t = state.tabi[idx];
-      t.bonus = (t.bonus || 0) + 20;
-      if (data.status === 'live') { t.spent = data.spent; t.grant = data.grant; t.balance = data.balance; t.grantSource = data.grantSource; }
-    }
-    renderTb();
-    renderTbGauge();
-    toast(`✓ +$20 засчитано` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
-  } catch (e) { toast('add-bonus: ' + e.message, 'error'); }
-}
+function tbBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'tb'); }
 
 function tbShowAdd(show = true) {
   $('tb-add-form').classList.toggle('hidden', !show);
@@ -6918,15 +6838,21 @@ async function tbCheckBalance(api_key) {
     const res = await fetch('/__switch/api/tb/balance?api_key=' + encodeURIComponent(api_key));
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    const idx = state.tabi.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const s = state.tabi[idx];
+    const s = state.tabi.find(x => x.api_key === api_key);
+    if (s) {
       s.status = data.status;
-      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; }
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+      }
+      s.balanceCheckedAt = new Date().toISOString();
     }
     renderTb();
     renderTbGauge();
-    if (data.status === 'live') toast(`💰 баланс $${data.balance.toFixed(2)} (выдано $${data.grant} · потрачено $${data.spent.toFixed(2)})`, 'success', 4000);
+    if (data.status === 'live') {
+      const lbl = (BAL_SRC[data.balanceSource] || {}).label || '?';
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
     else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
     else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
   } catch (e) { toast('balance: ' + e.message, 'error'); }
@@ -6941,56 +6867,23 @@ async function tbCheckAllBalances() {
     state.tabi = data.sessions || [];
     renderTb();
     renderTbGauge();
+    const exact = state.tabi.filter(s => s.balanceSource === 'self').length;
     const withBal = state.tabi.filter(s => typeof s.balance === 'number').length;
-    toast(`✓ балансы посчитаны (${withBal})`, 'success');
+    toast(`✓ балансы посчитаны (${withBal}, из них точных ${exact})`, 'success');
   } catch (e) {
     $('tb-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
     toast('балансы: ' + e.message, 'error');
   }
 }
 
-async function tbSetGrant(api_key) {
-  const cur = state.tabi.find(x => x.api_key === api_key);
-  const now = cur && cur.grantManual ? String(cur.grantManual) : '';
-  const spent = cur && typeof cur.spent === 'number' ? cur.spent.toFixed(2) : '?';
-  const grantNow = cur && typeof cur.grant === 'number' ? cur.grant.toFixed(0) : '?';
-  const isManual = cur && cur.grantSource === 'manual';
-
-  const msg = [
-    'Сколько денег было НА АККАУНТЕ ИЗНАЧАЛЬНО (когда его зарегали)?',
-    '',
-    `Сейчас: выдано $${grantNow} (${isManual ? 'вписано тобой' : 'дашборд угадал сам'}), потрачено $${spent}.`,
-    'Остаток = выдано − потрачено. Поэтому если выдача указана неверно — врёт и остаток.',
-    '',
-    'Tabi выдают $100 новым аккаунтам (+$20 за рефку). Впиши реальную цифру, если иная.',
-    'Оставь поле пустым и нажми OK — дашборд снова будет угадывать сам (база $100).',
-  ].join('\n');
-
-  const val = prompt(msg, now);
-  if (val === null) return;
-  const grant = val.trim() === '' ? null : Number(val.trim());
-  if (grant !== null && !(grant > 0)) return toast('выдача должна быть числом больше 0', 'warn');
-  try {
-    const res = await fetch('/__switch/api/tb/set-grant', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key, grant }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    const idx = state.tabi.findIndex(x => x.api_key === api_key);
-    if (idx >= 0) {
-      const s = state.tabi[idx];
-      if (grant === null) delete s.grantManual; else s.grantManual = grant;
-      if (data.status === 'live') { s.spent = data.spent; s.grant = data.grant; s.balance = data.balance; s.grantSource = data.grantSource; }
-    }
-    renderTb();
-    renderTbGauge();
-    toast(grant === null ? '↩ выдача сброшена на авто' : `✓ выдача $${grant}` + (data.status === 'live' ? ` · баланс $${data.balance.toFixed(2)}` : ''), 'success', 3500);
-  } catch (e) { toast('set-grant: ' + e.message, 'error'); }
+function tbSetBalance(api_key) {
+  return newapiSetBalanceUI('tb', api_key, () => state.tabi, () => { renderTb(); renderTbGauge(); });
 }
 
-// Бэк сам решает, куда вести браузер аккаунта: ключа ещё нет (mode=register) →
-// регистрация по реф-ссылке владельца; ключ есть (mode=console) → страница баланса.
+function tbMapProfiles() {
+  return newapiMapProfilesUI('tb', () => loadTbSessions(false));
+}
+
 async function tbOpenLk(id) {
   if (!id) return;
   try {
@@ -8878,7 +8771,7 @@ async function renderGlobalGauge() {
           else if (s.status === 'dead') dead++;
           if (typeof s.balance === 'number') {
             sumBalance += s.balance;
-            sumGrant += (s.grant || 175);
+            sumGrant += balanceDenom(s, 175);
             withBalance++;
           }
         }
@@ -8903,7 +8796,7 @@ async function renderGlobalGauge() {
           else if (s.status === 'dead') dead++;
           if (typeof s.balance === 'number') {
             sumBalance += s.balance;
-            sumGrant += (s.grant || 70);
+            sumGrant += balanceDenom(s, 70);
             withBalance++;
           }
         }
@@ -8928,7 +8821,7 @@ async function renderGlobalGauge() {
           else if (s.status === 'dead') dead++;
           if (typeof s.balance === 'number') {
             sumBalance += s.balance;
-            sumGrant += (s.grant || 100);
+            sumGrant += balanceDenom(s, 100);
             withBalance++;
           }
         }

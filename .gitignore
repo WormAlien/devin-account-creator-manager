@@ -294,6 +294,12 @@ tabi/profiles/
 tabi/sessions/
 routing/tabi-sessions.json
 
+# ── Cookie-jar New-API (routing/lib/newapi-account.js) ────────────────────────
+# Живые session/refresh-куки и access-токены аккаунтов agentrouter/gorouter/tabi,
+# снятые из профилей Chromium. Refresh-кука одноразовая, поэтому её ротированное
+# значение хранится здесь, а не в профиле. НИКОГДА не коммитить.
+routing/newapi-jar.json
+
 # ── GitHub-аккаунты (вкладка дашборда): приватные данные ──────────────────────
 # Профили браузера (куки/сессии GitHub на аккаунт) — НИКОГДА не коммитить.
 # github-accounts.json уже закрыт выше, github-accounts.example.json коммитим.

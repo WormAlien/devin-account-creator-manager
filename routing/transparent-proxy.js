@@ -5244,13 +5244,11 @@ const AR_MODELMAP_FILE = path.join(__dirname, 'ar-modelmap.json');
 const AR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ar-active-key.txt');
 const AR_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'ar-active-model.txt');
 const AR_BASE_URL = 'https://agentrouter.org';
-// Баланс ключа: сервис не отдаёт остаток напрямую — только потраченное (total_usage).
-// Выдачу («грант») угадываем по шагу $25 от базовых $175. balance = grant − spent.
+// Баланс ключа берётся точно из /api/user/self (см. newapiBalance). Константы ниже —
+// только для последнего резерва «угадать грант», когда у аккаунта нет ни куки, ни
+// вписанного вручную баланса.
 const AR_GRANT_STEP = 25;
-const AR_REFERRAL_STEP = 100;
 const AR_DEFAULT_GRANT = 175;
-const AR_SENTINEL_USD = 1e6;               // hard_limit_usd у безлимитных = 100M — заглушка, не баланс
-const arIsSaneLimit = v => typeof v === 'number' && v > 0 && v < AR_SENTINEL_USD;
 const AR_PROXY_PORT = 20132;
 const AR_PROXY_URL = `http://localhost:${AR_PROXY_PORT}`;
 // SSE keepalive proxy (friend's sse-keepalive-proxy, v1tusha) — стоит перед
@@ -5334,7 +5332,10 @@ function arLoad() {
     try {
         const raw = fs.readFileSync(AR_SESSIONS_FILE, 'utf8');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
-        return Array.isArray(arr) ? arr : [];
+        if (!Array.isArray(arr)) return [];
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) { try { arSave(arr); } catch {} }
+        return arr;
     } catch { return []; }
 }
 function arSave(arr) {
@@ -5347,7 +5348,11 @@ function arSave(arr) {
 // свежие цифры терялись, и в баре баланс откатывался назад. Здесь перечитываем
 // диск и накладываем только переданные объекты по api_key.
 // ВНИМАНИЕ: Object.assign не удаляет поля — для удаления ключей/полей
-// (delete, set-grant со сбросом) по-прежнему нужен arSave() целиком.
+// (delete, сброс анкера) по-прежнему нужен arSave() целиком.
+// Исключение — список ниже: это метки, которые успешный чек СНИМАЕТ. Без явного
+// удаления однажды записанный balanceError выживал на диске и гейдж вечно показывал
+// «⚠ ошибка чека» при живом ключе и свежем балансе.
+const BALANCE_CLEARABLE = ['balanceError', 'selfError', 'granted'];
 function arSaveMerge(changed) {
     const list = Array.isArray(changed) ? changed : [changed];
     const disk = arLoad();
@@ -5355,7 +5360,10 @@ function arSaveMerge(changed) {
     for (const upd of list) {
         if (!upd || !upd.api_key) continue;
         const cur = byKey.get(upd.api_key);
-        if (cur) Object.assign(cur, upd);
+        if (cur) {
+            Object.assign(cur, upd);
+            for (const k of BALANCE_CLEARABLE) if (!(k in upd)) delete cur[k];
+        }
         else disk.push(upd);
     }
     arSave(disk);
@@ -5380,61 +5388,212 @@ async function arProbe(apiKey) {
     } catch { return 'unknown'; }
 }
 
-// Баланс ключа: читаем публичные billing-эндпоинты СВОИМ же ключом (CC-заголовки — WAF
-// пропускает только Claude Code запросы). spent = total_usage (центы!) / 100; grant либо задан
-// вручную (grantOverride — у разных акков выдача разная: 125/175/личный больше), либо угадываем
-// по шагу $25; balance = grant − spent. hard_limit_usd НЕ баланс (у безлимитных = sentinel 100M).
-async function arBalance(apiKey, grantOverride, bonusOverride, referralOverride) {
+// ─────────── Точный баланс аккаунта New-API: общее для AgentRouter/GoRouter/Tabi ───────────
+//
+// Все три — инстансы New-API, и раньше у каждого была своя копия расчёта «угадать
+// грант и вычесть потраченное». Угадывание врало: пользователь подгонял грант руками
+// под цифру из ЛК, подгонка разъезжалась с первой же тратой и в UI висели минусы.
+//
+// Порядок источников (первый сработавший побеждает):
+//   1. self   — GET /api/user/self куками профиля Chromium → ТОЧНЫЙ остаток аккаунта.
+//   2. anchor — вписанный руками баланс, убывающий по расходу (для аккаунтов без куки).
+//   3. guess  — старое угадывание по шагу гранта. Последний резерв, помечается как прикидка.
+//
+// usage-эндпоинт зовём ВСЕГДА, даже когда self сработал: он определяет живость
+// КЛЮЧА (401/403 = ключ мёртв), а self говорит только про аккаунт. Для продажи
+// ключа важно именно первое. Заодно даёт легаси-расход для анкера.
+// Важно: total_usage — расход ТОКЕНА, не аккаунта (при пересоздании токена занижен),
+// поэтому при успехе self расход берём из used_quota.
+const NEWAPI_PROFILE_DIRS = {
+    'agentrouter.org': path.join(__dirname, '..', 'agentrouter', 'profiles'),
+    'gorouter.app':    path.join(__dirname, '..', 'gorouter', 'profiles'),
+    'tabitoken.com':   path.join(__dirname, '..', 'tabi', 'profiles'),
+};
+
+function newapiLib() {
+    try { return require('./lib/newapi-account'); }
+    catch (e) { logLine(`newapi-account недоступен: ${e.message}`); return null; }
+}
+
+// Путь к профилю аккаунта. Метку профиля храним в записи пула (поле profile),
+// её проставляет сопоставление (handle*MapProfiles).
+function newapiProfileDir(host, profileLabel) {
+    const base = NEWAPI_PROFILE_DIRS[host];
+    if (!base || !profileLabel) return null;
+    const dir = path.join(base, String(profileLabel).replace(/[\\/]/g, ''));
+    try { return fs.existsSync(dir) ? dir : null; } catch { return null; }
+}
+
+const round2 = v => Math.round(Number(v) * 100) / 100;
+
+// Чистка легаси-полей старой схемы (grant/grantManual/bonus/referral). Анкер из них
+// НЕ делаем: он был бы выведен из того же сломанного угадывания, а потом подставлялся
+// бы вместо точной цифры каждый раз, когда self споткнулся о рейт-лимит — именно так
+// Tabi показывала −$4.37 там, где в аккаунте лежало $6.63. Пусть лучше запись честно
+// висит «~ прикидка» и просит вписать баланс. Анкер бывает только вписанный руками.
+// Идемпотентно: после чистки полей повторно не сработает.
+function newapiMigrateAnchors(sessions) {
+    let changed = false;
+    for (const s of sessions || []) {
+        if (!s || typeof s !== 'object') continue;
+        for (const k of ['grant', 'grantSource', 'grantManual']) if (k in s) { delete s[k]; changed = true; }
+        for (const k of ['bonus', 'referral']) if (k in s) { delete s[k]; changed = true; }
+        // Анкеры, созданные прошлой версией миграции, тоже убираем — они из угадывания.
+        if (s.anchorFrom === 'migrated') {
+            delete s.balanceAnchor; delete s.anchorSpent; delete s.anchoredAt; delete s.anchorFrom;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+// Общий расчёт. target — запись пула (нужен api_key; profile/anchor опциональны).
+// guessGrant(spent) — легаси-угадывание провайдера, вызывается только как резерв.
+async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessGrant }) {
+    const apiKey = target && target.api_key;
     if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
+    const lib = newapiLib();
+    // Все запросы к хосту — через шлюз частоты модуля. Иначе billing-вызовы летят
+    // мимо очереди (пачка идёт чанками по 3), и Aliyun WAF у agentrouter.org
+    // начинает отдавать JS-заглушку с кодом 200 вместо JSON к середине прогона.
+    const gated = fn => (lib && lib.hostGate) ? lib.hostGate(host, fn) : fn();
+
+    // ── 1. usage: живость ключа + легаси-расход ──
     const day = ms => new Date(ms).toISOString().slice(0, 10);
     const end = day(Date.now());
-    const start = day(Date.now() - 400 * 864e5); // 400 дней назад
+    const start = day(Date.now() - 400 * 864e5);   // 400 дней назад
     let usageRes;
     try {
-        usageRes = await fetch(
-            `${AR_BASE_URL}/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
-            {
-                method: 'GET',
-                headers: { ...AR_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
-                signal: AbortSignal.timeout(15000),
-            },
-        );
+        usageRes = await gated(() => fetch(`${usageUrl}?start_date=${start}&end_date=${end}`, {
+            method: 'GET',
+            headers: { ...ccHeaders, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        }));
     } catch (e) {
         return { status: 'unknown', error: e.message };
     }
     if (usageRes.status === 401 || usageRes.status === 403) return { status: 'dead' };
     if (usageRes.status !== 200) return { status: 'unknown', error: `usage HTTP ${usageRes.status}` };
 
-    let spent;
+    let usageSpent;
     try {
         const data = await usageRes.json();
-        spent = Math.round((Number(data.total_usage) || 0)) / 100; // центы → доллары
+        usageSpent = Math.round((Number(data.total_usage) || 0)) / 100;   // центы → доллары
     } catch (e) {
         return { status: 'unknown', error: `usage parse: ${e.message}` };
     }
-    const grant = grantOverride > 0
-        ? grantOverride
-        : Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP);
-    const bonus = Number(bonusOverride) > 0 ? Number(bonusOverride) : 0;
-    const referral = Number(referralOverride) > 0 ? Number(referralOverride) : 0;
-    const balance = Math.round((grant + bonus + referral - spent) * 100) / 100;
 
-    // Опционально: срок доступа. Не критично — ошибки глотаем, баланс уже посчитан.
-    let accessUntil = null, limitSane = null;
-    try {
-        const subRes = await fetch(`${AR_BASE_URL}/v1/dashboard/billing/subscription`, {
-            method: 'GET',
-            headers: { ...AR_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
-            signal: AbortSignal.timeout(15000),
-        });
-        if (subRes.status === 200) {
-            const sub = await subRes.json();
-            accessUntil = sub.access_until && sub.access_until > 0 ? sub.access_until : null;
-            limitSane = arIsSaneLimit(Number(sub.hard_limit_usd));
+    // ── 2. self: точный остаток аккаунта ──
+    // Экономия запросов. Точная цифра меняется ТОЛЬКО когда что-то потрачено, поэтому
+    // если предыдущий self прошёл недавно и расход с тех пор не сдвинулся — берём
+    // сохранённое значение и на шлюз не идём. Без этого повторное нажатие «Балансы
+    // всех» шлёт по запросу на каждый аккаунт, Aliyun WAF у agentrouter и rate-limit
+    // у tabitoken включают защиту, и точные цифры деградируют до прикидок.
+    const SELF_REUSE_MS = 20 * 60_000;
+    if (target.balanceSource === 'self' && target.selfCheckedAt
+        && typeof target.balance === 'number'
+        && Number(target.usageSpentAtSelf) === usageSpent
+        && Date.now() - new Date(target.selfCheckedAt).getTime() < SELF_REUSE_MS) {
+        return {
+            status: 'live', balanceSource: 'self', reused: true,
+            balance: target.balance, spent: target.spent, usageSpent,
+            granted: target.granted, newApiUserId: target.newApiUserId,
+            newApiUsername: target.newApiUsername, selfCheckedAt: target.selfCheckedAt,
+        };
+    }
+    const profileDir = newapiProfileDir(host, target.profile);
+    let selfError = null;
+    if (lib && (profileDir || target.accessToken)) {
+        try {
+            const me = await lib.accountSelf({
+                host,
+                profileDir,
+                accessToken: target.accessToken || null,
+                userId: target.newApiUserId || null,
+            });
+            if (me.ok && me.balance != null) {
+                return {
+                    status: 'live',
+                    balanceSource: 'self',
+                    balance: me.balance,
+                    spent: me.spent != null ? me.spent : usageSpent,
+                    usageSpent,
+                    granted: me.granted,
+                    newApiUserId: me.userId,
+                    newApiUsername: me.username,
+                    selfCheckedAt: new Date().toISOString(),
+                };
+            }
+            selfError = me.error || 'self не ответил';
+        } catch (e) { selfError = e.message; }
+    } else if (lib && !profileDir) {
+        selfError = target.profile ? 'профиль не найден на диске' : 'профиль не сопоставлен';
+    }
+
+    // ── 3. anchor: вписанный руками баланс, убывает по расходу ──
+    // Анкер всегда привязан к ЛЕГАСИ-расходу (usageSpent) — на том же основании,
+    // на котором его записали, иначе цифра прыгнула бы при смене источника.
+    const anchor = Number(target.balanceAnchor);
+    if (isFinite(anchor) && anchor > 0 && target.anchorSpent != null) {
+        const drawn = round2(usageSpent - Number(target.anchorSpent));
+        const left = round2(anchor - Math.max(0, drawn));
+        // Ушло в ноль или минус — привязка устарела (расход обогнал вписанное).
+        // Отдавать её как факт нельзя: провалимся в прикидку, и UI попросит вписать заново.
+        if (left > 0) {
+            return {
+                status: 'live',
+                balanceSource: 'anchor',
+                balance: left,
+                spent: usageSpent,
+                usageSpent,
+                granted: null,
+                selfError,
+            };
         }
-    } catch { /* срок доступа не критичен */ }
+        selfError = selfError || 'вписанный баланс исчерпан расходом — впиши заново';
+    }
 
-    return { status: 'live', spent, grant, bonus, referral, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+    // ── 4. guess: старое угадывание, последний резерв ──
+    const grant = guessGrant(usageSpent);
+    const bonus = Number(target.bonus) > 0 ? Number(target.bonus) : 0;
+    const referral = Number(target.referral) > 0 ? Number(target.referral) : 0;
+    const legacyGrant = Number(target.grantManual) > 0 ? Number(target.grantManual) : grant;
+    let accessUntil = null;
+    if (subUrl) {
+        try {
+            const subRes = await gated(() => fetch(subUrl, {
+                method: 'GET',
+                headers: { ...ccHeaders, 'Authorization': `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(15000),
+            }));
+            if (subRes.status === 200) {
+                const sub = await subRes.json();
+                accessUntil = sub.access_until && sub.access_until > 0 ? sub.access_until : null;
+            }
+        } catch { /* срок доступа не критичен */ }
+    }
+    return {
+        status: 'live',
+        balanceSource: 'guess',
+        balance: round2(legacyGrant + bonus + referral - usageSpent),
+        spent: usageSpent,
+        usageSpent,
+        granted: round2(legacyGrant + bonus + referral),
+        accessUntil,
+        selfError,
+    };
+}
+
+// Баланс ключа AgentRouter. Точный — из /api/user/self; резервы см. newapiBalance.
+async function arBalance(target) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'agentrouter.org',
+        ccHeaders: AR_CC_HEADERS,
+        usageUrl: `${AR_BASE_URL}/dashboard/billing/usage`,
+        subUrl: `${AR_BASE_URL}/v1/dashboard/billing/subscription`,
+        guessGrant: spent => Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP),
+    });
 }
 
 async function handleArSessions(req, res) {
@@ -5451,7 +5610,7 @@ async function handleArSessions(req, res) {
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
-                await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s.api_key, s.grantManual, s.bonus, s.referral))));
+                await Promise.all(sessions.slice(i, i + 3).map(async s => arApplyBalance(s, await arBalance(s))));
                 // Мержим каждую порцию сразу: батч идёт ~10с, и если сохранять только
                 // в конце, всё это время бар видит старые цифры (а при обрыве — теряет их).
                 arSaveMerge(sessions.slice(i, i + 3));
@@ -5464,13 +5623,14 @@ async function handleArSessions(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// Пишем результат arBalance в объект сессии (персистентный кеш — переживает F5 и рестарт).
-// grantManual НЕ трогаем — это ручная настройка пользователя, живёт отдельно от посчитанного grant.
+// Пишем результат newapiBalance в объект сессии (персистентный кеш — переживает F5 и рестарт).
+// Общее для AgentRouter/GoRouter/Tabi.
+// balanceAnchor/anchorSpent НЕ трогаем — это ручная настройка пользователя.
 // balanceCheckedAt ставим ВСЕГДА, а не только при live: раньше при таймауте billing
 // (а он медленный, 1-2с) штамп оставался старым → статусбар считал кеш протухшим и
 // дёргал обновление на КАЖДОМ рендере строки, т.е. на каждом промпте. Теперь неудача
 // тоже отмечена — бар подождёт до следующего порога, а ошибку видно в balanceError.
-function arApplyBalance(target, bal) {
+function newapiApplyBalance(target, bal) {
     if (!target || !bal) return bal;
     // Аккаунт без ключа — это не ошибка чека: balanceError бы зажёг «⚠ ошибка чека»
     // в гейдже пула. Просто помечаем статус и уходим, штамп проверки не ставим.
@@ -5479,12 +5639,22 @@ function arApplyBalance(target, bal) {
     target.balanceCheckedAt = new Date().toISOString();
     if (bal.status === 'live') {
         target.spent = bal.spent;
-        target.grant = bal.grant;
-        target.bonus = bal.bonus;
-        target.referral = bal.referral;
         target.balance = bal.balance;
-        target.accessUntil = bal.accessUntil;
-        target.grantSource = bal.grantSource;
+        target.balanceSource = bal.balanceSource;
+        if (bal.granted != null) target.granted = bal.granted; else delete target.granted;
+        if (bal.accessUntil != null) target.accessUntil = bal.accessUntil;
+        if (bal.newApiUserId) target.newApiUserId = bal.newApiUserId;
+        if (bal.newApiUsername) target.newApiUsername = bal.newApiUsername;
+        // Отметка последнего успешного self и расход на тот момент — по ним решается,
+        // можно ли переиспользовать точную цифру вместо нового запроса (см. SELF_REUSE_MS).
+        if (bal.balanceSource === 'self') {
+            target.selfCheckedAt = bal.selfCheckedAt || new Date().toISOString();
+            if (bal.usageSpent != null) target.usageSpentAtSelf = bal.usageSpent;
+        }
+        // Почему точный баланс недоступен — видно в UI подсказкой, чтобы было понятно,
+        // что починить (сопоставить профиль / переоткрыть ЛК).
+        if (bal.balanceSource === 'self') delete target.selfError;
+        else if (bal.selfError) target.selfError = bal.selfError;
         delete target.balanceError;
     } else {
         // Цифры оставляем прошлые (лучше устаревшие, чем нули), но помечаем причину.
@@ -5492,6 +5662,8 @@ function arApplyBalance(target, bal) {
     }
     return bal;
 }
+
+function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
 
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
 async function handleArPing(req, res) {
@@ -5525,7 +5697,7 @@ function arBalanceOnce(apiKey) {
     if (running) return running;
     const p = (async () => {
         const target = arLoad().find(s => s.api_key === apiKey);
-        const bal = await arBalance(apiKey, target && target.grantManual, target && target.bonus, target && target.referral);
+        const bal = await arBalance(target || { api_key: apiKey });
         if (target) {
             arApplyBalance(target, bal);
             arSaveMerge(target);   // мерж, а не перезапись файла: не затираем параллельный батч
@@ -5604,67 +5776,197 @@ async function handleArBalance(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// POST /__switch/api/ar/set-grant { api_key, grant } → задать/сбросить изначальную выдачу вручную
-// (у разных аккаунтов она разная: 125/175/личный больше). grant=null|0|'' → сброс на авто-угадывание.
-// Сразу пересчитываем баланс с новым grant, если ключ живой.
-async function handleArSetGrant(req, res) {
+// POST /__switch/api/{ar,go,tb}/set-balance { api_key, balance }
+//
+// Одна кнопка вместо трёх ручек. Раньше пользователь правил «изначальную выдачу»,
+// докидывал +$25 за чек-ин и +$100 за рефку, подгоняя итог под цифру из ЛК —
+// подгонка разъезжалась с первой же тратой и в UI появлялись минусы. Теперь он
+// вписывает то, что реально видит, а мы запоминаем это ВМЕСТЕ с текущим расходом:
+//
+//   balanceAnchor = вписанное,  anchorSpent = расход на тот момент
+//   дальше balance = balanceAnchor − (расход − anchorSpent)   → убывает сам
+//
+// balance = null|'' → сброс анкера. Если у аккаунта есть куки, точный баланс из
+// /api/user/self всё равно приоритетнее — об этом сообщаем в ответе.
+async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn }) {
     try {
         const body = await readJsonBody(req);
         const key = String(body.api_key || '').trim();
         if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
-        const raw = body.grant;
-        const grant = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
-        if (grant !== null && !(grant > 0)) return jsonRes(res, 400, { error: 'grant должен быть > 0 или пустым (сброс)' });
-        const sessions = arLoad();
+        const raw = body.balance;
+        const val = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+        if (val !== null && !(isFinite(val) && val >= 0)) {
+            return jsonRes(res, 400, { error: 'баланс должен быть числом ≥ 0 или пустым (сброс)' });
+        }
+        const sessions = load();
         const target = sessions.find(s => s.api_key === key);
         if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
-        if (grant === null) delete target.grantManual;
-        else target.grantManual = grant;
-        // Пересчёт баланса с новой выдачей (если ключ отвечает).
-        const bal = await arBalance(key, target.grantManual, target.bonus, target.referral);
-        arApplyBalance(target, bal);
-        arSave(sessions);
-        logLine(`agentrouter set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
-        jsonRes(res, 200, { ok: true, ...bal });
+
+        // Проверочный чек: он и живость ключа даёт, и текущий расход для привязки.
+        // Его падение НЕ должно ронять вписывание: пользователь назвал число, сохранить
+        // его обязаны в любом случае. Раньше сетевой обрыв отдавал наверх
+        // `error: 'fetch failed'`, фронт считал это провалом — хотя анкер уже был записан.
+        const probe = await balanceFn(target);
+        const probeOk = probe && probe.status === 'live';
+        const basis = (probe && probe.usageSpent != null) ? probe.usageSpent : (Number(target.spent) || 0);
+
+        if (val === null) {
+            delete target.balanceAnchor; delete target.anchorSpent;
+            delete target.anchoredAt; delete target.anchorFrom;
+        } else {
+            target.balanceAnchor = round2(val);
+            target.anchorSpent = basis;
+            target.anchoredAt = new Date().toISOString();
+            target.anchorFrom = 'manual';
+        }
+
+        let bal;
+        if (val === null) {
+            // Сброс — единственный случай, где нужен повторный расчёт: probe считался
+            // ДО удаления анкера и всё ещё показывал его.
+            bal = await balanceFn(target);
+        } else if (probeOk && probe.balanceSource === 'self') {
+            bal = probe;   // точная цифра приоритетнее вписанной
+        } else {
+            // Показываем вписанное. Статус мёртвого ключа не подменяем, но и ошибку
+            // чека не тащим в ответ — сохранение состоялось.
+            bal = {
+                status: (probe && probe.status === 'dead') ? 'dead' : 'live',
+                balanceSource: 'anchor',
+                balance: round2(val),
+                spent: basis,
+                usageSpent: basis,
+                granted: null,
+            };
+        }
+        applyFn(target, bal);
+        save(sessions);   // целиком: delete полей мержем (Object.assign) не выражается
+        logLine(`${tag} set-balance: ***${key.slice(-6)} → ${val === null ? 'сброс анкера' : '$' + val}${probeOk ? '' : ' (чек не ответил)'}`);
+        const note = (val !== null && bal.balanceSource === 'self')
+            ? 'анкер сохранён, но показывается точный баланс из ЛК аккаунта — он приоритетнее'
+            : (val !== null && !probeOk)
+                ? `баланс $${round2(val)} сохранён; расход перепроверить не удалось (${(probe && probe.error) || 'шлюз не ответил'})`
+                : undefined;
+        jsonRes(res, 200, { ok: true, ...bal, error: undefined, note });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// POST /__switch/api/ar/add-bonus { api_key } → чек-ин в ЛК дал +$25 (поле bonus копится отдельно
-// от изначальной выдачи grant). Баланс = grant + bonus − spent. grant НЕ трогаем.
-async function handleArAddBonus(req, res) {
+function handleArSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'agentrouter', load: arLoad, save: arSave, balanceFn: arBalance, applyFn: arApplyBalance });
+}
+
+// POST /__switch/api/{ar,go,tb}/map-profiles
+//
+// Связывает записи пула с браузерными профилями — без этой связки точный баланс
+// недоступен, потому что /api/user/self авторизуется куками аккаунта, а не ключом.
+//
+// Сверяем по САМОМУ КЛЮЧУ, а не по github-логину. Логин ненадёжен: у GoRouter поля
+// email в пуле оказались скопированы из AgentRouter, так что совпадение логина не
+// значит, что ключ записи принадлежит этому аккаунту. GET /api/token/ отдаёт ключ
+// замаскированным (sk-78xp******), поэтому полный раскрываем POST /api/token/<id>/key.
+// Логин остаётся только резервом для записей, чей ключ не нашёлся ни в одном аккаунте.
+//
+// Отдельно возвращаем «бесхозные» профили — аккаунты, живые на диске, но
+// отсутствующие в пуле (у GoRouter их четыре).
+async function newapiMapProfiles(req, res, { tag, host, load, save }) {
     try {
-        const body = await readJsonBody(req);
-        const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
-        const sessions = arLoad();
-        const target = sessions.find(s => s.api_key === key);
-        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
-        target.bonus = Math.round(((Number(target.bonus) || 0) + 25) * 100) / 100;
-        const bal = await arBalance(key, target.grantManual, target.bonus, target.referral);
-        arApplyBalance(target, bal);
-        arSave(sessions);
-        logLine(`agentrouter add-bonus: ***${key.slice(-6)} → +$25 (всего bonus $${target.bonus})`);
-        jsonRes(res, 200, { ok: true, bonus: target.bonus, ...bal });
+        const lib = newapiLib();
+        if (!lib) return jsonRes(res, 500, { error: 'модуль newapi-account недоступен' });
+        const base = NEWAPI_PROFILE_DIRS[host];
+        let labels;
+        try {
+            labels = fs.readdirSync(base).filter(d => {
+                try { return fs.statSync(path.join(base, d)).isDirectory(); } catch { return false; }
+            });
+        } catch (e) { return jsonRes(res, 500, { error: `профили не читаются: ${e.message}` }); }
+
+        const sessions = load();
+
+        // ── шаг 1 (локально): у каких профилей вообще есть авторизация для этого хоста ──
+        const candidates = [];
+        for (const label of labels) {
+            const dir = path.join(base, label);
+            const cookies = lib.readProfileCookies(dir);
+            const own = cookies.filter(c => c.host === host || c.host.endsWith('.' + host));
+            const sess = own.find(c => c.name === 'session');
+            const hasAuth = !!sess || own.some(c => c.name === 'new_api_refresh');
+            if (!hasAuth) continue;
+            candidates.push({
+                label, dir,
+                github: lib.githubLogin(cookies),
+                userId: sess ? lib.sessionUserId(sess.value) : null,
+            });
+        }
+
+        // ── шаг 2 (сеть): ключи каждого аккаунта. По 2 профиля за раз — это реальные
+        // запросы к сервису, гнать все сразу незачем. ──
+        const keyOwner = new Map();   // полный ключ → кандидат
+        for (let i = 0; i < candidates.length; i += 2) {
+            await Promise.all(candidates.slice(i, i + 2).map(async c => {
+                try {
+                    const r = await lib.listAccountKeys({ host, profileDir: c.dir, userId: c.userId });
+                    c.keysOk = r.ok;
+                    c.keyError = r.ok ? null : r.error;
+                    for (const k of r.keys || []) if (k.key) keyOwner.set(k.key, c);
+                } catch (e) { c.keysOk = false; c.keyError = e.message; }
+            }));
+        }
+
+        // ── шаг 3: раскладываем по записям ──
+        const claimed = new Set();
+        const mapped = [];
+        const unmatched = [];
+        for (const s of sessions) {
+            if (!isRealKey(s.api_key)) continue;
+            const owner = keyOwner.get(s.api_key);
+            if (owner) {
+                s.profile = owner.label;
+                if (owner.userId) s.newApiUserId = owner.userId;
+                claimed.add(owner.label);
+                mapped.push({ account: s.email || s.name, profile: owner.label, via: 'ключ' });
+                continue;
+            }
+            // Резерв: github-логин. Помечаем в записи, что связка неточная.
+            const login = String(s.email || s.name || '').trim().toLowerCase();
+            const byLogin = login ? candidates.find(c => String(c.github || '').toLowerCase() === login && !claimed.has(c.label)) : null;
+            if (byLogin) {
+                s.profile = byLogin.label;
+                if (byLogin.userId) s.newApiUserId = byLogin.userId;
+                s.profileMatch = 'github';
+                claimed.add(byLogin.label);
+                mapped.push({ account: s.email || s.name, profile: byLogin.label, via: 'github-логин (неточно)' });
+            } else {
+                delete s.profile; delete s.newApiUserId; delete s.profileMatch;
+                unmatched.push({ account: s.email || s.name, key: '***' + String(s.api_key).slice(-6) });
+            }
+        }
+        // Точная связка снимает пометку неточности.
+        for (const s of sessions) if (s.profile && keyOwner.has(s.api_key)) delete s.profileMatch;
+
+        const orphans = candidates
+            .filter(c => !claimed.has(c.label))
+            .map(c => ({ profile: c.label, github: c.github, keysOk: c.keysOk !== false, error: c.keyError || undefined }));
+
+        save(sessions);   // целиком: связка удаляет поля, мержем это не выражается
+        logLine(`${tag} map-profiles: сопоставлено ${mapped.length}/${sessions.length}, бесхозных профилей ${orphans.length}`);
+        jsonRes(res, 200, {
+            ok: true,
+            total: sessions.length,
+            mappedCount: mapped.length,
+            mapped, unmatched, orphans,
+            profilesWithAuth: candidates.length,
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// POST /__switch/api/ar/add-referral { api_key } → реврал принёс +$100 (поле referral копится
-// отдельно от bonus и grant). Баланс = grant + bonus + referral − spent. grant НЕ трогаем.
-async function handleArAddReferral(req, res) {
-    try {
-        const body = await readJsonBody(req);
-        const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
-        const sessions = arLoad();
-        const target = sessions.find(s => s.api_key === key);
-        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
-        target.referral = Math.round(((Number(target.referral) || 0) + AR_REFERRAL_STEP) * 100) / 100;
-        const bal = await arBalance(key, target.grantManual, target.bonus, target.referral);
-        arApplyBalance(target, bal);
-        arSave(sessions);
-        logLine(`agentrouter add-referral: ***${key.slice(-6)} → +$${AR_REFERRAL_STEP} (всего referral $${target.referral})`);
-        jsonRes(res, 200, { ok: true, referral: target.referral, ...bal });
-    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+function handleArMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'agentrouter', host: 'agentrouter.org', load: arLoad, save: arSave });
+}
+function handleGoMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'gorouter', host: 'gorouter.app', load: goLoad, save: goSave });
+}
+function handleTbMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'tabi', host: 'tabitoken.com', load: tbLoad, save: tbSave });
 }
 
 // POST /__switch/api/ar/set-github { api_key, ghId } → привязать/сменить/отвязать GitHub-аккаунт
@@ -5789,9 +6091,17 @@ async function handleArDelete(req, res) {
 // `v` намеренно остаётся 1: meta — аддитивное поле. Старый дашборд его просто
 // игнорирует, поэтому новые коды импортируются и старой версией тоже, а старые
 // коды (без meta) — новой. Обновляться синхронно с другом не нужно.
+//
+// profile и accessToken НЕ переносим: первый — метка локальной папки профиля
+// (у получателя её нет), второй — живой доступ к аккаунту, ему в коде не место.
+// Старые grant/grantManual/bonus/referral остаются в списке ради приёма кодов из
+// прошлых версий — на загрузке их свернёт newapiMigrateAnchors.
 const SHARE_META_FIELDS = [
-    'status', 'spent', 'grant', 'grantManual', 'grantSource',
-    'bonus', 'referral', 'balance', 'accessUntil', 'balanceCheckedAt', 'created',
+    'status', 'spent', 'balance', 'balanceSource', 'granted',
+    'balanceAnchor', 'anchorSpent', 'anchoredAt', 'anchorFrom',
+    'newApiUserId', 'newApiUsername', 'selfCheckedAt', 'usageSpentAtSelf',
+    'accessUntil', 'balanceCheckedAt', 'created',
+    'grant', 'grantManual', 'grantSource', 'bonus', 'referral',
 ];
 
 function sharePickMeta(acct) {
@@ -6252,12 +6562,9 @@ const GO_UPSTREAM = 'https://gorouter.app';
 const GO_KEEPALIVE_PORT = 20156;
 const GO_KEEPALIVE_URL = `http://localhost:${GO_KEEPALIVE_PORT}`;
 const GO_MODELMAP_FILE = path.join(__dirname, 'gorouter-modelmap.json');
-// Баланс: сервис отдаёт только total_usage (центы). Выдача («грант») — по шагу
-// $25 от базовых $70 (у gorouter НЕ 175, как у agentrouter). Пользователь правит руками.
+// Резерв «угадать грант» (см. newapiBalance): база $70, а не $175 как у agentrouter.
 const GO_GRANT_STEP = 25;
 const GO_DEFAULT_GRANT = 70;
-// Чек-ин в ЛК даёт бонус: у agentrouter это $25, у gorouter — $5.
-const GO_BONUS_STEP = 5;
 const GO_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 const GO_CC_HEADERS = {
@@ -6285,6 +6592,8 @@ function goLoad() {
             }
             seen.add(s.id);
         });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { goSave(arr); } catch {}
         }
@@ -6350,65 +6659,20 @@ async function goProbe(apiKey) {
     } catch { return 'unknown'; }
 }
 
-// Баланс: usage endpoint на КОРНЕ gorouter.app (не /v1). spent = total_usage (центы)/100.
-async function goBalance(apiKey, grantOverride, bonusOverride) {
-    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
-    const day = ms => new Date(ms).toISOString().slice(0, 10);
-    const end = day(Date.now());
-    const start = day(Date.now() - 400 * 864e5);
-    let usageRes;
-    try {
-        usageRes = await fetch(
-            `https://gorouter.app/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
-            {
-                method: 'GET',
-                headers: { ...GO_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
-                signal: AbortSignal.timeout(15000),
-            },
-        );
-    } catch (e) {
-        return { status: 'unknown', error: e.message };
-    }
-    if (usageRes.status === 401 || usageRes.status === 403) return { status: 'dead' };
-    if (usageRes.status !== 200) return { status: 'unknown', error: `usage HTTP ${usageRes.status}` };
-
-    let spent;
-    try {
-        const data = await usageRes.json();
-        spent = Math.round((Number(data.total_usage) || 0)) / 100; // центы → доллары
-    } catch (e) {
-        return { status: 'unknown', error: `usage parse: ${e.message}` };
-    }
-    const grant = grantOverride > 0
-        ? grantOverride
-        : Math.max(GO_DEFAULT_GRANT, Math.ceil(spent / GO_GRANT_STEP) * GO_GRANT_STEP);
-    const bonus = Number(bonusOverride) > 0 ? Number(bonusOverride) : 0;
-    const balance = Math.round((grant + bonus - spent) * 100) / 100;
-
-    return { status: 'live', spent, grant, bonus, balance, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+// Баланс: usage endpoint на КОРНЕ gorouter.app (не /v1). Точный остаток — из
+// /api/user/self куками профиля; резервы (анкер, угадывание) см. newapiBalance.
+async function goBalance(target) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'gorouter.app',
+        ccHeaders: GO_CC_HEADERS,
+        usageUrl: 'https://gorouter.app/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(GO_DEFAULT_GRANT, Math.ceil(spent / GO_GRANT_STEP) * GO_GRANT_STEP),
+    });
 }
 
-function goApplyBalance(target, bal) {
-    if (!target || !bal) return bal;
-    // Аккаунт без ключа — не ошибка чека (см. arApplyBalance).
-    if (bal.status === 'no_key') { target.status = 'no_key'; delete target.balanceError; return bal; }
-    target.status = bal.status;
-    // Штамп ставим при любом исходе — иначе при таймауте billing статусбар считает
-    // кеш протухшим и пинает обновление на каждом промпте (см. arApplyBalance).
-    target.balanceCheckedAt = new Date().toISOString();
-    if (bal.status === 'live') {
-        target.spent = bal.spent;
-        target.grant = bal.grant;
-        target.bonus = bal.bonus;
-        target.balance = bal.balance;
-        target.accessUntil = bal.accessUntil;
-        target.grantSource = bal.grantSource;
-        delete target.balanceError;
-    } else {
-        target.balanceError = bal.error || bal.status;
-    }
-    return bal;
-}
+function goApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
 
 async function handleGoSessions(req, res) {
     try {
@@ -6424,7 +6688,7 @@ async function handleGoSessions(req, res) {
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
-                await Promise.all(sessions.slice(i, i + 3).map(async s => goApplyBalance(s, await goBalance(s.api_key, s.grantManual, s.bonus))));
+                await Promise.all(sessions.slice(i, i + 3).map(async s => goApplyBalance(s, await goBalance(s))));
             }
             goSave(sessions);
         }
@@ -6453,7 +6717,7 @@ async function handleGoBalance(req, res) {
         const recalc = async () => {
             const sessions = goLoad();
             const target = sessions.find(s => s.api_key === api_key);
-            const bal = await goBalance(api_key, target && target.grantManual, target && target.bonus);
+            const bal = await goBalance(target || { api_key });
             if (target) { goApplyBalance(target, bal); goSave(sessions); }
             return bal;
         };
@@ -6467,44 +6731,8 @@ async function handleGoBalance(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-async function handleGoSetGrant(req, res) {
-    try {
-        const body = await readJsonBody(req);
-        const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
-        const raw = body.grant;
-        const grant = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
-        if (grant !== null && !(grant > 0)) return jsonRes(res, 400, { error: 'grant должен быть > 0 или пустым (сброс)' });
-        const sessions = goLoad();
-        const target = sessions.find(s => s.api_key === key);
-        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
-        if (grant === null) delete target.grantManual;
-        else target.grantManual = grant;
-        const bal = await goBalance(key, target.grantManual, target.bonus);
-        goApplyBalance(target, bal);
-        goSave(sessions);
-        logLine(`gorouter set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
-        jsonRes(res, 200, { ok: true, ...bal });
-    } catch (e) { jsonRes(res, 500, { error: e.message }); }
-}
-
-// POST /__switch/api/go/add-bonus { api_key } → чек-ин в ЛК дал +$5 (поле bonus копится отдельно
-// от изначальной выдачи grant). Баланс = grant + bonus − spent. grant НЕ трогаем.
-async function handleGoAddBonus(req, res) {
-    try {
-        const body = await readJsonBody(req);
-        const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
-        const sessions = goLoad();
-        const target = sessions.find(s => s.api_key === key);
-        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
-        target.bonus = Math.round(((Number(target.bonus) || 0) + GO_BONUS_STEP) * 100) / 100;
-        const bal = await goBalance(key, target.grantManual, target.bonus);
-        goApplyBalance(target, bal);
-        goSave(sessions);
-        logLine(`gorouter add-bonus: ***${key.slice(-6)} → +$${GO_BONUS_STEP} (всего bonus $${target.bonus})`);
-        jsonRes(res, 200, { ok: true, bonus: target.bonus, ...bal });
-    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+function handleGoSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'gorouter', load: goLoad, save: goSave, balanceFn: goBalance, applyFn: goApplyBalance });
 }
 
 const goLkPids = new Map();
@@ -6923,14 +7151,9 @@ const TB_MODELMAP_FILE = path.join(__dirname, 'tabi-modelmap.json');
 const TB_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'tabi-active-key.txt');
 const TB_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'tabi-active-model.txt');
 const TB_BASE_URL = 'https://tabitoken.com';   // БЕЗ /v1 (usage на корне, как AR/GO)
-// Баланс: сервис отдаёт только total_usage (центы). Выдача («грант») по умолчанию
-// $100 (база провайдера) + $20 за каждого приведённого по реферальной ссылке.
-// balance = grant + bonus − spent. Пользователь правит руками кнопкой ✏️.
+// Резерв «угадать грант» (см. newapiBalance): база $100, шаг $20.
 const TB_GRANT_STEP = 20;
 const TB_DEFAULT_GRANT = 100;
-const TB_BONUS_STEP = 20;
-const TB_SENTINEL_USD = 1e6;
-const tbIsSaneLimit = v => typeof v === 'number' && v > 0 && v < TB_SENTINEL_USD;
 const TB_KEEPALIVE_PORT = 20155;
 const TB_KEEPALIVE_URL = `http://localhost:${TB_KEEPALIVE_PORT}`;
 const TB_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
@@ -6959,6 +7182,8 @@ function tbLoad() {
             }
             seen.add(s.id);
         });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { tbSave(arr); } catch {}
         }
@@ -7113,80 +7338,21 @@ async function tbProbe(apiKey) {
     } catch { return 'unknown'; }
 }
 
-// Баланс ключа: usage на КОРНЕ tabitoken.com (не /v1), spent = total_usage (центы)/100.
-// grant = вручную (grantManual) либо авто: база $100 + шаг $20 по потраченному.
-async function tbBalance(apiKey, grantOverride, bonusOverride) {
-    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
-    const day = ms => new Date(ms).toISOString().slice(0, 10);
-    const end = day(Date.now());
-    const start = day(Date.now() - 400 * 864e5);
-    let usageRes;
-    try {
-        usageRes = await fetch(
-            `${TB_BASE_URL}/dashboard/billing/usage?start_date=${start}&end_date=${end}`,
-            {
-                method: 'GET',
-                headers: { ...TB_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
-                signal: AbortSignal.timeout(15000),
-            },
-        );
-    } catch (e) {
-        return { status: 'unknown', error: e.message };
-    }
-    if (usageRes.status === 401 || usageRes.status === 403) return { status: 'dead' };
-    if (usageRes.status !== 200) return { status: 'unknown', error: `usage HTTP ${usageRes.status}` };
-
-    let spent;
-    try {
-        const data = await usageRes.json();
-        spent = Math.round((Number(data.total_usage) || 0)) / 100; // центы → доллары
-    } catch (e) {
-        return { status: 'unknown', error: `usage parse: ${e.message}` };
-    }
-    const grant = grantOverride > 0
-        ? grantOverride
-        : Math.max(TB_DEFAULT_GRANT, Math.ceil(spent / TB_GRANT_STEP) * TB_GRANT_STEP);
-    const bonus = Number(bonusOverride) > 0 ? Number(bonusOverride) : 0;
-    const balance = Math.round((grant + bonus - spent) * 100) / 100;
-
-    // Опционально: срок доступа. Ошибки глотаем.
-    let accessUntil = null, limitSane = null;
-    try {
-        const subRes = await fetch(`${TB_BASE_URL}/v1/dashboard/billing/subscription`, {
-            method: 'GET',
-            headers: { ...TB_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
-            signal: AbortSignal.timeout(15000),
-        });
-        if (subRes.status === 200) {
-            const sub = await subRes.json();
-            accessUntil = sub.access_until && sub.access_until > 0 ? sub.access_until : null;
-            limitSane = tbIsSaneLimit(Number(sub.hard_limit_usd));
-        }
-    } catch { /* срок доступа не критичен */ }
-
-    return { status: 'live', spent, grant, bonus, balance, accessUntil, limitSane, source: 'auto', grantSource: grantOverride > 0 ? 'manual' : 'auto' };
+// Баланс ключа: usage на КОРНЕ tabitoken.com (не /v1). Точный остаток — из
+// /api/user/self (tabitoken это rc.23, там сперва обмен refresh-куки на JWT);
+// резервы (анкер, угадывание) см. newapiBalance.
+async function tbBalance(target) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'tabitoken.com',
+        ccHeaders: TB_CC_HEADERS,
+        usageUrl: `${TB_BASE_URL}/dashboard/billing/usage`,
+        subUrl: `${TB_BASE_URL}/v1/dashboard/billing/subscription`,
+        guessGrant: spent => Math.max(TB_DEFAULT_GRANT, Math.ceil(spent / TB_GRANT_STEP) * TB_GRANT_STEP),
+    });
 }
 
-function tbApplyBalance(target, bal) {
-    if (!target || !bal) return bal;
-    // Аккаунт без ключа — не ошибка чека (см. arApplyBalance).
-    if (bal.status === 'no_key') { target.status = 'no_key'; delete target.balanceError; return bal; }
-    target.status = bal.status;
-    // Штамп при любом исходе — см. arApplyBalance (иначе бар долбит обновление).
-    target.balanceCheckedAt = new Date().toISOString();
-    if (bal.status === 'live') {
-        target.spent = bal.spent;
-        target.grant = bal.grant;
-        target.bonus = bal.bonus;
-        target.balance = bal.balance;
-        target.accessUntil = bal.accessUntil;
-        target.grantSource = bal.grantSource;
-        delete target.balanceError;
-    } else {
-        target.balanceError = bal.error || bal.status;
-    }
-    return bal;
-}
+function tbApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
 
 async function handleTbSessions(req, res) {
     try {
@@ -7202,7 +7368,7 @@ async function handleTbSessions(req, res) {
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
-                await Promise.all(sessions.slice(i, i + 3).map(async s => tbApplyBalance(s, await tbBalance(s.api_key, s.grantManual, s.bonus))));
+                await Promise.all(sessions.slice(i, i + 3).map(async s => tbApplyBalance(s, await tbBalance(s))));
             }
             tbSave(sessions);
         }
@@ -7231,7 +7397,7 @@ async function handleTbBalance(req, res) {
         const recalc = async () => {
             const sessions = tbLoad();
             const target = sessions.find(s => s.api_key === api_key);
-            const bal = await tbBalance(api_key, target && target.grantManual, target && target.bonus);
+            const bal = await tbBalance(target || { api_key });
             if (target) { tbApplyBalance(target, bal); tbSave(sessions); }
             return bal;
         };
@@ -7244,44 +7410,8 @@ async function handleTbBalance(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-async function handleTbSetGrant(req, res) {
-    try {
-        const body = await readJsonBody(req);
-        const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
-        const raw = body.grant;
-        const grant = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
-        if (grant !== null && !(grant > 0)) return jsonRes(res, 400, { error: 'grant должен быть > 0 или пустым (сброс)' });
-        const sessions = tbLoad();
-        const target = sessions.find(s => s.api_key === key);
-        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
-        if (grant === null) delete target.grantManual;
-        else target.grantManual = grant;
-        const bal = await tbBalance(key, target.grantManual, target.bonus);
-        tbApplyBalance(target, bal);
-        tbSave(sessions);
-        logLine(`tabi set-grant: ***${key.slice(-6)} → ${grant === null ? 'auto' : '$' + grant}`);
-        jsonRes(res, 200, { ok: true, ...bal });
-    } catch (e) { jsonRes(res, 500, { error: e.message }); }
-}
-
-// POST /__switch/api/tb/add-bonus { api_key } → рефка принесла +$20 (поле bonus копится
-// отдельно от выдачи grant). Баланс = grant + bonus − spent. grant НЕ трогаем.
-async function handleTbAddBonus(req, res) {
-    try {
-        const body = await readJsonBody(req);
-        const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
-        const sessions = tbLoad();
-        const target = sessions.find(s => s.api_key === key);
-        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
-        target.bonus = Math.round(((Number(target.bonus) || 0) + TB_BONUS_STEP) * 100) / 100;
-        const bal = await tbBalance(key, target.grantManual, target.bonus);
-        tbApplyBalance(target, bal);
-        tbSave(sessions);
-        logLine(`tabi add-bonus: ***${key.slice(-6)} → +$${TB_BONUS_STEP} (всего bonus $${target.bonus})`);
-        jsonRes(res, 200, { ok: true, bonus: target.bonus, ...bal });
-    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+function handleTbSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'tabi', load: tbLoad, save: tbSave, balanceFn: tbBalance, applyFn: tbApplyBalance });
 }
 
 const tbLkPids = new Map();
@@ -8371,9 +8501,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-model') return handleArSetModel(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/modelmap') return handleArModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/modelmap') return handleArModelMap(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/ar/set-grant') return handleArSetGrant(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/ar/add-bonus') return handleArAddBonus(req, res);
-if (req.method === 'POST' && req.url === '/__switch/api/ar/add-referral') return handleArAddReferral(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/set-balance') return handleArSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/map-profiles') return handleArMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
@@ -8404,8 +8533,8 @@ if (req.method === 'POST' && req.url === '/__switch/api/ar/add-referral') return
     if (req.method === 'POST' && req.url === '/__switch/api/go/delete')    return handleGoDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/activate')  return handleGoActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-model') return handleGoSetModel(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/go/set-grant') return handleGoSetGrant(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/go/add-bonus') return handleGoAddBonus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/set-balance') return handleGoSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/map-profiles') return handleGoMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/modelmap')  return handleGoModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/session/open') return handleGoSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/share')    return handleGoShare(req, res);
@@ -8424,8 +8553,8 @@ if (req.method === 'POST' && req.url === '/__switch/api/ar/add-referral') return
     if (req.method === 'POST' && req.url === '/__switch/api/tb/delete')    return handleTbDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/activate')  return handleTbActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/set-model') return handleTbSetModel(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/tb/set-grant') return handleTbSetGrant(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/tb/add-bonus') return handleTbAddBonus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/set-balance') return handleTbSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/map-profiles') return handleTbMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/modelmap')  return handleTbModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/session/open') return handleTbSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/share')    return handleTbShare(req, res);

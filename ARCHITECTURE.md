@@ -485,26 +485,65 @@ client detected` (проверено 2026-08-16, при прочих равны�
 
 ### Баланс ключа (продажа на FunPay)
 
-Сервис **не отдаёт остаток** по ключу — только потраченное. Считаем `balance = grant − spent`:
+Точный остаток берётся из **аккаунтного** эндпоинта New-API, а не выводится из ключа.
+Общий модуль на все три вкладки — `routing/lib/newapi-account.js`, общий расчёт —
+`newapiBalance()` в `transparent-proxy.js` (одна реализация вместо трёх копий).
 
-- `spent` = `GET /dashboard/billing/usage?start_date=…&end_date=…` (400 дней назад → сегодня),
-  поле `total_usage` **в центах** → делим на 100. CC-заголовки + `Bearer` (WAF), таймаут 15с.
-- `grant` (изначальная выдача) — у разных аккаунтов разная (125 / 175 / личный больше):
-  либо **задана вручную** (`grantManual` в сессии, роут `set-grant`), либо угадывается
-  `max(175, ceil(spent/25)*25)`. `hard_limit_usd` (= sentinel 100M у безлимитных) **НЕ баланс**.
-- Результат кешируется прямо в `agentrouter-sessions.json` (`spent/grant/balance/bonus/grantSource/
-  balanceCheckedAt`) — переживает F5 и рестарт. `arBalance()` / `arApplyBalance()`.
-- UI: колонка «Баланс» (цвет по доле остатка: >30% emerald, 10–30% amber, <10% crimson),
-  Кнопка «✏️ из $175» под суммой = задать изначальную выдачу вручную (голубая = вписана
-  руками, серая = дашборд угадал), «💳 Балансы всех» = пакетный прогон (чанки по 3).
-- **Бонус чек-ина «+25»**: `POST /api/ar/add-bonus {api_key}` → `handleArAddBonus`: поле
-  `bonus` (копится, отдельно от выдачи), `balance = grant + bonus − spent`, grant НЕ трогается.
-  UI — кнопка «+25» справа от суммы (confirm → пересчёт; зелёная, если бонус уже есть).
-  `arBalance(apiKey, grantOverride, bonusOverride)` — bonus идёт третьим аргументом.
-- **GoRouter — то же 1 в 1, но шагом $5**: `POST /api/go/add-bonus` → `handleGoAddBonus`,
-  `GO_BONUS_STEP = 5`, `goBalance(apiKey, grantOverride, bonusOverride)`, кеш в
-  `gorouter-sessions.json`, UI-кнопка «+5» справа от суммы (`goAddBonus()` / `goBalanceCell()`).
-  База выдачи у gorouter — `GO_DEFAULT_GRANT = 70` (не 175).
+**Три источника, первый сработавший побеждает** (поле `balanceSource` в записи):
+
+| источник | бейдж | откуда |
+|---|---|---|
+| `self` | ⚡ точный | `GET /api/user/self` → `quota` (остаток) и `used_quota` (расход) в единицах квоты; USD = `quota / quota_per_unit` (500000, из `/api/status`) |
+| `anchor` | ✏️ вручную | вписанный из ЛК баланс + расход на момент вписывания: `balance = balanceAnchor − (spent − anchorSpent)`, дальше убывает сам |
+| `guess` | ~ прикидка | последний резерв: `max(база, ceil(spent/шаг)*шаг) − spent`. База 175 / 70 / 100 |
+
+- `usage`-эндпоинт (`/dashboard/billing/usage`, `total_usage` **в центах**) зовётся всегда:
+  он определяет живость **ключа** (401/403 = мёртв), а `self` говорит только про аккаунт —
+  для продажи важно первое. Внимание: `total_usage` — расход **токена**, а не аккаунта, и при
+  пересоздании токена занижен, поэтому при успехе `self` расход берётся из `used_quota`.
+- **Авторизация аккаунтная, не ключевая**, и различается по версиям New-API:
+  `agentrouter.org` / `gorouter.app` (classic) — cookie `session` + заголовок `New-Api-User: <id>`,
+  причём **id читается локально из самой куки** (gorilla/sessions подписывает, но не шифрует);
+  `tabitoken.com` (rc.23) — `POST /api/user/auth/refresh` с кукой `new_api_refresh` → JWT.
+- **Куки берутся прямо из профилей Chromium** (`<provider>/profiles/<label>`), без запуска
+  браузера: схема `v10`, ключ в `Local State` под DPAPI (раскрывается через PowerShell
+  `ProtectedData.Unprotect`), сама БД читается копией через `better-sqlite3`.
+- **Свой cookie-jar** `routing/newapi-jar.json` (gitignored): refresh-кука у tabitoken
+  **одноразовая** — сервер отдаёт новое значение в `set-cookie`, а писать обратно в живую
+  зашифрованную БД профиля нельзя. Jar же кеширует access-токен (~15 мин), чтобы повторный
+  чек не жёг refresh. Пишется **перечитыванием диска по одному ключу**: пачка идёт по 3
+  аккаунта, и запись снимка целиком затирала чужие свежие куки (та же грабля, что лечит `arSaveMerge`).
+- **Связка записи с профилем** — `profile` + `newApiUserId`, ставит `POST /api/{ar,go,tb}/map-profiles`
+  (`newapiMapProfiles`, кнопка «🔗 Профили»). Сверка **по самому ключу**, не по github-логину:
+  у GoRouter поля `email` оказались скопированы из AgentRouter. `GET /api/token/` отдаёт ключ
+  по-разному — agentrouter полным (без префикса `sk-`), gorouter/tabi замаскированным
+  (`sk-78xp******`), для второго случая полный раскрывается `POST /api/token/<id>/key`.
+  Ответ роута также возвращает **бесхозные профили** — живые аккаунты, которых нет в пуле.
+- **Защита от рейт-лимитов.** У agentrouter перед API стоит Aliyun WAF: при частых запросах он
+  отдаёт JS-заглушку **с кодом 200 вместо JSON**, у tabitoken `/auth/refresh` отвечает 429.
+  Поэтому: запросы к хосту идут через шлюз частоты (`hostGate`, пауза 900мс, у agentrouter 2500мс),
+  первый же отказ включает **остывание хоста на 10 минут** (остальные аккаунты пачки мгновенно
+  уходят в резерв), а **ретраев нет сознательно** — они только продлевают блокировку.
+  Плюс переиспользование: если прошлый `self` был < 20 мин назад и расход не сдвинулся,
+  точная цифра берётся из кеша (`selfCheckedAt` / `usageSpentAtSelf`) и на шлюз не идём.
+- Кеш — прямо в `{agentrouter,gorouter,tabi}-sessions.json`: `spent/balance/balanceSource/granted/
+  balanceAnchor/anchorSpent/selfCheckedAt/balanceCheckedAt`. `balanceCheckedAt` штампуется при
+  **любом** исходе (иначе статусбар долбит обновление на каждом промпте), причина недоступности
+  точной цифры — в `selfError`.
+- **Вписать баланс**: `POST /api/{ar,go,tb}/set-balance {api_key, balance}` → `newapiSetBalance`.
+  `balance = null` сбрасывает привязку. Заменило собой `set-grant` / `add-bonus` / `add-referral`:
+  три ручки (выдача + «+25» чек-ин + «+100» рефка) описывали одно число, требовали проклика
+  после каждой траты и разъезжались до минусов (`−$7.40` у GoRouter). Старые поля
+  `grantManual/bonus/referral/grant/grantSource` при загрузке просто **удаляются**
+  (`newapiMigrateAnchors`), в анкер НЕ сворачиваются: анкер из них был бы выведен из того же
+  сломанного угадывания и подставлялся бы вместо точной цифры при каждом рейт-лимите —
+  именно так Tabi показывала `−$4.37` там, где в аккаунте лежало `$6.63`. Анкер бывает только
+  вписанный руками, а если расход его обогнал (остаток ≤ 0) — запись честно уходит в «прикидку».
+- UI: `newapiBalanceCell()` (одна на три вкладки) — сумма + бейдж источника + кнопка «✏️ вписать».
+  Пороги цвета **абсолютные** (≥$20 emerald, ≥$5 amber, ниже crimson): при точном балансе гранта
+  нет и брать долю не от чего. Отрицательное показывается как `$0.00` с подсказкой «привязка
+  устарела». Статусбар (`gauge_from_balance_cache`) знаменатель шкалы берёт как
+  `granted` → `balanceAnchor` → легаси `grant+bonus+referral`.
 
 ### Кнопка «🌐 ЛК» — рефка для новых, баланс для рабочих (общее для ar/go/tb)
 

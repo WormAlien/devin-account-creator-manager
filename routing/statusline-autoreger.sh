@@ -143,13 +143,13 @@ balance_err=""     # непустая = последняя проверка ба
 active_name=""
 
 # Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter):
-# дашборд держит там balance/grant/balanceCheckedAt активного ключа. Читаем блок активного
-# ключа bash-native (0 форков), avail_sum = balance как есть (дашборд уже посчитал
-# grant+bonus−spent), pct = balance/grant. Ленивый рефреш через
-# GET /__switch/api/<endpoint_path>?api_key=… если кеш протух (> <stale_s>).
+# дашборд держит там balance/granted/balanceCheckedAt активного ключа. Читаем блок активного
+# ключа bash-native (0 форков), avail_sum = balance как есть (дашборд уже посчитал точную
+# цифру из /api/user/self либо вывел из вписанного анкера), pct = balance/granted. Ленивый
+# рефреш через GET /__switch/api/<endpoint_path>?api_key=… если кеш протух (> <stale_s>).
 gauge_from_balance_cache() {
     local sessions_file="$1" active_key_file="$2" endpoint_path="$3" stale_threshold="$4"
-    local key raw after before head_obj tail_obj block bal grant bonus referral chk bal_i grant_i chk_ts now_s
+    local key raw after before head_obj tail_obj block bal granted anchor grant bonus referral chk bal_i grant_i chk_ts now_s
     have_gauge=0
 
     key=""; read -r key < "$active_key_file" 2>/dev/null || true
@@ -168,17 +168,30 @@ gauge_from_balance_cache() {
 
     have_gauge=1
     bal=0;   [[ "$block" =~ \"balance\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\.[0-9]+)?) ]] && bal="${BASH_REMATCH[1]}"
-    grant=0; [[ "$block" =~ \"grant\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && grant="${BASH_REMATCH[1]}"
     chk="";  [[ "$block" =~ \"balanceCheckedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && chk="${BASH_REMATCH[1]}"
     # balanceError пишет сервер, когда billing не ответил — цифра не просто стара, а под вопросом
     balance_err=""; [[ "$block" =~ \"balanceError\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && balance_err="${BASH_REMATCH[1]}"
-    # avail_sum = баланс как есть; pct = bal/(grant+bonus+referral) — тот же знаменатель,
-    # из которого сервер считал balance, иначе шкала уезжает за 100% и не двигается.
+    # Знаменатель шкалы. Приоритет тот же, что у сервера при расчёте balance:
+    #   granted       — точная сумма выданного (остаток+расход) из /api/user/self
+    #   balanceAnchor — вписанный руками баланс, если точного нет
+    #   grant+bonus+referral — легаси-поля старых записей (до перехода на анкер)
+    # Знаменатель обязан быть тем же, из которого посчитан balance, иначе шкала
+    # уезжает за 100% и перестаёт двигаться.
+    granted=0;  [[ "$block" =~ \"granted\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && granted="${BASH_REMATCH[1]}"
+    anchor=0;   [[ "$block" =~ \"balanceAnchor\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && anchor="${BASH_REMATCH[1]}"
+    grant=0;    [[ "$block" =~ \"grant\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && grant="${BASH_REMATCH[1]}"
     bonus=0;    [[ "$block" =~ \"bonus\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && bonus="${BASH_REMATCH[1]}"
     referral=0; [[ "$block" =~ \"referral\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && referral="${BASH_REMATCH[1]}"
     [[ "$bal" == -* ]] && bal=0
     avail_sum="$bal"
-    bal_i="${bal%.*}"; grant_i=$(( ${grant%.*} + ${bonus%.*} + ${referral%.*} ))
+    bal_i="${bal%.*}"
+    if [ "${granted%.*}" -gt 0 ] 2>/dev/null; then
+        grant_i="${granted%.*}"
+    elif [ "${anchor%.*}" -gt 0 ] 2>/dev/null; then
+        grant_i="${anchor%.*}"
+    else
+        grant_i=$(( ${grant%.*} + ${bonus%.*} + ${referral%.*} ))
+    fi
     if [ "${grant_i:-0}" -gt 0 ] 2>/dev/null; then pct=$(( bal_i * 100 / grant_i )); else pct=0; fi
 
     # свежесть по balanceCheckedAt (ISO). balance_age_s наружу — рендер строки

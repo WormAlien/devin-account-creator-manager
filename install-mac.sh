@@ -205,6 +205,15 @@ copy_example routing/video-keys.example.json routing/video-keys.json
 copy_example routing/image-keys.example.json routing/image-keys.json
 copy_example tgbot/.env.example tgbot/.env
 
+# Статус-лайн: в шаблоне settings.json секции statusLine нет, а существующий файл
+# мы не перезаписываем — поэтому включаем отдельно, дописывая ровно эту секцию.
+# Иначе бар внизу CC просто выключен, и юзер об этом не догадывается.
+if node tools/enable-statusline.js >/dev/null 2>&1; then
+  ok "статус-лайн включён (провайдер/модель · баланс · контекст)"
+else
+  warn "статус-лайн включить не удалось — вручную: node tools/enable-statusline.js"
+fi
+
 # 8. Права + карантин macOS
 step "Права и карантин macOS"
 chmod +x mac-support/shims/* routing/*.sh DASHBOARD.command 2>/dev/null

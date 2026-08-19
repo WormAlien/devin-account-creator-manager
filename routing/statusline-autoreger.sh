@@ -11,7 +11,36 @@ set -u
 # timeout на cat: без payload в env и с открытым-но-пустым stdin cat блокируется
 # НАВСЕГДА → CC убивает statusline по своему таймауту → бар пропадает целиком
 # (и контекст, и баланс). 2с — потолок, обычно env есть и cat не вызывается.
-payload="${STATUSLINE_PAYLOAD:-$(timeout 2 cat 2>/dev/null || true)}"
+#
+# ВАЖНО: `timeout` — из GNU coreutils, на macOS его НЕТ. Раньше здесь стоял
+# `timeout 2 cat`, и на маке подстановка молча давала пустую строку: model_id
+# становился «unknown», а контекстное окно не показывалось вообще (поймано на
+# живом маке 2026-08-20). Поэтому читаем bash-native `read -t` — без внешних
+# утилит и без форка, работает и в git-bash, и в bash 3.2 из macOS.
+payload="${STATUSLINE_PAYLOAD:-}"
+if [ -z "$payload" ]; then
+    IFS= read -r -d '' -t 2 payload 2>/dev/null || true
+    payload="${payload:-}"
+fi
+
+# ---- дата: GNU и BSD расходятся, а на маке date только BSD ------------------
+# `date -d <ISO>` — GNU-синтаксис; у BSD -d это флаг летнего времени, и разбор
+# ISO падает. `date +%s%3N` (миллисекунды) BSD тоже не умеет — оставляет «%3N»
+# в строке, из-за чего арифметика возраста кеша ломалась молча.
+_iso_epoch() {   # ISO8601 → epoch, 0 если не разобрали
+    local iso="$1" s
+    s="$(date -d "$iso" +%s 2>/dev/null)" && [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+    iso="${iso%%.*}"; iso="${iso%Z}"; iso="${iso%%+*}"
+    date -j -u -f '%Y-%m-%dT%H:%M:%S' "$iso" +%s 2>/dev/null || echo 0
+}
+_now_ms() {      # epoch в миллисекундах; на BSD добиваем нулями до секунды
+    local s
+    s="$(date +%s%3N 2>/dev/null)"
+    case "$s" in
+        ''|*[!0-9]*) printf '%s000' "$(date +%s)" ;;
+        *)           printf '%s' "$s" ;;
+    esac
+}
 
 # ROOT = корень репо (скрипт лежит в <repo>/routing/). ${BASH_SOURCE%/*} вместо
 # $(dirname) — без форка.
@@ -204,7 +233,7 @@ gauge_from_balance_cache() {
     # свежесть по balanceCheckedAt (ISO). balance_age_s наружу — рендер строки
     # показывает возраст цифры, чтобы было видно, обновляется квота или залипла.
     if [ -n "$chk" ]; then
-        chk_ts="$(date -d "$chk" +%s 2>/dev/null || echo 0)"
+        chk_ts="$(_iso_epoch "$chk")"
         now_s="$(date +%s)"
         [ "$chk_ts" -gt 0 ] && stale_age_s=$(( now_s - chk_ts ))
         [ "$stale_age_s" -lt 0 ] && stale_age_s=0
@@ -271,7 +300,7 @@ if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] &
             if [ "$fm_state" = "cooldown" ]; then
                 cool_str="?"
                 if [ -n "$cool_until" ]; then
-                    cool_ts="$(date -d "$cool_until" +%s 2>/dev/null || echo 0)"
+                    cool_ts="$(_iso_epoch "$cool_until")"
                     now_s="$(date +%s)"
                     if [ "$cool_ts" -gt "$now_s" ]; then
                         cool_left=$(( cool_ts - now_s ))
@@ -288,7 +317,7 @@ if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] &
             pct="$(awk -v u="$h5" -v m="$h5m" -v a="$av" 'BEGIN { r=m-u; if (r<0) r=0; if (a>=0 && a<r) r=a; if (m>0) printf "%d",(r/m)*100; else print (a==0 ? "0" : "100") }')"
 
             # свежесть по updatedAt (ms)
-            now_ms="$(date +%s%3N 2>/dev/null || echo 0)"
+            now_ms="$(_now_ms)"
             [ "$upd" -gt 0 ] && stale_age_s=$(( (now_ms - upd) / 1000 ))
             [ "$stale_age_s" -lt 0 ] && stale_age_s=0
             balance_age_s="$stale_age_s"   # возраст цифры → в рендер (см. age_mark)

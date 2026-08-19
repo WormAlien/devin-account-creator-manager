@@ -145,11 +145,33 @@ else
 fi
 
 # 6. Claude Code
+#
+# `npm install -g` на маке падает с EACCES, когда npm-префикс — системный
+# /usr/local (так стоит Homebrew на Intel и любой node из pkg-установщика):
+# /usr/local/lib/node_modules принадлежит root. Раньше эта ошибка глоталась
+# (стояло `npm i -g … && ok`), установщик рапортовал успех, а юзер потом получал
+# `zsh: command not found: claude` — ровно это и случилось на живом маке.
+#
+# Лечим без sudo: свой префикс в ~/.npm-global + PATH в ~/.zprofile. Так глобальные
+# пакеты ставятся в домашнюю папку, права root не нужны, и claude виден и в новых
+# терминалах, и в DASHBOARD.command (двойной клик → login-shell zsh).
 step "Claude Code"
 if have claude; then
   ok "claude уже стоит: $(claude --version 2>/dev/null || echo '?')"
 else
-  npm install -g @anthropic-ai/claude-code && ok "Claude Code установлен"
+  if ! npm install -g @anthropic-ai/claude-code 2>/dev/null; then
+    warn "нет прав на глобальную папку npm ($(npm prefix -g 2>/dev/null)) — переношу её в ~/.npm-global"
+    npm config set prefix "$HOME/.npm-global"
+    mkdir -p "$HOME/.npm-global/bin"
+    export PATH="$HOME/.npm-global/bin:$PATH"
+    if ! grep -qs '.npm-global/bin' "$HOME/.zprofile" 2>/dev/null; then
+      printf '\nexport PATH="$HOME/.npm-global/bin:$PATH"\n' >> "$HOME/.zprofile"
+      ok "~/.npm-global/bin прописан в ~/.zprofile"
+    fi
+    npm install -g @anthropic-ai/claude-code || warn "не установился — поставь вручную: npm install -g @anthropic-ai/claude-code"
+  fi
+  if have claude; then ok "Claude Code установлен: $(claude --version 2>/dev/null || echo '?')"
+  else warn "claude всё ещё не виден в PATH — открой НОВЫЙ терминал и проверь: claude --version"; fi
 fi
 
 # 7. Конфиги из *.example (существующие не перезаписываем)

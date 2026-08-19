@@ -52,6 +52,22 @@ function cookieBackendReady() {
     return sqliteModule() ? { ok: true } : { ok: false, error: String(SQLITE_ERROR).split('\n')[0].slice(0, 120) };
 }
 
+// Где у профиля БД куки. Путь менялся: до Chromium 96 это Default/Cookies, потом
+// Default/Network/Cookies. Проверяем оба и отдаём существующий — иначе на сборке с
+// другим layout'ом мы молча решаем «куки нет» и роняем точный баланс в прикидку.
+// Возвращает null, если нет ни одного.
+const COOKIE_DB_RELS = [
+    ['Default', 'Network', 'Cookies'],
+    ['Default', 'Cookies'],
+];
+function cookieDbPath(profileDir) {
+    for (const rel of COOKIE_DB_RELS) {
+        const p = path.join(profileDir, ...rel);
+        try { if (fs.existsSync(p)) return p; } catch {}
+    }
+    return null;
+}
+
 // Почему у профиля не нашлось куки — текст прямо в UI, без обращения к машине владельца.
 // Дёшево: модуль в require-кеше, AES-ключ профиля кеширован на процесс.
 function cookieFailReason(profileDir, host) {
@@ -59,7 +75,7 @@ function cookieFailReason(profileDir, host) {
         return `better-sqlite3 не собран → npm rebuild better-sqlite3 (${String(SQLITE_ERROR).split('\n')[0].slice(0, 70)})`;
     }
     try {
-        if (!fs.existsSync(path.join(profileDir, 'Default', 'Network', 'Cookies'))) {
+        if (!cookieDbPath(profileDir)) {
             return 'в профиле нет БД куки — открой ЛК (🌐) и войди в аккаунт';
         }
     } catch {}
@@ -340,11 +356,24 @@ function macKeyFromPassword(pw) {
     return crypto.pbkdf2Sync(String(pw), MAC_SALT, MAC_ITER, 16, 'sha1');
 }
 
-// Кандидаты ключей: Keychain (оба сервиса) → mock keychain → пустой пароль.
-// Кешируем на процесс: `security` поднимается ~100 мс и может дёрнуть диалог доступа.
-let MAC_CANDIDATES = null;
-function macKeyCandidates() {
-    if (MAC_CANDIDATES) return MAC_CANDIDATES;
+// Кандидаты ключей в порядке ДЕШЕВИЗНЫ, а не вероятности.
+//
+// `security find-generic-password` на каждый процесс поднимает системный диалог
+// «введите пароль» — на живом маке это восемь окон за один прогон (пробник +
+// дашборд + keepalive'ы, у каждого свой процесс и свой кеш). Поэтому сперва
+// пробуем то, что не стоит ничего: Playwright запускает Chromium с
+// --use-mock-keychain, и тогда пароль — константа 'peanuts'. К Keychain лезем
+// только если mock не подошёл.
+function macCheapCandidates() {
+    return [
+        { label: "mock keychain ('peanuts')", key: macKeyFromPassword('peanuts') },
+        { label: 'пустой пароль', key: macKeyFromPassword('') },
+    ];
+}
+
+let MAC_KEYCHAIN = null;
+function macKeychainCandidates() {
+    if (MAC_KEYCHAIN) return MAC_KEYCHAIN;
     const out = [];
     for (const svc of ['Chromium Safe Storage', 'Chrome Safe Storage']) {
         try {
@@ -354,17 +383,15 @@ function macKeyCandidates() {
             if (pw) out.push({ label: svc, key: macKeyFromPassword(pw) });
         } catch {}
     }
-    out.push({ label: 'mock keychain', key: macKeyFromPassword('peanuts') });
-    out.push({ label: 'пустой пароль', key: macKeyFromPassword('') });
-    MAC_CANDIDATES = out;
+    MAC_KEYCHAIN = out;
     return out;
 }
 
 // Сырые encrypted_value из БД профиля — только чтобы выбрать рабочий кандидат.
 // Отдельно от readProfileCookies, потому что та сама зовёт profileAesKey.
 function macSampleEncrypted(profileDir, limit = 6) {
-    const src = path.join(profileDir, 'Default', 'Network', 'Cookies');
-    if (!fs.existsSync(src)) return [];
+    const src = cookieDbPath(profileDir);
+    if (!src) return [];
     const Database = sqliteModule();
     if (!Database) return [];
     const tmp = path.join(os.tmpdir(), `nac_probe_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
@@ -469,8 +496,8 @@ const msToChromeTime = ms => (Number(ms) + CHROME_EPOCH_OFFSET_MS) * 1000;
 // Возвращаем [{ host, name, value, lastUpdate }]; host без ведущей точки,
 // lastUpdate — мс epoch (по нему решаем, чья ротация свежее, см. effectiveCookieHeader).
 function readProfileCookies(profileDir) {
-    const src = path.join(profileDir, 'Default', 'Network', 'Cookies');
-    if (!fs.existsSync(src)) return [];
+    const src = cookieDbPath(profileDir);
+    if (!src) return [];
     const key = profileAesKey(profileDir);
     if (!key) return [];
     const tmp = path.join(os.tmpdir(), `nac_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
@@ -521,7 +548,7 @@ function readProfileCookies(profileDir) {
 function writeProfileCookies(profileDir, host, cookies) {
     const names = Object.keys(cookies || {});
     if (!names.length) return { ok: true, written: [], missing: [] };
-    const src = path.join(profileDir, 'Default', 'Network', 'Cookies');
+    const src = cookieDbPath(profileDir);
     if (!fs.existsSync(src)) return { ok: false, error: 'в профиле нет БД куки' };
     const key = profileAesKey(profileDir);
     if (!key) return { ok: false, error: 'нет AES-ключа профиля' };

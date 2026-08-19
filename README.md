@@ -1,5 +1,16 @@
 <div align="center">
 
+<a href="https://t.me/xgateonline_bot?start=github"><img src="docs/xgate-banner.png" alt="XGATE VPN — чистые IP для регистраций и API. Промокод ABUSEHUB — 3 дня бесплатно"></a>
+
+[![XGATE VPN](https://img.shields.io/badge/XGATE_VPN-@xgateonline__bot-000000?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/xgateonline_bot?start=github)
+[![личный кабинет](https://img.shields.io/badge/личный_кабинет-cabinet.xgate.online-000000?style=for-the-badge&logo=googlechrome&logoColor=white)](https://cabinet.xgate.online)
+[![промокод ABUSEHUB](https://img.shields.io/badge/промокод-ABUSEHUB_·_3_дня-37e29a?style=for-the-badge&labelColor=000000)](https://t.me/xgateonline_bot?start=github)
+
+<sub>Проект бесплатный и живёт с подписок <b>XGATE</b>: свои ноды, IP без истории абуза — регистрации, капчи и API проходят. Промокод <code>ABUSEHUB</code> — 3 дня бесплатно, дальше от 150 ₽/мес.<br>
+🤖 <a href="https://t.me/xgateonline_bot?start=github"><b>Telegram-бот @xgateonline_bot</b></a> · 🔑 <a href="https://cabinet.xgate.online"><b>Личный кабинет cabinet.xgate.online</b></a> · <a href="#поддержать-проект">зачем это в репозитории</a></sub>
+
+<br>
+
 # Vibe-Code Account Creator Manager
 
 Локальная control-plane: переключение backend'а Claude Code между провайдерами (**AgentRouter · GoRouter · Tabi Token**) одним кликом из веб-дашборда, автореги/импорт ключей, GitHub-аккаунты с 2FA, статус-лайн с балансом и контекстом. Плюс ТГ-пульт для управления с телефона.
@@ -341,6 +352,35 @@ node gorouter/open-session.js <label>     # вход в кабинет GoRouter
 ```bash
 git diff --cached | grep -E "sk-[a-z]{2,}-[a-f0-9]+|auth_key_hex|fe_oa_|aero_live_|totpSecret|recoveryCodes|ghp_" || echo "OK: no keys in staged diff"
 ```
+
+## Поддержать проект
+
+Всё здесь бесплатное и таким останется. Если сэкономило тебе время — лучший способ сказать спасибо: взять подписку на **XGATE**, наш VPN. Деньги идут на серверы, автореги и разработку этого репозитория.
+
+<table>
+<tr>
+  <td>🎟️ <b>Промокод <code>ABUSEHUB</code></b></td>
+  <td><b>3 дня бесплатно</b>, карта не нужна — вводится в боте</td>
+</tr>
+<tr>
+  <td>🤖 <b>Telegram-бот</b></td>
+  <td><a href="https://t.me/xgateonline_bot?start=github">@xgateonline_bot</a> — покупка, ключи, саппорт</td>
+</tr>
+<tr>
+  <td>🔑 <b>Личный кабинет</b></td>
+  <td><a href="https://cabinet.xgate.online">cabinet.xgate.online</a> — подписка, устройства, статистика</td>
+</tr>
+<tr>
+  <td>📄 <b>Документация</b></td>
+  <td><a href="https://docs.xgate.online">docs.xgate.online</a> — настройка под iOS/Android/Windows</td>
+</tr>
+<tr>
+  <td>💸 <b>Партнёрка</b></td>
+  <td><b>20%</b> с каждого платежа приведённых, пожизненно — ссылка в боте</td>
+</tr>
+</table>
+
+**Почему это релевантно этому репо.** Регистрации, капчи и API-эндпоинты не любят выжженные IP публичных VPN — с них ловишь бан ещё на форме. У XGATE свой небольшой пул нод (**DE · CH · NL · FI · RU**), а не перепроданный чужой пул: Reality (XTLS), XHTTP за CDN, Hysteria2 — проходит DPI и операторские белые списки. От **150 ₽/мес**, оплата картой и СБП в рублях или криптой, 1–20 устройств на подписку.
 
 ## Disclaimer
 

@@ -67,10 +67,21 @@ if [ ! -f "$SELF_DIR/package.json" ] || [ ! -f "$SELF_DIR/routing/restart-dashbo
   fi
 
   chmod +x "$DEST/install-mac.sh" 2>/dev/null
+  # Права на файлы git с Windows не хранит (всё приезжает как 100644), а на маке мы
+  # их доставляем сами — chmod'ом здесь и в restart-dashboard.sh для shim-ов. Для git
+  # это выглядит как локальная правка, и следующий `git pull` встаёт с «your local
+  # changes would be overwritten» (поймано живьём: обновление не приезжало, а юзер
+  # думал, что код свежий). core.fileMode=false отключает слежку за exec-битом.
+  git -C "$DEST" config core.fileMode false 2>/dev/null
   exec bash "$DEST/install-mac.sh"
 fi
 
 cd "$SELF_DIR" || { err "не могу перейти в $SELF_DIR"; exit 1; }
+
+# То же для случая, когда репо клонировали руками, а не через bootstrap.
+if [ "$(uname)" = "Darwin" ] && [ -d .git ] && [ "$(git config core.fileMode 2>/dev/null)" != "false" ]; then
+  git config core.fileMode false 2>/dev/null && ok "git core.fileMode=false (иначе chmod ломает git pull)"
+fi
 
 # 1. Xcode Command Line Tools — нужны для сборки нативных модулей (better-sqlite3)
 if [ "$(uname)" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then

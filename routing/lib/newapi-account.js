@@ -63,7 +63,11 @@ function cookieFailReason(profileDir, host) {
             return 'в профиле нет БД куки — открой ЛК (🌐) и войди в аккаунт';
         }
     } catch {}
-    if (!profileAesKey(profileDir)) return 'ключ профиля не расшифровался (Local State / DPAPI)';
+    if (!profileAesKey(profileDir)) {
+        return IS_MAC
+            ? 'ключ профиля не подобрался (Keychain «Chromium Safe Storage» / mock keychain)'
+            : 'ключ профиля не расшифровался (Local State / DPAPI)';
+    }
     return `в профиле нет куки для ${host} — сессия не сохранилась, войди в ЛК заново`;
 }
 
@@ -232,6 +236,16 @@ function aesKeyFromBase64(out) {
 // звать нельзя — дашборд перестанет отвечать на всё. Единственное штатное место —
 // routing/gh-index-build.js, отдельный процесс.
 function warmAesKeys(profileDirs) {
+    // На macOS батчить нечего: пароль один на систему (Keychain), дорогого
+    // процесса-на-профиль нет — есть только проба кандидата по БД профиля.
+    if (IS_MAC) {
+        let warmed = 0, failed = 0;
+        for (const dir of profileDirs || []) {
+            if (AES_KEY_CACHE.has(dir)) continue;
+            if (profileAesKey(dir)) warmed++; else failed++;
+        }
+        return { warmed, failed };
+    }
     const pending = [];
     for (const dir of profileDirs || []) {
         if (AES_KEY_CACHE.has(dir)) continue;
@@ -269,9 +283,128 @@ function warmAesKeys(profileDirs) {
     }
 }
 
+// ───────────────────── macOS: другой ключ и другой шифр ─────────────────────
+//
+// На Windows ключ лежит в Local State под DPAPI, а значение — AES-256-GCM.
+// На macOS всё иначе, поэтому Windows-ветка там не деградирует, а просто не
+// работает: profileAesKey возвращал null → readProfileCookies отдавал [] →
+// accountSelf не авторизовался → точный баланс молча превращался в «~ прикидку»
+// (замер на чистом MacBook 2026-08-20: 6 профилей, ключ не расшифровался ни в одном).
+//
+// Схема macOS (OSCrypt):
+//   пароль — Keychain, generic-password сервиса «Chromium Safe Storage»
+//            (у Chrome — «Chrome Safe Storage»). Playwright, запущенный с
+//            --use-mock-keychain, вместо Keychain берёт константу 'peanuts',
+//            поэтому кандидатов несколько и рабочий выбирается по факту.
+//   ключ   — PBKDF2-SHA1(пароль, 'saltysalt', 1003 итераций, 16 байт).
+//   значение — 'v10' + AES-128-CBC, IV = 16 пробелов, PKCS#7. Нонса нет,
+//            тега нет: короче GCM-формата, поэтому длину проверяем отдельно.
+const IS_MAC = process.platform === 'darwin';
+const MAC_SALT = 'saltysalt';
+const MAC_ITER = 1003;
+const MAC_IV = Buffer.alloc(16, 0x20);   // ровно 16 пробелов
+
+// Плейнтекст у Chromium 130+ префиксован 32 байтами SHA-256(host_key) — тем же,
+// что и на Windows (это уровень OSCrypt, не платформы). Срезаем по той же
+// эвристике «начало не похоже на текст».
+function macStripPrefix(out) {
+    if (out.length > 32 && /[\x00-\x08\x0e-\x1f]/.test(out.toString('latin1').slice(0, 32))) return out.slice(32);
+    return out;
+}
+
+function macDecryptCookie(enc, key) {
+    try {
+        if (!Buffer.isBuffer(enc) || enc.length < 3 + 16) return null;
+        if (enc.slice(0, 3).toString('latin1') !== 'v10') return null;
+        const d = crypto.createDecipheriv('aes-128-cbc', key, MAC_IV);
+        d.setAutoPadding(false);            // padding снимаем сами: Chromium иногда пишет свой
+        let out = Buffer.concat([d.update(enc.slice(3)), d.final()]);
+        const pad = out[out.length - 1];
+        if (pad >= 1 && pad <= 16 && pad <= out.length) out = out.slice(0, out.length - pad);
+        out = macStripPrefix(out);
+        const s = out.toString('utf8');
+        // Куки — печатный ASCII. Проверка отсеивает «расшифровку» неверным ключом:
+        // CBC без тега аутентичности молча отдаёт мусор вместо ошибки.
+        return /^[\x20-\x7e]*$/.test(s) && s.length ? s : null;
+    } catch { return null; }
+}
+
+function macEncryptCookie(value, key, hostKey) {
+    const c = crypto.createCipheriv('aes-128-cbc', key, MAC_IV);
+    const prefix = crypto.createHash('sha256').update(String(hostKey)).digest();
+    const body = Buffer.concat([c.update(Buffer.concat([prefix, Buffer.from(String(value), 'utf8')])), c.final()]);
+    return Buffer.concat([Buffer.from('v10', 'latin1'), body]);
+}
+
+function macKeyFromPassword(pw) {
+    return crypto.pbkdf2Sync(String(pw), MAC_SALT, MAC_ITER, 16, 'sha1');
+}
+
+// Кандидаты ключей: Keychain (оба сервиса) → mock keychain → пустой пароль.
+// Кешируем на процесс: `security` поднимается ~100 мс и может дёрнуть диалог доступа.
+let MAC_CANDIDATES = null;
+function macKeyCandidates() {
+    if (MAC_CANDIDATES) return MAC_CANDIDATES;
+    const out = [];
+    for (const svc of ['Chromium Safe Storage', 'Chrome Safe Storage']) {
+        try {
+            const pw = execFileSync('security', ['find-generic-password', '-w', '-s', svc, '-a', svc.split(' ')[0]], {
+                encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
+            }).trim();
+            if (pw) out.push({ label: svc, key: macKeyFromPassword(pw) });
+        } catch {}
+    }
+    out.push({ label: 'mock keychain', key: macKeyFromPassword('peanuts') });
+    out.push({ label: 'пустой пароль', key: macKeyFromPassword('') });
+    MAC_CANDIDATES = out;
+    return out;
+}
+
+// Сырые encrypted_value из БД профиля — только чтобы выбрать рабочий кандидат.
+// Отдельно от readProfileCookies, потому что та сама зовёт profileAesKey.
+function macSampleEncrypted(profileDir, limit = 6) {
+    const src = path.join(profileDir, 'Default', 'Network', 'Cookies');
+    if (!fs.existsSync(src)) return [];
+    const Database = sqliteModule();
+    if (!Database) return [];
+    const tmp = path.join(os.tmpdir(), `nac_probe_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
+    const copied = [tmp];
+    try {
+        fs.copyFileSync(src, tmp);
+        for (const suf of ['-wal', '-shm']) {
+            if (fs.existsSync(src + suf)) { fs.copyFileSync(src + suf, tmp + suf); copied.push(tmp + suf); }
+        }
+        const db = new Database(tmp, { readonly: true });
+        try {
+            return db.prepare('SELECT encrypted_value FROM cookies LIMIT ?').all(limit)
+                .map(r => r.encrypted_value)
+                .filter(v => Buffer.isBuffer(v) && v.length > 3);
+        } finally { db.close(); }
+    } catch { return []; }
+    finally { for (const f of copied) { try { fs.unlinkSync(f); } catch {} } }
+}
+
+// Рабочий ключ профиля на macOS: тот кандидат, которым реально расшифровалась
+// хотя бы одна кука. Если БД пустая/отсутствует — отдаём первый кандидат, чтобы
+// причину сформулировал cookieReason («нет БД куки»), а не «ключ не расшифровался».
+function macProfileKey(profileDir) {
+    const cands = macKeyCandidates();
+    const sample = macSampleEncrypted(profileDir);
+    if (!sample.length) return cands[0] ? cands[0].key : null;
+    for (const c of cands) {
+        if (sample.some(enc => macDecryptCookie(enc, c.key) !== null)) return c.key;
+    }
+    return null;
+}
+
 function profileAesKey(profileDir) {
     if (AES_KEY_CACHE.has(profileDir)) return AES_KEY_CACHE.get(profileDir);
     let key = null;
+    if (IS_MAC) {
+        try { key = macProfileKey(profileDir); } catch { key = null; }
+        AES_KEY_CACHE.set(profileDir, key);
+        return key;
+    }
     try {
         const blob = readAesBlob(profileDir);
         if (blob) {
@@ -292,6 +425,7 @@ function profileAesKey(profileDir) {
 // У сборок начиная с Chrome 130-х плейнтекст префиксован 32 байтами хеша домена —
 // срезаем, если начало не похоже на текст.
 function decryptCookieValue(enc, key) {
+    if (IS_MAC) return macDecryptCookie(enc, key);
     try {
         if (!Buffer.isBuffer(enc) || enc.length < 32) return null;
         const tag = enc.slice(0, 3).toString('latin1');
@@ -314,6 +448,7 @@ function decryptCookieValue(enc, key) {
 // у всех записей плейнтекст начинается именно им). Без префикса браузер сочтёт куку
 // испорченной и молча её выбросит.
 function encryptCookieValue(value, key, hostKey) {
+    if (IS_MAC) return macEncryptCookie(value, key, hostKey);
     const iv = crypto.randomBytes(12);
     const c = crypto.createCipheriv('aes-256-gcm', key, iv);
     const prefix = crypto.createHash('sha256').update(String(hostKey)).digest();

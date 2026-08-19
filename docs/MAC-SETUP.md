@@ -75,7 +75,11 @@ bash install-mac.sh
 
 - добавление аккаунтов в пулы (AgentRouter / GoRouter / Tabi Token / GitHub …),
 - активация ключа → настройка `~/.claude/settings.json` одним кликом,
-- проверка баланса (чистый HTTP через keepalive-прокси, Windows-кода там нет),
+- проверка баланса — точная, куками профиля Chromium. **Ключ куки на macOS берётся
+  иначе, чем на Windows** (Keychain «Chromium Safe Storage» + PBKDF2-SHA1/1003 и
+  AES-128-CBC вместо Local State/DPAPI + AES-256-GCM) — ветка `darwin` в
+  `routing/lib/newapi-account.js`. Пока её не было, точный баланс молча падал в
+  «~ прикидку». Диагностика: `node tools/mac-cookie-probe.js`,
 - открытие ЛК в браузере (Playwright chromium),
 - официальный Claude по OAuth (код уже умеет читать macOS Keychain).
 

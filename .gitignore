@@ -311,3 +311,9 @@ routing/newapi-jar.json
 # Профили браузера (куки/сессии GitHub на аккаунт) — НИКОГДА не коммитить.
 # github-accounts.json уже закрыт выше, github-accounts.example.json коммитим.
 github/profiles/
+
+# Снимки GitHub-сессий (storageState: cookies user_session и компания), которые
+# заселяются в профили новых аккаунтов New-API-вкладок. Живой доступ к аккаунтам —
+# НИКОГДА не коммитить. Кладёт их github/harvest-session.js, читает
+# routing/lib/github-session.js.
+github/sessions/

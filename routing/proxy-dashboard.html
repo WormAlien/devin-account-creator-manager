@@ -1578,6 +1578,7 @@
               <input id="ar-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="arAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiSeedPick('ar')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="arShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
         </div>
@@ -1701,6 +1702,7 @@
               <input id="go-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="goAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiSeedPick('go')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="goShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
         </div>
@@ -1824,6 +1826,7 @@
               <input id="tb-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="tbAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiSeedPick('tb')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="tbShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
         </div>
@@ -1896,6 +1899,20 @@
             <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — читается прокси :20157 по mtime, применяется БЕЗ рестарта</h2>
             <button onclick="loadXpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
+          <!-- Дефолт вкладки — «как есть» по всем тирам. Вкладка сделана клоном Tabi, и
+               первая версия унаследовала его маппинг (opus→claude-opus-5) — то есть подменяла
+               выбранную выше модель на ту, которой на этом шлюзе нет канала. Молчаливая
+               подмена ненастроенным маппингом = час отладки, поэтому дефолт пустой. -->
+          <div class="mb-3 rounded-lg bg-amber/10 border border-amber/40 px-3 py-2 text-[11px] leading-relaxed text-amber">
+            Дефолт — <b>«как есть»</b>: тир не подменяется, наверх уходит ровно та модель, что выбрана
+            в списке выше. Ставь цель только осознанно — маппинг <b>перебивает</b> выбранную модель.<br>
+            ⚠️ <span class="font-mono">claude-opus-5</span> на xpeach.codes <b>не работает</b>: канала в группе
+            <span class="font-mono">Claude｜Max 号池</span> под него нет — сначала было
+            <span class="font-mono">403 Insufficient account balance</span> (пустой счёт реселлера, не твои 🍑),
+            после отключения канала — <span class="font-mono">500 可用渠道不存在</span> (проверено 2026-08-19).
+            Живые: <span class="font-mono">opus-4-8 / 4-7 / 4-6</span>, <span class="font-mono">sonnet-5</span>,
+            <span class="font-mono">fable-5</span>, <span class="font-mono">haiku-4-5</span> (TTFB 3–5 с).
+          </div>
           <div id="xp-modelmap-sel" class="flex gap-2 items-end flex-wrap">
             <span class="text-[10px] text-faint">загрузка…</span>
           </div>
@@ -1947,6 +1964,7 @@
               <input id="xp-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="xpAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiSeedPick('xp')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="xpShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
         </div>
@@ -3546,8 +3564,16 @@ function actBtn(onclick, title, icon, color) {
 function isRealKey(k) { return /^sk-/.test(String(k || '')); }
 
 // Плашка вместо кнопки-активации у аккаунта без ключа.
-const NO_KEY_CELL = `<span class="font-mono text-[11px] px-2 py-1 rounded border border-dashed border-line-soft text-faint whitespace-nowrap"
-  title="ключ появится в ЛК после регистрации — вставь его кнопкой 🔑">🔑 получи API-ключ после регистрации</span>`;
+//
+// Кликабельна целиком и делает то же, что кнопка 🔑 справа: у аккаунта без ключа это
+// единственное осмысленное действие, а тянуться мышью через всю строку к иконке 6×6 px —
+// лишняя работа. Экранирование кавычек — как в actBtn.
+function noKeyCell(onclick) {
+  const safe = String(onclick).replace(/'/g, '&#39;');
+  return `<button onclick='${safe}' title="Вставить API-ключ (тот же, что кнопка 🔑) — возьми его в ЛК после регистрации"
+    class="font-mono text-[11px] px-2 py-1 rounded border border-dashed border-line-soft text-faint whitespace-nowrap
+           hover:border-sky/60 hover:text-sky hover:bg-sky/10 transition cursor-pointer">🔑 получи API-ключ после регистрации</button>`;
+}
 const NO_KEY_BADGE = '<span class="text-faint text-[11px]" title="аккаунт создан, ключа ещё нет">⚪ нет ключа</span>';
 const NO_KEY_BALANCE = '<span class="text-faint text-sm" title="ключа ещё нет — баланс появится после регистрации">—</span>';
 
@@ -5609,7 +5635,7 @@ function renderAr() {
     const idJ = JSON.stringify(s.id || '');
     const balanceCell = arBalanceCell(s, kJ);
     const ghBadge = arGhBadge(s);
-    const keyCell = noKey ? NO_KEY_CELL : `<button onclick='arActivate(${kJ})' title="Сделать активным (ключ → ar-active-key.txt, на лету)"
+    const keyCell = noKey ? noKeyCell(`arSetKey(${idJ})`) : `<button onclick='arActivate(${kJ})' title="Сделать активным (ключ → ar-active-key.txt, на лету)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-sky hover:border-sky/50'} transition">${esc(keyMask)}</button>`;
     return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
@@ -6069,6 +6095,136 @@ async function arSetGithub(api_key, ghId) {
   } catch (e) { toast('GitHub: ' + e.message, 'error'); }
 }
 
+// ───── Заселение готовой GitHub-сессии (общее для ar/go/tb/xp) ─────
+//
+// Зачем: у каждого аккаунта свой профиль Chromium, и GitHub в свежем профиле требует
+// логин + пароль + 2FA — хотя ровно эта сессия уже лежит в профиле другого провайдера
+// (профили куками не делятся). Кнопка «взять готовый GitHub» переносит её: бэкенд снимает
+// GitHub-куки из профиля-источника, кладёт в <provider>/sessions/<label>.json с маркером
+// seed:'github', и open-session.js вливает их в новый профиль, всё равно идя на рефку.
+//
+// Тот же GitHub на ДРУГОМ хосте = новый аккаунт панели; на ТОМ ЖЕ = вход в существующий,
+// поэтому занятые здесь аккаунты в списке заблокированы.
+const NEWAPI_SEED_PROV = {
+  ar: { label: 'AgentRouter', host: 'agentrouter.org', color: 'azure',   reload: () => loadArSessions() },
+  go: { label: 'GoRouter',    host: 'gorouter.app',    color: 'violet',  reload: () => loadGoSessions() },
+  tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions() },
+  xp: { label: 'XPeach',      host: 'xpeach.codes',    color: 'rose',    reload: () => loadXpSessions() },
+};
+
+let ghSeedProv = null;   // какой провайдер открыл модалку
+let ghSeedRetry = 0;     // сколько раз уже переспросили, пока строится индекс
+
+async function newapiSeedPick(prov) {
+  const p = NEWAPI_SEED_PROV[prov];
+  if (!p) return;
+  ghSeedProv = prov;
+  ghSeedRetry = 0;
+  $('gh-seed-provider').textContent = p.label;
+  $('gh-seed-list').innerHTML = '<div class="text-xs text-faint px-1 py-3">читаю индекс профилей…</div>';
+  $('gh-seed-modal').classList.remove('hidden');
+  newapiSeedLoad();
+}
+
+// Индекс профилей строит отдельный процесс (routing/gh-index-build.js), потому что
+// расшифровка кук — синхронный PowerShell, и в самом дашборде он вешал весь сервер.
+// Пока индекса нет, бэкенд честно отвечает building:true — переспрашиваем, а не ждём.
+async function newapiSeedLoad() {
+  const prov = ghSeedProv;
+  const p = NEWAPI_SEED_PROV[prov];
+  if (!p) return;
+  try {
+    const res = await fetch(`/__switch/api/gh/available?host=${encodeURIComponent(p.host)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+
+    if (!data.accounts.length && data.building) {
+      if (ghSeedRetry++ < 12) {   // ~15 с: полной сборки хватает с запасом (замер 734 мс)
+        $('gh-seed-list').innerHTML = '<div class="text-xs text-faint px-1 py-3">строю индекс профилей браузера (первый раз, пару секунд)…</div>';
+        $('gh-seed-hint').textContent = `попытка ${ghSeedRetry}`;
+        return setTimeout(() => { if (ghSeedProv === prov) newapiSeedLoad(); }, 1200);
+      }
+      $('gh-seed-list').innerHTML = '<div class="text-xs text-crimson px-1 py-3">индекс так и не собрался — смотри Server Logs, строку <code class="font-mono">gh-index</code></div>';
+      return;
+    }
+    newapiSeedRender(data);
+  } catch (e) {
+    $('gh-seed-list').innerHTML = `<div class="text-xs text-crimson px-1 py-3">${esc(e.message)}</div>`;
+  }
+}
+
+function closeGhSeedModal() {
+  $('gh-seed-modal').classList.add('hidden');
+  ghSeedProv = null;
+}
+
+function newapiSeedRender(data) {
+  const rows = [];
+  // Годные — сверху: занятые/мёртвые/без сессии всё равно нельзя выбрать.
+  const ok = a => !a.usedHere && a.status !== 'dead' && a.hasSession && !a.allSourcesBusy;
+  const list = [...(data.accounts || [])].sort((a, b) => (ok(b) ? 1 : 0) - (ok(a) ? 1 : 0));
+  for (const a of list) {
+    const st = GH_STATUS_META[a.status] || GH_STATUS_META.unknown;
+    const why = a.usedHere ? `уже есть на ${data.tag} — вход откроет старый аккаунт`
+      : a.status === 'dead' ? 'помечен dead'
+      : !a.hasSession ? 'сессии на диске нет — залогинься во вкладке GitHub'
+      : a.allSourcesBusy ? 'профиль с сессией открыт в браузере — закрой его'
+      : null;
+    const src = a.cached ? `кеш${a.cacheStale ? ' (устарел, перечитаю)' : ''}`
+      : a.sessionFrom ? `${a.sessionFrom}${a.sessionAgeDays !== null ? ` · ${a.sessionAgeDays} дн.` : ''}`
+      : '—';
+    const idJ = JSON.stringify(a.id).replace(/'/g, '&#39;');
+    rows.push(why
+      ? `<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated/40 border-line-soft opacity-50 cursor-not-allowed" title="${esc(why)}">
+           <span class="text-xs text-faint truncate max-w-[18ch]">🐙 ${esc(a.nickname)}</span>
+           <span class="text-[10px] text-faint truncate max-w-[26ch]">${esc(why)}</span>
+         </div>`
+      : `<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated border-line-soft hover:border-azure/60 cursor-pointer transition"
+             onclick='newapiAddGithub(${idJ})'>
+           <span class="text-xs text-ink truncate max-w-[18ch]">🐙 ${esc(a.nickname)}</span>
+           <span class="flex items-center gap-1.5 shrink-0">
+             <span class="font-mono text-[10px] text-faint truncate max-w-[20ch]" title="источник сессии">${esc(src)}</span>
+             <span class="text-[10px] px-1 py-px rounded border ${st.badge}">${st.label}</span>
+           </span>
+         </div>`);
+  }
+  const free = list.filter(ok).length;
+  $('gh-seed-hint').textContent = (free
+    ? `свободно ${free} из ${list.length} · пароль и 2FA не понадобятся`
+    : `свободных нет: все ${list.length} либо уже засвечены здесь, либо без живой сессии`)
+    + (data.building ? ' · индекс обновляется в фоне' : '');
+  $('gh-seed-list').innerHTML = rows.join('') || '<div class="text-xs text-faint px-1 py-3">хранилище GitHub пусто — добавь аккаунты во вкладке GitHub</div>';
+}
+
+async function newapiAddGithub(ghId) {
+  const prov = ghSeedProv;
+  const p = NEWAPI_SEED_PROV[prov];
+  if (!p) return;
+  $('gh-seed-list').innerHTML = '<div class="text-xs text-faint px-1 py-3">снимаю GitHub-сессию (запускаю браузер headless, до минуты)…</div>';
+  $('gh-seed-hint').textContent = 'не закрывай окно';
+  try {
+    const res = await fetch(`/__switch/api/${prov}/add-github`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ghId }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    closeGhSeedModal();
+    toast(`🐙 ${data.ghLogin}: аккаунт создан, сессия из ${data.from} (${data.cookieCount} кук)`, 'success', 4000);
+    // Браузер открываем существующим роутом — он же синхронизирует куки и ставит отметку визита.
+    const opened = await fetch(`/__switch/api/${prov}/session/open`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: data.id }),
+    }).then(r => r.json()).catch(e => ({ error: e.message }));
+    if (opened.error) toast('браузер не открылся: ' + opened.error, 'error');
+    else toast('🌐 браузер открыт на регистрации — жми «Continue with GitHub»', 'info', 6000);
+    await p.reload();
+  } catch (e) {
+    toast('заселение: ' + e.message, 'error', 7000);
+    newapiSeedPick(prov);   // вернуть список, чтобы видеть причину и выбрать другой
+  }
+}
+
 async function arCopyKey(api_key) {
   try {
     await navigator.clipboard.writeText(api_key);
@@ -6358,7 +6514,7 @@ function renderGo() {
     const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
     const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
     const balanceCell = goBalanceCell(s, kJ);
-    const keyCell = noKey ? NO_KEY_CELL : `<button onclick='goActivate(${kJ})' title="Сделать активным (keepalive :20156 → gorouter.app)"
+    const keyCell = noKey ? noKeyCell(`goSetKey(${idJ})`) : `<button onclick='goActivate(${kJ})' title="Сделать активным (keepalive :20156 → gorouter.app)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-teal hover:border-teal/50'} transition">${esc(keyMask)}</button>`;
     return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
@@ -6878,7 +7034,7 @@ function renderTb() {
     const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
     const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
     const balanceCell = tbBalanceCell(s, kJ);
-    const keyCell = noKey ? NO_KEY_CELL : `<button onclick='tbActivate(${kJ})' title="Сделать активным (keepalive :20155 → tabitoken.com)"
+    const keyCell = noKey ? noKeyCell(`tbSetKey(${idJ})`) : `<button onclick='tbActivate(${kJ})' title="Сделать активным (keepalive :20155 → tabitoken.com)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-violet hover:border-violet/50'} transition">${esc(keyMask)}</button>`;
     return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
@@ -7323,6 +7479,15 @@ async function loadXpModels(force) {
   $('xp-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
 }
 
+// Модели, которые есть в каталоге xpeach, но канала под них в группе `Claude｜Max 号池`
+// нет — запрос гарантированно падает. Живыми пробами 2026-08-19: claude-opus-5 отдаёт
+// 403 "Insufficient account balance" (кончился счёт РЕСЕЛЛЕРА, а не наши 🍑), а после
+// того как New-API отключил канал за hard-ошибку — 500 "可用渠道不存在" (2/2).
+// Каталог их не скрывает, поэтому держим список руками; пусто = вкладка не мешает.
+const XP_DEAD_MODELS = {
+  'claude-opus-5': 'нет канала в группе Claude｜Max 号池: 403 Insufficient account balance → 500 可用渠道不存在 (2026-08-19). Возьми claude-opus-4-8',
+};
+
 async function renderXpModels(models) {
   if (models) state.xpModels = models;
   const list = state.xpModels || [];
@@ -7340,10 +7505,12 @@ async function renderXpModels(models) {
     const eps = m.supported_endpoint_types || [];
     const openaiOnly = eps.length && !eps.includes('anthropic');
     const badge = openaiOnly ? `<span class="text-[9px] px-1 rounded bg-amber/15 text-amber border border-amber/40" title="только OpenAI-эндпоинт: keepalive :20157 её не отдаст">openai</span>` : '';
+    const dead = XP_DEAD_MODELS[id] || '';
+    const deadBadge = dead ? `<span class="text-[9px] px-1 rounded bg-crimson/15 text-crimson border border-crimson/40" title="${esc(dead)}">💀 нет канала</span>` : '';
     return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-emerald/15 border border-emerald/50 text-emerald' : 'bg-rose/10 border border-rose/30 text-rose'}"
       onclick='xpSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + xpeach-active-model.txt) · 📋 = копия">
-      ${esc(id)}${badge}
+      ${esc(id)}${badge}${deadBadge}
       <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
@@ -7354,6 +7521,8 @@ async function renderXpModels(models) {
 
 async function xpSelectModel(id) {
   if (!id) return toast('нет model id', 'warn');
+  // Битую модель применяем только по явному «да»: молча она даст 403/500 на каждый запрос.
+  if (XP_DEAD_MODELS[id] && !confirm(`${id} на xpeach.codes нерабочая:\n\n${XP_DEAD_MODELS[id]}\n\nВсё равно применить?`)) return;
   try {
     toast('⏳ применяю ' + id + '…', 'info', 2000);
     const res = await fetch('/__switch/api/xp/set-model', {
@@ -7399,7 +7568,7 @@ function renderXp() {
     const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
     const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
     const balanceCell = xpBalanceCell(s, kJ);
-    const keyCell = noKey ? NO_KEY_CELL : `<button onclick='xpActivate(${kJ})' title="Сделать активным (keepalive :20157 → xpeach.codes)"
+    const keyCell = noKey ? noKeyCell(`xpSetKey(${idJ})`) : `<button onclick='xpActivate(${kJ})' title="Сделать активным (keepalive :20157 → xpeach.codes)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-rose hover:border-rose/50'} transition">${esc(keyMask)}</button>`;
     return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
@@ -7719,7 +7888,7 @@ async function renderXpModelMap() {
   const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
   const sel = (name) => {
     const val = mm[name] || '';
-    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) + (XP_DEAD_MODELS[id] ? ' 💀 нет канала' : '') : '— как есть — (дефолт)'}</option>`).join('');
     return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
       <select id="xp-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
   };
@@ -7735,6 +7904,10 @@ async function xpSaveModelMap() {
     sonnet: $('xp-mm-sonnet')?.value || '',
     haiku: $('xp-mm-haiku')?.value || '',
   };
+  // Цель-пустышка = «как есть» (тир не подменяется). Мёртвую цель — только по явному «да».
+  const bad = ['opus', 'sonnet', 'haiku'].filter(t => XP_DEAD_MODELS[mm[t]]);
+  if (bad.length && !confirm(`Цель ${bad.map(t => `${t}→${mm[t]}`).join(', ')} нерабочая на xpeach.codes:\n\n`
+    + bad.map(t => XP_DEAD_MODELS[mm[t]]).join('\n') + `\n\nМаппинг перебьёт выбранную модель. Всё равно сохранить?`)) return;
   try {
     const res = await fetch('/__switch/api/xp/modelmap', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -13228,6 +13401,22 @@ document.addEventListener('DOMContentLoaded', toggleLogPanel);
     <div id="ar-gh-modal-unbind" class="mb-3"></div>
     <div class="flex justify-end">
       <button onclick="closeArGhModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- Заселение готовой GitHub-сессии в новый аккаунт (общая для AgentRouter / GoRouter / Tabi / XPeach) -->
+<div id="gh-seed-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onclick="if(event.target===this) closeGhSeedModal()">
+  <div class="bg-surface rounded-xl border border-azure/40 shadow-2xl p-5 w-[520px] max-w-[92vw] max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-sm font-semibold">🐙 Взять готовый GitHub · <span id="gh-seed-provider" class="text-azure">—</span></h3>
+      <button onclick="closeGhSeedModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-2">Аккаунт создастся сразу, а его профиль браузера получит уже живую GitHub-сессию — вводить логин, пароль и 2FA не придётся. Справа — откуда берётся сессия.</p>
+    <div id="gh-seed-hint" class="text-[11px] text-emerald mb-2">—</div>
+    <div id="gh-seed-list" class="space-y-1.5 overflow-y-auto mb-4 pr-1"></div>
+    <div class="flex justify-end">
+      <button onclick="closeGhSeedModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
     </div>
   </div>
 </div>

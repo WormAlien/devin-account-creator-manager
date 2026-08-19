@@ -194,23 +194,94 @@ function toMillis(v) {
 // Вызов дорогой (~300мс), поэтому кешируем на процесс: ключ профиля не меняется.
 const AES_KEY_CACHE = new Map();   // profileDir → Buffer | null
 
-function profileAesKey(profileDir) {
-    if (AES_KEY_CACHE.has(profileDir)) return AES_KEY_CACHE.get(profileDir);
-    let key = null;
+// DPAPI-блоб ключа профиля из Local State. null — профиля/ключа нет.
+function readAesBlob(profileDir) {
     try {
         const raw = fs.readFileSync(path.join(profileDir, 'Local State'), 'utf8');
         const ls = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         const enc = ls.os_crypt && ls.os_crypt.encrypted_key;
-        if (enc) {
-            const blob = Buffer.from(enc, 'base64').slice(5);   // снять префикс 'DPAPI'
+        return enc ? Buffer.from(enc, 'base64').slice(5) : null;   // снять префикс 'DPAPI'
+    } catch { return null; }
+}
+
+function aesKeyFromBase64(out) {
+    const buf = Buffer.from(String(out || '').trim(), 'base64');
+    return buf.length === 32 ? buf : null;
+}
+
+// Расшифровать ключи СРАЗУ У МНОГИХ профилей одним процессом PowerShell.
+//
+// Зачем: profileAesKey поднимает по процессу на профиль, ~650 мс каждый. Пока это был
+// один-два профиля на чек баланса, никто не замечал; скан всех папок ради индекса
+// GitHub-сессий (lib/github-session.js) упёрся в 41 профиль = 27 СЕКУНД молчания в
+// модалке. Один запуск на всех — около секунды.
+//
+// Блобы передаём файлом, а не аргументом: 41 блоб это уже ~16 КБ командной строки, а её
+// лимит в Windows 32767 символов — на сотне профилей команда просто не собралась бы.
+//
+// Путь к файлу вклеиваем В САМУ КОМАНДУ, и это не лень:
+//   • `-args <path>` НЕ РАБОТАЕТ с `-Command` (только с `-File`) — powershell ругается
+//     «-args не распознано», $args[0] пуст, ReadAllLines('') падает. Батч при этом молча
+//     откатывался на процесс-на-профиль: 48 профилей = 30 секунд вместо 0.7.
+//   • `env: {...process.env, NAC_BLOBS}` работает, но переписывать окружение дочернему
+//     процессу на элевированном дашборде оказалось себе дороже.
+// Кавычки в пути удваиваем — в PowerShell внутри '...' это escape для одинарной.
+// Строк на выходе ровно столько же, сколько на входе: пустая = не расшифровалось.
+//
+// ВНИМАНИЕ: вызов СИНХРОННЫЙ и блокирует событийный цикл. Из обработчика HTTP-запроса его
+// звать нельзя — дашборд перестанет отвечать на всё. Единственное штатное место —
+// routing/gh-index-build.js, отдельный процесс.
+function warmAesKeys(profileDirs) {
+    const pending = [];
+    for (const dir of profileDirs || []) {
+        if (AES_KEY_CACHE.has(dir)) continue;
+        const blob = readAesBlob(dir);
+        if (!blob) { AES_KEY_CACHE.set(dir, null); continue; }
+        pending.push({ dir, blob });
+    }
+    if (!pending.length) return { warmed: 0, failed: 0 };
+
+    const listFile = path.join(os.tmpdir(), `nac_keys_${process.pid}_${pending.length}.txt`);
+    try {
+        fs.writeFileSync(listFile, pending.map(p => p.blob.toString('base64')).join('\n'), 'utf8');
+        const psPath = listFile.replace(/'/g, "''");
+        const ps = 'Add-Type -AssemblyName System.Security;'
+            + `foreach($l in [IO.File]::ReadAllLines('${psPath}')){`
+            + 'if(-not $l){ \'\'; continue }'
+            + 'try{ [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Unprotect('
+            + '[Convert]::FromBase64String($l),$null,\'CurrentUser\')) }catch{ \'\' } }';
+        const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+            encoding: 'utf8', timeout: 60000, windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],   // stdin закрыт: PowerShell не должен его ждать
+        }).split(/\r?\n/);
+        let warmed = 0, failed = 0;
+        pending.forEach((p, i) => {
+            const key = aesKeyFromBase64(out[i]);
+            AES_KEY_CACHE.set(p.dir, key);
+            if (key) warmed++; else failed++;
+        });
+        return { warmed, failed };
+    } catch (e) {
+        // Батч не задался — НЕ кешируем null, пусть profileAesKey добьёт по одному.
+        return { warmed: 0, failed: pending.length, error: e.message };
+    } finally {
+        try { fs.unlinkSync(listFile); } catch {}
+    }
+}
+
+function profileAesKey(profileDir) {
+    if (AES_KEY_CACHE.has(profileDir)) return AES_KEY_CACHE.get(profileDir);
+    let key = null;
+    try {
+        const blob = readAesBlob(profileDir);
+        if (blob) {
             const ps = 'Add-Type -AssemblyName System.Security;'
                 + `$b=[Convert]::FromBase64String('${blob.toString('base64')}');`
                 + "[Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::Unprotect($b,$null,'CurrentUser'))";
             const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
                 encoding: 'utf8', timeout: 20000, windowsHide: true,
             }).trim();
-            const buf = Buffer.from(out, 'base64');
-            if (buf.length === 32) key = buf;
+            key = aesKeyFromBase64(out);
         }
     } catch { key = null; }
     AES_KEY_CACHE.set(profileDir, key);
@@ -815,7 +886,7 @@ async function listAccountKeysInner({ host, profileDir, userId, reveal }) {
 
 module.exports = {
     QUOTA_PER_UNIT_DEFAULT, HOST_AUTH, authKind,
-    profileAesKey, readProfileCookies, cookieHeaderFor, githubLogin,
+    profileAesKey, warmAesKeys, readProfileCookies, cookieHeaderFor, githubLogin,
     cookieBackendReady, cookieFailReason,
     writeProfileCookies, syncJarToProfile,
     sessionUserId, userIdFromUsername,

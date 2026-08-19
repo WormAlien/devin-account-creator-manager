@@ -39,14 +39,19 @@ REPO_NAME="vibe-code-account-creator-manager"
 if [ ! -f "$SELF_DIR/package.json" ] || [ ! -f "$SELF_DIR/routing/restart-dashboard.sh" ]; then
   step "Bootstrap: репо рядом нет — качаю"
 
-  # git на маке приезжает вместе с Command Line Tools
-  if ! have git; then
-    warn "git не найден — ставлю Command Line Tools. Откроется окно, дождись конца."
+  # На чистом маке `command -v git` ВРЁТ: /usr/bin/git существует всегда, но это
+  # shim от Command Line Tools — при вызове он лишь открывает диалог «установить
+  # инструменты разработчика» и возвращает ошибку. Поэтому годность git проверяем
+  # через xcode-select -p (сами CLT), а не по наличию файла.
+  if ! xcode-select -p >/dev/null 2>&1; then
+    warn "Command Line Tools не стоят (в них git) — ставлю. Откроется окно, дождись конца."
     xcode-select --install >/dev/null 2>&1 || true
     echo "  Когда установка закончится — нажми Enter..."
     read -r _
-    have git || { err "git так и не появился. Поставь Xcode CLT вручную и запусти снова."; exit 1; }
+    xcode-select -p >/dev/null 2>&1 || { err "CLT не установились. Поставь вручную (xcode-select --install) и запусти снова."; exit 1; }
   fi
+  git --version >/dev/null 2>&1 || { err "git не работает даже после CLT. Проверь: git --version"; exit 1; }
+  ok "git $(git --version 2>/dev/null | awk '{print $3}')"
 
   # Куда клонировать: рядом с текущей папкой, как install.ps1. Переопределяется VCACM_DIR=…
   DEST="${VCACM_DIR:-$PWD/$REPO_NAME}"
@@ -78,10 +83,36 @@ if [ "$(uname)" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then
 fi
 
 # 2. Homebrew
+#
+# Установщик Homebrew НЕ добавляет brew в PATH — ни в текущей сессии, ни навсегда.
+# На Apple Silicon он кладёт всё в /opt/homebrew (не в /usr/local), которого в
+# дефолтном PATH нет, поэтому следующий шаг падал бы с `brew: command not found`,
+# а поставленный им node не нашёлся бы потом ни в DASHBOARD.command, ни в
+# restart-dashboard.sh. Поэтому: подхватываем brew shellenv в эту сессию и
+# дописываем его в ~/.zprofile (zsh — дефолтный шелл macOS с Catalina).
+brew_shellenv() {
+  local p
+  for p in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [ -x "$p" ]; then
+      eval "$("$p" shellenv)" 2>/dev/null
+      if ! grep -qs "$p shellenv" "$HOME/.zprofile" 2>/dev/null; then
+        printf '\neval "$(%s shellenv)"\n' "$p" >> "$HOME/.zprofile"
+        ok "brew прописан в ~/.zprofile (иначе node потеряется после перезапуска терминала)"
+      fi
+      return 0
+    fi
+  done
+  return 1
+}
+
 if ! have brew; then
   step "Homebrew"
   warn "Homebrew не найден — ставлю (понадобится пароль sudo)."
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || exit 1
+  brew_shellenv || { err "brew поставился, но не нашёлся в /opt/homebrew и /usr/local. Открой новый терминал и запусти установщик снова."; exit 1; }
+  ok "brew $(brew --version 2>/dev/null | head -1)"
+else
+  brew_shellenv >/dev/null 2>&1 || true
 fi
 
 # 3. node / npm / git

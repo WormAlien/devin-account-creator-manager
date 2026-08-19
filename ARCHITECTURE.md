@@ -1275,6 +1275,15 @@ Bootstrap-блок в начале скрипта: если рядом нет `p
 - Автореги (Camoufox/rebrowser/Telegram) — вне охвата обёртки, для сценария
   «свои аккаунты» не нужны.
 - `.gitattributes`: `mac-support/shims/*` и `*.command` — строго `eol=lf`.
+- **Две грабли чистого мака** (обе пофикшены, но не проверены на живом Darwin):
+  `command -v git` **врёт** — `/usr/bin/git` есть всегда, но без CLT это shim,
+  который лишь открывает диалог «установить инструменты разработчика» и падает.
+  Годность git → `xcode-select -p`, не наличие файла. И установщик Homebrew
+  **не кладёт brew в PATH**: на Apple Silicon это `/opt/homebrew/bin`, которого в
+  дефолтном PATH нет → `brew install node` упал бы с `command not found`, а
+  поставленный node не нашёлся бы потом в `DASHBOARD.command`. Функция
+  `brew_shellenv()` делает `eval "$(brew shellenv)"` в сессию **и** дописывает
+  строку в `~/.zprofile` (двойной клик `.command` → login-shell zsh → подхватит).
 
 ## Чек-лист: добавляем новый модуль
 

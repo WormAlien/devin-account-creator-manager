@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // Диагностика: почему на macOS точный баланс (self) деградирует в «~ прикидку».
 //
-// Точный баланс берётся куками профиля Chromium (lib/newapi-account.js →
-// accountSelf). На Windows ключ лежит в Local State под DPAPI, значение —
-// AES-256-GCM. На macOS: пароль в Keychain (или константа 'peanuts', если
-// Chromium запущен с --use-mock-keychain, как делает Playwright) →
-// PBKDF2-SHA1('saltysalt', 1003, 16) → 'v10' + AES-128-CBC, IV = 16 пробелов.
+// v3 — перебор МАТРИЦЫ схем. Предыдущие прогоны на живом маке (Chrome for Testing
+// 148, Intel) показали: БД лежит в Default/Cookies, префикс значений 'v10', но
+// стандартная macOS-схема (Keychain «Chromium/Chrome Safe Storage» + PBKDF2-SHA1
+// 1003 + AES-128-CBC) НЕ расшифровывает. Значит либо пароль из другой Keychain-
+// записи (у Chrome for Testing своя), либо это mock-keychain с константой, либо
+// вовсе Linux-схема (1 итерация), либо шифр другой.
 //
-// Keychain дёргаем ТОЛЬКО если mock-пароль не подошёл: `security` поднимает
-// системный диалог ввода пароля на каждый процесс.
+// Поэтому здесь: пароли × итерации × шифры, плюс печать формы данных — по
+// кратности длины 16 сразу видно, CBC это вообще или нет.
 //
-// Пробник НЕ печатает значения куки — только имена, длины и вердикт.
+// Значения куки НЕ печатаются: только длины, флаги и вердикт.
 // Запуск:  node tools/mac-cookie-probe.js
 'use strict';
 const fs = require('fs');
@@ -34,100 +35,95 @@ const ok = s => console.log(`\x1b[32m  + ${s}\x1b[0m`);
 const no = s => console.log(`\x1b[31m  - ${s}\x1b[0m`);
 const dim = s => console.log(`\x1b[90m    ${s}\x1b[0m`);
 
-console.log(b('\n== mac-cookie-probe =='));
+console.log(b('\n== mac-cookie-probe v3 =='));
 console.log(`platform: ${process.platform} · arch: ${process.arch}\n`);
 
 let Database = null;
 try { Database = require('better-sqlite3'); ok('better-sqlite3 загрузился'); }
-catch (e) { no(`better-sqlite3 не загрузился: ${e.message}`); }
+catch (e) { no(`better-sqlite3 не загрузился: ${e.message}`); process.exit(1); }
 
-const kf = pw => crypto.pbkdf2Sync(String(pw), 'saltysalt', 1003, 16, 'sha1');
-const MAC_IV = Buffer.alloc(16, 0x20);
-
-// Дешёвые кандидаты — без диалога пароля.
-const cheap = [
-    { label: "mock keychain ('peanuts')", key: kf('peanuts') },
-    { label: 'пустой пароль', key: kf('') },
+// ── пароли ──
+// Keychain-записи ищем БЕЗ -a: account у Chrome for Testing отличается от имени
+// сервиса, и фильтр по нему давал «нет записи» там, где она есть.
+const KEYCHAIN_SERVICES = [
+    'Chrome for Testing Safe Storage',
+    'Chromium Safe Storage',
+    'Chrome Safe Storage',
+    'Chrome Canary Safe Storage',
 ];
-let keychain = null;
-function keychainCandidates() {
-    if (keychain) return keychain;
-    keychain = [];
-    console.log('\n  (mock-пароль не подошёл — спрашиваю Keychain, будет диалог пароля;');
-    console.log('   в нём жми «Разрешить всегда», чтобы больше не спрашивал)');
-    for (const svc of ['Chromium Safe Storage', 'Chrome Safe Storage']) {
+const passwords = [
+    { label: "'peanuts' (mock/Linux)", pw: 'peanuts' },
+    { label: "'mock_password' (--use-mock-keychain)", pw: 'mock_password' },
+    { label: 'пустой', pw: '' },
+];
+let keychainAsked = false;
+function addKeychainPasswords() {
+    if (keychainAsked) return;
+    keychainAsked = true;
+    console.log('\n  спрашиваю Keychain (может быть окно пароля — жми «Разрешить всегда»)');
+    for (const svc of KEYCHAIN_SERVICES) {
         try {
-            const pw = execFileSync('security', ['find-generic-password', '-w', '-s', svc, '-a', svc.split(' ')[0]], {
+            const pw = execFileSync('security', ['find-generic-password', '-w', '-s', svc], {
                 encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'],
             }).trim();
-            if (pw) { keychain.push({ label: `Keychain «${svc}»`, key: kf(pw) }); ok(`Keychain: «${svc}» (${pw.length} симв.)`); }
+            if (pw) { passwords.push({ label: `Keychain «${svc}»`, pw }); ok(`Keychain: «${svc}» (${pw.length} симв.)`); }
         } catch { dim(`Keychain: «${svc}» нет`); }
     }
-    return keychain;
 }
 
-function decryptCbc(enc, key) {
+// ── схемы: (итерации, длина ключа, шифр) ──
+const SCHEMES = [
+    { label: 'PBKDF2×1003 · aes-128-cbc', iter: 1003, len: 16, mode: 'cbc' },
+    { label: 'PBKDF2×1 · aes-128-cbc (Linux)', iter: 1, len: 16, mode: 'cbc' },
+    { label: 'PBKDF2×1003 · aes-256-cbc', iter: 1003, len: 32, mode: 'cbc' },
+    { label: 'PBKDF2×1003 · aes-256-gcm', iter: 1003, len: 32, mode: 'gcm' },
+];
+const IV16 = Buffer.alloc(16, 0x20);
+const keyCache = new Map();
+function derive(pw, iter, len) {
+    const k = `${pw}|${iter}|${len}`;
+    if (!keyCache.has(k)) keyCache.set(k, crypto.pbkdf2Sync(String(pw), 'saltysalt', iter, len, 'sha1'));
+    return keyCache.get(k);
+}
+
+function plausible(buf) {
+    let out = buf;
+    if (out.length > 32 && /[\x00-\x08\x0e-\x1f]/.test(out.toString('latin1').slice(0, 32))) out = out.slice(32);
+    const s = out.toString('utf8');
+    return (/^[\x20-\x7e]+$/.test(s) && s.length >= 1) ? s : null;
+}
+
+function tryDecrypt(enc, pw, scheme) {
     try {
-        if (!Buffer.isBuffer(enc) || enc.length < 19) return null;
-        if (enc.slice(0, 3).toString('latin1') !== 'v10') return null;
-        const d = crypto.createDecipheriv('aes-128-cbc', key, MAC_IV);
-        d.setAutoPadding(false);
-        let out = Buffer.concat([d.update(enc.slice(3)), d.final()]);
-        const pad = out[out.length - 1];
-        if (pad >= 1 && pad <= 16 && pad <= out.length) out = out.slice(0, out.length - pad);
-        if (out.length > 32 && /[\x00-\x08\x0e-\x1f]/.test(out.toString('latin1').slice(0, 32))) out = out.slice(32);
-        const s = out.toString('utf8');
-        return /^[\x20-\x7e]*$/.test(s) && s.length ? s : null;
+        const key = derive(pw, scheme.iter, scheme.len);
+        if (scheme.mode === 'cbc') {
+            const body = enc.slice(3);
+            if (body.length % 16 !== 0 || !body.length) return null;
+            const d = crypto.createDecipheriv(`aes-${scheme.len * 8}-cbc`, key, IV16);
+            d.setAutoPadding(false);
+            let out = Buffer.concat([d.update(body), d.final()]);
+            const pad = out[out.length - 1];
+            if (pad >= 1 && pad <= 16 && pad <= out.length) out = out.slice(0, out.length - pad);
+            return plausible(out);
+        }
+        if (enc.length < 3 + 12 + 16) return null;
+        const d = crypto.createDecipheriv('aes-256-gcm', key, enc.slice(3, 15));
+        d.setAuthTag(enc.slice(enc.length - 16));
+        return plausible(Buffer.concat([d.update(enc.slice(15, enc.length - 16)), d.final()]));
     } catch { return null; }
 }
 
-// Рекурсивный поиск чего угодно похожего на БД куки — на случай иного layout'а.
-function findCookieish(dir, depth = 0, acc = []) {
-    if (depth > 3 || acc.length >= 8) return acc;
-    let ents = [];
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return acc; }
-    for (const e of ents) {
-        const p = path.join(dir, e.name);
-        if (e.isDirectory()) findCookieish(p, depth + 1, acc);
-        else if (/ookie/i.test(e.name)) acc.push(p);
-        if (acc.length >= 8) break;
-    }
-    return acc;
-}
-
-let profiles = 0, dbs = 0, rows = 0, cracked = 0;
-const winners = new Map(), prefixes = new Map();
-
+// ── сбор образцов ──
+const samples = [];   // { profile, host, name, enc }
 for (const [host, rel] of POOLS) {
     const base = path.join(ROOT, rel);
     let dirs = [];
     try { dirs = fs.readdirSync(base).filter(d => fs.statSync(path.join(base, d)).isDirectory()); } catch { continue; }
-    if (!dirs.length) continue;
-    console.log(b(`\n${host}  (${rel}, профилей: ${dirs.length})`));
-
     for (const d of dirs) {
-        profiles++;
         const dir = path.join(base, d);
         let src = null;
-        for (const r of COOKIE_RELS) {
-            const p = path.join(dir, ...r);
-            if (fs.existsSync(p)) { src = p; break; }
-        }
-        if (!src) {
-            no(`${d}: БД куки нет ни в Default/Network/Cookies, ни в Default/Cookies`);
-            // Что вообще лежит в профиле — так видно, дошёл ли браузер до записи данных.
-            const def = path.join(dir, 'Default');
-            let names = [];
-            try { names = fs.readdirSync(def).slice(0, 24); } catch {}
-            dim(names.length ? `Default (${names.length}+): ${names.join(', ')}` : 'папки Default нет вообще');
-            const found = findCookieish(dir);
-            if (found.length) dim(`похожее на куки: ${found.map(f => path.relative(dir, f)).join(' · ')}`);
-            continue;
-        }
-        dbs++;
-        if (!Database) continue;
-        dim(`${d}: БД → ${path.relative(dir, src)}`);
-
+        for (const r of COOKIE_RELS) { const p = path.join(dir, ...r); if (fs.existsSync(p)) { src = p; break; } }
+        if (!src) continue;
         const tmp = path.join(os.tmpdir(), `probe_${process.pid}_${d}.db`);
         const copied = [tmp];
         try {
@@ -135,48 +131,62 @@ for (const [host, rel] of POOLS) {
             for (const suf of ['-wal', '-shm']) {
                 if (fs.existsSync(src + suf)) { fs.copyFileSync(src + suf, tmp + suf); copied.push(tmp + suf); }
             }
-        } catch (e) { no(`${d}: не скопировать БД: ${e.message}`); continue; }
-        try {
             const db = new Database(tmp, { readonly: true });
-            let got;
-            try {
-                got = db.prepare('SELECT host_key, name, encrypted_value FROM cookies LIMIT 40').all();
-            } finally { db.close(); }
-            const mine = got.filter(r => new RegExp(host.split('.')[0], 'i').test(String(r.host_key || '')));
-            if (!got.length) { no(`${d}: БД есть, но пустая (0 записей)`); continue; }
-
-            let localOk = 0, tag = '?';
-            const sample = (mine.length ? mine : got).slice(0, 10);
-            for (const r of sample) {
-                rows++;
+            let rows;
+            try { rows = db.prepare('SELECT host_key, name, encrypted_value FROM cookies LIMIT 60').all(); }
+            finally { db.close(); }
+            const key = host.split('.')[0];
+            for (const r of rows) {
                 const enc = Buffer.isBuffer(r.encrypted_value) ? r.encrypted_value : Buffer.from(r.encrypted_value || '');
-                if (enc.length < 4) continue;
-                tag = enc.slice(0, 3).toString('latin1');
-                prefixes.set(tag, (prefixes.get(tag) || 0) + 1);
-                let hit = null;
-                for (const c of cheap) if (decryptCbc(enc, c.key)) { hit = c.label; break; }
-                if (!hit) for (const c of keychainCandidates()) if (decryptCbc(enc, c.key)) { hit = c.label; break; }
-                if (hit) { localOk++; cracked++; winners.set(hit, (winners.get(hit) || 0) + 1); }
+                if (enc.length > 3 && new RegExp(key, 'i').test(String(r.host_key || ''))) {
+                    samples.push({ profile: d, host, name: r.name, enc });
+                }
             }
-            const names = mine.map(r => r.name).slice(0, 6).join(',') || '—';
-            if (localOk) ok(`${d}: '${tag}', расшифровано ${localOk}/${sample.length} · записей всего ${got.length}, для ${host}: ${mine.length} (${names})`);
-            else no(`${d}: '${tag}', НИ ОДНА из ${sample.length} не поддалась · всего ${got.length}, для ${host}: ${mine.length} (${names})`);
-        } catch (e) { no(`${d}: чтение БД упало: ${e.message}`); }
-        finally { for (const f of copied) { try { fs.unlinkSync(f); } catch {} } }
+        } catch {} finally { for (const f of copied) { try { fs.unlinkSync(f); } catch {} } }
     }
 }
 
+if (!samples.length) { no('образцов куки не нашлось — открой ЛК (🌐), войди, закрой браузер и повтори'); process.exit(0); }
+
+// ── форма данных: она одна уже отвечает, CBC это или нет ──
+console.log(b(`\nформа данных (образцов: ${samples.length})`));
+const shape = new Map();
+for (const s of samples) {
+    const tag = s.enc.slice(0, 3).toString('latin1');
+    const body = s.enc.length - 3;
+    const k = `'${tag}' · len-3=${body} · %16=${body % 16}`;
+    shape.set(k, (shape.get(k) || 0) + 1);
+}
+for (const [k, v] of [...shape].slice(0, 12)) dim(`${k}  ×${v}`);
+const allDiv16 = samples.every(s => (s.enc.length - 3) % 16 === 0);
+console.log(allDiv16
+    ? '  → длины кратны 16: это блочный CBC, дело в пароле/итерациях'
+    : '  → длины НЕ кратны 16: это не CBC (значит поточный/GCM или app-bound)');
+
+// ── перебор ──
+console.log(b('\nперебор схем'));
+const winner = [];
+for (const pass of [() => null, addKeychainPasswords]) {
+    pass();
+    for (const p of passwords) {
+        for (const sc of SCHEMES) {
+            const hits = samples.filter(s => tryDecrypt(s.enc, p.pw, sc));
+            if (hits.length) {
+                winner.push({ pw: p.label, scheme: sc.label, hits: hits.length, names: [...new Set(hits.map(h => h.name))].slice(0, 5) });
+            }
+        }
+    }
+    if (winner.length) break;
+}
+
 console.log(b('\n== вердикт =='));
-console.log(`профилей: ${profiles} · с БД куки: ${dbs} · записей проверено: ${rows} · расшифровано: ${cracked}`);
-if (prefixes.size) console.log(`префиксы значений: ${[...prefixes].map(([k, v]) => `'${k}'×${v}`).join(', ')}`);
-if (winners.size) {
-    for (const [label, n] of winners) ok(`сработало: ${label} → AES-128-CBC (${n} куки)`);
-    console.log('\nЗначит ветка darwin в lib/newapi-account.js рабочая — жми «Проверить баланс».');
-} else if (rows) {
-    no('ни один кандидат не подошёл — пришли вывод целиком, схема нестандартная');
-} else if (dbs) {
-    no('БД куки есть, но записей нет — сессия не села на диск');
+if (winner.length) {
+    for (const w of winner) ok(`${w.pw} + ${w.scheme} → ${w.hits}/${samples.length} куки (${w.names.join(',')})`);
+    console.log('\nПришли эту строку — впишу схему в lib/newapi-account.js.');
 } else {
-    no('БД куки не нашлось ни у одного профиля — смотри строки Default выше');
+    no(`ни одна из ${passwords.length}×${SCHEMES.length} комбинаций не подошла`);
+    console.log('  Пришли вывод целиком — включая блок «форма данных».');
+    console.log('  Если длины НЕ кратны 16 — это app-bound шифрование, куки с диска не читаются');
+    console.log('  в принципе, и точный баланс на маке придётся брать иначе (через браузер).');
 }
 console.log('');

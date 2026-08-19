@@ -12,10 +12,27 @@ shim-скриптами, а запуск идёт через `.sh`-аналог 
 | --- | --- |
 | `mac-support/shims/*` | Выполняемые обёртки: `netstat` (эмитит Windows-формат из `lsof`), `taskkill` (`/F /PID N` → `kill -9 N`), `curl.exe`, `clip.exe`, `python`/`python.exe` |
 | `routing/restart-dashboard.sh` | Аналог `.bat`: чистит порты через `lsof`, поднимает ротатор/прокси/дашборд, открывает UI |
-| `install-mac.sh` | Установщик: Homebrew → node/git → `npm install` → Playwright chromium → Claude Code → конфиги → запуск |
+| `install-mac.sh` | Bootstrap (git → clone → перезапуск из клона) + установщик: Homebrew → node/git → `npm install` → Playwright chromium → Claude Code → конфиги → запуск |
 | `DASHBOARD.command` | Двойной клик для запуска (снимает карантин `xattr`) |
 
 ## Быстрый старт
+
+Одной строкой в Терминале на голом маке (нет ни git, ни репо):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+```
+
+Bootstrap-блок в начале `install-mac.sh` ставит Command Line Tools (в них git),
+клонирует репо в текущую папку и через `exec` перезапускает себя изнутри клона —
+дальше идёт обычная установка. Путь клона переопределяется `VCACM_DIR=/путь`.
+
+**Почему `bash -c "$(curl …)"`, а не `curl … | bash`:** при пайпе stdin занят
+телом скрипта, и интерактивные `read` (ожидание Command Line Tools, «запустить
+дашборд?») читают не ответ юзера, а остаток скрипта. Через `-c` stdin остаётся
+терминалом. Ровно так же ставит себя Homebrew.
+
+Если git уже есть и хочется вручную:
 
 ```bash
 git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git

@@ -81,6 +81,8 @@
 
 ## Установка с нуля
 
+### Windows
+
 Голый Windows, где **нет ни git, ни node** — открой **PowerShell** (есть в любой Windows) и вставь одну строку. Bootstrap сам поставит Git + Node.js через winget, склонирует репо и запустит интерактивный установщик.
 
 ```powershell
@@ -90,13 +92,30 @@ irm https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manage
 > [!NOTE]
 > Если после установки Git появилась ошибка про `bash` — закрой это окно PowerShell, **открой новое** и вставь строку ещё раз (PATH обновляется только в новой сессии). Со второго запуска git/node уже на месте, дойдёт до конца.
 
-Если **git и node уже стоят** — можно сразу через git-bash:
+### macOS
+
+Голый мак — открой **Терминал** и вставь одну строку. Bootstrap поставит Command Line Tools (там же git), склонирует репо и запустит `install-mac.sh`: Homebrew → node → `npm install` → Playwright chromium → Claude Code → конфиги → дашборд.
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+```
+
+> [!IMPORTANT]
+> Именно `/bin/bash -c "$(curl …)"`, а не `curl … | bash`. При пайпе stdin занят самим скриптом, и интерактивные вопросы установщика («дождись Command Line Tools», «запустить дашборд?») читают мусор вместо твоего ответа.
+
+Репо ляжет в текущую папку (`~/vibe-code-account-creator-manager`, если запускать из хоума) — переопределяется `VCACM_DIR=/путь`. Дальше запуск в любой момент: двойной клик на **`DASHBOARD.command`** или `bash routing/restart-dashboard.sh`. Подробности и ограничения мака (автореги Camoufox и ТГ-пульт не портированы) — [`docs/MAC-SETUP.md`](docs/MAC-SETUP.md).
+
+### Если git и node уже стоят
+
+Windows (git-bash):
 
 ```bash
 git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git
 cd vibe-code-account-creator-manager
 bash install.sh
 ```
+
+macOS — то же, но `bash install-mac.sh`.
 
 Что делает установщик (всё интерактивно, Enter = дефолт):
 

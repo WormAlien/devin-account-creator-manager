@@ -4,9 +4,14 @@
 # Ни одной строки существующего кода не трогает: только ставит зависимости,
 # копирует *.example → рабочие конфиги и поднимает дашборд через restart-dashboard.sh.
 #
-# Запуск:  bash install-mac.sh
+# Запуск:  bash install-mac.sh   (изнутри репо)
+#          или одной строкой на голом маке — см. блок Bootstrap ниже.
 set -u
-cd "$(dirname "$0")"
+
+# Где лежит сам скрипт. При запуске одной строкой файла на диске нет:
+# BASH_SOURCE пуст, $0 = "bash" → dirname даёт ".", то есть текущую папку,
+# и проверка в Bootstrap уводит в клонирование репо.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SELF_DIR="$PWD"
 
 b()   { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()  { printf '\033[32m  ✓ %s\033[0m\n' "$*"; }
@@ -19,6 +24,48 @@ b "═════════════════════════�
 b "  Vibe-Code Account Creator Manager"
 b "  Установка для macOS"
 b "══════════════════════════════════════════════"
+
+# 0. Bootstrap — установка одной строкой на голом маке, где нет ни git, ни репо:
+#
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+#
+# Именно `bash -c "$(curl …)"`, а НЕ `curl … | bash`: при пайпе stdin занят самим
+# скриптом, и все интерактивные `read` ниже (Xcode CLT, «запустить дашборд?»)
+# читают мусор вместо ответа юзера. Через -c stdin остаётся терминалом.
+# Аналог install.ps1 для Windows: ставим git → клонируем → перезапускаем себя из клона.
+REPO_URL="https://github.com/WormAlien/vibe-code-account-creator-manager.git"
+REPO_NAME="vibe-code-account-creator-manager"
+
+if [ ! -f "$SELF_DIR/package.json" ] || [ ! -f "$SELF_DIR/routing/restart-dashboard.sh" ]; then
+  step "Bootstrap: репо рядом нет — качаю"
+
+  # git на маке приезжает вместе с Command Line Tools
+  if ! have git; then
+    warn "git не найден — ставлю Command Line Tools. Откроется окно, дождись конца."
+    xcode-select --install >/dev/null 2>&1 || true
+    echo "  Когда установка закончится — нажми Enter..."
+    read -r _
+    have git || { err "git так и не появился. Поставь Xcode CLT вручную и запусти снова."; exit 1; }
+  fi
+
+  # Куда клонировать: рядом с текущей папкой, как install.ps1. Переопределяется VCACM_DIR=…
+  DEST="${VCACM_DIR:-$PWD/$REPO_NAME}"
+  if [ -f "$DEST/$REPO_NAME/package.json" ]; then
+    err "двойная вложенность: $DEST/$REPO_NAME — убери внешний дубль до установки."
+    exit 1
+  fi
+  if [ -d "$DEST/.git" ]; then
+    ok "репо уже склонировано → $DEST"
+  else
+    git clone "$REPO_URL" "$DEST" || { err "git clone не удался — проверь вывод выше."; exit 1; }
+    ok "склонировано → $DEST"
+  fi
+
+  chmod +x "$DEST/install-mac.sh" 2>/dev/null
+  exec bash "$DEST/install-mac.sh"
+fi
+
+cd "$SELF_DIR" || { err "не могу перейти в $SELF_DIR"; exit 1; }
 
 # 1. Xcode Command Line Tools — нужны для сборки нативных модулей (better-sqlite3)
 if [ "$(uname)" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then

@@ -1247,12 +1247,22 @@ keepalive-spawn.js:23) + `sqlite3` + `python` + `curl.exe`/`clip.exe`.
 | `mac-support/shims/taskkill` | `/F /PID N` → `kill -9 N`, `/F /IM x` → `pkill -9 -x x` |
 | `mac-support/shims/curl.exe`, `clip.exe`, `python`, `python.exe` | прокладки на curl/pbcopy/python3 |
 | `routing/restart-dashboard.sh` | аналог `restart-dashboard.bat`: чистит 8 портов через `lsof -ti`, `PATH`+`SQLITE3`, старт fm-rot :20126 / fm-oa :20130 / vyce :20131 / transparent-proxy :8200, poll статуса, `open` UI |
-| `install-mac.sh` | Xcode CLT → Homebrew → node/git → `npm install` → `npx playwright install chromium` → `npm i -g @anthropic-ai/claude-code` → копирует `*.example` → `chmod +x` + `xattr -cr` |
+| `install-mac.sh` | bootstrap (git → clone → `exec` себя из клона) → Xcode CLT → Homebrew → node/git → `npm install` → `npx playwright install chromium` → `npm i -g @anthropic-ai/claude-code` → копирует `*.example` → `chmod +x` + `xattr -cr` |
 | `DASHBOARD.command` | двойной клик: `xattr -cr .` + `bash routing/restart-dashboard.sh` |
 | `docs/MAC-SETUP.md` | инструкция для друга |
 
-Установка одной командой (она же в описании репо на GitHub):
-`git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git && cd vibe-code-account-creator-manager && bash install-mac.sh`
+Установка одной строкой на голом маке (она же в README) — симметрично `install.ps1`:
+`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"`
+
+Bootstrap-блок в начале скрипта: если рядом нет `package.json` и
+`routing/restart-dashboard.sh` — значит запущено вне репо, ставим CLT (в них git),
+`git clone` в `$PWD` (или `VCACM_DIR`), `exec bash <clone>/install-mac.sh`.
+Путь скрипта берётся из `${BASH_SOURCE[0]:-$0}`: при `bash -c` он пуст, `$0` = `bash`,
+`dirname` даёт `.` → cwd → уходим в bootstrap; при `bash install-mac.sh` — папка репо.
+
+**Только `bash -c "$(curl …)"`, не `curl … | bash`:** при пайпе stdin занят телом
+скрипта, и `read` (ожидание CLT, «запустить дашборд?») читает остаток скрипта
+вместо ответа юзера. Так же бутстрапится Homebrew.
 
 Нюансы:
 - git с Windows **не хранит exec-bit** → `chmod +x` ставит `install-mac.sh`, а

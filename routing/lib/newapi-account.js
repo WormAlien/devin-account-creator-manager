@@ -361,12 +361,17 @@ function macKeyFromPassword(pw) {
 // `security find-generic-password` на каждый процесс поднимает системный диалог
 // «введите пароль» — на живом маке это восемь окон за один прогон (пробник +
 // дашборд + keepalive'ы, у каждого свой процесс и свой кеш). Поэтому сперва
-// пробуем то, что не стоит ничего: Playwright запускает Chromium с
-// --use-mock-keychain, и тогда пароль — константа 'peanuts'. К Keychain лезем
-// только если mock не подошёл.
+// пробуем то, что не стоит ничего, и к Keychain лезем только если не подошло.
+//
+// Рабочий вариант (замер на живом маке 2026-08-20, Chrome for Testing 148, Intel:
+// 11/11 куки в 6 профилях): пароль 'mock_password'. Playwright запускает Chromium
+// с --use-mock-keychain, а MockAppleKeychain отдаёт именно эту константу — не
+// 'peanuts' (то Linux-схема) и не Keychain-запись «Chromium Safe Storage»,
+// которая на маке есть, но принадлежит другому браузеру и не подходит.
 function macCheapCandidates() {
     return [
-        { label: "mock keychain ('peanuts')", key: macKeyFromPassword('peanuts') },
+        { label: "'mock_password' (--use-mock-keychain)", key: macKeyFromPassword('mock_password') },
+        { label: "'peanuts' (Linux-схема)", key: macKeyFromPassword('peanuts') },
         { label: 'пустой пароль', key: macKeyFromPassword('') },
     ];
 }

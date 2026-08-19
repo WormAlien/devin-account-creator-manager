@@ -1285,6 +1285,28 @@ Bootstrap-блок в начале скрипта: если рядом нет `p
   `brew_shellenv()` делает `eval "$(brew shellenv)"` в сессию **и** дописывает
   строку в `~/.zprofile` (двойной клик `.command` → login-shell zsh → подхватит).
 
+- **Точный баланс на macOS — своя схема куки** (замер на живом маке 2026-08-20,
+  Chrome for Testing 148, Intel: 11/11 куки в 6 профилях). БД лежит в
+  `Default/Cookies`, **не** в `Default/Network/Cookies` — путь проверяется по
+  обоим (`cookieDbPath`). Ключ: `PBKDF2-SHA1('mock_password', 'saltysalt', 1003, 16)`,
+  значение: `'v10'` + **AES-128-CBC**, IV = 16 пробелов, PKCS#7 (на Windows —
+  DPAPI + AES-256-GCM). Пароль именно `mock_password`: Playwright стартует
+  Chromium с `--use-mock-keychain`, и `MockAppleKeychain` отдаёт эту константу —
+  ни `peanuts` (Linux-схема), ни Keychain-запись «Chromium Safe Storage» (на маке
+  есть, но от другого браузера) не подходят. К Keychain код лезет только если
+  дешёвые кандидаты не сработали: `security find-generic-password` поднимает
+  диалог пароля в КАЖДОМ процессе (пробник + дашборд + keepalive'ы = 8 окон).
+  Диагностика — `node tools/mac-cookie-probe.js` (перебирает матрицу
+  пароль × итерации × шифр и печатает форму данных).
+- **`git config core.fileMode false` обязателен на маке.** Права не едут с
+  Windows (всё 100644), мы их доставляем `chmod`'ом — git видит 644→755 как
+  локальную правку и `git pull` встаёт с «your local changes would be
+  overwritten». Ставится в bootstrap после clone и при обычном запуске из репо.
+- **`npm install -g` на маке падает с EACCES**, если npm-префикс системный
+  (`/usr/local` — Homebrew на Intel): `claude` не ставится, юзер получает
+  `command not found`. Установщик переносит префикс в `~/.npm-global` и
+  дописывает PATH в `~/.zprofile`.
+
 ## Чек-лист: добавляем новый модуль
 
 1. **Бэкенд:** хендлеры в `transparent-proxy.js` (роуты `/__switch/api/<module>/*`),

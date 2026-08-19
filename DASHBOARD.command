@@ -4,4 +4,7 @@
 # выполни один раз в Terminal:  xattr -cr /путь/к/папке
 cd "$(dirname "$0")" || exit 1
 xattr -cr . 2>/dev/null
-bash routing/restart-dashboard.sh
+# Окно Terminal при двойном клике закрывается вместе с выводом, поэтому просим
+# Enter в конце. В обычном терминале эта пауза не нужна (и мешает: read съедает
+# следующую строку вставленного блока команд) — поэтому флаг, а не -t 0.
+DASHBOARD_WAIT_ENTER=1 bash routing/restart-dashboard.sh

@@ -81,7 +81,9 @@ function cookieFailReason(profileDir, host) {
     } catch {}
     if (!profileAesKey(profileDir)) {
         return IS_MAC
-            ? 'ключ профиля не подобрался (Keychain «Chromium Safe Storage» / mock keychain)'
+            ? (MAC_KEY_ERROR
+                ? `подбор ключа куки упал: ${String(MAC_KEY_ERROR).slice(0, 90)}`
+                : 'ключ профиля не подобрался (mock keychain / Keychain «Chromium Safe Storage»)')
             : 'ключ профиля не расшифровался (Local State / DPAPI)';
     }
     return `в профиле нет куки для ${host} — сессия не сохранилась, войди в ЛК заново`;
@@ -319,6 +321,7 @@ const IS_MAC = process.platform === 'darwin';
 const MAC_SALT = 'saltysalt';
 const MAC_ITER = 1003;
 const MAC_IV = Buffer.alloc(16, 0x20);   // ровно 16 пробелов
+let MAC_KEY_ERROR = null;                // последняя внутренняя ошибка подбора ключа
 
 // Плейнтекст у Chromium 130+ префиксован 32 байтами SHA-256(host_key) — тем же,
 // что и на Windows (это уровень OSCrypt, не платформы). Срезаем по той же
@@ -417,13 +420,18 @@ function macSampleEncrypted(profileDir, limit = 6) {
 }
 
 // Рабочий ключ профиля на macOS: тот кандидат, которым реально расшифровалась
-// хотя бы одна кука. Если БД пустая/отсутствует — отдаём первый кандидат, чтобы
-// причину сформулировал cookieReason («нет БД куки»), а не «ключ не расшифровался».
+// хотя бы одна кука. Сначала дешёвые (без диалога пароля), и только если ни один
+// не подошёл — Keychain. Если БД пустая/отсутствует — отдаём первый дешёвый
+// кандидат, чтобы причину сформулировал cookieFailReason («нет БД куки»), а не
+// «ключ не подобрался».
 function macProfileKey(profileDir) {
-    const cands = macKeyCandidates();
+    const cheap = macCheapCandidates();
     const sample = macSampleEncrypted(profileDir);
-    if (!sample.length) return cands[0] ? cands[0].key : null;
-    for (const c of cands) {
+    if (!sample.length) return cheap[0] ? cheap[0].key : null;
+    for (const c of cheap) {
+        if (sample.some(enc => macDecryptCookie(enc, c.key) !== null)) return c.key;
+    }
+    for (const c of macKeychainCandidates()) {
         if (sample.some(enc => macDecryptCookie(enc, c.key) !== null)) return c.key;
     }
     return null;
@@ -433,7 +441,11 @@ function profileAesKey(profileDir) {
     if (AES_KEY_CACHE.has(profileDir)) return AES_KEY_CACHE.get(profileDir);
     let key = null;
     if (IS_MAC) {
-        try { key = macProfileKey(profileDir); } catch { key = null; }
+        // Ошибку НЕ глотаем молча: раньше здесь стоял пустой catch, и опечатка в
+        // имени функции (macKeyCandidates → macCheapCandidates после рефакторинга)
+        // выглядела в UI как «ключ профиля не подобрался». Час диагностики на маке.
+        try { key = macProfileKey(profileDir); }
+        catch (e) { MAC_KEY_ERROR = (e && e.message) || String(e); key = null; }
         AES_KEY_CACHE.set(profileDir, key);
         return key;
     }

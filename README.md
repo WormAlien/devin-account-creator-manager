@@ -15,6 +15,8 @@
 
 Локальная control-plane: переключение backend'а Claude Code между провайдерами (**AgentRouter · GoRouter · Tabi Token**) одним кликом из веб-дашборда, автореги/импорт ключей, GitHub-аккаунты с 2FA, статус-лайн с балансом и контекстом. Плюс ТГ-пульт для управления с телефона.
 
+<sub>⚡ <b>Ставится одной строкой на голую машину</b> — <a href="#windows">Windows (PowerShell)</a> · <a href="#macos">macOS (Терминал)</a>. Вставил, пожал Enter — дашборд открылся.</sub>
+
 <br>
 
 ![Dashboard](docs/dashboard.png)
@@ -94,16 +96,33 @@ irm https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manage
 
 ### macOS
 
-Голый мак — открой **Терминал** и вставь одну строку. Bootstrap поставит Command Line Tools (там же git), склонирует репо и запустит `install-mac.sh`: Homebrew → node → `npm install` → Playwright chromium → Claude Code → конфиги → дашборд.
+Голый мак, где нет вообще ничего — открой **Терминал** и вставь **одну строку**. Дальше только Enter: bootstrap ставит Command Line Tools (в них git), клонирует репо и прогоняет `install-mac.sh` — Homebrew → node → `npm install` → Playwright chromium → Claude Code → конфиги из `*.example` → дашборд.
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
 ```
 
-> [!IMPORTANT]
-> Именно `/bin/bash -c "$(curl …)"`, а не `curl … | bash`. При пайпе stdin занят самим скриптом, и интерактивные вопросы установщика («дождись Command Line Tools», «запустить дашборд?») читают мусор вместо твоего ответа.
+Хочешь в свою папку — задай `VCACM_DIR` (сама папка станет корнем репо, промежуточные создадутся):
 
-Репо ляжет в текущую папку (`~/vibe-code-account-creator-manager`, если запускать из хоума) — переопределяется `VCACM_DIR=/путь`. Дальше запуск в любой момент: двойной клик на **`DASHBOARD.command`** или `bash routing/restart-dashboard.sh`. Подробности и ограничения мака (автореги Camoufox и ТГ-пульт не портированы) — [`docs/MAC-SETUP.md`](docs/MAC-SETUP.md).
+```bash
+VCACM_DIR="$HOME/Documents/VibeCode" /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+```
+
+Проверено на чистом MacBook: одна вставка, дальше Enter — и дашборд открыт. Реагировать надо всего в трёх местах:
+
+1. **Окно «Установить инструменты разработчика»** → **Установить**, подождать 5–10 минут, вернуться в Терминал и нажать **Enter** (скрипт ждёт именно этого).
+2. **Пароль от мака** — просит установщик Homebrew через `sudo`. Вводится слепо, символы не показываются — это нормально.
+3. **«Терминал» запрашивает доступ к папке «Документы»** (только если ставишь в `Documents`) → **OK**. Промахнулся и нажал «Запретить» — *Системные настройки → Конфиденциальность и безопасность → Файлы и папки → Терминал*.
+
+> [!IMPORTANT]
+> Именно `/bin/bash -c "$(curl …)"`, а не `curl … | bash`. При пайпе stdin занят самим скриптом, и интерактивные вопросы («дождись Command Line Tools», «запустить дашборд?») читают тело скрипта вместо твоего ответа. Так же бутстрапится сам Homebrew.
+
+> [!NOTE]
+> Папку `Documents` писать латиницей, хотя Finder показывает «Документы» — на диске она английская.
+
+Дальше запуск в любой момент: двойной клик на **`DASHBOARD.command`** в корне репо либо `bash routing/restart-dashboard.sh`. Дашборд: <http://localhost:8200/__switch>
+
+Как это устроено (shim-ы Windows-команд, что работает и что не портировано — автореги Camoufox и ТГ-пульт) — [`docs/MAC-SETUP.md`](docs/MAC-SETUP.md).
 
 ### Если git и node уже стоят
 

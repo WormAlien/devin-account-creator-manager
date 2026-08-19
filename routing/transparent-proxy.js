@@ -4972,6 +4972,295 @@ async function handleGhOpen(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── Заселение готовой GitHub-сессии в новый аккаунт New-API ─────
+//
+// Проблема: у каждого аккаунта вкладок ar/go/tb/xp свой персистентный профиль Chromium, и
+// GitHub в свежем профиле логинится с нуля — логин + пароль + 2FA. При этом ровно эта
+// GitHub-сессия обычно уже лежит в профиле другого провайдера: профили куками не делятся.
+// Замер на 2026-08-19: 41 профиль с GitHub-сессией на 14 уникальных аккаунтов.
+//
+// Решение: снимаем GitHub-куки из профиля-источника (github/harvest-session.js →
+// storageState, только github.com) и кладём в <provider>/sessions/<label>.json c маркером
+// seed:'github'. open-session.js вливает их в свежий профиль и всё равно идёт на
+// регистрацию по рефке — остаётся нажать «Continue with GitHub».
+//
+// Один GitHub на ДРУГОМ хосте = новый аккаунт панели; на ТОМ ЖЕ хосте = вход в уже
+// существующий. Поэтому занятые хосты считаем и блокируем (ghSessionUsage).
+function ghSessionLib() {
+    try { return require('./lib/github-session'); }
+    catch (e) { logLine(`github-session недоступен: ${e.message}`); return null; }
+}
+
+// Карты pid'ов открытых браузеров по тегу профиля. Собираем ЛЕНИВО: сами карты объявлены
+// ниже в файле (arLkPids и компания), на верхнем уровне они бы попали в TDZ.
+// Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
+// закрытии ещё и перезапишет банку кук.
+function ghLkPidsByTag() {
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids };
+}
+
+function ghAnyPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function ghProfileBusy(profile) {
+    const map = ghLkPidsByTag()[profile.tag];
+    return !!(map && ghAnyPidAlive(map.get(profile.label)));
+}
+
+// Сколько стоил скан и не откатился ли он на медленный путь. Раньше ошибка батча DPAPI
+// глушилась в catch, скан молча возвращался к процессу PowerShell на профиль (27 с на 41
+// папке), и в логе об этом не было НИ СЛОВА — искать приходилось наугад.
+function ghLogScan(gsl, where) {
+    const s = gsl.scanStats && gsl.scanStats();
+    if (!s) return;
+    logLine(`${where}: скан профилей ${s.ms}мс (из индекса ${s.fromIndex}, расшифровано ${s.decrypted}, с GitHub ${s.withGithub}/${s.profiles})`
+        + (s.warmError ? ` ⚠️ DPAPI-батч упал: ${s.warmError}` : '')
+        + (!s.warmError && s.warmFailed ? ` ⚠️ ключей не расшифровалось: ${s.warmFailed}` : ''));
+}
+
+// Пересобрать индекс профилей ОТДЕЛЬНЫМ процессом.
+//
+// Почему не в себе: расшифровка ключа профиля — это execFileSync('powershell'), синхронный
+// вызов. Он блокирует событийный цикл, и на элевированном дашборде (restart-dashboard.bat
+// поднимает его от администратора) однажды не вернулся совсем: :8200 слушал, соединения
+// висли в CLOSE_WAIT, модалка «читаю профили…» стояла минутами, а в tasklist из обычной
+// консоли ни node, ни powershell даже не видно. Теперь ждать нечего: скрипт пишет JSON,
+// дашборд его читает.
+let ghIndexBuild = { pid: null, startedAt: 0, lastOut: '' };
+
+function ghIndexBuilding() {
+    return !!(ghIndexBuild.pid && ghAnyPidAlive(ghIndexBuild.pid));
+}
+
+function ghRebuildIndex(reason) {
+    if (ghIndexBuilding()) return { already: true, pid: ghIndexBuild.pid };
+    const script = path.join(__dirname, 'gh-index-build.js');
+    try {
+        const proc = spawn(process.execPath, [script], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        ghIndexBuild = { pid: proc.pid, startedAt: Date.now(), lastOut: '' };
+        proc.stdout.on('data', d => { ghIndexBuild.lastOut = String(d).trim(); logLine(`gh-index [${reason}]: ${String(d).trim()}`); });
+        proc.stderr.on('data', d => logLine(`gh-index ERR [${reason}]: ${String(d).trim()}`));
+        proc.on('error', e => { logLine(`gh-index спавн не удался: ${e.message}`); ghIndexBuild.pid = null; });
+        proc.on('exit', (code) => {
+            logLine(`gh-index [${reason}]: готов за ${Date.now() - ghIndexBuild.startedAt}мс (код ${code})`);
+            ghIndexBuild.pid = null;
+        });
+        proc.unref();
+        logLine(`gh-index [${reason}]: собираю индекс профилей (pid ${proc.pid})`);
+        return { started: true, pid: proc.pid };
+    } catch (e) {
+        logLine(`gh-index спавн не удался: ${e.message}`);
+        return { error: e.message };
+    }
+}
+
+// Индекс собираем при старте — чтобы к первому открытию модалки он уже лежал на диске.
+function ghWarmIndexOnBoot() {
+    setTimeout(() => {
+        const gsl = ghSessionLib();
+        if (!gsl) return;
+        const info = gsl.indexInfo();
+        const outdated = gsl.indexOutdatedDirs().length;   // только stat, без расшифровки
+        if (!info.exists || outdated) ghRebuildIndex('старт');
+        else logLine(`gh-index: индекс на месте (${info.count} профилей, всё свежее)`);
+    }, 1500);   // не мешаем подъёму портов и первым health-чекам
+}
+
+// Что известно про GitHub-аккаунты применительно к одному хосту: где уже засвечены,
+// есть ли снимок для заселения и откуда его брать. Сети не касается вообще.
+function ghSessionUsage(host) {
+    const gsl = ghSessionLib();
+    if (!gsl) throw new Error('модуль github-session недоступен');
+    const tag = gsl.hostToTag(host);
+    if (!tag) throw new Error(`неизвестный хост: ${host}`);
+    const index = gsl.indexByLogin();
+    return { gsl, tag, index };
+}
+
+// GET /__switch/api/gh/available?host=<host>
+//
+// Отвечает МГНОВЕННО: читает только готовый индекс с диска. Ни DPAPI, ни sqlite, ни сети.
+// Сеть не трогаем ещё и потому, что живость сессии безопасно проверить можно лишь настоящим
+// браузером (см. lib/github-session.js — сырая проба с выдуманным UA гасит сессию на стороне
+// GitHub); вердикт выносит харвест в момент заселения.
+//
+// Индекса нет или он устарел → запускаем сборку отдельным процессом и говорим фронту
+// building:true. Раньше сборка шла прямо здесь и вешала весь дашборд.
+async function handleGhAvailable(req, res) {
+    try {
+        const host = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('host') || '';
+        const { gsl, tag, index } = ghSessionUsage(host);
+
+        const info = gsl.indexInfo();
+        const outdated = gsl.indexOutdatedDirs().length;   // только stat по файлам кук
+        let building = ghIndexBuilding();
+        if ((!info.exists || outdated) && !building) {
+            ghRebuildIndex(info.exists ? 'устарел' : 'нет индекса');
+            building = true;
+        }
+        if (!info.exists) {
+            // Совсем ничего нет — показывать нечего, но и висеть не будем.
+            return jsonRes(res, 200, {
+                ok: true, host, tag, accounts: [], building: true, indexed: 0,
+                note: 'строю индекс профилей — обнови через пару секунд',
+            });
+        }
+
+        const accounts = ghLoad().map(g => {
+            const nick = String(g.nickname || g.login || '').trim();
+            const entry = index.get(nick.toLowerCase());
+            const sources = (entry ? entry.sources : []).filter(s => s.hasUserSession);
+            const free = sources.filter(s => !ghProfileBusy(s));
+            const cached = gsl.readCache(g.id);
+            return {
+                id: g.id,
+                nickname: nick,
+                login: g.login || '',
+                status: g.status || 'live',
+                usedOn: entry ? [...entry.hosts] : [],
+                usedHere: !!(entry && entry.hosts.has(tag)),
+                hasSession: !!(cached || sources.length),
+                cached: !!cached,
+                cacheStale: cached ? gsl.cacheStale(cached) : null,
+                sessionFrom: sources.length ? `${sources[0].tag}/${sources[0].label}` : null,
+                sessionAgeDays: sources.length
+                    ? Math.round(gsl.freshnessMs(sources[0]) / 86400000) : null,
+                allSourcesBusy: sources.length > 0 && free.length === 0,
+            };
+        });
+        jsonRes(res, 200, {
+            ok: true, host, tag, accounts,
+            profilesScanned: index.size, indexed: info.count,
+            indexAgeMs: info.ageMs, building, outdated,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Снять снимок GitHub-сессии в кеш github/sessions/<ghId>.json.
+// Харвест сам проверяет живость настоящим браузером: код 3 = сессия мертва.
+function ghHarvest(gsl, ghId, profile) {
+    const out = gsl.cachePath(ghId);
+    return new Promise(resolve => {
+        const proc = spawn(process.execPath, [gsl.HARVEST_SCRIPT, profile.dir, out],
+            { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+        let so = '', se = '';
+        proc.stdout.on('data', d => so += String(d));
+        proc.stderr.on('data', d => se += String(d));
+        proc.on('error', e => resolve({ code: 1, err: e.message }));
+        proc.on('exit', code => resolve({ code, out: so, err: se }));
+        // Запуск браузера + навигация: 30 с мало, минута с запасом.
+        setTimeout(() => { try { proc.kill(); } catch {} }, 60000);
+    });
+}
+
+// POST /__switch/api/{ar,go,tb,xp}/add-github { ghId }
+//
+// Создаёт запись пула под готовым GitHub-аккаунтом и заселяет её профиль. Браузер здесь
+// НЕ открываем: дашборд следом зовёт существующий /session/open, дублировать spawn незачем.
+async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessionsDir }) {
+    // Харвест — это запуск Chromium, десятки секунд молчания в сокете.
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const body = await readJsonBody(req);
+        const ghId = String(body.ghId || '').trim();
+        if (!ghId) return jsonRes(res, 400, { error: 'ghId обязателен' });
+
+        const acct = ghLoad().find(g => g.id === ghId);
+        if (!acct) return jsonRes(res, 404, { error: 'GitHub-аккаунт не найден в хранилище' });
+        const nick = String(acct.nickname || acct.login || '').trim();
+        if (!nick) return jsonRes(res, 400, { error: 'у GitHub-аккаунта нет ника' });
+        if (acct.status === 'dead') {
+            return jsonRes(res, 400, { error: `GitHub ${nick} помечен как dead — регистрировать под ним нечего` });
+        }
+
+        const { gsl, tag: hostTag, index } = ghSessionUsage(host);
+        if (gsl.usedOnHost(index, nick, hostTag)) {
+            return jsonRes(res, 409, {
+                error: `под ${nick} на этом хосте аккаунт уже есть — вход по нему откроет старый аккаунт, а не создаст новый`,
+            });
+        }
+
+        // Снимок: сначала кеш, иначе харвест из самого подходящего профиля-источника.
+        let snap = gsl.readCache(ghId);
+        let from = snap ? 'кеш' : null;
+        if (snap && gsl.cacheStale(snap)) { snap = null; from = null; }   // старше TTL — перечитать
+        if (!snap) {
+            const entry = index.get(nick.toLowerCase());
+            const sources = (entry ? entry.sources : []).filter(s => s.hasUserSession);
+            if (!sources.length) {
+                return jsonRes(res, 409, {
+                    error: `живой GitHub-сессии для ${nick} на диске нет — открой его один раз во вкладке GitHub («Открыть GitHub») и залогинься`,
+                });
+            }
+            const free = sources.filter(s => !ghProfileBusy(s));
+            if (!free.length) {
+                return jsonRes(res, 409, {
+                    error: `все профили с сессией ${nick} заняты открытым браузером — закрой его и повтори`,
+                });
+            }
+            // Пробуем по очереди: сессия в конкретном профиле может быть уже мёртвой,
+            // а у того же аккаунта рядом лежит живая (профили логинились раздельно).
+            const tried = [];
+            for (const src of free) {
+                const r = await ghHarvest(gsl, ghId, src);
+                if (r.code === 0) { snap = gsl.readCache(ghId); from = `${src.tag}/${src.label}`; break; }
+                tried.push(`${src.tag}/${src.label}: ${r.code === 3 ? 'сессия мертва' : r.code === 2 ? 'профиль занят' : (r.err || 'ошибка').trim().slice(0, 120)}`);
+            }
+            if (!snap) {
+                logLine(`${tag} add-github: ${nick} — снимок не снялся (${tried.join(' | ')})`);
+                return jsonRes(res, 409, {
+                    error: `GitHub-сессия ${nick} не годится: ${tried.join('; ')}. Залогинься заново во вкладке GitHub.`,
+                });
+            }
+        }
+
+        // Запись пула. email = ник GitHub осознанно: резервная ветка сопоставления
+        // профилей (newapiMapProfiles) сверяет `s.email || s.name` с githubLogin(cookies),
+        // то есть с кукой dotcom_user — а это и есть ник. Связка заработает сама.
+        const sessions = load();
+        const dup = sessions.find(s => String(s.email || '').toLowerCase() === nick.toLowerCase());
+        if (dup) return jsonRes(res, 409, { error: `запись с email ${nick} уже есть в пуле` });
+
+        const id = prefix + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        sessions.push({
+            id,
+            email: nick,
+            name: nick,
+            api_key: makeNoKeyStub(),
+            active: false,
+            status: 'no_key',
+            created: new Date().toISOString(),
+            ghId,
+            seededFrom: from,
+        });
+        save(sessions);
+
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(path.join(sessionsDir, label + '.json'),
+            JSON.stringify(gsl.seedPayload(snap, nick), null, 2) + '\n', 'utf8');
+
+        logLine(`${tag} add-github: ${nick} → ${label} (сессия из ${from}, кук ${(snap.cookies || []).length})`);
+        jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: (snap.cookies || []).length });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+function handleArAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'agentrouter', host: 'agentrouter.org', prefix: 'ar_', load: arLoad, save: arSave, sessionsDir: AR_SESSIONS_DIR });
+}
+function handleGoAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'gorouter', host: 'gorouter.app', prefix: 'go_', load: goLoad, save: goSave, sessionsDir: GO_SESSIONS_DIR });
+}
+function handleTbAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'tabi', host: 'tabitoken.com', prefix: 'tb_', load: tbLoad, save: tbSave, sessionsDir: TB_SESSIONS_DIR });
+}
+function handleXpAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'xpeach', host: 'xpeach.codes', prefix: 'xp_', load: xpLoad, save: xpSave, sessionsDir: XP_SESSIONS_DIR });
+}
+
 // ───── Svrtr — пул ТГ-аккаунтов, активация через API Helper ─────
 // api.svrtr.org — Anthropic-совместимый endpoint (x-api-key). Авторег через @svrtrbot.
 // Активация = ключ в sr-active-key.txt + apiKeyHelper в settings.json.
@@ -9529,6 +9818,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/gh/delete')          return handleGhDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/update')          return handleGhUpdate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/open')            return handleGhOpen(req, res);
+    // Заселение готовой GitHub-сессии в новый аккаунт New-API-вкладок (ar/go/tb/xp).
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/gh/available')) return handleGhAvailable(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/add-github')       return handleTbAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/add-github')       return handleXpAddGithub(req, res);
 
     // ---- Svrtr — пул ТГ-аккаунтов, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/svrtr/sessions'))    return handleSvrtrSessions(req, res);
@@ -10290,6 +10585,10 @@ server.listen(LISTEN_PORT, () => {
             console.log(`    → точный баланс AgentRouter/GoRouter/Tabi работать НЕ будет: npm rebuild better-sqlite3`);
         }
     } catch {}
+
+    // Индекс GitHub-сессий по профилям — греем в фоне, чтобы модалка «🐙 Взять готовый
+    // GitHub» не платила за первый скан (см. ghWarmIndexOnBoot).
+    ghWarmIndexOnBoot();
 
     // Папку репо могли перенести — статуслайн в settings.json прописан абсолютным
     // путём, поправляем ссылку на свою копию скрипта (см. healStatuslinePath).

@@ -40,8 +40,10 @@ const profileDir = path.join(PROFILES_DIR, label);
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
 
-// Если рядом лежит <label>.json (импортированный чужой share-код) — применяем
-// его как storageState: cookies + localStorage. Тогда GitHub/tabitoken сразу залогинены.
+// Если рядом лежит <label>.json — применяем его как storageState: cookies + localStorage.
+// Два разных источника такого файла, и различать их обязательно:
+//   share-код друга      → аккаунт tabitoken уже создан, GitHub/tabitoken сразу залогинены;
+//   seed:'github'        → только GitHub-куки, аккаунта tabitoken ещё НЕТ (см. seededGithub).
 function loadImportedSession() {
   try {
     const p = path.join(SESSIONS_DIR, label + '.json');
@@ -50,6 +52,12 @@ function loadImportedSession() {
     const ss = JSON.parse(raw);
     if (!ss || typeof ss !== 'object') return null;
     return {
+      // seed:'github' — в файле ТОЛЬКО GitHub-куки, аккаунта провайдера ещё нет: файл
+      // положил дашборд по кнопке «взять готовый GitHub». Отличать обязательно, иначе
+      // ветка ниже примет его за готовый аккаунт друга, уведёт на страницу баланса и
+      // пропустит регистрацию по рефке — реф-кредит потеряется.
+      seed: ss.seed === 'github' ? 'github' : null,
+      ghLogin: typeof ss.ghLogin === 'string' ? ss.ghLogin : null,
       cookies: Array.isArray(ss.cookies) ? ss.cookies : [],
       origins: Array.isArray(ss.origins) ? ss.origins : [],
     };
@@ -229,15 +237,21 @@ async function main() {
     appliedSession = await applyImportedSession(context, imported);
   }
 
+  // Заселение готового GitHub — аккаунта у провайдера ещё нет, рефка НУЖНА.
+  const seededGithub = appliedSession && imported && imported.seed === 'github';
+  if (seededGithub) {
+    console.log(`🐙 GitHub-сессия заселена${imported.ghLogin ? ` (${imported.ghLogin})` : ''} — пароль и 2FA не понадобятся, жми «Continue with GitHub».`);
+  }
+
   // Импортированный share-код — аккаунт друга уже зарегистрирован, рефка ему не нужна.
-  const wantRegister = appliedSession ? false
+  const wantRegister = (appliedSession && !seededGithub) ? false
     : mode === 'register' ? true
     : mode === 'console' ? false
     : fresh;                                   // 'auto': чистый профиль = регистрация
   console.log(`🎯 ${wantRegister ? `регистрация по рефке: ${REGISTER_URL}` : `баланс: ${CONSOLE_URL}`}`);
 
   try {
-    if (appliedSession) {
+    if (appliedSession && !seededGithub) {
       await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
       await reportRender(page);
       console.log('✅ Импортированная сессия применена (GitHub/tabitoken уже залогинены).');

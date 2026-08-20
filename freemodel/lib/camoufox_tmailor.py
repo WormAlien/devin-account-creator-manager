@@ -7,7 +7,7 @@ Camoufox (Firefox stealth) клиент для tmailor.com.
   {"cmd":"wait_otp", "timeout":120, "poll":4, "from_hint":"freemodel"} -> {"ok":true, "code":"123456", "link":...} | {"ok":false, "error":"timeout"}
   {"cmd":"stop"}                  -> завершает процесс
 """
-import asyncio, json, os, re, sys, time, traceback
+import asyncio, json, os, re, shutil, sys, time, traceback
 from pathlib import Path
 
 from camoufox import AsyncCamoufox
@@ -17,6 +17,18 @@ API_URL = "https://tmailor.com/api"
 
 PROFILE_DIR = Path(__file__).parent / f"camoufox_tmailor_profile_{os.getpid()}"
 PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Профиль свой на каждый запуск и до 21.08.2026 не убирался никогда: накопилось
+# 580 каталогов на 37.4 ГБ — 82% веса всего репо. Подметаем по mtime, а НЕ по
+# живости PID: Windows переиспользует номера (2 из 580 мёртвых профилей совпали
+# с чужими живыми python.exe), а os.kill(pid, 0) здесь зовёт TerminateProcess.
+# 6 часов — с большим запасом дольше любого прогона, который длится минуты.
+for _stale in PROFILE_DIR.parent.glob("camoufox_tmailor_profile_*"):
+    try:
+        if _stale != PROFILE_DIR and _stale.is_dir() and _stale.stat().st_mtime < time.time() - 6 * 3600:
+            shutil.rmtree(_stale, ignore_errors=True)
+    except OSError:
+        pass
 
 
 def log(tag: str, msg: str):

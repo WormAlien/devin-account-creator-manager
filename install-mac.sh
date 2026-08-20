@@ -208,10 +208,15 @@ copy_example tgbot/.env.example tgbot/.env
 # Статус-лайн: в шаблоне settings.json секции statusLine нет, а существующий файл
 # мы не перезаписываем — поэтому включаем отдельно, дописывая ровно эту секцию.
 # Иначе бар внизу CC просто выключен, и юзер об этом не догадывается.
-if node tools/enable-statusline.js >/dev/null 2>&1; then
+# Вывод НЕ глушим: раньше стояло >/dev/null, и причина отказа («в settings.json
+# свой statusLine», «settings.json не читается как JSON») терялась — оставался
+# только общий warn, по которому чинить нечего.
+if sl_out="$(node tools/enable-statusline.js 2>&1)"; then
   ok "статус-лайн включён (провайдер/модель · баланс · контекст)"
+  printf '%s\n' "$sl_out" | sed 's/^/    /'
 else
   warn "статус-лайн включить не удалось — вручную: node tools/enable-statusline.js"
+  printf '%s\n' "$sl_out" | sed 's/^/    /'
 fi
 
 # 8. Права + карантин macOS

@@ -5274,6 +5274,24 @@ function ghSessionUsage(host) {
     return { gsl, tag, index };
 }
 
+// Есть ли в пуле провайдера ЖИВАЯ запись под этим ником. Это прямое доказательство
+// занятости, в отличие от куки в профиле: пул — то, что мы сами про себя знаем.
+// Сверяем и по `ghId` (его пишет заселение), и по `email`/`name` — руками добавленные
+// записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
+// нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
+// вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad() };
+function ghPoolEntryFor(tag, nick, ghId) {
+    const load = GH_POOL_LOADERS[tag];
+    if (!load) return null;
+    const low = String(nick || '').toLowerCase();
+    try {
+        return load().find(s => (ghId && s.ghId === ghId)
+            || String(s.email || '').toLowerCase() === low
+            || String(s.name || '').toLowerCase() === low) || null;
+    } catch { return null; }
+}
+
 // GET /__switch/api/gh/available?host=<host>
 //
 // Отвечает МГНОВЕННО: читает только готовый индекс с диска. Ни DPAPI, ни sqlite, ни сети.
@@ -5309,6 +5327,11 @@ async function handleGhAvailable(req, res) {
             const sources = (entry ? entry.sources : []).filter(s => s.hasUserSession);
             const free = sources.filter(s => !ghProfileBusy(s));
             const cached = gsl.readCache(g.id);
+            // Профили на ЭТОМ хосте, где найдена кука этого ника. Архивные (`_old_*`)
+            // в `hosts` не попадают, но перечислить их полезно: по ним видно, что аккаунт
+            // тут когда-то был, и понятно, почему предупреждение вообще появилось.
+            const hereProfiles = (entry ? entry.sources : []).filter(s => s.tag === tag);
+            const poolEntry = ghPoolEntryFor(tag, nick, g.id);
             return {
                 id: g.id,
                 nickname: nick,
@@ -5316,6 +5339,10 @@ async function handleGhAvailable(req, res) {
                 status: g.status || 'live',
                 usedOn: entry ? [...entry.hosts] : [],
                 usedHere: !!(entry && entry.hosts.has(tag)),
+                // Запись в пуле — прямое доказательство занятости, кука в профиле лишь косвенное.
+                inPool: !!poolEntry,
+                poolStatus: poolEntry ? (poolEntry.status || 'unknown') : null,
+                hereProfiles: hereProfiles.map(s => ({ label: s.label, archived: !!s.archived })),
                 hasSession: !!(cached || sources.length),
                 cached: !!cached,
                 cacheStale: cached ? gsl.cacheStale(cached) : null,
@@ -5361,6 +5388,12 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         const body = await readJsonBody(req);
         const ghId = String(body.ghId || '').trim();
         if (!ghId) return jsonRes(res, 400, { error: 'ghId обязателен' });
+        // force — владелец видел предупреждение «этот GitHub тут уже засвечен» и настаивает.
+        // Легитимных причин настаивать хватает: регистрация у провайдера была закрыта и
+        // аккаунт не создался; аккаунт был удалён на стороне провайдера; запись из пула
+        // снесли, а профиль на диске остался. Запрет без обхода загонял в тупик — ник
+        // числился занятым навсегда, потому что кука в профиле никуда не девается.
+        const force = !!body.force;
 
         const acct = ghLoad().find(g => g.id === ghId);
         if (!acct) return jsonRes(res, 404, { error: 'GitHub-аккаунт не найден в хранилище' });
@@ -5371,9 +5404,26 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         }
 
         const { gsl, tag: hostTag, index } = ghSessionUsage(host);
-        if (gsl.usedOnHost(index, nick, hostTag)) {
+        // Два уровня «занято», и путать их нельзя. Запись в пуле — факт: аккаунт у нас
+        // уже есть, дубль не нужен, и обойти это force'ом бессмысленно (ниже всё равно
+        // упрёмся в проверку дубля email). Кука в профиле — лишь косвенный признак.
+        const poolEntry = ghPoolEntryFor(hostTag, nick, ghId);
+        if (poolEntry) {
             return jsonRes(res, 409, {
-                error: `под ${nick} на этом хосте аккаунт уже есть — вход по нему откроет старый аккаунт, а не создаст новый`,
+                error: `под ${nick} запись в пуле уже есть (${poolEntry.status || 'unknown'})`
+                    + ' — заводить вторую нечего: открой её кнопкой 🌐 и войди, а если аккаунт'
+                    + ' у провайдера удалён, сначала удали запись из пула',
+            });
+        }
+        if (gsl.usedOnHost(index, nick, hostTag) && !force) {
+            const where = (index.get(nick.toLowerCase()) || { sources: [] }).sources
+                .filter(s => s.tag === hostTag).map(s => s.label).join(', ');
+            return jsonRes(res, 409, {
+                canForce: true,
+                error: `под ${nick} на этом хосте остался профиль браузера${where ? ` (${where})` : ''},`
+                    + ' то есть аккаунт тут скорее всего уже создан — тогда вход откроет его,'
+                    + ' а не заведёт новый. Если аккаунта нет (регистрация была закрыта, аккаунт'
+                    + ' удалён) — повтори с подтверждением.',
             });
         }
 
@@ -5437,8 +5487,8 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         fs.writeFileSync(path.join(sessionsDir, label + '.json'),
             JSON.stringify(gsl.seedPayload(snap, nick), null, 2) + '\n', 'utf8');
 
-        logLine(`${tag} add-github: ${nick} → ${label} (сессия из ${from}, кук ${(snap.cookies || []).length})`);
-        jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: (snap.cookies || []).length });
+        logLine(`${tag} add-github: ${nick} → ${label} (сессия из ${from}, кук ${(snap.cookies || []).length}${force ? ', ПОВЕРХ предупреждения о засвете' : ''})`);
+        jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: (snap.cookies || []).length, forced: force });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
@@ -6272,39 +6322,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         return { status: 'unknown', error: `usage parse: ${e.message}` };
     }
 
-    // ── 2. anchor: вписанный руками баланс, убывает по расходу ──
-    // ПРИОРИТЕТ ВЫШЕ точного self, и это осознанно. Владелец вписывает цифру ровно
-    // тогда, когда видит ЛК своими глазами и цифра шлюза его не устроила (у gorouter
-    // /api/user/self отдаёт квоту, расходящуюся с кошельком в ЛК). Раньше self
-    // перебивал анкер: вписанное сохранялось в файл, а в таблице тут же возвращалось
-    // прежнее число с тостом «точный приоритетнее» — со стороны это выглядело как
-    // «ручное вписывание не работает» (поймано на личном gorouter-аккаунте 2026-08-20).
-    // Возврат к точному — пустое поле в промпте (сброс анкера).
-    // Анкер всегда привязан к ЛЕГАСИ-расходу (usageSpent) — на том же основании, на
-    // котором его записали, иначе цифра прыгнула бы при смене источника.
-    // Побочно это экономит запрос self к шлюзу (для WAF полезно): у аккаунта с живым
-    // анкером точная цифра всё равно не показывалась бы.
-    let anchorDrained = null;
-    const anchor = Number(target.balanceAnchor);
-    if (isFinite(anchor) && anchor > 0 && target.anchorSpent != null) {
-        const drawn = round2(usageSpent - Number(target.anchorSpent));
-        const left = round2(anchor - Math.max(0, drawn));
-        // Ушло в ноль или минус — привязка устарела (расход обогнал вписанное).
-        // Отдавать её как факт нельзя: пробуем self, потом прикидку, и UI просит вписать заново.
-        if (left > 0) {
-            return {
-                status: 'live',
-                balanceSource: 'anchor',
-                balance: left,
-                spent: usageSpent,
-                usageSpent,
-                granted: null,
-            };
-        }
-        anchorDrained = 'вписанный баланс исчерпан расходом — впиши заново';
-    }
-
-    // ── 3. self: точный остаток аккаунта ──
+    // ── 2. self: точный остаток аккаунта ──
     // Экономия запросов. Если предыдущий self прошёл недавно и с тех пор ничего не
     // изменилось — берём сохранённое значение и на шлюз не идём. Без этого повторное
     // нажатие «Балансы всех» шлёт по запросу на каждый аккаунт, Aliyun WAF у agentrouter
@@ -6317,21 +6335,30 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     const SELF_REUSE_MS = 20 * 60_000;
     const prof = newapiResolveProfile(host, target);
     const selfAt = target.selfCheckedAt ? new Date(target.selfCheckedAt).getTime() : 0;
-    if (!force && target.balanceSource === 'self' && selfAt
-        && typeof target.balance === 'number'
+    // Кеш точной цифры лежит в ОТДЕЛЬНОМ поле selfBalance, а не в target.balance: у
+    // аккаунта с анкером в balance стоит вписанное руками, и опираться на него нельзя.
+    // Фолбэк на target.balance — для записей, снятых до появления поля, иначе первый
+    // чек каждой из них зря пошёл бы на шлюз.
+    const cachedSelf = typeof target.selfBalance === 'number' ? target.selfBalance
+        : (target.balanceSource === 'self' && typeof target.balance === 'number' ? target.balance : null);
+    let self = null;
+    if (!force && selfAt && cachedSelf != null
         && Number(target.usageSpentAtSelf) === usageSpent
         && newapiLkOpenedAt(prof.label) < selfAt
         && Date.now() - selfAt < SELF_REUSE_MS) {
-        return {
-            status: 'live', balanceSource: 'self', reused: true,
-            balance: target.balance, spent: target.spent, usageSpent,
-            granted: target.granted, newApiUserId: target.newApiUserId,
-            newApiUsername: target.newApiUsername, selfCheckedAt: target.selfCheckedAt,
+        self = {
+            reused: true,
+            balance: cachedSelf,
+            spent: target.balanceSource === 'self' && typeof target.spent === 'number' ? target.spent : usageSpent,
+            granted: target.grantedSelf != null ? target.grantedSelf : target.granted,
+            newApiUserId: target.newApiUserId,
+            newApiUsername: target.newApiUsername,
+            selfCheckedAt: target.selfCheckedAt,
         };
     }
     const profileDir = prof.dir;
     let selfError = null;
-    if (lib && (profileDir || target.accessToken)) {
+    if (!self && lib && (profileDir || target.accessToken)) {
         try {
             const me = await lib.accountSelf({
                 host,
@@ -6344,33 +6371,90 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 // значение профилю, пока браузер закрыт, — чтобы следующее открытие ЛК
                 // не наткнулось на погашенную сессию и не разлогинилось.
                 if (prof.label) newapiSyncProfile(host, prof.label, 'после чека');
-                return {
-                    status: 'live',
-                    balanceSource: 'self',
+                self = {
                     balance: me.balance,
                     spent: me.spent != null ? me.spent : usageSpent,
-                    usageSpent,
                     granted: me.granted,
                     newApiUserId: me.userId,
                     newApiUsername: me.username,
                     profileUsed: prof.label,
                     selfCheckedAt: new Date().toISOString(),
                 };
+            } else {
+                selfError = me.error || 'self не ответил';
             }
-            selfError = me.error || 'self не ответил';
         } catch (e) { selfError = e.message; }
-    } else if (lib && !profileDir) {
+    } else if (!self && lib && !profileDir) {
         selfError = target.profile
             ? 'профиль не найден на диске'
             : 'профиля аккаунта нет — открой ЛК кнопкой 🌐 и войди, тогда баланс станет точным';
     }
 
-    // Анкер уже проверен ДО self (шаг 2) — он приоритетнее точной цифры. Сюда попадаем
-    // только если анкера нет или он исчерпан расходом; во втором случае причина едет
-    // в UI, чтобы было понятно, почему показывается прикидка.
+    // ── 3. anchor: вписанная руками цифра как ПОПРАВКА к точной ──
+    // Владелец вписывает баланс тогда, когда видит ЛК своими глазами и цифра шлюза его
+    // не устроила (у gorouter /api/user/self отдаёт квоту, расходящуюся с кошельком в
+    // ЛК). Показываем именно вписанное: self его не перебивает — до 20.08 перебивал, и
+    // вписывание выглядело нерабочим.
+    //
+    // Но self ВСЁ РАВНО опрашивается (выше), и это главное. Раньше анкер возвращался
+    // ДО него: цифра умела только убывать на расход, а детект чек-ина смотрит на рост
+    // выдачи в точной цифре — значит у анкерного аккаунта не срабатывал никогда, 🎁
+    // горел вечно и +$25 приходилось вписывать руками (поймано на lankymapping и wa,
+    // 2026-08-20). Итого: balance = вписанное + прирост выдачи с сайта − прирост расхода.
+    let anchorDrained = null;
+    const anchor = Number(target.balanceAnchor);
+    if (isFinite(anchor) && anchor > 0 && target.anchorSpent != null) {
+        const drawn = Math.max(0, round2(usageSpent - Number(target.anchorSpent)));
+        // Пополнение или бонус после вписывания: шлюз поднял выдачу — ту же сумму
+        // прибавляем к вписанному, иначе владельцу пришлось бы вписывать заново после
+        // каждого чек-ина. База — выдача шлюза на момент вписывания; у записей, сделанных
+        // до этого фикса, её нет: прироста тогда нет, а базу проставит первый успешный
+        // self (см. newapiApplyBalance), и со следующего пополнения всё сойдётся.
+        const baseGranted = Number(target.anchorGrantedSelf);
+        const nowGranted = self ? Number(self.granted) : NaN;
+        const topUp = (isFinite(baseGranted) && isFinite(nowGranted) && nowGranted > baseGranted)
+            ? round2(nowGranted - baseGranted) : 0;
+        const left = round2(anchor + topUp - drawn);
+        // Ушло в ноль или минус — привязка устарела (расход обогнал вписанное).
+        // Отдавать её как факт нельзя: показываем self, потом прикидку, и UI просит вписать заново.
+        if (left > 0) {
+            return {
+                status: 'live',
+                balanceSource: 'anchor',
+                balance: left,
+                spent: usageSpent,
+                usageSpent,
+                granted: null,
+                anchorTopUp: topUp,
+                self,           // точная цифра нужна для детекта чек-ина, даже когда показываем анкер
+                selfError,
+            };
+        }
+        anchorDrained = 'вписанный баланс исчерпан расходом — впиши заново';
+    }
+
+    // ── 4. точная цифра, когда анкера нет (или он исчерпан) ──
+    if (self) {
+        return {
+            status: 'live',
+            balanceSource: 'self',
+            reused: !!self.reused,
+            balance: self.balance,
+            spent: self.spent,
+            usageSpent,
+            granted: self.granted,
+            newApiUserId: self.newApiUserId,
+            newApiUsername: self.newApiUsername,
+            profileUsed: self.profileUsed,
+            selfCheckedAt: self.selfCheckedAt,
+            self,
+        };
+    }
+
+    // Анкер исчерпан расходом — причина едет в UI, чтобы было понятно, почему прикидка.
     if (anchorDrained) selfError = selfError || anchorDrained;
 
-    // ── 4. guess: старое угадывание, последний резерв ──
+    // ── 5. guess: старое угадывание, последний резерв ──
     const grant = guessGrant(usageSpent);
     const bonus = Number(target.bonus) > 0 ? Number(target.bonus) : 0;
     const referral = Number(target.referral) > 0 ? Number(target.referral) : 0;
@@ -6477,8 +6561,14 @@ function newapiApplyBalance(target, bal, opts) {
     // сравнить. Именно так пропал забранный бонус faithfulpho: $300 → пауза шлюза →
     // $325, а базы к этому моменту не осталось. grantedSelf обновляется ТОЛЬКО
     // успешным self и переживает любые откаты на прикидку.
-    if (opts && opts.checkin && bal.status === 'live' && bal.balanceSource === 'self') {
-        const nextGranted = Number(bal.granted);
+    // Точная цифра приходит либо самим ответом (balanceSource: 'self'), либо вложенной
+    // в анкерный ответ полем `self`: у аккаунта с вписанным балансом показываем вписанное,
+    // но детект чек-ина обязан смотреть на выдачу ШЛЮЗА. Пока эта ветка требовала
+    // balanceSource === 'self', у анкерных записей 🎁 не гасло никогда.
+    const seen = (bal.self && bal.self.granted != null) ? bal.self
+        : (bal.balanceSource === 'self' ? bal : null);
+    if (opts && opts.checkin && bal.status === 'live' && seen) {
+        const nextGranted = Number(seen.granted);
         const prevGranted = Number(
             target.grantedSelf != null ? target.grantedSelf
                 : (target.balanceSource === 'self' ? target.granted : NaN),
@@ -6504,13 +6594,25 @@ function newapiApplyBalance(target, bal, opts) {
         if (bal.profileUsed && target.profile !== bal.profileUsed) target.profile = bal.profileUsed;
         // Отметка последнего успешного self и расход на тот момент — по ним решается,
         // можно ли переиспользовать точную цифру вместо нового запроса (см. SELF_REUSE_MS).
-        if (bal.balanceSource === 'self') {
-            target.selfCheckedAt = bal.selfCheckedAt || new Date().toISOString();
+        // Ведём её и когда показываем анкер: self к тому моменту уже опрошен, и без
+        // отметки каждый чек анкерного аккаунта зря бил бы по шлюзу.
+        if (seen) {
+            target.selfCheckedAt = seen.selfCheckedAt || new Date().toISOString();
             if (bal.usageSpent != null) target.usageSpentAtSelf = bal.usageSpent;
+            if (typeof seen.balance === 'number') target.selfBalance = seen.balance;
+            if (seen.newApiUserId) target.newApiUserId = seen.newApiUserId;
+            if (seen.newApiUsername) target.newApiUsername = seen.newApiUsername;
+            if (seen.profileUsed && target.profile !== seen.profileUsed) target.profile = seen.profileUsed;
+            // База для прироста выдачи у анкерных записей. Проставляется здесь для тех,
+            // что вписаны до появления поля: цифра при этом не прыгает (прирост с этого
+            // момента = 0), а следующий чек-ин уже прибавится к вписанному сам.
+            if (target.balanceAnchor != null && target.anchorGrantedSelf == null && seen.granted != null) {
+                target.anchorGrantedSelf = Number(seen.granted);
+            }
         }
         // Почему точный баланс недоступен — видно в UI подсказкой, чтобы было понятно,
         // что починить (сопоставить профиль / переоткрыть ЛК).
-        if (bal.balanceSource === 'self') delete target.selfError;
+        if (seen) delete target.selfError;
         else if (bal.selfError) target.selfError = bal.selfError;
         delete target.balanceError;
     } else {
@@ -6680,10 +6782,15 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn,
         const probe = await balanceFn(target, { force: true });
         const probeOk = probe && probe.status === 'live';
         const basis = (probe && probe.usageSpent != null) ? probe.usageSpent : (Number(target.spent) || 0);
+        // Точная цифра из проверочного чека: у аккаунта с уже вписанным балансом она
+        // приезжает вложенной (показываем-то анкер), у остальных — самим ответом.
+        const probeSelf = (probe && probe.self && probe.self.granted != null) ? probe.self
+            : (probe && probe.balanceSource === 'self' ? probe : null);
 
         if (val === null) {
             delete target.balanceAnchor; delete target.anchorSpent;
             delete target.anchoredAt; delete target.anchorFrom;
+            delete target.anchorGrantedSelf;
         } else {
             // Второй (и для аккаунтов без профиля — единственный) способ узнать про
             // чек-ин: владелец вписывает то, что ВИДИТ в ЛК. Полная выдача = остаток +
@@ -6704,6 +6811,12 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn,
             target.anchorSpent = basis;
             target.anchoredAt = new Date().toISOString();
             target.anchorFrom = 'manual';
+            // База прироста: выдача ШЛЮЗА на этот момент. Дальше её рост (чек-ин,
+            // пополнение) прибавляется к вписанному сам — вписывать заново после каждого
+            // бонуса не нужно. Если self не ответил, базу СНОСИМ: оставленная от прошлого
+            // вписывания дала бы двойной учёт уже прибавленного.
+            if (probeSelf && probeSelf.granted != null) target.anchorGrantedSelf = Number(probeSelf.granted);
+            else delete target.anchorGrantedSelf;
         }
 
         let bal;
@@ -6712,11 +6825,13 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn,
             // ДО удаления анкера и всё ещё показывал его.
             bal = await balanceFn(target, { force: true });
         } else {
-            // Показываем ВПИСАННОЕ, даже если точный self отвечает. Он больше не
-            // перебивает анкер (см. приоритет в newapiBalance): раньше ответ подменялся
-            // на probe, и в таблице цифра тут же возвращалась к прежней — выглядело
-            // как «вписывание не работает». Статус мёртвого ключа не подменяем, но и
+            // Показываем ВПИСАННОЕ, даже если точный self отвечает: он опрашивается, но
+            // анкер не перебивает (см. newapiBalance). Раньше ответ подменялся на probe,
+            // и в таблице цифра тут же возвращалась к прежней — выглядело как
+            // «вписывание не работает». Статус мёртвого ключа не подменяем, но и
             // ошибку чека не тащим в ответ — сохранение состоялось.
+            // `self` прокидываем внутрь, чтобы applyFn обновил кеш точной цифры и базу
+            // чек-ина: без этого следующий чек снова пошёл бы на шлюз.
             bal = {
                 status: (probe && probe.status === 'dead') ? 'dead' : 'live',
                 balanceSource: 'anchor',
@@ -6724,14 +6839,17 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn,
                 spent: basis,
                 usageSpent: basis,
                 granted: null,
+                self: probeSelf,
             };
         }
         applyFn(target, bal);
         save(sessions);   // целиком: delete полей мержем (Object.assign) не выражается
         logLine(`${tag} set-balance: ***${key.slice(-6)} → ${val === null ? 'сброс анкера' : '$' + val}${probeOk ? '' : ' (чек не ответил)'}`);
-        const selfSaw = (val !== null && probeOk && probe.balanceSource === 'self' && probe.balance != null
-            && round2(probe.balance) !== round2(val))
-            ? round2(probe.balance) : null;
+        // Расхождение с цифрой шлюза берём из probeSelf, а не из probe.balanceSource:
+        // при перевписывании поверх анкера ответ приходит анкерным, а точная цифра — внутри.
+        const selfSaw = (val !== null && probeOk && probeSelf && probeSelf.balance != null
+            && round2(probeSelf.balance) !== round2(val))
+            ? round2(probeSelf.balance) : null;
         const note = (val !== null && !probeOk)
             ? `баланс $${round2(val)} сохранён; расход перепроверить не удалось (${(probe && probe.error) || 'шлюз не ответил'})`
             : selfSaw !== null
@@ -7512,6 +7630,44 @@ async function handleArCheckinConfig(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// POST /__switch/api/ar/checkin-mark { id, on } → поставить/снять отметку «бонус забран».
+//
+// Зачем ручная отметка, если бэкенд умеет детектить сам. Детект видит ТОЛЬКО рост выдачи
+// между двумя точными чеками, и есть случаи, когда роста не увидеть в принципе:
+//   • бонус налился, пока точной цифры не было вовсе (пауза WAF, кука ЛК истекла, у записи
+//     стоял анкер и глушил self — так пропали отметки у lankymapping и wa 2026-08-20);
+//   • владелец забрал бонус вне дашборда, а первый чек после этого уже застал новую выдачу
+//     как «исходную» — сравнивать не с чем;
+//   • шлюз перестал наливать этому аккаунту, и 🎁 будет гореть вечно, вводя в заблуждение.
+// Восстановить пропущенный рост нечем — цифра уже новая. Поэтому владельцу нужен способ
+// сказать «забрал», иначе колонка врёт, а врущая колонка хуже отсутствующей.
+//
+// `on: false` снимает отметку (ошибочно нажал / бонус не дали). Штамп ставим ТЕКУЩИМ
+// временем, а не началом окна: важно лишь, что он внутри текущего окна.
+async function handleArCheckinMark(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const on = body.on === undefined ? true : !!body.on;
+        const sessions = arLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (on) {
+            target.checkinAt = new Date().toISOString();
+            target.checkinFrom = 'manual';
+        } else {
+            delete target.checkinAt; delete target.checkinFrom;
+        }
+        // Мержем, а не пишем целиком: параллельный батч «💳 Балансы всех» держит в памяти
+        // свою копию пула. checkinAt/checkinFrom нет в BALANCE_CLEARABLE, поэтому отметка
+        // переживает и его сохранение.
+        arSaveMerge(target);
+        logLine(`agentrouter чек-ин: ${target.name || target.email || id} — отметка ${on ? 'поставлена' : 'снята'} вручную`);
+        jsonRes(res, 200, { ok: true, checkinAt: target.checkinAt || null, checkinFrom: target.checkinFrom || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // ───── GoRouter — автономная вкладка (NewAPI, GitHub-вход) ─────────────
 // Свой пул ключей (gorouter-sessions.json), свой активный ключ/модель.
 // Активация БЕЗ локального прокси: gorouter.app сам Anthropic-совместимый,
@@ -7734,7 +7890,13 @@ async function handleGoSessionOpen(req, res) {
         // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
         newapiSyncProfile('gorouter.app', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
-        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`gorouter session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`gorouter session/open ERR [${label}]: ${String(d).trim()}`));
@@ -8494,7 +8656,13 @@ async function handleTbSessionOpen(req, res) {
         // браузер уходит на refresh с погашенным значением и разлогинивается.
         newapiSyncProfile('tabitoken.com', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
-        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`tabi session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`tabi session/open ERR [${label}]: ${String(d).trim()}`));
@@ -9090,7 +9258,13 @@ async function handleXpSessionOpen(req, res) {
         // браузер уходит на refresh с погашенным значением и разлогинивается.
         newapiSyncProfile('xpeach.codes', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
-        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`xpeach session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`xpeach session/open ERR [${label}]: ${String(d).trim()}`));
@@ -10225,6 +10399,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/key')      return handleArSetKey(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-mark')   return handleArCheckinMark(req, res);
 
     // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157) — реальное время без рестарта.
     if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);

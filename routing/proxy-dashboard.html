@@ -5503,19 +5503,52 @@ function arLeftFmt(msLeft) {
 // Готовый подарок крупнее и в полную яркость, забранная коробка приглушена — глаз
 // цепляет только те строки, куда идти. Дедлайн уходит в data-атрибут: текст
 // перерисовывает общий тикер раз в секунду, строку заново не рендерим (приём Grok-кулдауна).
+//
+// Ячейка кликабельна — это РУЧНАЯ отметка, а не поход за бонусом (за бонусом — кнопка 🎁
+// в Actions, она открывает браузер). Нужна там, где детект бессилен: рост выдачи виден
+// только между двумя точными чеками, а бонус мог налиться в паузу WAF, под анкером или
+// вообще вне дашборда. Тогда колонка врёт, и починить это может только владелец.
 function arCheckinCell(s) {
   const st = arCheckinState(s);
   if (st.skip) return '<span class="text-faint text-[11px]">—</span>';
   const bonus = arCheckinCfg().bonusUsd;
+  const kJ = JSON.stringify(s.id);
   if (st.ready) {
-    const tip = st.at
+    const tip = (st.at
       ? `+$${bonus} можно забирать: забирали ${agoShort(st.at)} назад, но сутки сменились`
-      : `+$${bonus} можно забирать — ещё не отмечался, значит бонус на месте`;
-    return `<span class="text-[15px] leading-none" title="${esc(tip)}">🎁</span>`;
+      : `+$${bonus} можно забирать — ещё не отмечался, значит бонус на месте`)
+      + ' · клик = отметить забранным вручную (если бонус уже взят, а рост выдачи не поймался)';
+    return `<button onclick='arCheckinMark(${kJ}, true)' title="${esc(tip)}"
+      class="text-[15px] leading-none hover:opacity-70 transition">🎁</button>`;
   }
-  const from = s.checkinFrom === 'anchor' ? 'по вписанному вручную балансу' : 'по точному балансу из ЛК';
-  const tip = `+$${bonus} уже забрали ${agoShort(st.at)} назад (${from}) · новый подарок после ${arCheckinCfg().resetHhmmMsk} МСК`;
-  return `<span class="text-faint text-[11px] whitespace-nowrap opacity-60" data-ar-checkin="${st.deadline}" title="${esc(tip)}">📦 ${arLeftFmt(st.deadline - Date.now())}</span>`;
+  const from = s.checkinFrom === 'anchor' ? 'по вписанному вручную балансу'
+    : s.checkinFrom === 'manual' ? 'отмечено вручную'
+    : 'по точному балансу из ЛК';
+  const tip = `+$${bonus} уже забрали ${agoShort(st.at)} назад (${from}) · новый подарок после ${arCheckinCfg().resetHhmmMsk} МСК`
+    + ' · клик = снять отметку';
+  return `<button onclick='arCheckinMark(${kJ}, false)' data-ar-checkin="${st.deadline}" title="${esc(tip)}"
+    class="text-faint text-[11px] whitespace-nowrap opacity-60 hover:opacity-100 transition">📦 ${arLeftFmt(st.deadline - Date.now())}</button>`;
+}
+
+// Ручная отметка «бонус забран / не забран». Обновляем state точечно и перерисовываем —
+// иначе колонка и счётчик 🎁N в сайдваре разъехались бы с диском до F5.
+async function arCheckinMark(id, on) {
+  try {
+    const res = await fetch('/__switch/api/ar/checkin-mark', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, on }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const s = (state.agentrouter || []).find(x => x.id === id);
+    if (s) {
+      if (data.checkinAt) { s.checkinAt = data.checkinAt; s.checkinFrom = data.checkinFrom; }
+      else { delete s.checkinAt; delete s.checkinFrom; }
+    }
+    renderAr(); renderArGauge(); arRenderCheckinCard(); arSetNavCount();
+    toast(on ? `📦 отмечено вручную: бонус забран, следующий после ${arCheckinCfg().resetHhmmMsk} МСК`
+             : '🎁 отметка снята — подарок снова считается доступным', 'success', 4000);
+  } catch (e) { toast('отметка чек-ина: ' + e.message, 'error', 8000); }
 }
 
 // Карточка в шапке: сводка + настройка границы. Тикающую цифру держим в отдельном
@@ -5993,6 +6026,21 @@ function renderAr() {
   );
 }
 
+// Перенос точной цифры из ответа чека в state. Ответ анкерного аккаунта показывает
+// вписанное, а цифру шлюза везёт вложенным `self` — без этого переноса тултип и база
+// прироста в UI отставали до F5, хотя на диске уже обновились.
+function applySelfSeen(s, data) {
+  const seen = (data && data.self) || (data && data.balanceSource === 'self' ? data : null);
+  if (!s || !seen) return;
+  if (typeof seen.balance === 'number') s.selfBalance = seen.balance;
+  if (seen.granted != null) {
+    s.grantedSelf = seen.granted;
+    if (s.balanceAnchor != null && s.anchorGrantedSelf == null) s.anchorGrantedSelf = seen.granted;
+  }
+  if (seen.selfCheckedAt) s.selfCheckedAt = seen.selfCheckedAt;
+  delete s.selfError;
+}
+
 // Ячейка баланса. Данные берём из самого объекта сессии (персистентный кеш из sessions.json).
 // dead → 🔴; есть balance → $XX.XX цветом по доле остатка; иначе кнопка 💰 для чека.
 // Вторая строка — кликабельная выдача «из $175»: у разных аккаунтов она разная (125/175/личный
@@ -6037,9 +6085,16 @@ function balanceSourceBadge(s) {
     const drawn = (typeof s.spent === 'number' && typeof s.anchorSpent === 'number')
       ? Math.max(0, s.spent - s.anchorSpent) : 0;
     const when = s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '';
+    // Прирост выдачи шлюза с момента вписывания (чек-ин, пополнение) — он прибавлен
+    // к вписанному автоматически, и это надо показать: иначе цифра больше вписанной
+    // выглядит как ошибка. Считается из тех же полей, что и на сервере.
+    const topUp = (Number(s.grantedSelf) > Number(s.anchorGrantedSelf))
+      ? Number(s.grantedSelf) - Number(s.anchorGrantedSelf) : 0;
     tip = `Вписан вручную: $${(s.balanceAnchor ?? 0).toFixed(2)}${when ? ` (${when})` : ''}`
       + `, с тех пор потрачено $${drawn.toFixed(2)}`
+      + (topUp > 0 ? ` · шлюз налил +$${topUp.toFixed(2)} после вписывания, уже прибавлено` : '')
       + ` · перекрывает цифру шлюза, пустое поле в ✏️ вернёт точный баланс`
+      + (typeof s.selfBalance === 'number' ? ` · шлюз сейчас показывает $${s.selfBalance.toFixed(2)}` : '')
       + `${s.selfError ? ` · точный недоступен: ${s.selfError}` : ''}`;
   } else {
     tip = 'Прикидка: выдача угадана, точной цифры нет.'
@@ -6132,11 +6187,12 @@ async function newapiSetBalanceUI(prov, api_key, list, rerender) {
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     if (s) {
-      if (val === null) { delete s.balanceAnchor; delete s.anchorSpent; delete s.anchoredAt; }
-      else { s.balanceAnchor = val; s.anchorSpent = data.usageSpent; s.anchoredAt = new Date().toISOString(); }
+      if (val === null) { delete s.balanceAnchor; delete s.anchorSpent; delete s.anchoredAt; delete s.anchorGrantedSelf; }
+      else { s.balanceAnchor = val; s.anchorSpent = data.usageSpent; s.anchoredAt = new Date().toISOString(); delete s.anchorGrantedSelf; }
       if (data.status === 'live') {
         s.spent = data.spent; s.balance = data.balance;
         s.balanceSource = data.balanceSource; s.granted = data.granted;
+        applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
     }
@@ -6257,6 +6313,7 @@ async function arCheckBalance(api_key) {
         s.spent = data.spent; s.balance = data.balance;
         s.balanceSource = data.balanceSource; s.granted = data.granted;
         s.accessUntil = data.accessUntil; s.selfError = data.selfError;
+        applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
       // Метка чек-ина приходит вместе с балансом: именно этот чек её и мог поставить
@@ -6516,12 +6573,18 @@ function closeGhSeedModal() {
 
 function newapiSeedRender(data) {
   const rows = [];
-  // Годные — сверху: занятые/мёртвые/без сессии всё равно нельзя выбрать.
-  const ok = a => !a.usedHere && a.status !== 'dead' && a.hasSession && !a.allSourcesBusy;
-  const list = [...(data.accounts || [])].sort((a, b) => (ok(b) ? 1 : 0) - (ok(a) ? 1 : 0));
+  // Годные — сверху. Засвеченные тоже выбираемы (с подтверждением), поэтому в «годные»
+  // они не входят, но и в мёртвый низ списка не падают: между ними и запретами разница.
+  const hardBlock = a => a.inPool || a.status === 'dead' || !a.hasSession || a.allSourcesBusy;
+  const ok = a => !hardBlock(a) && !a.usedHere;
+  const rank = a => ok(a) ? 0 : hardBlock(a) ? 2 : 1;
+  const list = [...(data.accounts || [])].sort((a, b) => rank(a) - rank(b));
   for (const a of list) {
     const st = GH_STATUS_META[a.status] || GH_STATUS_META.unknown;
-    const why = a.usedHere ? `уже есть на ${data.tag} — вход откроет старый аккаунт`
+    // Запрет — только то, что физически не даст завести аккаунт. «Засвечен» сюда НЕ входит:
+    // профиль на диске переживает удаление записи, а регистрация могла и не состояться,
+    // поэтому это предупреждение с выбором, а не отказ (разбор 2026-08-21).
+    const why = a.inPool ? `запись в пуле уже есть (${a.poolStatus || '—'}) — открой её кнопкой 🌐`
       : a.status === 'dead' ? 'помечен dead'
       : !a.hasSession ? 'сессии на диске нет — залогинься во вкладке GitHub'
       : a.allSourcesBusy ? 'профиль с сессией открыт в браузере — закрой его'
@@ -6530,12 +6593,36 @@ function newapiSeedRender(data) {
       : a.sessionFrom ? `${a.sessionFrom}${a.sessionAgeDays !== null ? ` · ${a.sessionAgeDays} дн.` : ''}`
       : '—';
     const idJ = JSON.stringify(a.id).replace(/'/g, '&#39;');
-    rows.push(why
-      ? `<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated/40 border-line-soft opacity-50 cursor-not-allowed" title="${esc(why)}">
+    if (why) {
+      rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated/40 border-line-soft opacity-50 cursor-not-allowed" title="${esc(why)}">
            <span class="text-xs text-faint truncate max-w-[18ch]">🐙 ${esc(a.nickname)}</span>
            <span class="text-[10px] text-faint truncate max-w-[26ch]">${esc(why)}</span>
-         </div>`
-      : `<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated border-line-soft hover:border-azure/60 cursor-pointer transition"
+         </div>`);
+      continue;
+    }
+    if (a.usedHere) {
+      // Две кнопки вместо одного клика: от выбора зависит, потеряется ли реф-кредит.
+      // «войти» — аккаунт у провайдера есть, регистрация ответила бы «уже создан».
+      // «регистрация» — аккаунта нет (была закрыта, удалён), нужна рефка.
+      const where = (a.hereProfiles || []).map(p => p.label + (p.archived ? ' (архив)' : '')).join(', ');
+      const tip = `на этом хосте остался профиль${where ? `: ${where}` : ''} — аккаунт скорее всего уже создан`;
+      rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated border-amber/40" title="${esc(tip)}">
+           <span class="flex items-center gap-1.5 min-w-0">
+             <span class="text-xs text-ink truncate max-w-[14ch]">🐙 ${esc(a.nickname)}</span>
+             <span class="text-[10px] text-amber shrink-0" title="${esc(tip)}">⚠ засвечен</span>
+           </span>
+           <span class="flex items-center gap-1 shrink-0">
+             <button onclick='newapiAddGithub(${idJ}, { force: true, mode: "console" })'
+               title="Аккаунт у провайдера уже есть: заселить сессию и открыть ВХОД (кошелёк). Реф-кредит тут не при чём — аккаунт давно создан."
+               class="text-[10px] px-1.5 py-px rounded border bg-azure/15 border-azure/50 text-azure hover:bg-azure/25 transition">→ вход</button>
+             <button onclick='newapiAddGithub(${idJ}, { force: true, mode: "register" })'
+               title="Аккаунта у провайдера НЕТ (регистрация была закрыта / аккаунт удалён): открыть регистрацию по рефке, чтобы не потерять реф-кредит."
+               class="text-[10px] px-1.5 py-px rounded border bg-white/5 border-white/15 text-muted hover:border-amber/60 hover:text-amber transition">→ рег</button>
+           </span>
+         </div>`);
+      continue;
+    }
+    rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated border-line-soft hover:border-azure/60 cursor-pointer transition"
              onclick='newapiAddGithub(${idJ})'>
            <span class="text-xs text-ink truncate max-w-[18ch]">🐙 ${esc(a.nickname)}</span>
            <span class="flex items-center gap-1.5 shrink-0">
@@ -6545,38 +6632,47 @@ function newapiSeedRender(data) {
          </div>`);
   }
   const free = list.filter(ok).length;
+  const warned = list.filter(a => !hardBlock(a) && a.usedHere).length;
   $('gh-seed-hint').textContent = (free
-    ? `свободно ${free} из ${list.length} · пароль и 2FA не понадобятся`
-    : `свободных нет: все ${list.length} либо уже засвечены здесь, либо без живой сессии`)
+    ? `свободно ${free} из ${list.length}${warned ? ` · +${warned} засвеченных (можно взять с выбором вход/рег)` : ''} · пароль и 2FA не понадобятся`
+    : warned
+      ? `свободных нет, но ${warned} засвеченных доступны: выбери «вход», если аккаунт у провайдера есть, иначе «рег»`
+      : `свободных нет: все ${list.length} либо уже в пуле, либо без живой сессии`)
     + (data.building ? ' · индекс обновляется в фоне, список обновится сам' : '');
   $('gh-seed-list').innerHTML = rows.join('') || '<div class="text-xs text-faint px-1 py-3">хранилище GitHub пусто — добавь аккаунты во вкладке GitHub</div>';
 }
 
-async function newapiAddGithub(ghId) {
+async function newapiAddGithub(ghId, opts) {
   const prov = ghSeedProv;
   const p = NEWAPI_SEED_PROV[prov];
   if (!p) return;
+  const force = !!(opts && opts.force);
+  const mode = opts && opts.mode;
   $('gh-seed-list').innerHTML = '<div class="text-xs text-faint px-1 py-3">снимаю GitHub-сессию (запускаю браузер headless, до минуты)…</div>';
   $('gh-seed-hint').textContent = 'не закрывай окно';
   try {
     const res = await fetch(`/__switch/api/${prov}/add-github`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ghId }),
+      body: JSON.stringify({ ghId, force }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     closeGhSeedModal();
     toast(`🐙 ${data.ghLogin}: аккаунт создан, сессия из ${data.from} (${data.cookieCount} кук)`, 'success', 4000);
     // Браузер открываем существующим роутом — он же синхронизирует куки и ставит отметку визита.
+    // mode передаём явно: у безключевой записи роут сам выбрал бы регистрацию, а для
+    // засвеченного ника нужен вход — иначе провайдер ответит «аккаунт уже создан».
     const opened = await fetch(`/__switch/api/${prov}/session/open`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: data.id }),
+      body: JSON.stringify(mode ? { id: data.id, mode } : { id: data.id }),
     }).then(r => r.json()).catch(e => ({ error: e.message }));
     if (opened.error) toast('браузер не открылся: ' + opened.error, 'error');
-    else toast('🌐 браузер открыт на регистрации — жми «Continue with GitHub»', 'info', 6000);
+    else toast(mode === 'console'
+      ? '🌐 браузер открыт на входе — жми «Continue with GitHub», попадёшь в существующий аккаунт'
+      : '🌐 браузер открыт на регистрации — жми «Continue with GitHub»', 'info', 6000);
     await p.reload();
   } catch (e) {
-    toast('заселение: ' + e.message, 'error', 7000);
+    toast('заселение: ' + e.message, 'error', 9000);
     newapiSeedPick(prov);   // вернуть список, чтобы видеть причину и выбрать другой
   }
 }
@@ -7116,6 +7212,7 @@ async function goCheckBalance(api_key) {
       if (data.status === 'live') {
         s.spent = data.spent; s.balance = data.balance;
         s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
     }
@@ -7633,6 +7730,7 @@ async function tbCheckBalance(api_key) {
       if (data.status === 'live') {
         s.spent = data.spent; s.balance = data.balance;
         s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
     }
@@ -8164,6 +8262,7 @@ async function xpCheckBalance(api_key) {
       if (data.status === 'live') {
         s.spent = data.spent; s.balance = data.balance;
         s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
     }

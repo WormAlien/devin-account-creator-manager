@@ -167,15 +167,20 @@ function log(msg) {
 
 // --- Runtime-конфиг хеджинга (меняется на лету через POST /__config) ---
 // Хедж: если шлюз молчит дольше cfg.hedgeMs, пускаем ПАРАЛЛЕЛЬНЫЙ дубль запроса и
-// берём того, кто ответил первым, остальных рвём. Дефолты (20с / 2 попытки)
-// замерены на живом agentrouter (v1tusha, 15.08.2026): hedgeMs=5000 + 5 попыток
-// дали ~3x нагрузку и рост ответов 8с → 15-30с; 20с/2 вернули 6.6–8.6с.
-// 0 = выключить. CONFIG_FILE кейсуется по PORT — у нас 3 экземпляра прокси на
-// одном скрипте (:20133 agentrouter, :20155 tabi, :20156 gorouter).
+// берём того, кто ответил первым, остальных рвём. Дефолты замерены на живом
+// agentrouter (v1tusha, 15.08.2026): hedgeMs=5000 + 5 попыток дали ~3x нагрузку и
+// рост ответов 8с → 15-30с; 20с/2 вернули 6.6–8.6с. Обкатанный компромисс, который
+// теперь и едет из коробки на всех вкладках дашборда — **12с / 3 попытки / пре-коммит
+// 10с**: хедж срабатывает раньше 20с (меньше висяков на молчащем шлюзе), но не
+// лавиной, а третья попытка добирает залипшие. Менять — в дашборде (POST /__config,
+// без рестарта), файл keepalive-config-<PORT>.json переживает рестарт и имеет
+// приоритет над этими дефолтами. 0 = выключить.
+// CONFIG_FILE кейсуется по PORT — у нас 4 экземпляра прокси на одном скрипте
+// (:20133 agentrouter, :20155 tabi, :20156 gorouter, :20157 xpeach).
 const CONFIG_FILE = process.env.CONFIG_FILE
   || path.join(__dirname, `keepalive-config-${Number(process.env.PORT || 8787)}.json`);
 const cfg = {
-  hedgeMs: Number(process.env.HEDGE_MS || 20000),
+  hedgeMs: Number(process.env.HEDGE_MS || 12000),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || 3),
   preCommitMs: Number(process.env.PRE_COMMIT_MS || 10000),
 };

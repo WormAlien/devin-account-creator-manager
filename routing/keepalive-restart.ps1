@@ -19,8 +19,10 @@ $script = Join-Path $dir 'keepalive-proxy.js'
 $profileDir = $env:USERPROFILE
 
 # Same env transparent-proxy.js passes when it spawns these instances.
+# Хедж/попытки/пре-коммит держим равными дефолтам keepalive-proxy.js (12с / 3 / 10с),
+# иначе ручной рестарт молча менял бы настройки вкладки.
 $common = @{
-  IDLE_MS = '5000'; MAX_ATTEMPTS = '2'; HEDGE_MS = '20000'; RETRY_DELAY_MS = '1500';
+  IDLE_MS = '5000'; MAX_ATTEMPTS = '3'; HEDGE_MS = '12000'; RETRY_DELAY_MS = '1500';
   COUNT_TOKENS_FALLBACK = '1'; PRE_COMMIT_MS = '10000'; UPSTREAM_TIMEOUT_MS = '600000';
 }
 $perPort = @{

@@ -27,9 +27,11 @@
 
 ## Что это
 
-Всё под одной крышей: автореги + веб-дашборд на `:8200` (`routing/transparent-proxy.js`), который переписывает `~/.claude/settings.json` и менеджит пулы ключей. Claude Code читает из `settings.json` `ANTHROPIC_BASE_URL` + ключ — переключение бэкенда = подмена этих полей.
+Всё под одной крышей: автореги + веб-дашборд на `:8200` (`routing/transparent-proxy.js`), который переписывает `~/.claude/settings.json` и менеджит пулы ключей.
 
-Три актуальных провайдера — **AgentRouter**, **GoRouter**, **Tabi Token** — ходят через локальные **SSE keepalive-прокси** (`routing/keepalive-proxy.js`), которые держат SSE-поток и режут `[1m]`-суффиксы моделей. WAF-провайдеры (AgentRouter) пускают только «настоящие» запросы Claude Code, поэтому ключ пишется литералом в `ANTHROPIC_AUTH_TOKEN`, а баланс каждого ключа дашборд считает сам (`grant + bonus − spent`) и кеширует в `*-sessions.json`.
+**Адрес у Claude Code один и навсегда — `http://127.0.0.1:20100`** (front-door, `routing/frontdoor-proxy.js`, режим по умолчанию). Вбиваешь его один раз в любой клиент — терминал, Warp, Orca, Claude Code Desktop → Third-Party Inference — и больше не трогаешь: активный бэкенд лежит в `~/.claude/active-backend.json`, дашборд меняет только его. Переключение провайдера **не требует перезапуска ни одной сессии**, что критично для Orca (несколько pty с `claude` сразу). Реальный ключ во внешний клиент не нужен (`ANTHROPIC_AUTH_TOKEN=dummy`) — его подставляет прокси. Плата: пока режим включён, дашборд должен быть запущен, он и поднимает `:20100`. Тумблер и адрес для копирования — вкладка «Настройки»; подробности в [`ARCHITECTURE.md`](ARCHITECTURE.md#front-door-20100--переключение-провайдера-без-рестарта-claude-code).
+
+Три актуальных провайдера — **AgentRouter**, **GoRouter**, **Tabi Token** — ходят через локальные **SSE keepalive-прокси** (`routing/keepalive-proxy.js`), которые держат SSE-поток и режут `[1m]`-суффиксы моделей. WAF-провайдеры (AgentRouter) пускают только «настоящие» запросы Claude Code, поэтому ключ подставляет прокси (он лежит в `~/.claude/<префикс>-active-key.txt`, а не в `settings.json`), а баланс каждого ключа дашборд считает сам (`grant + bonus − spent`) и кеширует в `*-sessions.json`.
 
 Фишка: **статус-лайн Claude Code** (`routing/statusline-autoreger.sh`) показывает внизу CLI живой баланс активного ключа (`$`) и контекстное окно (`⧉`), при устаревшем кеше сам дёргает рефреш через дашборд. Установщик подключает его сам; на готовой установке — `node tools/enable-statusline.js` и перезапуск `claude`.
 

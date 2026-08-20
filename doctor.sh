@@ -55,6 +55,19 @@ done
 echo
 echo "--- 8. Дашборд: кто слушает порты ---"
 netstat -ano 2>/dev/null | grep -E "LISTENING" | grep -E ":(8200|20126|20128) " || echo "порты 8200/20126/20128 никто не слушает"
+# Front-door :20100 — вход Claude Code по умолчанию. Если он лежит, а settings.json
+# на него смотрит, CC не работает НИ с одним провайдером, и это первое, что надо видеть.
+echo
+echo "--- 8b. Front-door :20100 (вход Claude Code) ---"
+FD_ST="$(curl -s --max-time 3 http://127.0.0.1:20100/__frontdoor/api/status 2>/dev/null)"
+if [ -n "$FD_ST" ]; then
+  echo "жив: $FD_ST"
+else
+  echo "НЕ ОТВЕЧАЕТ. Если в settings.json стоит http://127.0.0.1:20100 — Claude Code сейчас мёртв."
+  echo "  Лечение: запустить дашборд (он поднимает :20100 сам) либо кнопка «🔄 поднять» в Health."
+fi
+[ -f "$HOME/.claude/active-backend.json" ] && echo "активный бэкенд: $(tr -d '\n' < "$HOME/.claude/active-backend.json")" \
+  || echo "active-backend.json нет — дашборд ещё не выбирал провайдера (front-door будет отвечать 503)"
 echo
 echo "--- 9. Node ---"
 node --version 2>&1; npm --version 2>&1

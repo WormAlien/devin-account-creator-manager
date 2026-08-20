@@ -3,14 +3,25 @@
 Пример рабочего `~/.claude/settings.json` (НЕ `.claude/settings.json` внутри проекта!).
 Скопируй `claude-settings.example.json` в `~/.claude/settings.json` и поправь под себя.
 
-Switcher на `:8200` правит только `apiKeyHelper` + `env.ANTHROPIC_BASE_URL` +
-`env.ANTHROPIC_API_KEY` — всё остальное (TTL=0, отключённый авто-апдейт, модель)
-должно уже стоять в файле, иначе FreeModel/Aerolink API Helper не заведётся.
+**Адрес здесь один и навсегда — `http://127.0.0.1:20100`** (front-door, режим по умолчанию,
+`routing/frontdoor.json`). Провайдера выбирает дашборд `:8200`, он пишет активный бэкенд в
+`~/.claude/active-backend.json`, а этот файл больше не меняется. Поэтому тот же адрес можно
+вбить в Warp, Orca, Claude Code Desktop (Third-Party Inference) — переключение бэкенда не
+требует перезапуска ни одной сессии. Реальный ключ не нужен: `ANTHROPIC_AUTH_TOKEN=dummy`,
+ключ подставляет прокси. Пока дашборд не записал бэкенд, запросы получают `503` с текстом
+«открой дашборд и выбери провайдера».
+
+Switcher на `:8200` в этом режиме правит только `~/.claude/active-backend.json` (плюс `model`
+при смене модели) — всё остальное в файле должно уже стоять.
 
 ## Ловушки (почему поля стоят именно так)
 
-- **`CLAUDE_CODE_API_KEY_HELPER_TTL_MS: "0"`** — `0` = читать ключ из `apiKeyHelper`
-  на КАЖДОМ запросе. Без этого ротация ключей на лету не работает.
+- **Ни `apiKeyHelper`, ни `ANTHROPIC_API_KEY` в шаблоне нет.** В режиме front-door они не
+  нужны и мешают: чокпоинт `writeSettings()` их всё равно снесёт, а ключ прокси читает сам из
+  `~/.claude/<префикс>-active-key.txt`. Вместе с `apiKeyHelper` уходит и
+  `CLAUDE_CODE_API_KEY_HELPER_TTL_MS: "0"`, и грабли вида «`cat` не в PATH», «кириллица в
+  пути», «TTL не 0 — ключ залип». Если выключаешь front-door тумблером, helper вернёт
+  обработчик активации того шлюза, которому он нужен.
 
 - **Версию Claude Code фиксировать не надо.** Раньше в шаблоне стояли
   `DISABLE_AUTOUPDATER: "1"` + `autoUpdates: false` — считалось, что версии новее

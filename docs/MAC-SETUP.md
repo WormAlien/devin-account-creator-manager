@@ -75,13 +75,27 @@ bash install-mac.sh
 
 - добавление аккаунтов в пулы (AgentRouter / GoRouter / Tabi Token / GitHub …),
 - активация ключа → настройка `~/.claude/settings.json` одним кликом,
-- проверка баланса — точная, куками профиля Chromium. **Ключ куки на macOS берётся
-  иначе, чем на Windows** (Keychain «Chromium Safe Storage» + PBKDF2-SHA1/1003 и
-  AES-128-CBC вместо Local State/DPAPI + AES-256-GCM) — ветка `darwin` в
-  `routing/lib/newapi-account.js`. Пока её не было, точный баланс молча падал в
-  «~ прикидку». Диагностика: `node tools/mac-cookie-probe.js`,
+- **точный баланс** — куками профиля Chromium. Схема шифрования на macOS своя:
+  БД в `Default/Cookies` (а не `Default/Network/Cookies`), ключ —
+  `PBKDF2-SHA1('mock_password', 'saltysalt', 1003, 16)`, значение — `'v10'` +
+  AES-128-CBC, IV = 16 пробелов (на Windows — DPAPI + AES-256-GCM). Пароль именно
+  `mock_password`, потому что Playwright запускает Chromium с
+  `--use-mock-keychain`. Проверено: 4 аккаунта, точные суммы за 2.7–6.2 с.
+- **статус-лайн Claude Code** — провайдер/модель, баланс, контекстное окно.
+  Включается установщиком; на готовой установке — `node tools/enable-statusline.js`
+  и перезапуск `claude`.
 - открытие ЛК в браузере (Playwright chromium),
 - официальный Claude по OAuth (код уже умеет читать macOS Keychain).
+
+## Диагностика, если что-то не сходится
+
+| Команда | Что покажет |
+| --- | --- |
+| `node tools/mac-balance-probe.js ar` | весь путь точного баланса по шагам: профиль → ключ → куки → ответ сервера (`go`/`tb`/`xp` — другие провайдеры) |
+| `node tools/mac-cookie-probe.js` | подбор ключа куки: перебирает пароли × итерации × шифры и печатает форму данных |
+| `node tools/enable-statusline.js` | включает статус-лайн в `~/.claude/settings.json` (с бэкапом) |
+
+Оба пробника не печатают значения куки — только имена и длины.
 
 ## Ограничения / примечания
 

@@ -31,8 +31,13 @@ fi
 
 # Shim-ы в начало PATH: transparent-proxy и дочерние процессы найдут их раньше системных
 SHIM_DIR="$ROOT/mac-support/shims"
-# node зовёт их через execFile напрямую — нужен exec-bit (git с Windows его не хранит)
+# Права: exec-bit теперь хранится в индексе git (100755), но старые копии репо
+# приехали как 100644, а `git config core.fileMode false` (нужен, иначе chmod ломает
+# git pull) заставляет git молчать о разнице. Поэтому восстанавливаем сами — иначе
+# двойной клик по DASHBOARD.command падает с «нет прав доступа», а node не может
+# позвать shim-ы через execFile.
 chmod +x "$SHIM_DIR"/* 2>/dev/null
+chmod +x "$ROOT"/routing/*.sh "$ROOT/DASHBOARD.command" "$ROOT/install-mac.sh" 2>/dev/null
 export PATH="$SHIM_DIR:$PATH"
 
 # sqlite3 на macOS встроен в систему — говорим коду, где его искать

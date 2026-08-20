@@ -1265,9 +1265,14 @@ Bootstrap-блок в начале скрипта: если рядом нет `p
 вместо ответа юзера. Так же бутстрапится Homebrew.
 
 Нюансы:
-- git с Windows **не хранит exec-bit** → `chmod +x` ставит `install-mac.sh`, а
-  `restart-dashboard.sh` самовосстанавливает права на shim-ы при каждом запуске
-  (node зовёт их через `execFile` напрямую, без шелла).
+- git с Windows **не выставляет exec-bit сам**, поэтому он прописан прямо в индексе
+  (`git update-index --chmod=+x` → режим `100755` у `DASHBOARD.command`, `install*.sh`,
+  `routing/*.sh`, `mac-support/shims/*`). До этого файлы приезжали как `100644`:
+  права ставил только установщик, и первый же `git pull`, задевший
+  `DASHBOARD.command`, снова их сбивал — двойной клик падал с «нет прав доступа»
+  (поймано живьём после переноса папки). Плюс `restart-dashboard.sh` восстанавливает
+  права на shim-ы, `routing/*.sh` и `DASHBOARD.command` при каждом старте — на
+  случай старых копий репо, где в индексе ещё `100644`.
 - Балансы AR/GO/TB — чистый HTTP через `keepalive-proxy.js`, там Windows-вызовов
   нет; OAuth Keychain macOS уже обработан кодом (transparent-proxy.js ~282-283).
 - `better-sqlite3`/`node-pty` собираются на Mac автоматически (нужен Xcode CLT);

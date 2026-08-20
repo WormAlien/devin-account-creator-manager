@@ -1,59 +1,49 @@
 #!/usr/bin/env node
 // Включить статус-лайн Autoreger в ~/.claude/settings.json.
 //
-// Зачем отдельный скрипт: в claude-settings.example.json секции statusLine нет, а
-// установщик копирует шаблон только если settings.json ещё не существует. У всех,
-// кто уже поставился, статус-лайн выключен, и включать надо в СУЩЕСТВУЮЩЕМ файле,
-// не потеряв ключи и остальные настройки.
+// Ставит НЕ прямой путь к репо, а шим в ~/.claude/autoreger-statusline.sh.
+// Зачем: settings.json требует команду с конкретным путём, и если писать туда
+// путь до репо, то любой перенос/переименование папки проекта молча ломает
+// статус-бар. Шим лежит в домашней папке (она не двигается) и читает актуальный
+// корень репо из ~/.claude/autoreger-root.txt, который обновляет
+// restart-dashboard при каждом старте дашборда. Копировать сам
+// statusline-autoreger.sh в ~/.claude нельзя — копия окаменеет, репа обновится,
+// а CC будет гонять древний файл.
 //
-// Путь к скрипту берётся от текущего репо, поэтому работает из любой папки
-// установки — и на маке, и на Windows.
-//
+// Чужой statusLine (не наш) не трогаем без --force.
 // Ключи не печатаются, перед записью делается бэкап.
-// Запуск:  node tools/enable-statusline.js
+// Запуск:  node tools/enable-statusline.js [--force]
 'use strict';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
 
-const script = path.resolve(__dirname, '..', 'routing', 'statusline-autoreger.sh');
-if (!fs.existsSync(script)) {
-    console.error(`✗ не найден ${script} — запускай из папки репозитория (сначала git pull)`);
-    process.exit(1);
+const ROOT = path.resolve(__dirname, '..');
+const source = path.join(ROOT, 'routing', 'statusline-shim.sh');
+const worker = path.join(ROOT, 'routing', 'statusline-autoreger.sh');
+for (const f of [source, worker]) {
+    if (!fs.existsSync(f)) {
+        console.error(`✗ не найден ${f} — запускай из папки репозитория (сначала git pull)`);
+        process.exit(1);
+    }
 }
 
-// Путь всегда с прямыми слэшами: обратные в JSON пришлось бы экранировать, а
-// битый settings.json роняет Claude Code целиком.
-const unix = script.split('\\').join('/');
+const claudeDir = path.join(os.homedir(), '.claude');
+fs.mkdirSync(claudeDir, { recursive: true });
 
-// Обёртка нужна РОВНО в одном случае: когда `bash` в PATH — это WSL-овский
-// C:\Windows\System32\bash.exe. Он не открывает пути вида C:/…, их надо
-// конвертировать wslpath, а ещё wslpath/cmd.exe по пути съедают stdin-пайп, из-за
-// чего payload от CC теряется и модель показывается как «unknown» — поэтому
-// payload уезжает через env STATUSLINE_PAYLOAD.
-// Для git-bash на Windows и для macOS/Linux обёртка вредна: install.sh ставит там
-// простую команду, и два установщика писали бы в settings.json разное.
-function bashIsWsl() {
-    if (process.platform !== 'win32') return false;
-    try {
-        const out = execFileSync('bash', ['-c', 'printf "%s|%s" "${WSL_DISTRO_NAME:-}" "$(uname -r)"'], {
-            encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim();
-        const [distro, kernel] = out.split('|');
-        return !!distro || /microsoft|wsl/i.test(kernel || '');
-    } catch { return false; }
-}
+// 1. Файл-указатель на корень репо. Прямые слэши — их понимают и git-bash, и WSL.
+const rootFile = path.join(claudeDir, 'autoreger-root.txt');
+fs.writeFileSync(rootFile, ROOT.split('\\').join('/') + '\n', 'utf8');
 
-const cmd = bashIsWsl()
-    ? "bash -c 'pl=\"$(cat 2>/dev/null)\"; "
-        + `s="${unix}"; `
-        + 'if command -v wslpath >/dev/null 2>&1; then s=$(wslpath -u "$s"); '
-        + 'elif command -v cygpath >/dev/null 2>&1; then s=$(cygpath -u "$s"); fi; '
-        + 'exec env STATUSLINE_PAYLOAD="$pl" bash "$s"\''
-    : `bash "${unix}"`;
+// 2. Шим рядом с ним. Копируем всегда: файл крошечный, а в репо он может
+// обновиться (и тогда старая копия должна уехать).
+const shim = path.join(claudeDir, 'autoreger-statusline.sh');
+fs.copyFileSync(source, shim);
+try { fs.chmodSync(shim, 0o755); } catch {}
 
-const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+// 3. settings.json
+const cmd = `bash "${shim.split('\\').join('/')}"`;
+const settingsPath = path.join(claudeDir, 'settings.json');
 let json = {};
 if (fs.existsSync(settingsPath)) {
     const raw = fs.readFileSync(settingsPath, 'utf8');
@@ -64,24 +54,32 @@ if (fs.existsSync(settingsPath)) {
         console.error('  ничего не перезаписываю — поправь файл вручную.');
         process.exit(1);
     }
-    const backup = path.join(os.homedir(), '.claude', 'settings.backup.json');
-    fs.writeFileSync(backup, raw);
-    console.log(`  бэкап: ${backup}`);
+    fs.writeFileSync(path.join(claudeDir, 'settings.backup.json'), raw);
 } else {
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     console.log('  settings.json не было — создаю');
 }
 
-const before = json.statusLine && json.statusLine.command;
-if (before === cmd) {
-    console.log('✓ статус-лайн уже включён, путь верный — менять нечего');
+const cur = (json.statusLine && json.statusLine.command) || '';
+const ours = /autoreger-statusline\.sh|statusline-autoreger\.sh/.test(cur);
+if (cur && !ours && !process.argv.includes('--force')) {
+    console.log('! в settings.json свой statusLine — не трогаю');
+    console.log(`  сейчас: ${cur.slice(0, 100)}`);
+    console.log('  перебить: node tools/enable-statusline.js --force');
+    process.exit(0);
+}
+
+console.log(`  корень репо: ${ROOT}`);
+console.log(`  указатель:   ${rootFile}`);
+
+if (cur === cmd) {
+    console.log('✓ статус-лайн уже включён через шим — путь переживёт перенос папки');
     process.exit(0);
 }
 
 json.statusLine = { type: 'command', command: cmd };
 fs.writeFileSync(settingsPath, JSON.stringify(json, null, 2) + '\n', 'utf8');
 
-console.log(before ? '✓ путь статус-лайна обновлён' : '✓ статус-лайн включён');
+console.log(cur ? '✓ статус-лайн переведён на шим (был прямой путь к репо)' : '✓ статус-лайн включён');
 console.log(`  ${cmd}`);
-console.log('\nПерезапусти Claude Code (выйди и запусти claude заново) — снизу появится:');
+console.log('\nПерезапусти Claude Code — снизу появится:');
 console.log('  agentrouter/opus │ $37.54 │ ⧉ 139k/1M');

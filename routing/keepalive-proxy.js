@@ -133,6 +133,16 @@ function rewriteModelJson(text, clientModel) {
 const upstream = new URL(UPSTREAM);
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
 const upBase = upstream.pathname.replace(/\/+$/, '');
+// Пул исходящих коннектов. В глобальном агенте Node 24 keepAlive уже включён, но
+// maxSockets = Infinity: хедж-дубль плюс ретраи давали пачку одновременных TLS-
+// рукопожатий через туннель (happ-tun/sing-tun часть их роняет — в логе это выглядело
+// как `Client network socket disconnected before secure TLS`). Явный лимит гасит эти
+// кластеры обрывов и заодно переиспользует сокет: замер 20.08 — первое рукопожатие
+// ~0.5с, дальше запросы идут за ~0.25с. 16 — с запасом на N агентов Orca на одном ключе.
+const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 16);
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
+const agentFor = requester => (requester === https.request ? httpsAgent : httpAgent);
 const gptProxy = new URL(HAIKU_GPT_PROXY);
 const gptRequester = gptProxy.protocol === 'https:' ? https.request : http.request;
 const gptBase = gptProxy.pathname.replace(/\/+$/, '');
@@ -169,19 +179,28 @@ function log(msg) {
 // Хедж: если шлюз молчит дольше cfg.hedgeMs, пускаем ПАРАЛЛЕЛЬНЫЙ дубль запроса и
 // берём того, кто ответил первым, остальных рвём. Дефолты замерены на живом
 // agentrouter (v1tusha, 15.08.2026): hedgeMs=5000 + 5 попыток дали ~3x нагрузку и
-// рост ответов 8с → 15-30с; 20с/2 вернули 6.6–8.6с. Обкатанный компромисс, который
-// теперь и едет из коробки на всех вкладках дашборда — **12с / 3 попытки / пре-коммит
-// 10с**: хедж срабатывает раньше 20с (меньше висяков на молчащем шлюзе), но не
-// лавиной, а третья попытка добирает залипшие. Менять — в дашборде (POST /__config,
-// без рестарта), файл keepalive-config-<PORT>.json переживает рестарт и имеет
-// приоритет над этими дефолтами. 0 = выключить.
+// рост ответов 8с → 15-30с; 20с/2 вернули 6.6–8.6с. А/Б 20.08 на медиане: 12с/3 и
+// 20с/2 идут одинаково (20.4с против 19.3с — шум), но дублей на запрос ≈0.99 против
+// ≈0.50. Дубль стоит НЕ денег (замер 21.08: убитый на 20-й секунде списал 0.3% цены
+// полного запроса — биллинг идёт по факту завершения генерации), а полосы шлюза,
+// пачек для WAF и TLS-рукопожатий через туннель. Отсюда дефолт **20с / 3 попытки /
+// не больше 1 дубля / пре-коммит 10с**: дубль летит только на реально молчащем
+// шлюзе и ровно один, а бюджет попыток остаётся на ретрай транзиентной 500.
+// Менять — в дашборде (POST /__config, без рестарта), файл
+// keepalive-config-<PORT>.json переживает рестарт и имеет приоритет над этими
+// дефолтами. 0 = выключить.
 // CONFIG_FILE кейсуется по PORT — у нас 4 экземпляра прокси на одном скрипте
 // (:20133 agentrouter, :20155 tabi, :20156 gorouter, :20157 xpeach).
 const CONFIG_FILE = process.env.CONFIG_FILE
   || path.join(__dirname, `keepalive-config-${Number(process.env.PORT || 8787)}.json`);
 const cfg = {
-  hedgeMs: Number(process.env.HEDGE_MS || 12000),
+  hedgeMs: Number(process.env.HEDGE_MS || 20000),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || 3),
+  // Сколько ПАРАЛЛЕЛЬНЫХ дублей максимум на один запрос. Раньше ограничения не было:
+  // scheduleHedge перевзводил себя, и при maxAttempts=3 на молчащем шлюзе в воздухе
+  // оказывалось три копии, а бюджет попыток был выеден хеджами — на транзиентную 500
+  // ретрая не оставалось. Счётчик отдельный именно поэтому. 0 = хедж выкл.
+  maxHedges: Number(process.env.MAX_HEDGES || 1),
   preCommitMs: Number(process.env.PRE_COMMIT_MS || 10000),
 };
 
@@ -202,6 +221,8 @@ function loadConfig() {
   if (h !== null) cfg.hedgeMs = h;
   const a = patchNum(c.maxAttempts, 1, 10, false);
   if (a !== null) cfg.maxAttempts = a;
+  const mh = patchNum(c.maxHedges, 1, 5, true);
+  if (mh !== null) cfg.maxHedges = mh;
   const p = patchNum(c.preCommitMs, 2000, 120000, true);
   if (p !== null) cfg.preCommitMs = p;
 }
@@ -217,12 +238,16 @@ function applyPatch(p) {
     const a = patchNum(p.maxAttempts, 1, 10, false);
     if (a !== null) cfg.maxAttempts = a;
   }
+  if ('maxHedges' in p) {
+    const mh = patchNum(p.maxHedges, 1, 5, true);
+    if (mh !== null) cfg.maxHedges = mh;
+  }
   if ('preCommitMs' in p) {
     const pc = patchNum(p.preCommitMs, 2000, 120000, true);
     if (pc !== null) cfg.preCommitMs = pc;
   }
   saveConfig();
-  log(`config updated: хедж ${cfg.hedgeMs ? `${cfg.hedgeMs}ms` : 'off'}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
+  log(`config updated: хедж ${cfg.hedgeMs ? `${cfg.hedgeMs}ms` : 'off'}, дублей максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
 }
 function publicState() {
   return { cfg: Object.assign({}, cfg), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt, stats: Object.assign({}, stats) };
@@ -239,7 +264,7 @@ const startedAt = Date.now();
 function handleControl(req, res, reqPath) {
   if (req.method === 'GET' && reqPath === '/__keepalive/api/status') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, port: PORT, upstream: UPSTREAM, idle_ms: IDLE_MS, retries: cfg.maxAttempts, hedge_ms: cfg.hedgeMs }));
+    res.end(JSON.stringify({ ok: true, port: PORT, upstream: UPSTREAM, idle_ms: IDLE_MS, retries: cfg.maxAttempts, hedge_ms: cfg.hedgeMs, max_hedges: cfg.maxHedges }));
     return;
   }
   if (req.method === 'GET' && reqPath === '/__state') {
@@ -432,6 +457,7 @@ const server = http.createServer((req, res) => {
   let winner = null;              // победитель гонки
   let finished = false;           // исход решён (победитель или сдались)
   let launched = 0;               // сколько попыток/дублей уже запущено
+  let hedgesLaunched = 0;         // из них ПАРАЛЛЕЛЬНЫХ дублей (кэп cfg.maxHedges)
   let hedgeTimer = null;          // таймер хедж-дубля
   let preTimer = null;            // таймер отложенного пре-коммита (preCommitMs)
   let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
@@ -745,14 +771,18 @@ const server = http.createServer((req, res) => {
 
   // Хедж-дубль: если через cfg.hedgeMs апстрим всё ещё молчит (нет даже заголовков),
   // запускаем ПАРАЛЛЕЛЬНУЮ попытку. Победит тот, кто ответит первым — остальных рвём.
+  // Дублей не больше cfg.maxHedges: своим счётчиком, а не бюджетом maxAttempts, иначе
+  // хеджи выедали попытки и на транзиентную 500 ретраить было уже нечем.
   const scheduleHedge = () => {
-    if (cfg.hedgeMs <= 0 || finished || aborted || hedgeTimer !== null) return;
+    if (cfg.hedgeMs <= 0 || cfg.maxHedges <= 0 || finished || aborted || hedgeTimer !== null) return;
     if (launched >= cfg.maxAttempts) return;
+    if (hedgesLaunched >= cfg.maxHedges) return;
     hedgeTimer = setTimeout(() => {
       hedgeTimer = null;
       if (finished || aborted) return;
       log(`${req.method} ${reqPath} хедж: тишина ${Date.now() - started}ms, пускаю дубль #${launched + 1}`);
       stats.hedges += 1;
+      hedgesLaunched += 1;
       makeUpstream('хедж');
       scheduleHedge();
     }, cfg.hedgeMs);
@@ -805,6 +835,7 @@ const server = http.createServer((req, res) => {
       method: req.method,
       path: t.base + reqPath,
       headers: headers,
+      agent: agentFor(t.requester),
       timeout: UPSTREAM_TIMEOUT_MS,
     }, (upRes) => {
       const status = upRes.statusCode;

@@ -1037,6 +1037,8 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 Лежит **в репо** (обновления приезжают с `git pull`), `install.sh` (шаг 3)
 прописывает его в `~/.claude/settings.json` → `statusLine.command`.
 `ROOT` определяет сам по своему расположению (`<repo>/routing/`).
+Бар не виден / пусто внизу CC — короткая инструкция для человека:
+`docs/STATUSLINE.md`, машинная диагностика: `doctor.sh` раздел 10.
 
 - **Провайдер**: сначала пробует `GET :8200/__switch/api/status` (1с timeout), при
   недоступности — фолбэк по `apiKeyHelper`/`ANTHROPIC_BASE_URL` из `settings.json`.
@@ -1231,6 +1233,13 @@ github/sessions/<ghId>.json          кеш снимка, TTL 7 суток (giti
      `indexByLogin()` по умолчанию берёт индекс с диска, а не свежий скан;
    - индекса нет → `/api/gh/available` отдаёт `building:true` и **не ждёт**; модалка
      показывает «строю индекс профилей» и переспрашивает раз в 1.2 с (до 12 раз);
+   - **индекс УСТАРЕЛ (данные есть, но пересобираются в фоне) → модалка тоже
+     доследивает.** Раньше фронт в этом случае рисовал старый список один раз и
+     замирал: только что зарегистрированный аккаунт числился свободным, а закрытый
+     браузер — «профиль занят», и правду показывал лишь F5 всей страницы. Теперь
+     пока приходит `building:true`, `newapiSeedLoad()` перечитывает и
+     перерисовывает сам — раз в 1.5 с, до 20 раз, только при открытой модалке
+     (таймер гасится в `closeGhSeedModal`), в подсказке «список обновится сам»;
    - `ghWarmIndexOnBoot()` запускает сборку через 1.5 с после старта.
    Кеш индекса — `github/sessions/_profile-index.json`, годность по **mtime файла
    `Default/Network/Cookies`**: DPAPI платится один раз в жизни профиля.
@@ -1327,7 +1336,7 @@ HTTPS+пароль и видит рабочий стол VPS прямо во в�
 
 | Что | Где | Кто чинит |
 |---|---|---|
-| `statusLine.command` → `routing/statusline-autoreger.sh` | `~/.claude/settings.json` | дашборд сам при старте (`healStatuslinePath`, бэкап в `settings-backups/`) |
+| `statusLine.command` → шим `~/.claude/autoreger-statusline.sh` | `~/.claude/settings.json` | дашборд сам при старте (`healStatuslinePath`: пишет указатель на корень, копирует шим, переводит на шим прямой/мёртвый путь; бэкап в `settings-backups/`) |
 | ключ проекта + `githubRepoPaths` | `~/.claude.json` | `tools/fix-paths-after-move.ps1` |
 | история сессий и **память агента** (`memory/`) | `~/.claude/projects/<слаг-пути>/` | тот же скрипт (переименовывает каталог; слаг = путь, где всё не-буквенно-цифровое → `-`) |
 | `DEFAULT_CWD` | `tgbot/.env` | тот же скрипт (обнуляет) |
@@ -1367,6 +1376,7 @@ keepalive-spawn.js:23) + `sqlite3` + `python` + `curl.exe`/`clip.exe`.
 | `install-mac.sh` | bootstrap (git → clone → `exec` себя из клона) → Xcode CLT → Homebrew → node/git → `npm install` → `npx playwright install chromium` → `npm i -g @anthropic-ai/claude-code` → копирует `*.example` → `chmod +x` + `xattr -cr` |
 | `DASHBOARD.command` | двойной клик: `xattr -cr .` + `bash routing/restart-dashboard.sh` |
 | `docs/MAC-SETUP.md` | инструкция для друга |
+| `docs/STATUSLINE.md` | «внизу CC пусто» — починка в одну команду + почему ломалось (Windows и mac) |
 
 Установка одной строкой на голом маке (она же в README) — симметрично `install.ps1`:
 `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"`
@@ -1459,6 +1469,35 @@ Bootstrap-блок в начале скрипта: если рядом нет `p
   возраст кеша баланса и остаток cooldown не считались; `date +%s%3N` BSD не
   умеет и оставляет `%3N` в строке → арифметика возраста ломалась молча. Обе
   подменены на `_iso_epoch()` / `_now_ms()` с BSD-ветками.
+- **Статус-лайн: остальные грабли «пусто внизу CC» (закрыто 2026-08-20).** Симптом
+  всегда один — внизу видно только подсказку `← for agents`, строки бара нет,
+  ошибок нигде; поэтому кажется, что мешает подсказка. Причины были:
+  - **CRLF в указателе.** `restart-dashboard.bat` пишет `autoreger-root.txt` через
+    cmd `echo`, то есть с `\r`. Шим читал путь вместе с `\r`, файла по
+    `C:/repo\r/routing/…` нет → пустой вывод. Теперь шим срезает `\r` и хвостовой
+    слэш сам (лечит любой источник указателя, включая чужие копии).
+  - **Шим искал `.claude` только по `$HOME`.** Если `bash` в PATH — WSL-овский
+    (`$HOME=/home/user`), указателя там нет; воркер такой фолбэк имел, шим — нет.
+    Добавлен тот же `%USERPROFILE%` + `wslpath`/`cygpath`.
+  - **Запуск в обход `restart-dashboard`.** `START.bat` и `node routing/transparent-proxy.js`
+    руками указатель не писали, шим смотрел в старый корень. Теперь указатель и
+    копию шима пишет сам дашборд в `healStatuslinePath()` — при любом способе старта.
+  - **`healStatuslinePath` не узнавал шим.** Проверка шла по имени
+    `statusline-autoreger.sh`, а в `settings.json` с новой схемы стоит
+    `autoreger-statusline.sh` → самопочинка была no-op для всех свежих установок,
+    и мёртвый POSIX-путь (`/Users/<старый юзер>/…`) не лечился вообще (правился
+    только путь с буквой диска). Теперь: путь из команды проверяется
+    `fs.existsSync`, всё наше и битое переводится на шим, чужой statusLine не трогается.
+  - **`ar_ready` (`🎁N`) на маке не показывался никогда:** граница суток считалась
+    через GNU `date -u -d`, на BSD подстановка давала 0 и весь блок пропускался.
+    Заменено арифметикой (`now - now % 86400`), ISO-граница — `date -u -r` с
+    GNU-фолбэком.
+  - **awk-классы `[[:space:]]`** в разборе кеша FreeModel: BWK awk на macOS до
+    Ventura их не понимает → имя активного аккаунта не находилось и шкала баланса
+    молча исчезала. Заменены на `[ \t]`.
+  - **Диагностика.** `doctor.sh` раздел 10: путь из `statusLine.command` (парсит
+    нодой — в JSON он в экранированных кавычках), существует ли файл, указатель и
+    воркер по нему, живой прогон бара с тестовым payload.
 - **Статус-лайн был выключен по умолчанию:** в `claude-settings.example.json`
   секции `statusLine` нет, а существующий `settings.json` установщики не
   перезаписывают. `install.sh` (Windows) подключает его своим `sl_node`,

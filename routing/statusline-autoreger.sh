@@ -258,11 +258,15 @@ if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] &
     active_key="$(cat "$PROF/.claude/fm-active-key.txt" 2>/dev/null | tr -d '[:space:]')"
     if [ -n "$active_key" ]; then
         # найти dir аккаунта в meta по apiKey
+        # `[ \t]` вместо `[[:space:]]`: awk на маке — BWK, и POSIX-классы он понял
+        # только в сборке 2020 года (Ventura+). На более старых macOS класс
+        # трактуется как набор литералов, имя аккаунта не находилось и шкала
+        # баланса FreeModel просто не выводилась — без единого сообщения.
         active_name="$(awk -v key="$active_key" '
             BEGIN { RS="}"; name=""; found_ok=""; found_any="" }
             {
-                if (match($0, /"[^"]+"[[:space:]]*:[[:space:]]*\{/)) {
-                    n=substr($0,RSTART,RLENGTH); gsub(/["{:[:space:]]/,"",n); name=n
+                if (match($0, /"[^"]+"[ \t]*:[ \t]*\{/)) {
+                    n=substr($0,RSTART,RLENGTH); gsub(/["{: \t]/,"",n); name=n
                 }
                 if (index($0, key) > 0) {
                     found_any=name
@@ -276,9 +280,9 @@ if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] &
     if [ -n "$active_name" ]; then
         # вырезаем блок конкретного аккаунта и парсим h5/h5max/updatedAt
         block="$(awk -v n="$active_name" '
-            $0 ~ "\""n"\"[[:space:]]*:[[:space:]]*\\{" { flag=1 }
+            $0 ~ "\""n"\"[ \t]*:[ \t]*\\{" { flag=1 }
             flag { print }
-            flag && /^[[:space:]]*\}/ { exit }
+            flag && /^[ \t]*\}/ { exit }
         ' "$LOGS/.freemodel_quota_cache.json")"
         if [ -n "$block" ]; then
             have_gauge=1
@@ -447,11 +451,18 @@ if [ -f "$ROUTING/agentrouter-sessions.json" ]; then
     fi
     # Границу считаем секундами от начала UTC-суток: `date -d "…-1:30"` ломается,
     # когда граница раньше 03:00 и час уходит в минус.
-    ar_day="$(date -u -d "$(date -u +%Y-%m-%d) 00:00:00" +%s 2>/dev/null || echo 0)"
-    if [ "$ar_day" -gt 0 ]; then
-        ar_b=$(( ar_day + (ar_hh - 3) * 3600 + ar_mm * 60 ))
-        [ "$ar_b" -gt "$(date +%s)" ] && ar_b=$(( ar_b - 86400 ))
-        ar_biso="$(date -u -d "@$ar_b" +%Y-%m-%dT%H:%M:%S 2>/dev/null)"
+    # Начало UTC-суток берём АРИФМЕТИКОЙ, а не `date -d`: GNU-синтаксиса на маке
+    # нет, подстановка молча давала 0 и весь блок 🎁 пропускался (поймано в
+    # аудите 2026-08-20 — на маке напоминание про +$25 не появлялось никогда).
+    ar_now="$(date -u +%s)"
+    ar_day=$(( ar_now - ar_now % 86400 ))
+    ar_b=$(( ar_day + (ar_hh - 3) * 3600 + ar_mm * 60 ))
+    [ "$ar_b" -gt "$ar_now" ] && ar_b=$(( ar_b - 86400 ))
+    # BSD: `-r <epoch>`, GNU: `-d @<epoch>` — порядок именно такой, на маке
+    # первый же вариант срабатывает и второй не зовётся.
+    ar_biso="$(date -u -r "$ar_b" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$ar_b" +%Y-%m-%dT%H:%M:%S 2>/dev/null)"
+    # Пустая граница сравнивалась бы с любой датой как «уже забрал» и гасила 🎁.
+    if [ -n "$ar_biso" ]; then
         # checkinAt пишется toISOString() → UTC фиксированной ширины, поэтому
         # лексикографическое сравнение строк здесь и есть хронологическое.
         ar_got="$(grep -oE '"checkinAt"[[:space:]]*:[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]+"' "$ROUTING/agentrouter-sessions.json" 2>/dev/null \

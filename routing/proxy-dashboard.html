@@ -6295,12 +6295,16 @@ const NEWAPI_SEED_PROV = {
 
 let ghSeedProv = null;   // какой провайдер открыл модалку
 let ghSeedRetry = 0;     // сколько раз уже переспросили, пока строится индекс
+let ghSeedWatch = null;  // таймер доследивания за фоновой пересборкой индекса
+let ghSeedWatchLeft = 0; // сколько доследок осталось
 
 async function newapiSeedPick(prov) {
   const p = NEWAPI_SEED_PROV[prov];
   if (!p) return;
   ghSeedProv = prov;
   ghSeedRetry = 0;
+  clearTimeout(ghSeedWatch); ghSeedWatch = null;
+  ghSeedWatchLeft = 20;    // ~30 c доследивания за фоновой пересборкой индекса
   $('gh-seed-provider').textContent = p.label;
   $('gh-seed-list').innerHTML = '<div class="text-xs text-faint px-1 py-3">читаю индекс профилей…</div>';
   $('gh-seed-modal').classList.remove('hidden');
@@ -6329,6 +6333,24 @@ async function newapiSeedLoad() {
       return;
     }
     newapiSeedRender(data);
+
+    // Индекс может пересобираться в фоне УЖЕ ПОСЛЕ того, как список отрисован
+    // (бэкенд отвечает building:true и старыми данными — так он не висит).
+    // Раньше на этом всё и заканчивалось: только что зарегистрированный аккаунт
+    // ещё числился свободным, а закрытый браузер — «профиль занят», и правду
+    // показывал лишь F5 всей страницы. Поэтому доследиваем: пока building —
+    // перечитываем и перерисовываем сами. Счётчик выдаётся ОДИН раз на открытие
+    // модалки (newapiSeedPick) — иначе «кончился → выдать заново» крутило бы
+    // опрос вечно, пока окно открыто.
+    clearTimeout(ghSeedWatch); ghSeedWatch = null;
+    if (data.building && ghSeedWatchLeft > 0) {
+      ghSeedWatchLeft--;
+      ghSeedWatch = setTimeout(() => {
+        if (ghSeedProv === prov && !$('gh-seed-modal').classList.contains('hidden')) newapiSeedLoad();
+      }, 1500);
+    } else if (!data.building) {
+      ghSeedWatchLeft = 0;
+    }
   } catch (e) {
     $('gh-seed-list').innerHTML = `<div class="text-xs text-crimson px-1 py-3">${esc(e.message)}</div>`;
   }
@@ -6337,6 +6359,8 @@ async function newapiSeedLoad() {
 function closeGhSeedModal() {
   $('gh-seed-modal').classList.add('hidden');
   ghSeedProv = null;
+  clearTimeout(ghSeedWatch); ghSeedWatch = null;
+  ghSeedWatchLeft = 0;
 }
 
 function newapiSeedRender(data) {
@@ -6373,7 +6397,7 @@ function newapiSeedRender(data) {
   $('gh-seed-hint').textContent = (free
     ? `свободно ${free} из ${list.length} · пароль и 2FA не понадобятся`
     : `свободных нет: все ${list.length} либо уже засвечены здесь, либо без живой сессии`)
-    + (data.building ? ' · индекс обновляется в фоне' : '');
+    + (data.building ? ' · индекс обновляется в фоне, список обновится сам' : '');
   $('gh-seed-list').innerHTML = rows.join('') || '<div class="text-xs text-faint px-1 py-3">хранилище GitHub пусто — добавь аккаунты во вкладке GitHub</div>';
 }
 

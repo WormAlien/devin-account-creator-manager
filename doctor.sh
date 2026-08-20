@@ -55,6 +55,51 @@ echo
 echo "--- 9. Node ---"
 node --version 2>&1; npm --version 2>&1
 echo
+echo "--- 10. Статус-лайн Claude Code ---"
+# Самая частая жалоба: внизу CC видно только «← for agents», а строки
+# provider/model │ $… │ ⧉ … нет. Причина всегда одна из двух: в settings.json
+# путь к несуществующему файлу (перенесли/переименовали папку), либо указатель
+# на корень репо записан с CRLF и путь не находится. Проверяем ровно это.
+CLAUDE_HOME="$HOME"
+[ -f "$CLAUDE_HOME/.claude/settings.json" ] || {
+  up="$(cmd.exe /c "echo %USERPROFILE%" 2>/dev/null | tr -d '\r')"
+  [ -n "$up" ] && command -v cygpath >/dev/null 2>&1 && CLAUDE_HOME="$(cygpath -u "$up")"
+}
+SET_J="$CLAUDE_HOME/.claude/settings.json"
+echo "settings.json: $SET_J"
+if [ -f "$SET_J" ]; then
+  # Парсим НОДОЙ, а не grep: в JSON путь лежит с экранированными кавычками
+  # ("bash \"C:/…\""), grep обрывался на первой из них, а ещё в файле есть свои
+  # "command" у хуков — можно было напечатать чужую строку.
+  node -e '
+    const fs=require("fs");
+    let s={}; try{ s=JSON.parse(fs.readFileSync(process.argv[1],"utf8").replace(/^\uFEFF/,"")); }
+    catch(e){ console.log("!!! settings.json не парсится: "+e.message); process.exit(0); }
+    const cmd=(s.statusLine&&s.statusLine.command)||"";
+    if(!cmd){ console.log("statusLine: НЕТ (выключен) → node tools/enable-statusline.js"); process.exit(0); }
+    console.log("statusLine.command: "+cmd);
+    const m=cmd.match(/"([^"]+)"|(\S+\.sh)/); const p=m?(m[1]||m[2]):"";
+    if(!p){ console.log("  путь в команде не распознан — статус-лайн, похоже, чужой"); process.exit(0); }
+    console.log("  файл команды: "+(fs.existsSync(p)?"ЕСТЬ":"!!! НЕТ → node tools/enable-statusline.js")+" ("+p+")");
+  ' "$SET_J" 2>&1
+else
+  echo "!!! settings.json нет — Claude Code ещё не запускался?"
+fi
+PTR="$CLAUDE_HOME/.claude/autoreger-root.txt"
+if [ -f "$PTR" ]; then
+  echo -n "указатель на репо: "; cat "$PTR"
+  grep -q $'\r' "$PTR" && echo "  (в файле CRLF — шим это переживает начиная с 2026-08-20, на старой копии статус-бар пропадал)"
+  PTR_ROOT="$(head -n1 "$PTR" | tr -d '\r')"
+  [ -f "$PTR_ROOT/routing/statusline-autoreger.sh" ] \
+    && echo "  воркер по указателю: ЕСТЬ" \
+    || echo "  воркер по указателю: !!! НЕТ — запусти дашборд из актуальной папки"
+else
+  echo "указатель $PTR: НЕТ → запусти дашборд (restart-dashboard) или node tools/enable-statusline.js"
+fi
+echo "живой прогон статус-лайна:"
+echo '{"model":{"id":"doctor-test"},"context_window":{"total_input_tokens":1000,"context_window_size":200000}}' \
+  | bash "$CLAUDE_HOME/.claude/autoreger-statusline.sh" 2>&1 | cat -v | tail -3
+echo
 echo "===== КОНЕЦ ====="
 } > "$R" 2>&1
 

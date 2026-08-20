@@ -7955,27 +7955,55 @@ async function tbKeepaliveSpawn() {
     }
 }
 
-// ───── Самопочинка внешней ссылки на путь репо ─────────────────────────────
-// В ~/.claude/settings.json statusLine.command — абсолютный путь к
-// routing/statusline-autoreger.sh. Папку репо переносят (Desktop → D:\app\…) и
-// статуслайн молча умирает: CC зовёт скрипт по старому пути. Дашборд знает, где
-// лежит сам, поэтому при старте переписывает ссылку на свою копию скрипта.
-// Всё остальное в settings.json путей репо не содержит (только localhost-порты).
+// ───── Самопочинка статуслайна ──────────────────────────────────────────────
+// Статус-бар обязан работать «из коробки» при ЛЮБОМ способе запуска. Указатель
+// ~/.claude/autoreger-root.txt и шим ~/.claude/autoreger-statusline.sh пишут
+// restart-dashboard.sh/.bat — но START.bat и запуск `node routing/transparent-proxy.js`
+// руками их обходят, и после переноса папки шим смотрел в старый корень.
+// Поэтому дашборд делает это сам, на каждом старте:
+//   1. указатель на свой корень (LF — cmd `echo` писал CRLF, и путь с хвостовым
+//      \r не находился: статус-бар исчезал, внизу оставалась только подсказка
+//      «← for agents», из-за чего казалось, что мешает именно она);
+//   2. свежая копия шима (в репо он может обновиться);
+//   3. settings.json: если там путь ПРЯМО в репо (старая схема) или файл по
+//      указанному пути не существует — переводим на шим.
+// Чужой statusLine (не наш) не трогаем.
 function healStatuslinePath() {
+    const claudeDir = path.join(os.homedir(), '.claude');
+    const repoRoot = path.join(__dirname, '..');
+    const shimSrc = path.join(__dirname, 'statusline-shim.sh');
+    const shimDst = path.join(claudeDir, 'autoreger-statusline.sh');
+    try {
+        fs.mkdirSync(claudeDir, { recursive: true });
+        fs.writeFileSync(path.join(claudeDir, 'autoreger-root.txt'),
+            repoRoot.replace(/\\/g, '/').replace(/\/+$/, '') + '\n', 'utf8');
+        if (fs.existsSync(shimSrc)) {
+            fs.copyFileSync(shimSrc, shimDst);
+            try { fs.chmodSync(shimDst, 0o755); } catch { }
+        }
+    } catch (e) {
+        logLine(`statusline pointer skip: ${e.message}`);
+    }
     try {
         if (!fs.existsSync(SETTINGS_FILE)) return null;
         const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
         const s = JSON.parse(raw);
         const cmd = s.statusLine && typeof s.statusLine.command === 'string' ? s.statusLine.command : '';
-        if (!cmd || !/statusline-autoreger\.sh/i.test(cmd)) return null;
-        const mine = path.join(__dirname, 'statusline-autoreger.sh').replace(/\\/g, '/');
-        if (cmd.includes(mine)) return null;
-        const fixed = cmd.replace(/[A-Za-z]:[\\/][^"']*?statusline-autoreger\.sh/gi, mine);
-        if (fixed === cmd || !fixed.includes(mine)) return null;
+        if (!cmd) return null;
+        if (!/statusline-autoreger\.sh|autoreger-statusline\.sh/i.test(cmd)) return null;  // чужой — не наше дело
+        // Путь внутри команды: `bash "<path>"` либо просто <path>.
+        const m = cmd.match(/"([^"]+)"|(\S+\.sh)/);
+        const cur = m ? (m[1] || m[2]) : '';
+        const curOk = cur && fs.existsSync(cur.replace(/\//g, path.sep));
+        const wanted = `bash "${shimDst.replace(/\\/g, '/')}"`;
+        if (cmd === wanted) return null;
+        // Прямой путь в репо, который ЖИВ и указывает на наш же скрипт — тоже
+        // переводим на шим: он переживёт следующий перенос папки.
+        if (curOk && /autoreger-statusline\.sh/i.test(cur)) return null;
         try { makeSettingsBackup('statusline-heal'); } catch { }
-        s.statusLine.command = fixed;
+        s.statusLine = { type: 'command', command: wanted };
         writeSettings(s);
-        return { from: cmd, to: fixed };
+        return { from: cmd, to: wanted };
     } catch (e) {
         logLine(`statusline heal skip: ${e.message}`);
         return null;

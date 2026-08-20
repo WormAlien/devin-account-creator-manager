@@ -88,7 +88,7 @@ async function arBalance(apiKey) {
 
 ### 3. Вики (после реализации)
 
-Обновить `D:\WORMALIENAIGIGANT\wiki\entities\Autoreger Clean.md` (через MCP obsidian):
+Обновить `D:\WORMALIENAIGIGANT\wiki\entities\Autoreger Clean.md` (обычными файловыми правками — `Edit`/`Write`; MCP obsidian убраны 2026-08-19):
 - Добавить порт/функцию balance-check в таблицу сервисов
 - `wiki/log.md` — запись `## [2026-08-13] feat | …`
 - `wiki/meta/Debug Reference.md` — если будут грабли (sentinel-лимит, центы total_usage)

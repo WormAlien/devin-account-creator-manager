@@ -36,6 +36,17 @@ if "%FAILED%"=="1" goto FAILED
 
 echo All ports released.
 
+REM ---- Pointer to the repo root for the statusline shim ----------------------
+REM settings.json points at %USERPROFILE%\.claude\autoreger-statusline.sh, and the
+REM shim reads the real repo path from autoreger-root.txt. That way moving or
+REM renaming the project folder does not break the status bar: just start the
+REM dashboard from the new location and the pointer is rewritten.
+for %%I in ("%~dp0..") do set "REPO_ROOT=%%~fI"
+set "REPO_ROOT_U=%REPO_ROOT:\=/%"
+if not exist "%USERPROFILE%\.claude" mkdir "%USERPROFILE%\.claude" >nul 2>&1
+>"%USERPROFILE%\.claude\autoreger-root.txt" echo %REPO_ROOT_U%
+if exist "%~dp0statusline-shim.sh" copy /Y "%~dp0statusline-shim.sh" "%USERPROFILE%\.claude\autoreger-statusline.sh" >nul 2>&1
+
 echo Starting Freemodel Key Rotator on :20126 ...
 call :STARTGUARD 20126 || goto FAILED
 start "FM Rotator" /B node freemodel-rotator.js

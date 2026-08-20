@@ -17,6 +17,18 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/routing" || { echo "! нельзя зайти в routing/"; exit 1; }
 
+# Указатель на корень репо для шима статус-лайна (~/.claude/autoreger-statusline.sh).
+# Благодаря нему settings.json не содержит путь к репо, и перенос/переименование
+# папки проекта не ломает статус-бар: достаточно запустить дашборд из нового места.
+if [ -n "${HOME:-}" ]; then
+  mkdir -p "$HOME/.claude" 2>/dev/null
+  printf '%s\n' "$ROOT" > "$HOME/.claude/autoreger-root.txt" 2>/dev/null
+  if [ -f "$ROOT/routing/statusline-shim.sh" ]; then
+    cp "$ROOT/routing/statusline-shim.sh" "$HOME/.claude/autoreger-statusline.sh" 2>/dev/null
+    chmod +x "$HOME/.claude/autoreger-statusline.sh" 2>/dev/null
+  fi
+fi
+
 # Shim-ы в начало PATH: transparent-proxy и дочерние процессы найдут их раньше системных
 SHIM_DIR="$ROOT/mac-support/shims"
 # node зовёт их через execFile напрямую — нужен exec-bit (git с Windows его не хранит)

@@ -31,13 +31,17 @@ python --version 2>&1 || echo "python в PATH нет"
 ls "$LOCALAPPDATA/Programs/Python/" 2>/dev/null || echo "в LOCALAPPDATA питонов нет"
 echo
 echo "--- 5. tg-venv ---"
-if [ -f tools/tg-venv/Scripts/python.exe ]; then
-  echo "python.exe: ЕСТЬ"
+# Путь до интерпретатора внутри venv платформозависим: Scripts/python.exe на
+# Windows, bin/python на macOS. Спрашиваем резолвер, а не хардкодим виндовый
+# вариант — иначе на маке доктор врёт «venv не создан» при живом venv.
+TGPY="$(node tools/tg-venv-python.js 2>/dev/null)"
+if [ -n "$TGPY" ] && [ -f "$TGPY" ]; then
+  echo "интерпретатор: ЕСТЬ ($TGPY)"
   cat tools/tg-venv/pyvenv.cfg 2>/dev/null
   echo "import-тест:"
-  tools/tg-venv/Scripts/python -c 'import opentele, tgcrypto; print("IMPORT OK")' 2>&1 | tail -5
+  "$TGPY" -c 'import opentele, tgcrypto; print("IMPORT OK")' 2>&1 | tail -5
 else
-  echo "python.exe: НЕТ (tools/tg-venv не создан или пустой)"
+  echo "интерпретатор: НЕТ (tools/tg-venv не создан или пустой; ожидался ${TGPY:-?})"
   ls tools/ 2>/dev/null
 fi
 echo
@@ -99,6 +103,47 @@ fi
 echo "живой прогон статус-лайна:"
 echo '{"model":{"id":"doctor-test"},"context_window":{"total_input_tokens":1000,"context_window_size":200000}}' \
   | bash "$CLAUDE_HOME/.claude/autoreger-statusline.sh" 2>&1 | cat -v | tail -3
+echo
+echo "--- 11. Бэкенд и ключ Claude Code ---"
+# Перенесено из install.sh (2026-08-20): установщику диагностика не нужна, а тут
+# она к месту. Сам ключ НЕ печатаем — только имя файла и код ответа шлюза.
+#
+# Ключа может не быть вовсе: если ANTHROPIC_BASE_URL смотрит в локальный прокси
+# (keepalive :20133 и т.п.), apiKeyHelper не нужен, ключ подставляет прокси.
+# Поэтому бэкенд пингуем В ЛЮБОМ случае — «CC молчит» чаще всего означает
+# «локальный прокси не поднят», а не «ключ дохлый».
+BASE_URL=$(grep -o '"ANTHROPIC_BASE_URL"[^,]*' "$SET_J" 2>/dev/null | grep -o 'https\?://[^"]*' | head -1)
+KEY_FILE=$(grep -o '[A-Za-z0-9_-]*active-key[A-Za-z0-9_.-]*' "$SET_J" 2>/dev/null | head -1)
+echo "ANTHROPIC_BASE_URL: ${BASE_URL:-НЕТ (Claude Code пойдёт в облако Anthropic)}"
+if [ -n "$KEY_FILE" ]; then
+  if [ -s "$CLAUDE_HOME/.claude/$KEY_FILE" ]; then
+    echo "файл ключа: ~/.claude/$KEY_FILE (непустой)"
+  else
+    echo "!!! ~/.claude/$KEY_FILE пустой или отсутствует — Claude Code скажет 'Authentication failed'"
+    echo "    фикс: активировать ключ в дашборде (вкладка провайдера → Активировать)"
+  fi
+else
+  echo "apiKeyHelper с *-active-key.txt в settings.json нет — ключ подставляет прокси"
+fi
+if [ -n "$BASE_URL" ] && command -v curl >/dev/null 2>&1; then
+  KEY_HDR=""
+  [ -n "$KEY_FILE" ] && [ -s "$CLAUDE_HOME/.claude/$KEY_FILE" ] \
+    && KEY_HDR="$(cat "$CLAUDE_HOME/.claude/$KEY_FILE")"
+  if [ -n "$KEY_HDR" ]; then
+    HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${BASE_URL%/}/v1/models" \
+      -H "x-api-key: $KEY_HDR" 2>/dev/null)
+  else
+    HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${BASE_URL%/}/v1/models" 2>/dev/null)
+  fi
+  case "$HTTP" in
+    000|"") echo "!!! $BASE_URL НЕ ОТВЕЧАЕТ — прокси не поднят? запусти restart-dashboard" ;;
+    401|403) echo "!!! $BASE_URL отверг ключ ($HTTP) — ключ дохлый, активируй другой в дашборде" ;;
+    200) echo "бэкенд отвечает: $BASE_URL → 200" ;;
+    502|503|504) echo "$BASE_URL жив, но АПСТРИМ не ответил ($HTTP) — шлюз лежит/ключ провайдера дохлый/VPN" ;;
+    # 404/405 от локального прокси — норма: он проксирует /v1/messages, а не /v1/models.
+    *) echo "бэкенд слушает: $BASE_URL → HTTP $HTTP (для локального прокси 404/405 — норма)" ;;
+  esac
+fi
 echo
 echo "===== КОНЕЦ ====="
 } > "$R" 2>&1

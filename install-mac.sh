@@ -231,7 +231,26 @@ ok "shim-ы и скрипты — executable"
 # запускается двойным кликом вообще, без внятной ошибки.
 xattr -cr . 2>/dev/null && ok "карантин снят"
 
-# 9. Запуск
+# 9. Доп. зависимости (общий скрипт с Windows)
+#
+# Здесь репо уже гарантированно на диске: bootstrap выше сделал exec из клона,
+# поэтому соседний install-deps.sh есть. На маке он ставит ТОЛЬКО ТГ-менеджер
+# (venv opentele + Telegram.app) — Camoufox-автореги там осознанно пропущены,
+# их пины проверены лишь на Windows.
+step "Доп. зависимости (✈ Открыть TG)"
+if [ ! -f install-deps.sh ]; then
+  warn "нет install-deps.sh — код приехал не целиком, поправь: git pull"
+elif [ ! -t 0 ]; then
+  bash install-deps.sh
+else
+  read -r -p "Поставить зависимости ТГ-менеджера сейчас? [Y/n] " ans
+  case "${ans:-Y}" in
+    y|Y|д|Д|yes|да) bash install-deps.sh ;;
+    *) echo "  Позже: bash install-deps.sh" ;;
+  esac
+fi
+
+# 10. Запуск
 step "Запуск дашборда"
 b "  Дашборд: http://localhost:8200/__switch"
 if [ -t 0 ]; then
@@ -244,7 +263,7 @@ else
   bash routing/restart-dashboard.sh
 fi
 
-# 10. Памятка. Печатаем в конце, потому что выше уже прокрутилось много вывода, а
+# 11. Памятка. Печатаем в конце, потому что выше уже прокрутилось много вывода, а
 # «как остановить» и «можно ли переносить папку» — первые два вопроса на маке.
 cat <<EOF
 
@@ -259,8 +278,10 @@ $(b "── Шпаргалка ────────────────�
   бери его в кавычки: cd "/путь/с пробелом/VibeCode"
 
   Обновление   git pull  (потом рестарт дашборда)
+  Доп. deps    bash install-deps.sh   — venv для ✈ Открыть TG + Telegram.app
   Диагностика  node tools/mac-balance-probe.js ar   — точный баланс по шагам
                node tools/enable-statusline.js      — вернуть статус-бар в CC
+               bash doctor.sh                       — отчёт целиком (раздел 5: venv, 11: бэкенд)
 
 EOF
 

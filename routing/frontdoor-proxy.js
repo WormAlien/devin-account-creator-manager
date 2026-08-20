@@ -1,0 +1,377 @@
+// frontdoor-proxy.js — фиксированный вход Claude Code (:20100).
+//
+// Зачем: `env` из ~/.claude/settings.json Claude Code читает ОДИН раз, при старте
+// процесса. Пока переключение провайдера меняло ANTHROPIC_BASE_URL, каждый свич
+// требовал новой сессии CC — а с Orca, где одновременно живёт несколько pty с
+// `claude`, это означало перезапуск всех терминалов.
+//
+// Поэтому base URL больше не меняется (навсегда http://127.0.0.1:20100), а выбор
+// бэкенда переехал в файл состояния ~/.claude/active-backend.json, который этот
+// прокси перечитывает по mtime на каждый запрос.
+//
+// Контракт (docs/HANDOFF-frontdoor.md):
+//   • ЛОКАЛЬНЫЙ апстрим (keepalive :2013x/:2015x, конвертеры :2013x) — чистый релей:
+//     заголовки клиента без изменений, ключ не трогаем, тело не трогаем. Ключ там
+//     инжектит keepalive (keepalive-proxy.js:771), маппинг тиров тоже его.
+//   • УДАЛЁННЫЙ апстрим (бывшие apiKeyHelper-режимы) — читаем ключ из
+//     ~/.claude/<keyFile> на каждый запрос (смена ключа на лету, авто-ротация
+//     FreeModel), ставим authorization+x-api-key, срезаем суффикс окна [1m] и
+//     применяем <p>-modelmap.json по mtime.
+//   • НЕ ретраим и не хеджируем (это делает keepalive; дубль сожжёт платный запрос),
+//     НЕ конвертим Anthropic→OpenAI (это :20130/:20131/:20132), НЕ отвечаем сами на
+//     count_tokens (локальную оценку даёт keepalive), НЕ логируем ключи.
+//   • Нет/битый state → 503 с внятным телом, а не молчаливый уход на дефолт.
+//
+// Слушаем ТОЛЬКО 127.0.0.1: прокси инжектит реальные ключи, на 0.0.0.0 это открытый релей.
+//
+//   PORT=20100 node frontdoor-proxy.js
+//   node frontdoor-proxy.js selftest     # самопроверка, порт не занимает
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const http = require('http');
+const https = require('https');
+const path = require('path');
+
+const PORT = Number(process.env.PORT || 20100);
+const LOG_FILE = process.env.LOG_FILE || '';
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
+const STATE_FILE = process.env.ACTIVE_BACKEND_FILE
+    || path.join(os.homedir(), '.claude', 'active-backend.json');
+const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+
+const { createLogger } = require('./proxy-logger.js');
+const { logLine } = createLogger('frontdoor');
+const startedAt = Date.now();
+
+function log(msg) {
+    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    process.stderr.write(line);
+    if (LOG_FILE) { try { fs.appendFileSync(LOG_FILE, line); } catch { /* ignore */ } }
+    logLine(msg);
+}
+
+// ── Состояние: единственный источник правды об активном бэкенде ───────────────
+// Апстрим уже разрешён дашбордом (transparent-proxy.js → writeSettings), поэтому
+// здесь НЕТ таблицы провайдеров и знания о портах: прокси только форвардит.
+const stateCache = { mtime: 0, state: null, error: 'state ещё не читался' };
+
+function parseState(raw) {
+    const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    const upstream = String(doc.upstream || '').trim();
+    if (!upstream) throw new Error('в active-backend.json нет upstream');
+    const u = new URL(upstream);        // бросит на мусоре — поймает вызывающий
+    if (!/^https?:$/.test(u.protocol)) throw new Error(`upstream не http(s): ${upstream}`);
+    return {
+        backend: String(doc.backend || '').trim() || 'unknown',
+        upstream,
+        url: u,
+        local: isLocalHost(u.hostname),
+        keyFile: doc.keyFile ? String(doc.keyFile) : null,
+        modelmap: doc.modelmap ? String(doc.modelmap) : null,
+        updatedAt: Number(doc.updatedAt) || 0,
+    };
+}
+
+function isLocalHost(h) {
+    return /^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?|0\.0\.0\.0)$/i.test(String(h || ''));
+}
+
+// Читаем по mtime: кеш не длиннее одного запроса по смыслу — иначе теряется
+// бесшовность свича, ради которой всё и делается.
+function readState() {
+    let st;
+    try {
+        st = fs.statSync(STATE_FILE);
+    } catch (e) {
+        stateCache.state = null;
+        stateCache.mtime = 0;
+        stateCache.error = `нет ${STATE_FILE} — дашборд ещё не записал активный бэкенд`;
+        return null;
+    }
+    if (stateCache.state && st.mtimeMs === stateCache.mtime) return stateCache.state;
+    try {
+        const parsed = parseState(fs.readFileSync(STATE_FILE, 'utf8'));
+        stateCache.state = parsed;
+        stateCache.mtime = st.mtimeMs;
+        stateCache.error = null;
+        log(`backend: ${parsed.backend} → ${parsed.upstream}${parsed.local ? ' (локальный, ключ не трогаем)' : ' (удалённый, ключ из ' + parsed.keyFile + ')'}`);
+        return parsed;
+    } catch (e) {
+        stateCache.state = null;
+        stateCache.mtime = st.mtimeMs;
+        stateCache.error = `active-backend.json битый: ${e.message}`;
+        return null;
+    }
+}
+
+// ── Маппинг тиров для удалённых апстримов ────────────────────────────────────
+// Те же правила, что у keepalive-proxy.js (:92) и agentrouter-proxy.js: держим
+// формат файла одинаковым, чтобы вкладки дашборда правили его без переучивания.
+const TIER_RE = [
+    { tier: 'opus', re: /(^|[-_.\/])?opus([-\/]|$)/i },
+    { tier: 'sonnet', re: /(^|[-_.\/])?sonnet([-\/]|$)/i },
+    { tier: 'haiku', re: /(^|[-_.\/])?haiku([-\/]|$)/i },
+];
+const mapCache = { file: '', mtime: 0, data: null };
+
+function readModelMap(file) {
+    if (!file) return null;
+    const p = path.isAbsolute(file) ? file : path.join(__dirname, file);
+    try {
+        const st = fs.statSync(p);
+        if (mapCache.data && mapCache.file === p && st.mtimeMs === mapCache.mtime) return mapCache.data;
+        const raw = fs.readFileSync(p, 'utf8');
+        const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        mapCache.data = { opus: '', sonnet: '', haiku: '', ...doc };
+        mapCache.file = p;
+        mapCache.mtime = st.mtimeMs;
+        return mapCache.data;
+    } catch { return null; }
+}
+
+function tierTargetFor(model, mm) {
+    if (!mm) return null;
+    for (const { tier, re } of TIER_RE) {
+        if (mm[tier] && re.test(String(model || ''))) return { tier, target: mm[tier] };
+    }
+    return null;
+}
+
+// ── Склейка пути: base шлюза + путь клиента ───────────────────────────────────
+// У половины шлюзов base URL уже кончается на /v1 (`api.evomap.ai/v1`,
+// `api.ourtoken.ai/v1`, `conduit.ozdoev.net/v1`, `localhost:20128/v1` — так они
+// лежат в BACKENDS/константах transparent-proxy.js), а Claude Code шлёт
+// `/v1/messages`. Наивная склейка даёт `/v1/v1/messages`, и шлюз отвечает 404
+// `Invalid URL` — проверено на живых ourtoken/evomap 2026-08-20. Схлопываем дубль:
+// одинарный /v1 — единственная форма, на которую эти шлюзы отвечают.
+function joinUpstreamPath(basePath, reqPath) {
+    const base = String(basePath || '').replace(/\/+$/, '');
+    if (base.endsWith('/v1') && /^\/v1(\/|\?|$)/.test(reqPath)) return base.slice(0, -3) + reqPath;
+    return base + reqPath;
+}
+
+// Что сделать с телом запроса перед удалённым шлюзом.
+// Возвращает { body, from, to } либо null (тело не меняем).
+// Суффикс окна ([1m], [200k]) — метка Claude Code, у шлюзов таких id нет: не срезать
+// = 503/404 на первом же запросе. Маппинг тира приоритетнее среза суффикса.
+function remapForRemote(method, reqPath, body, mm) {
+    if (method !== 'POST') return null;
+    if (reqPath.replace(/\?.*$/, '') !== '/v1/messages') return null;
+    let j;
+    try { j = JSON.parse(body.toString('utf8') || '{}'); } catch { return null; }
+    if (typeof j.model !== 'string' || !j.model) return null;
+    const model = j.model;
+    const tm = tierTargetFor(model, mm);
+    const target = tm && tm.target ? tm.target : model.replace(/\s*\[[^\]]*\]\s*$/, '');
+    if (target === model) return null;
+    return {
+        body: Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8'),
+        from: model,
+        to: target,
+    };
+}
+
+// Ошибка в форме Anthropic: Claude Code печатает message как есть, иначе юзер
+// видит только «unknown error» и лезет искать причину в CC, а не у нас.
+function apiError(res, code, message) {
+    const body = JSON.stringify({ type: 'error', error: { type: 'api_error', message } });
+    if (res.headersSent) { try { res.end(); } catch { /* ignore */ } return; }
+    res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+}
+
+function statusPayload() {
+    const s = readState();
+    return {
+        ok: true,
+        port: PORT,
+        uptime_ms: Date.now() - startedAt,
+        backend: s ? s.backend : null,
+        upstream: s ? s.upstream : null,
+        local: s ? s.local : null,
+        injectsKey: s ? (!s.local && !!s.keyFile) : null,
+        modelmap: s ? s.modelmap : null,
+        state_file: STATE_FILE,
+        error: s ? null : stateCache.error,
+    };
+}
+
+function handle(req, res) {
+    const reqPath = req.url || '/';
+    if (req.method === 'GET' && reqPath.replace(/\?.*$/, '') === '/__frontdoor/api/status') {
+        const body = JSON.stringify(statusPayload());
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+        return res.end(body);
+    }
+
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('error', () => { /* клиент отвалился — апстрим не дёргаем */ });
+    req.on('end', () => {
+        const state = readState();
+        if (!state) {
+            log(`${req.method} ${reqPath} → 503: ${stateCache.error}`);
+            return apiError(res, 503, `front-door :${PORT}: ${stateCache.error}. Открой дашборд :8200 и выбери провайдера.`);
+        }
+        forward(req, res, state, Buffer.concat(chunks), reqPath);
+    });
+}
+
+function forward(req, res, state, reqBody, reqPath) {
+    const u = state.url;
+    const requester = u.protocol === 'https:' ? https.request : http.request;
+    const headers = Object.assign({}, req.headers, { host: u.host });
+    let body = reqBody;
+
+    if (!state.local) {
+        // Ключ читаем на КАЖДЫЙ запрос: на этом стоит смена аккаунта без рестарта CC
+        // и авто-ротация FreeModel. Мирроринг keepalive-proxy.js:771-774.
+        let key = '';
+        if (state.keyFile) {
+            const kp = path.isAbsolute(state.keyFile) ? state.keyFile : path.join(CLAUDE_DIR, state.keyFile);
+            try { key = fs.readFileSync(kp, 'utf8').trim(); } catch { key = ''; }
+            if (!key) {
+                log(`${req.method} ${reqPath} → 503: пустой ${state.keyFile} (${state.backend})`);
+                return apiError(res, 503, `front-door: у ${state.backend} нет активного ключа (${state.keyFile}). Активируй аккаунт в дашборде.`);
+            }
+            headers.authorization = `Bearer ${key}`;
+            headers['x-api-key'] = key;
+        }
+        const mm = readModelMap(state.modelmap);
+        const remap = remapForRemote(req.method, reqPath, body, mm);
+        if (remap) {
+            body = remap.body;
+            headers['content-length'] = String(Buffer.byteLength(body));
+            log(`${req.method} ${reqPath} ${state.backend}: ${remap.from} → ${remap.to}`);
+        } else if (!mm && req.method === 'POST' && /claude-/i.test(modelOf(body))) {
+            // Шлюз без карты тиров: claude-модель уедет как есть. Первый признак
+            // будущего 404 «no such model» — пусть это будет видно в логе, а не в догадках.
+            log(`${req.method} ${reqPath} ${state.backend}: claude-* уходит на шлюз без ${state.modelmap || 'карты моделей'}`);
+        }
+    }
+
+    const upReq = requester({
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        method: req.method,
+        path: joinUpstreamPath(u.pathname, reqPath),
+        headers,
+        timeout: UPSTREAM_TIMEOUT_MS,
+    }, (upRes) => {
+        // Тело не трогаем вообще: SSE, gzip/zstd, MODEL_ECHO — не наша забота,
+        // ретраев нет, значит и буферизовать нечего. Просто труба.
+        res.writeHead(upRes.statusCode || 502, upRes.headers);
+        upRes.pipe(res);
+        upRes.on('error', () => { try { res.end(); } catch { /* ignore */ } });
+    });
+
+    upReq.on('timeout', () => {
+        log(`${req.method} ${reqPath} ${state.backend}: таймаут ${UPSTREAM_TIMEOUT_MS}мс`);
+        upReq.destroy(new Error('upstream timeout'));
+    });
+    upReq.on('error', (e) => {
+        // Ретраев тут нет сознательно: они живут в keepalive, дубль = второй платный запрос.
+        const hint = e.code === 'ECONNREFUSED' && state.local
+            ? ` Прокси ${state.upstream} не слушает — подними его кнопкой в Health или переактивируй провайдера.`
+            : '';
+        log(`${req.method} ${reqPath} ${state.backend}: ${e.code || e.message}`);
+        apiError(res, 502, `front-door → ${state.backend}: ${e.code || e.message}.${hint}`);
+    });
+    // Клиент ушёл (Ctrl-C, ESC в CC) — рвём и апстрим, чтобы не платить за ответ в никуда.
+    req.on('aborted', () => upReq.destroy());
+    upReq.end(body);
+}
+
+function modelOf(body) {
+    try { return JSON.parse(body.toString('utf8') || '{}').model || ''; } catch { return ''; }
+}
+
+// ── Самопроверка (до server.listen: порт не занимаем) ─────────────────────────
+if (process.argv[2] === 'selftest') {
+    const assert = require('assert');
+
+    // 1. Разбор состояния: local/remote, мусор.
+    const local = parseState(JSON.stringify({ backend: 'gorouter', upstream: 'http://127.0.0.1:20156' }));
+    assert.strictEqual(local.local, true, 'localhost = локальный апстрим');
+    assert.strictEqual(local.keyFile, null, 'у локального нет keyFile');
+    const remote = parseState(JSON.stringify({
+        backend: 'conduit', upstream: 'https://conduit.ozdoev.net/v1',
+        keyFile: 'cdt-active-key.txt', modelmap: 'cdt-modelmap.json',
+    }));
+    assert.strictEqual(remote.local, false, 'внешний хост = удалённый апстрим');
+    assert.strictEqual(remote.keyFile, 'cdt-active-key.txt', 'keyFile читается');
+    assert.strictEqual(parseState(JSON.stringify({ backend: 'x', upstream: 'http://localhost:20155' })).local, true, 'localhost по имени');
+    assert.throws(() => parseState('{"backend":"x"}'), /нет upstream/, 'без upstream — ошибка');
+    assert.throws(() => parseState('{"upstream":"ftp://x/"}'), /не http/, 'не-http upstream — ошибка');
+    assert.throws(() => parseState('не json'), 'мусор — ошибка');
+
+    // 2. Путь апстрима: base шлюза + путь клиента, с схлопыванием дубля /v1.
+    //    Замерено на живых шлюзах 2026-08-20: ourtoken отвечает на /v1/models (403
+    //    «banned» — т.е. путь дошёл) и 404 «Invalid URL (/v1/v1/models)» на дубле;
+    //    evomap так же. aerolink (base без пути) отдал каталог 200.
+    const jp = (up, p) => joinUpstreamPath(new URL(up).pathname, p);
+    assert.strictEqual(jp('https://api.evomap.ai/v1', '/v1/messages'), '/v1/messages', 'дубль /v1 схлопнут');
+    assert.strictEqual(jp('http://localhost:20128/v1', '/v1/messages'), '/v1/messages', 'omniroute тоже');
+    assert.strictEqual(jp('https://api.svrtr.org', '/v1/messages'), '/v1/messages', 'base без пути');
+    assert.strictEqual(jp('https://capi.aerolink.lat/', '/v1/models'), '/v1/models', 'хвостовой слэш не мешает');
+    assert.strictEqual(jp('http://127.0.0.1:20156', '/v1/messages?beta=true'), '/v1/messages?beta=true', 'query не теряется');
+    assert.strictEqual(jp('https://api.evomap.ai/v1', '/health'), '/v1/health', 'не-/v1 путь дописывается к base');
+    assert.strictEqual(joinUpstreamPath('/api/v1', '/v1/messages'), '/api/v1/messages', 'схлопывание не съедает префикс');
+
+    // 3. Ремап тела для удалённых: срез суффикса окна и карта тиров.
+    const bodyOf = (o) => Buffer.from(JSON.stringify(o), 'utf8');
+    const noMap = null;
+    const r1 = remapForRemote('POST', '/v1/messages', bodyOf({ model: 'claude-opus-5[1m]', max_tokens: 1 }), noMap);
+    assert.strictEqual(r1.to, 'claude-opus-5', 'суффикс [1m] срезан');
+    assert.strictEqual(JSON.parse(r1.body).max_tokens, 1, 'остальное тело сохранено');
+    assert.strictEqual(remapForRemote('POST', '/v1/messages', bodyOf({ model: 'claude-opus-5' }), noMap), null,
+        'без суффикса и без карты тело не трогаем');
+    const mm = { opus: 'gpt-5.4', sonnet: '', haiku: '' };
+    const r2 = remapForRemote('POST', '/v1/messages', bodyOf({ model: 'claude-opus-5[1m]' }), mm);
+    assert.strictEqual(r2.to, 'gpt-5.4', 'карта тиров приоритетнее среза суффикса');
+    const r3 = remapForRemote('POST', '/v1/messages', bodyOf({ model: 'claude-sonnet-5[1m]' }), mm);
+    assert.strictEqual(r3.to, 'claude-sonnet-5', 'пустой тир в карте = только срез суффикса');
+    assert.strictEqual(remapForRemote('GET', '/v1/models', bodyOf({ model: 'claude-opus-5[1m]' }), mm), null, 'не POST — не трогаем');
+    assert.strictEqual(remapForRemote('POST', '/v1/messages/count_tokens', bodyOf({ model: 'claude-opus-5[1m]' }), mm), null,
+        'count_tokens форвардим как есть, своей оценки не даём');
+    assert.strictEqual(remapForRemote('POST', '/v1/messages', Buffer.from('не json'), mm), null, 'битое тело не ломает прокси');
+    // Пробник валидации модели CC (stream=false, 2 сообщения, без tools) — обычный запрос.
+    const probe = remapForRemote('POST', '/v1/messages', bodyOf({
+        model: 'claude-opus-5[1m]', stream: false, messages: [{ role: 'user', content: 'x' }, { role: 'assistant', content: 'y' }],
+    }), noMap);
+    assert.strictEqual(probe.to, 'claude-opus-5', 'пробник /model проходит как обычный запрос');
+
+    // 4. Локальный апстрим: тело и ключ не трогаем (это делает keepalive).
+    //    Проверяем самим кодом forward() — что ветка инжекта под !state.local.
+    const src = fs.readFileSync(__filename, 'utf8');
+    assert.ok(/if \(!state\.local\) \{[\s\S]*?headers\.authorization/.test(src),
+        'инжект ключа только в ветке !state.local');
+    // Ровно один вызов апстрима на запрос: ретраи и хеджи живут в keepalive, дубль
+    // отсюда — второй платный запрос к шлюзу.
+    assert.strictEqual((src.match(/^\s*const upReq = requester\(\{/gm) || []).length, 1,
+        'апстрим дёргается ровно из одного места (нет ретраев/хеджей)');
+    assert.ok(/server\.listen\(PORT, '127\.0\.0\.1'/.test(src), 'слушаем только 127.0.0.1 (инжектим ключи)');
+
+    // 5. Ошибки в форме Anthropic.
+    let captured = null;
+    apiError({ writeHead() {}, end(b) { captured = b; }, headersSent: false }, 503, 'тест');
+    const err = JSON.parse(captured);
+    assert.strictEqual(err.type, 'error', 'тело ошибки в форме Anthropic');
+    assert.ok(err.error.message.includes('тест'), 'сообщение доезжает до клиента');
+
+    console.log('selftest OK');
+    process.exit(0);
+}
+
+const server = http.createServer(handle);
+server.on('clientError', (err, socket) => {
+    if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+});
+server.listen(PORT, '127.0.0.1', () => {
+    log(`front-door на http://127.0.0.1:${PORT}, состояние из ${STATE_FILE}`);
+    const s = readState();
+    if (!s) log(`ВНИМАНИЕ: ${stateCache.error} — запросы будут отвечать 503, пока дашборд не запишет бэкенд`);
+});

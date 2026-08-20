@@ -32,6 +32,11 @@ call :KILLPORT 20130 "FM OpenAI proxy"
 call :KILLPORT 20131 "VyceAI proxy"
 call :KILLPORT 20132 "agentrouter proxy"
 call :KILLPORT 20133 "keepalive proxy"
+REM Front-door :20100 — единый вход Claude Code. Убивать безопасно только потому,
+REM что transparent-proxy.js спавнит его обратно на boot. Порты :20155-20157
+REM (keepalive провайдеров) здесь НЕ трогаем: автоспавна у них нет, а settings.json
+REM может смотреть ровно в один из них — снесём и все сессии CC получат ConnectionRefused.
+call :KILLPORT 20100 "front-door"
 if "%FAILED%"=="1" goto FAILED
 
 echo All ports released.

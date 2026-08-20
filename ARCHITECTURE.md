@@ -13,6 +13,7 @@
 | Порт   | Сервис                  | Файл                           | Роль |
 |--------|-------------------------|--------------------------------|------|
 | `8200` | **Backend Switcher / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |
+| `20100`| **Front Door** (фиксированный вход CC) | `routing/frontdoor-proxy.js` | Единственный адрес в `ANTHROPIC_BASE_URL`, когда режим включён (`routing/frontdoor.json`). На каждый запрос читает `~/.claude/active-backend.json` по mtime и форвардит в апстрим активного бэкенда: локальным (keepalive/конвертеры) — как есть, удалённым — с инжектом ключа из `<p>-active-key.txt` + срезом суффикса `[1m]` + `<p>-modelmap.json`. Ретраев нет (они в keepalive). Слушает только `127.0.0.1`. Самопроверка: `node routing/frontdoor-proxy.js selftest`. |
 | `20126`| **FreeModel Key Rotator** | `routing/freemodel-rotator.js` | Менеджер прямых ключей для backend `freemodel_rotator`. Пишет ключ в `settings.json`. |
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
@@ -29,6 +30,10 @@
 Запуск: `routing/start-switcher.bat` (поднимает :20126 + :20130 + :8200, открывает UI).
 Рестарт: `routing/restart-dashboard.bat` (убивает все три, перезапускает).
 ТГ-бот: `npm run tgbot` (нужен `tgbot/.env`, см. `tgbot/README.md`).
+
+> `:20132`, `:20133` и `:20100` boot-спавнит сам `transparent-proxy.js`, поэтому bat-скрипты
+> их убивают перед стартом. `:20155`–`:20157` (keepalive провайдеров) **не убивают никогда**:
+> автоспавна у них нет, а `settings.json` может смотреть ровно в один из них.
 
 ## Свипер зомби-браузеров
 
@@ -80,21 +85,24 @@
   (ключи `sk-sr-v1-`), авторег через @svrtrbot (одна кнопка Login Start в боте).
   Файлы: `svrtr/lib/svrtr-api.js`, `svrtr/svrtr_autoreger.js`.
 - **agentrouter** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20133` (SSE keepalive,
-  форвард в agentrouter.org БЕЗ `/v1`), ключ пишется **литералом** в `ANTHROPIC_AUTH_TOKEN`
-  (не apiKeyHelper — WAF agentrouter не пускает helper-путь). `apiKeyHelper` удаляется,
+  форвард в agentrouter.org БЕЗ `/v1`), в `ANTHROPIC_AUTH_TOKEN` пишется заглушка `dummy`
+  (не apiKeyHelper — WAF agentrouter не пускает helper-путь). Реальный ключ прокси читают
+  из `~/.claude/ar-active-key.txt` на каждый запрос → смена аккаунта **бесшовна**, без новой
+  сессии CC. `apiKeyHelper` удаляется,
   модель из `~/.claude/ar-active-model.txt`. Роутинг: и `claude-*`, и `gpt-*` идут в
   `:20133`, который сам переправляет gpt в конвертер `:20132`. Пул:
   `routing/agentrouter-sessions.json`.
 - **gorouter** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20156` (SSE keepalive,
-  форвард в gorouter.app), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `gorouter-active-key.txt`,
+  форвард в gorouter.app), в `ANTHROPIC_AUTH_TOKEN` — `dummy`, реальный ключ keepalive берёт
+  из `gorouter-active-key.txt` на каждый запрос,
   модель из `~/.claude/gorouter-active-model.txt` + `gorouter-modelmap.json`. Пул:
   `routing/gorouter-sessions.json`.
 - **tabi** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20155` (SSE keepalive,
-  форвард в tabitoken.com), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `tabi-active-key.txt`,
+  форвард в tabitoken.com), в `ANTHROPIC_AUTH_TOKEN` — `dummy`, ключ из `tabi-active-key.txt`,
   модель из `~/.claude/tabi-active-model.txt` + `tabi-modelmap.json`. Пул:
   `routing/tabi-sessions.json`.
 - **xpeach** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20157` (SSE keepalive,
-  форвард в xpeach.codes), ключ литералом в `ANTHROPIC_AUTH_TOKEN` из `xpeach-active-key.txt`,
+  форвард в xpeach.codes), в `ANTHROPIC_AUTH_TOKEN` — `dummy`, ключ из `xpeach-active-key.txt`,
   модель из `~/.claude/xpeach-active-model.txt` + `xpeach-modelmap.json`. Пул:
   `routing/xpeach-sessions.json`. Валюта шлюза — 🍑 (курс к единице квоты как у $).
 - **helpcoder** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/hc-active-key.txt`,
@@ -115,6 +123,64 @@ cat без файла виснет на stdin. Выяснено на чисто�
 Режим определяется по `settings.json` (`currentTarget`): apiKeyHelper с `fm-active-key.txt`
 → `apihelper`; с `al-active-key.txt` → `aerolink`; с `ev-active-key.txt` → `evomap`; с `ot-active-key.txt` → `ourtoken`; с `cdt-active-key.txt` → `conduit`; с `hc-active-key.txt` → `helpcoder`;
 прямой ключ → backend по URL (base agentrouter.org → `agentrouter`).
+**В режиме front-door** (см. ниже) base URL всегда `:20100`, и источник правды —
+`~/.claude/active-backend.json`; правила выше остаются фолбэком для прямого режима.
+
+### Front-door `:20100` — переключение провайдера без рестарта Claude Code
+
+**Проблема.** `env` из `settings.json` Claude Code читает ОДИН раз, на старте процесса.
+Пока свич менял `ANTHROPIC_BASE_URL`, каждое переключение провайдера требовало новой
+сессии CC. С Orca, где одновременно живёт несколько pty с `claude`, это неприемлемо
+(перезапускать все терминалы), а Claude Code Desktop вообще не читает `settings.json` —
+он берёт gateway из Third-Party Inference, и вбивать туда меняющийся адрес бессмысленно.
+
+**Решение.** `ANTHROPIC_BASE_URL` фиксируется на `http://127.0.0.1:20100`, а выбор бэкенда
+переезжает в `~/.claude/active-backend.json`:
+
+```json
+{ "backend": "gorouter", "upstream": "http://127.0.0.1:20156",
+  "keyFile": null, "modelmap": null, "updatedAt": 1755000000000 }
+```
+
+| Поле | Смысл |
+|---|---|
+| `upstream` | ровно тот адрес, который обработчик активации выставил бы в `settings.json` |
+| `keyFile` | `null` для локальных апстримов (ключ ставит keepalive/конвертер), имя файла в `~/.claude/` для удалённых шлюзов |
+| `modelmap` | `<префикс>-modelmap.json` по префиксу key-файла (`cdt-` → `cdt-modelmap.json`); файла может не быть |
+
+**Чокпоинт один — `writeSettings()`** (`applyFrontdoor()` рядом с ним). 15+ обработчиков
+активации **не правились**: они по-прежнему пишут свой base URL / `apiKeyHelper`, а чокпоинт
+выводит из объекта бэкенд (`backendFromSettingsObj`), записывает состояние и подменяет
+`env` на `:20100` + `AUTH_TOKEN=dummy`, снося `apiKeyHelper`/`ANTHROPIC_API_KEY`.
+Правила, которые из этого следуют:
+
+- запись, где base URL уже `:20100` (модель, тоггл, пресет, второй `writeSettings` подряд),
+  состояние **не трогает** — иначе второй проход затирал бы активный бэкенд;
+- официальный Claude (OAuth, пустой base URL) не front-door'ится вообще;
+- ключ, записанный литералом (единственный такой путь — `freemodel_rotator`), переезжает в
+  `~/.claude/fd-active-key.txt`: прокси читает ключи только из файлов, секретам в состоянии не место.
+
+**Тумблер** — вкладка «Настройки» (`routing/frontdoor.json`, `{enabled, port}`, читается по
+mtime). В репо лежит `enabled:false`: у друга установка не меняется, пока он сам не включит.
+Адрес переезжает при следующей активации провайдера; откат — выключить тумблер и кликнуть
+по ключу (или восстановить бэкап `settings.json`).
+
+**Грабли, уже закрытые:**
+
+- у половины шлюзов base URL кончается на `/v1` (`api.evomap.ai/v1`, `api.ourtoken.ai/v1`,
+  `conduit.ozdoev.net/v1`, `localhost:20128/v1`), а CC шлёт `/v1/messages` → наивная склейка
+  даёт `/v1/v1/messages` и `404 Invalid URL`. Front-door дубль **схлопывает** (замерено на
+  живых ourtoken/evomap 2026-08-20: одинарный `/v1` — единственная форма, на которую они отвечают);
+- `wired.effectivePort` в Health — порт апстрима активного бэкенда, а не `:20100`. Без этого
+  упавший keepalive активного провайдера числился бы мирным «не запущен» (см. `isIdle`);
+- front-door — **единая точка отказа**: лёг `:20100` → лёг Claude Code целиком. Поэтому
+  boot-спавн (`transparent-proxy.js`) + кнопка «🔄 перезапустить» в Health, а порт внесён в
+  защищённые (`POST /api/health/kill` его не убьёт).
+
+**Регресс-тесты:** `node routing/frontdoor-proxy.js selftest` (логика прокси) и
+`node tools/check-frontdoor.js` — поднимает изолированную копию дашборда (свой `USERPROFILE`,
+свой порт, свой `frontdoor.json`) и проверяет чокпоинт на всех формах записи: helper-режим,
+локальный апстрим, литеральный ключ, официальный Claude, повторная запись, выключенный тумблер.
 
 > ⚠️ Версию Claude Code фиксировать НЕ надо. Пин `2.1.153` + `DISABLE_AUTOUPDATER=1`/
 > `autoUpdates:false` был основан на неверном выводе «новее ломает `apiKeyHelper`» —
@@ -262,6 +328,20 @@ Custom-конвертеры под правило НЕ попадают созн
 `custom-providers.json` выставлен только на время активации, поэтому «порт в конфиге
 есть, процесса нет» — это протухшее состояние, а не покой, и его надо видеть.
 
+**Но видеть его вечно не надо.** `proxyPort`/`proxyPid` снимались только на явных путях
+(переключение провайдера, стоп, удаление), а если конвертер умирал сам — падал, попадал
+под `KILLPORT` из `restart-dashboard.bat`, переживал ребут — запись оставалась навсегда, и
+Health рисовал красное «упал» провайдеру, которым не пользуются (жило месяцами: `:20150`
+BluesMinds с pid из позапрошлой загрузки). Теперь `handleHealth` при сборке проб сверяет
+запись с `netstat`: порт никто не слушает **и** провайдер не активен → чистит
+`proxyPort`/`proxyPid` в json, пишет строку в лог и пробу не создаёт. У **активного**
+провайдера мёртвый конвертер остаётся красным — туда смотрит Claude Code, это авария.
+
+Это единственное место в дашборде, где состояние процесса персистится на диск. Остальные
+«занятости» (`ghProfileBusy`, `newapiLkBusy`, `ghIndexBuilding`, tg-health job) держат pid
+в памяти и проверяют `process.kill(pid, 0)` — они умирают вместе с процессом и залипнуть
+не могут. Новое состояние такого рода класть на диск без сверки с живостью нельзя.
+
 ### Хедж / ретраи keepalive — дефолты из коробки
 
 Одинаковы для **всех четырёх** вкладок (AgentRouter / GoRouter / Tabi / XPeach), потому
@@ -279,6 +359,10 @@ Custom-конвертеры под правило НЕ попадают созн
 работают именно дефолты кода** — менять «для всех» надо там, а не в json. Крутилки в
 дашборде пишут в `POST /__config` → применяется без рестарта + сохраняется в json.
 Плейсхолдеры инпутов (`12` / `3` / `10`) держать равными дефолтам кода.
+
+Человеческая шпаргалка — что каждая ручка даёт, таймлайн запроса, замеры «агрессивный хедж
+делает хуже», диагностика «прокси vs шлюз vs VPN-туннель»:
+**[`routing/KEEPALIVE-TUNING.md`](routing/KEEPALIVE-TUNING.md)**.
 
 ---
 
@@ -596,11 +680,24 @@ client detected` (проверено 2026-08-16, при прочих равны�
 
 **Три источника, первый сработавший побеждает** (поле `balanceSource` в записи):
 
-| источник | бейдж | откуда |
-|---|---|---|
-| `self` | ⚡ точный | `GET /api/user/self` → `quota` (остаток) и `used_quota` (расход) в единицах квоты; USD = `quota / quota_per_unit` (500000, из `/api/status`) |
-| `anchor` | ✏️ вручную | вписанный из ЛК баланс + расход на момент вписывания: `balance = balanceAnchor − (spent − anchorSpent)`, дальше убывает сам |
-| `guess` | ~ прикидка | последний резерв: `max(база, ceil(spent/шаг)*шаг) − spent`. База 175 / 70 / 100 |
+| приоритет | источник | бейдж | откуда |
+|---|---|---|---|
+| 1 | `anchor` | ✏️ вручную | вписанный из ЛК баланс + расход на момент вписывания: `balance = balanceAnchor − (spent − anchorSpent)`, дальше убывает сам |
+| 2 | `self` | ⚡ точный | `GET /api/user/self` → `quota` (остаток) и `used_quota` (расход) в единицах квоты; USD = `quota / quota_per_unit` (500000, из `/api/status`) |
+| 3 | `guess` | ~ прикидка | последний резерв: `max(база, ceil(spent/шаг)*шаг) − spent`. База 175 / 70 / 100 |
+
+- ⚠️ **Вписанное вручную стоит ВЫШЕ «точного», и это осознанно** (порядок исправлен
+  2026-08-20). Изначально `self` перебивал анкер, и это дважды выглядело как «ручное
+  вписывание не работает»: цифра честно сохранялась в `*-sessions.json`, а в таблице тут же
+  возвращалась прежняя — с тостом «анкер сохранён, но показывается точный баланс из ЛК
+  аккаунта — он приоритетнее». Посылка «точное лучше вписанного руками» неверна: владелец
+  вписывает ровно тогда, когда посмотрел ЛК глазами и цифра шлюза его не устроила (у GoRouter
+  `quota` расходится с кошельком в ЛК). Возврат к точному — пустое поле в ✏️ (сброс анкера).
+  Побочно экономится запрос `self` у аккаунтов с живым анкером — для WAF полезно.
+- ⚠️ **Расход шлюза может поехать НАЗАД, и тогда анкер замирает.** Живой случай: `anchorSpent
+  = 103.90` при текущем `usage = 59.10` (счётчик упал на $44.80 после вписывания). `drawn`
+  отрицательный, режется в 0, вписанная цифра больше не убывает вообще. Лечение ручное —
+  вписать заново; угадывать за шлюз реальный расход не на чем.
 
 - `usage`-эндпоинт (`/dashboard/billing/usage`, `total_usage` **в центах**) зовётся всегда:
   он определяет живость **ключа** (401/403 = мёртв), а `self` говорит только про аккаунт —
@@ -722,16 +819,23 @@ client detected` (проверено 2026-08-16, при прочих равны�
 яркость, забранная коробка приглушена (`opacity-60`) — глаз цепляет только строки, куда идти.
 Слов в колонке нет намеренно, она узкая; расшифровка — в подсказке при наведении.
 
-- **Сброс — суточная граница, а не скользящие 24ч.** Забрал вечером в 20:14 → следующий
-  заход возможен уже в 08:30 следующего утра. Именно поэтому днём после утреннего чек-ина
-  деньги не капали, а на следующее утро капали. Время границы — **наблюдение владельца, не
+- **Сброс — суточная граница, а не скользящие 24ч.** Забрал в 20:14 при границе `20:30` →
+  следующий заход возможен уже через 16 минут, а не через сутки. Именно поэтому днём после
+  чек-ина деньги не капали, а после границы капали. Время границы — **наблюдение владельца, не
   факт из документации шлюза**, поэтому настраивается: `routing/ar-checkin.json`
-  `{resetHhmmMsk: "08:30", bonusUsd: 25}`, читается по запросу (правка **без рестарта**
+  `{resetHhmmMsk: "20:30", bonusUsd: 25}`, читается по запросу (правка **без рестарта**
   прокси, как `ar-modelmap.json`), UI — поле в карточке `#ar-checkin`, роут
   `GET/POST /api/ar/checkin-config` (`handleArCheckinConfig`).
+- **Дефолт `20:30` зашит в ЧЕТЫРЁХ местах** — при смене править все, иначе разъедутся:
+  `AR_CHECKIN_DEFAULTS` (`transparent-proxy.js`, отдаётся когда файла нет или он битый),
+  `AR_CHECKIN_DEFAULT_HHMM` + внутренний фолбэк `isFinite(H) ? H : 20` и `placeholder`
+  инпута (`proxy-dashboard.html`), `ar_hh=20; ar_mm=30` (`statusline-autoreger.sh`,
+  свой парсер на `grep`, конфиг не импортирует). Сам `ar-checkin.json` в гите **есть**,
+  поэтому в свежем клоне читается он, а не константы.
 - **Расчёт границы** (`arCheckinWindowStart`, `proxy-dashboard.html`): МСК = UTC+3 без
-  переходов на летнее время с 2014, поэтому `08:30 МСК = 05:30 UTC` жёстко; `Date.UTC` сам
-  откатывает дату при `H−3 < 0`. Если граница сегодня ещё не наступила — работает вчерашняя.
+  переходов на летнее время с 2014, поэтому `20:30 МСК = 17:30 UTC` жёстко; `Date.UTC` сам
+  откатывает дату при `H−3 < 0` (актуально для ранних границ, если владелец поставит до 03:00).
+  Если граница сегодня ещё не наступила — работает вчерашняя.
 - **Поля в `agentrouter-sessions.json`**: `checkinAt` (ISO, когда зафиксирован забор) +
   `checkinFrom` (`self` | `anchor` — откуда узнали, видно в подсказке). В
   `BALANCE_CLEARABLE` их **нет**, поэтому `arSaveMerge()` их сохраняет и параллельный батч
@@ -1052,7 +1156,7 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 ## Статуслайн Claude Code (`routing/statusline-autoreger.sh`)
 
 Скрипт-cтрока cнизу CLI: `provider/model │ $217.33~ │ ⧉ 139k/1M`.
-Лежит **в репо** (обновления приезжают с `git pull`), `install.sh` (шаг 3)
+Лежит **в репо** (обновления приезжают с `git pull`), `install.sh` (шаг 7)
 прописывает его в `~/.claude/settings.json` → `statusLine.command`.
 `ROOT` определяет сам по своему расположению (`<repo>/routing/`).
 Бар не виден / пусто внизу CC — короткая инструкция для человека:
@@ -1060,6 +1164,11 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 
 - **Провайдер**: сначала пробует `GET :8200/__switch/api/status` (1с timeout), при
   недоступности — фолбэк по `apiKeyHelper`/`ANTHROPIC_BASE_URL` из `settings.json`.
+  В режиме front-door base URL всегда `:20100`, поэтому провайдер читается из
+  `~/.claude/active-backend.json` (bash-native, 0 форков); нет состояния → `frontdoor`.
+  Захват `apiKeyHelper` регуляркой обрывается на экранированной кавычке `\"` внутри
+  JSON, поэтому при промахе имя key-файла ищется по всему тексту `settings.json` —
+  без этого helper-режимы показывались как `unknown`.
 - **Квота для `freemodel` = только активный аккаунт** (не сумма пула):
   ключ из `~/.claude/fm-active-key.txt` → dir через `.freemodel_meta.json`
   (`apiKey`) → блок в `.freemodel_quota_cache.json`. Метрика — 5h окно:
@@ -1372,6 +1481,86 @@ tools\fix-paths-after-move.ps1` (есть `-DryRun` и `-OldPath`) →
 десятки ГБ). Перед переносом их проще снести — и MAX_PATH не упрётся, и копирование
 станет быстрым.
 
+## Установщики: база / тяжёлый стек / общие хелперы
+
+Разделено 2026-08-20. Было: один `install.sh` на 543 строки и ~20 вопросов —
+он одновременно ставил зависимости, выпрашивал секреты в терминале, тянул
+Python-стек и в хвосте диагностировал ключ курлом. `install-mac.sh` при этом
+вышел на 266 строк и два вопроса, и разница читалась как «виндовый наляпистый».
+
+| Файл | Роль |
+| :--- | :--- |
+| `install.sh` | Windows-база, ~240 строк, **3 вопроса**: winget (если нет node/git) · git identity (если не настроен) · запустить дашборд |
+| `install-deps.sh` | Тяжёлое и опциональное: Python 3.11 + Camoufox + grok-launcher + tg-venv + портативный Telegram, `sqlite3.exe`, OmniRoute в Docker, `.env` ТГ-бота. Зовётся в конце `install.sh`, работает и сам по себе |
+| `install-lib.sh` | `b/ok/warn/err/step/have/ask/prompt/set_env` + режим `AUTO`. Общий для двух файлов выше |
+| `install-mac.sh` | macOS, **standalone**: качается одним файлом через `curl` в bootstrap-однострочнике, поэтому `. install-lib.sh` ему нельзя — свои 6 хелперов он держит сам |
+
+Что важно не сломать:
+
+- **`AUTO=1` — контракт `update.sh:45` и `fix.sh:52`.** В этом режиме ни одного
+  `read`, а дефолты вопросов в `install-deps.sh` ровно те, что были в старом
+  install.sh (Python `Y`, sqlite3 `Y`, OmniRoute `N`, ТГ-бот `N`). Поднимешь
+  дефолт — и обновление у друга начнёт молча ставить Docker.
+- **Секреты установщик не спрашивает.** Ввод API-ключа, `BOT_TOKEN` и
+  `OMNIROUTE_API_KEY` из базы убран: в терминале секрет остаётся в скроллбэке и
+  в истории шелла. Ключ бэкенда вписывается в дашборде. (`BOT_TOKEN` и
+  OmniRoute-ключ остались в `install-deps.sh` — там это осознанный опт-ин.)
+- **Диагностика — в `doctor.sh`, не в установщике.** Проверка ключа переехала
+  туда разделом 11 и по пути стала полезнее: пингует `ANTHROPIC_BASE_URL` даже
+  когда `apiKeyHelper` нет вовсе (сейчас типичный случай — базовый URL смотрит
+  в локальный `keepalive-proxy`, ключ подставляет прокси). Различает `000`
+  (прокси не поднят), `401/403` (ключ дохлый), `502/503/504` (жив, но апстрим
+  лежит) и `404/405` (норма для локального прокси).
+- **`install.ps1` не тронут** — 102 строки bootstrap'а, зовёт `bash install.sh`.
+
+### `tools/tg-venv-python.js` — где интерпретатор venv
+
+`python -m venv` раскладывает venv по-разному: `Scripts/python.exe` на Windows,
+`bin/python` на macOS. Виндовый вариант был **захардкожен** в четырёх местах
+(`transparent-proxy.js` `handleTgOpen`, `tgbot/stt.js`, `doctor.sh`, `fix.sh`), из-за
+чего на маке «✈ Открыть TG» и STT отдавали «venv не создан» при полностью живом
+venv. Теперь один резолвер: перебор `Scripts/python.exe` → `bin/python3` →
+`bin/python`, переопределение через `TG_VENV_PYTHON` (у STT исторически ещё и
+`STT_PYTHON`), а при отсутствии venv он возвращает **ожидаемый на этой платформе**
+путь — вызывающий печатает его в ошибке, иначе юзеру нечего искать.
+
+`handleTgOpen` спрашивает резолвер **на каждый запрос**, а не один раз при загрузке
+модуля: venv мог появиться после старта дашборда (UPDATE.bat), и закешированный
+«не найден» держался бы до рестарта прокси. Сам `require` обёрнут в `try`: если
+обновление приехало не целиком, дашборд не должен умирать на загрузке из-за одной
+кнопки — откат на виндовый layout, ломается только ✈. То же в `tgbot/stt.js`
+(иначе падал бы весь бот), и `install.sh` так же проверяет наличие `install-lib.sh`
+/ `install-deps.sh` до первого их использования и выходит с кодом 1 и внятной
+причиной вместо каскада «ask: command not found».
+
+### ТГ-менеджер на macOS (написано вслепую, не проверено на Darwin)
+
+Поддержан **только** ТГ-менеджер, не автореги. Camoufox сюда не входит осознанно:
+пины (`camoufox==0.4.11`, `playwright==1.60.0`) подобраны на Windows, мак-колёса не
+проверялись, и вслепую они дают сломанную установку вместо работающей.
+
+- **venv** (`install-deps.sh`, ветка `IS_MAC`): Python 3.11 берётся по абсолютному
+  пути из `brew --prefix python@3.11` — brew не кладёт свои питоны в PATH под этим
+  именем гарантированно (та же грабля, что с `brew shellenv` в `install-mac.sh`).
+  Запасной вариант — системный `python3`. Реквизиты те же
+  (`tools/tg-venv-requirements.txt`), лог сборки в `$TMPDIR/tg-venv-install.log`, при
+  падении печатается хвост: вероятные виновники на маке — `PyQt5` или `TgCrypto`
+  без готового колеса под arm64.
+- **Клиент** (`tools/tg-open.py`): портативной сборки Telegram под мак не
+  существует, поэтому `telegram_candidates()` ищет `.app` — свой в репо, затем
+  `/Applications`, затем `~/Applications` (её ставит `brew install --cask telegram`).
+  Изоляция профилей держится на `-workdir`, а не на копии бинаря, так что общий
+  `.app` аккаунты не смешивает.
+- **Отвязка процесса**: `DETACHED_PROCESS` — виндовый флаг, `start_new_session`
+  (setsid) — POSIX-ный, и передавать его на Windows нельзя (`subprocess` бросит
+  `ValueError`). Поэтому kwargs собираются по `sys.platform`, а виндовая ветка
+  осталась ровно той же — проверено здесь: `--check` проходит, клиент резолвится в
+  прежний портативный `Telegram.exe`, `Popen` те же kwargs принимает.
+
+Что на маке ещё **не** заработает: Camoufox-автореги (см. выше) и всё, что тянет
+`sqlite3.exe`-специфику — но сам `sqlite3` в macOS системный, `install-deps.sh` его
+только проверяет.
+
 ## macOS: обёртка-совместимость (ноль правок Windows-кода)
 
 Дашборд рассчитан на Windows, но весь функционал (ключи ar/go/tb, балансы,
@@ -1518,9 +1707,10 @@ Bootstrap-блок в начале скрипта: если рядом нет `p
     воркер по нему, живой прогон бара с тестовым payload.
 - **Статус-лайн был выключен по умолчанию:** в `claude-settings.example.json`
   секции `statusLine` нет, а существующий `settings.json` установщики не
-  перезаписывают. `install.sh` (Windows) подключает его своим `sl_node`,
-  `install-mac.sh` — через `tools/enable-statusline.js`. Обе пишут ОДНУ и ту же
-  команду `bash "<repo>/routing/statusline-autoreger.sh"`; WSL-обёртка с payload
+  перезаписывают. Оба установщика (`install.sh` и `install-mac.sh`) подключают его
+  одним и тем же `node tools/enable-statusline.js`, который пишет команду
+  `bash "<repo>/routing/statusline-autoreger.sh"` (через шим в `~/.claude/`, чтобы
+  переживать перенос папки); WSL-обёртка с payload
   через `env STATUSLINE_PAYLOAD` включается только когда `bash` в PATH реально
   WSL-овский (проверка по `WSL_DISTRO_NAME`/`uname -r`, а не по платформе).
 - **Пауза «Нажми Enter» только по флагу `DASHBOARD_WAIT_ENTER=1`.** Раньше стояло
@@ -1532,6 +1722,32 @@ Bootstrap-блок в начале скрипта: если рядом нет `p
   ответ сервера, с временем); `tools/mac-cookie-probe.js` — подбор ключа куки,
   матрица пароль × итерации × шифр плюс форма данных (по кратности длины 16
   видно, блочный ли шифр).
+
+## Orca (внешний оркестратор агентов) — что о ней надо знать
+
+[Orca](https://www.onorca.dev) (`stablyai/orca`, у нас 1.4.185) — desktop-IDE, которая гоняет
+CLI-агентов в pty-терминалах по изолированным git-worktree. **Своих моделей у неё нет** и в
+путь запроса она не входит: детектит локальный бинарь (`claude` из PATH) и запускает его с
+нашим же `~/.claude/settings.json`. Проверено на живой машине 2026-08-20:
+
+| Что | Где / значение |
+|---|---|
+| CLI | `%LOCALAPPDATA%\Programs\orca\resources\bin\orca.exe` — **добавлен в пользовательский PATH**. `orca.cmd` отказывается форвардить `orchestration send/reply` (cmd портит тело сообщения) — там звать `.exe` напрямую |
+| Конфиг агентов | `%APPDATA%\orca\profiles\local-default\orca-data.json` → `settings` |
+| Наш роутинг не затеняется | `agentCmdOverrides = {}`, `agentDefaultEnv` = только `{goose:…}` — никаких `ANTHROPIC_*` |
+| Модель | `agentDefaultArgs.claude = "--dangerously-skip-permissions"`, `--model` **не передаётся** → модель берётся из `settings.model`. Пояс при желании: дописать туда `--model "claude-opus-5[1m]"` |
+| Свой аккаунт-свитчер | `orca account list --json` → `claude.accounts: []` — OAuth поверх нашего роутинга Orca не подсовывает |
+| Скилл для агентов | `orca skills install --skill orca-cli --agent claude-code` → `~/.claude/skills/orca-cli`. Полная справка команд — `orca agent-context` |
+
+Зачем ей front-door: терминалов с `claude` много, `env` каждый читает на старте — без
+фиксированного `:20100` любой свич провайдера требовал бы перезапуска всех.
+
+⚠️ **Никакой id из каталога Orca** (`--model aws-bedrock-opus-5` и подобные) не должен
+доехать до наших шлюзов: флаг сильнее `settings.json`, а такой модели у шлюза нет.
+⚠️ N агентов Orca = **один ключ шлюза**. Front-door не ретраит, но хеджи keepalive × N
+агентов жгут квоту и ловят рейт-лимит WAF — за балансом следить.
+
+---
 
 ## Чек-лист: добавляем новый модуль
 

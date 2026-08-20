@@ -571,6 +571,14 @@
         </div>
 
         <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
+          <div>
+            <h2 class="text-sm font-semibold">Front Door — фиксированный вход <code class="font-mono text-emerald text-xs">:20100</code></h2>
+            <p class="text-xs text-muted mt-0.5">Переключение провайдера <b>без перезапуска Claude Code</b>: <code class="font-mono text-emerald text-xs">ANTHROPIC_BASE_URL</code> перестаёт меняться, активный бэкенд живёт в <code class="font-mono text-emerald text-xs">~/.claude/active-backend.json</code>, а выбор делает локальный прокси <code class="font-mono text-emerald text-xs">routing/frontdoor-proxy.js</code>. Нужно для Orca (много терминалов с <code class="font-mono text-emerald text-xs">claude</code>) и для Claude Code Desktop.</p>
+          </div>
+          <div id="frontdoor-box" class="text-xs text-faint">загружаю…</div>
+        </div>
+
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
               <h2 class="text-sm font-semibold">Статус-бар Claude Code</h2>
@@ -2888,7 +2896,7 @@ function showTab(name) {
     loadTrHealthCache();
     loadTrUsageCache();
   }
-  if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); }
+  if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); loadFrontdoor(); }
   if (name === 'plugins') { loadPlugins(); loadMcp(); }
   if (name === 'health') { loadHealth(); }
 }
@@ -2989,7 +2997,10 @@ function renderHealth() {
   // (три красных строки в Health при полностью здоровой системе). Красным остаётся
   // тот единственный порт, в который реально смотрит Claude Code: если лёг он —
   // это настоящая поломка, её же отдельно подсвечивает блок «Текущий бэкенд».
-  const wiredPort = (d.wired || {}).port || null;
+  // В режиме front-door settings.json всегда показывает :20100, поэтому «реальный»
+  // порт берём из active-backend.json (wired.effectivePort) — иначе упавший
+  // keepalive активного провайдера числился бы мирно «не запущенным».
+  const wiredPort = (d.wired || {}).effectivePort || (d.wired || {}).port || null;
   const isIdle = (s) => s.keepalive && s.status !== 'up' && s.port !== wiredPort;
 
   const downs = svc.filter(s => s.status === 'down' && !isIdle(s));
@@ -3011,6 +3022,16 @@ function renderHealth() {
         <code class="font-mono text-ink">${esc(w.base || '—')}</code>
         ${w.port ? `<span class="text-[10px] text-faint">:${w.port}</span>` : ''}
       </div>`;
+    // Front-door: показываем вторую строку маршрута, иначе по base URL непонятно,
+    // куда запрос уходит на самом деле (у всех провайдеров он один и тот же).
+    if (w.frontdoor) {
+      html += `<div class="mt-1 text-xs flex items-center gap-2 flex-wrap">
+        <span class="px-2 py-0.5 rounded-full border border-azure/40 bg-azure/10 text-azure text-[10px]">front-door</span>
+        <span class="text-muted">→ ${esc(w.backend || '?')}</span>
+        ${w.effectivePort ? `<code class="font-mono text-faint text-[11px]">:${w.effectivePort}${w.effectiveService ? ' · ' + esc(w.effectiveService) : ''}</code>`
+                          : `<span class="text-faint text-[11px]">удалённый шлюз, ключ ставит прокси</span>`}
+      </div>`;
+    }
     if (w.port) {
       const up = w.up;
       const svcName = w.service || 'неизвестный сервис';
@@ -3066,6 +3087,7 @@ function renderHealth() {
             ${s.omni ? `<span class="text-[10px] text-faint">порт 20128 · localhost/v1</span>` : ''}
             ${s.orphan ? `<button onclick="killHealthPort(${s.port})" title="Убить всё, что слушает :${s.port}" class="text-[10px] px-2 py-1 rounded border border-crimson/40 text-crimson hover:bg-crimson/15 transition">💀 убить</button>` : ''}
             ${s.keepalive ? `<button onclick="restartKeepalive(${s.port})" title="Пересоздать процесс keepalive на :${s.port} (подхватить новый код прокси)" class="text-[10px] px-2 py-1 rounded border border-azure/40 text-azure hover:bg-azure/15 transition">🔄 перезапустить</button>` : ''}
+            ${s.frontdoor ? `<button onclick="restartFrontdoor()" title="Пересоздать front-door на :${s.port}. Пока он лежит, у Claude Code нет бэкенда вообще." class="text-[10px] px-2 py-1 rounded border border-azure/40 text-azure hover:bg-azure/15 transition">🔄 перезапустить</button>` : ''}
           </div>
           <div class="text-[11px] text-faint mt-0.5 flex items-center gap-2 flex-wrap">
             <span class="font-mono">:${s.port}</span>
@@ -3108,6 +3130,76 @@ async function restartKeepalive(port) {
       loadHealth();
     }
   } catch (e) { toast('рестарт keepalive: ' + e.message, 'error'); }
+}
+
+// Front-door — единая точка входа Claude Code. Пока он лежит, ни одна сессия CC не
+// работает, поэтому кнопка отдельная и с предупреждением поверх обычного простоя.
+async function restartFrontdoor() {
+  if (!confirm('Перезапустить front-door?\n\nВсе сессии Claude Code на секунду теряют бэкенд — летящие запросы оборвутся.')) return;
+  toast('Перезапускаю front-door…', 'info');
+  try {
+    const r = await fetch('/__switch/api/frontdoor/restart', { method: 'POST' });
+    const d = await r.json();
+    if (r.ok && d.ok) toast(`Front-door поднят на :${d.port} (pid ${d.pid || '?'})`, 'success');
+    else toast('Front-door: ' + (d.error || r.status), 'error');
+  } catch (e) { toast('рестарт front-door: ' + e.message, 'error'); }
+  loadHealth();
+  try { await loadFrontdoor(); } catch {}
+}
+
+// ── Front-door: тумблер на вкладке «Настройки» ───────────────────────────────
+async function loadFrontdoor() {
+  const el = $('frontdoor-box');
+  if (!el) return;
+  let d;
+  try {
+    d = await (await fetch('/__switch/api/frontdoor')).json();
+  } catch (e) {
+    el.innerHTML = `<div class="text-xs text-crimson">front-door: ${esc(e.message)}</div>`;
+    return;
+  }
+  state.frontdoor = d;
+  const live = !!(d.live && d.live.ok);
+  const st = d.state || {};
+  el.innerHTML = `
+    <div class="flex flex-wrap items-center gap-3">
+      <button onclick="toggleFrontdoor(${d.enabled ? 'false' : 'true'})"
+        class="px-3 py-1.5 rounded-lg border text-xs font-semibold transition ${d.enabled ? 'border-emerald/40 bg-emerald/10 text-emerald hover:bg-emerald/20' : 'border-line bg-white/5 text-muted hover:bg-white/10'}">
+        ${d.enabled ? '● включён' : '○ выключен'}
+      </button>
+      <code class="font-mono text-[11px] text-faint">${esc(d.url)}</code>
+      <span class="text-[10px] px-2 py-0.5 rounded-full border ${live ? 'border-emerald/40 bg-emerald/10 text-emerald' : 'border-crimson/40 bg-crimson/10 text-crimson'}">
+        прокси ${live ? 'жив' : 'лежит'}
+      </span>
+      <span class="text-[10px] px-2 py-0.5 rounded-full border ${d.wired ? 'border-azure/40 bg-azure/10 text-azure' : 'border-line text-muted'}">
+        Claude Code ${d.wired ? 'смотрит сюда' : 'ходит напрямую'}
+      </span>
+      ${!live ? `<button onclick="restartFrontdoor()" class="text-[10px] px-2 py-1 rounded border border-azure/40 text-azure hover:bg-azure/15 transition">🔄 поднять</button>` : ''}
+    </div>
+    <div class="mt-2 text-[11px] text-faint">
+      ${st.backend ? `активный бэкенд: <span class="text-ink font-mono">${esc(st.backend)}</span> → <span class="font-mono">${esc(st.upstream || '?')}</span>${st.keyFile ? ` · ключ <span class="font-mono">${esc(st.keyFile)}</span>` : ' · ключ ставит keepalive'}`
+                  : 'состояние ещё не записано — активируй провайдера'}
+    </div>
+    <div class="mt-2 text-[11px] text-muted leading-relaxed">
+      Включённый режим фиксирует <code class="font-mono">ANTHROPIC_BASE_URL</code> на <code class="font-mono">${esc(d.url)}</code>,
+      и переключение провайдера перестаёт требовать перезапуска Claude Code (нужно для Orca, где терминалов с <code class="font-mono">claude</code> много).
+      Адрес переедет при следующей активации провайдера. Откат — выключить тумблер и снова кликнуть по ключу.
+    </div>`;
+}
+
+async function toggleFrontdoor(on) {
+  if (on && !confirm('Включить front-door?\n\nПри следующей активации провайдера base URL станет ' + ((state.frontdoor || {}).url || ':20100') + '.\nНовые сессии Claude Code пойдут через него. Откат — выключить тумблер и кликнуть по ключу.')) return;
+  try {
+    const r = await fetch('/__switch/api/frontdoor/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !!on }),
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) toast(`Front-door ${d.enabled ? 'включён' : 'выключен'}`, 'success');
+    else toast('front-door: ' + (d.error || r.status), 'error');
+  } catch (e) { toast('front-door: ' + e.message, 'error'); }
+  await loadFrontdoor();
+  try { loadStatus(); } catch {}
 }
 
 async function killHealthPort(port) {
@@ -5307,18 +5399,18 @@ function agoShort(ts) {
 // Шлюз наливает +$25 на аккаунт раз в сутки, но только после захода в ЛК с
 // разлогином и повторным входом через GitHub. Сброс — НЕ скользящие 24ч от момента
 // забора, а суточная граница: забрал вечером → следующий заход возможен уже утром.
-// Время границы (08:30 МСК по умолчанию) настраивается в карточке ниже.
+// Время границы (20:30 МСК по умолчанию) настраивается в карточке ниже.
 // Отметку `checkinAt` ставит бэкенд сам, когда видит рост выдачи (см. ARCHITECTURE.md).
-const AR_CHECKIN_DEFAULT_HHMM = '08:30';
+const AR_CHECKIN_DEFAULT_HHMM = '20:30';
 
 // Начало текущего окна чек-ина. МСК = UTC+3 без переходов на летнее время с 2014,
-// поэтому 08:30 МСК = 05:30 UTC жёстко. Date.UTC сам откатит дату при H-3 < 0.
+// поэтому 20:30 МСК = 17:30 UTC жёстко. Date.UTC сам откатит дату при H-3 < 0.
 function arCheckinWindowStart(hhmm, nowMs) {
   const parts = String(hhmm || AR_CHECKIN_DEFAULT_HHMM).split(':');
   const H = Number(parts[0]), M = Number(parts[1]);
   const now = nowMs || Date.now();
   const msk = new Date(now + 3 * 3600_000);        // «который час в Москве»
-  let b = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(), (isFinite(H) ? H : 8) - 3, isFinite(M) ? M : 30);
+  let b = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(), (isFinite(H) ? H : 20) - 3, isFinite(M) ? M : 30);
   if (b > now) b -= 86400_000;                     // граница ещё не наступила → работает вчерашняя
   return b;
 }
@@ -5406,7 +5498,7 @@ function arRenderCheckinCard() {
       </div>
       <div class="flex items-center gap-2 text-xs">
         <span class="text-faint" title="Наблюдение владельца: после этого времени бонус можно забрать снова, независимо от того, во сколько забирал вчера.">граница суток</span>
-        <input id="ar-checkin-hhmm" value="${esc(cfg.resetHhmmMsk)}" size="5" maxlength="5" placeholder="08:30"
+        <input id="ar-checkin-hhmm" value="${esc(cfg.resetHhmmMsk)}" size="5" maxlength="5" placeholder="20:30"
           class="w-16 bg-elevated border border-line-soft rounded px-2 py-1 font-mono text-center text-ink focus:border-sky/60 outline-none">
         <span class="text-faint">МСК</span>
         <button onclick="arSaveCheckinCfg()" class="px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">💾</button>
@@ -5889,6 +5981,7 @@ function balanceSourceBadge(s) {
     const when = s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '';
     tip = `Вписан вручную: $${(s.balanceAnchor ?? 0).toFixed(2)}${when ? ` (${when})` : ''}`
       + `, с тех пор потрачено $${drawn.toFixed(2)}`
+      + ` · перекрывает цифру шлюза, пустое поле в ✏️ вернёт точный баланс`
       + `${s.selfError ? ` · точный недоступен: ${s.selfError}` : ''}`;
   } else {
     tip = 'Прикидка: выдача угадана, точной цифры нет.'
@@ -5926,7 +6019,7 @@ function newapiBalanceCell(s, kJ, prov, sym = '$') {
 
   const editTip = s.balanceSource === 'anchor'
     ? `Вписать баланс заново (сейчас ${sym}${(s.balanceAnchor ?? 0).toFixed(2)} от ${s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '—'}). Пусто = сбросить.`
-    : 'Вписать текущий баланс из ЛК. Дальше он убывает сам по расходу.';
+    : 'Вписать текущий баланс из ЛК. Дальше он убывает сам по расходу и перекрывает цифру шлюза.';
   const edit = `<button onclick='${prov}SetBalance(${kJ})' title="${esc(editTip)}"
     class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
     ${s.balanceSource === 'anchor' ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
@@ -5959,14 +6052,14 @@ async function newapiSetBalanceUI(prov, api_key, list, rerender) {
   const spent = s && typeof s.spent === 'number' ? s.spent.toFixed(2) : '?';
   const msg = [
     s && s.balanceSource === 'self'
-      ? 'У этого аккаунта баланс уже читается ТОЧНО из ЛК — вписывать ничего не нужно.'
-        + '\nЕсли впишешь, значение сохранится, но показываться будет точное.'
+      ? 'У этого аккаунта баланс читается ТОЧНО из ЛК — вписывать обычно не нужно.'
+        + '\nНо если цифра шлюза расходится с кошельком, вписанное её ПЕРЕКРОЕТ.'
       : 'Открой ЛК аккаунта и впиши остаток, который там показан.',
     '',
     `Сейчас потрачено $${spent}. Вписанный баланс дальше убывает сам по расходу,`,
     'поэтому кликать надо один раз, а не после каждой траты.',
     '',
-    'Пустое поле + OK = сбросить ручную привязку.',
+    'Пустое поле + OK = сбросить ручную привязку (вернётся точный баланс шлюза).',
   ].join('\n');
 
   const raw = prompt(msg, cur);

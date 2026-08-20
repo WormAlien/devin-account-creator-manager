@@ -152,7 +152,7 @@ if (Test-Path $venvPy) {
         }
         $act += 'tg-venv recreated'
     } else {
-        Say "tg-venv       : broken and no $req -- run install.sh"
+        Say "tg-venv       : broken and no $req -- run install-deps.sh"
     }
 } else {
     Say 'tg-venv       : not installed (fine unless you use TG session opening)'

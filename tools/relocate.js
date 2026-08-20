@@ -73,7 +73,7 @@ if (fs.existsSync(cfg)) {
     } catch {}
     if (stale) {
         warn('tools/tg-venv создан для СТАРОГО пути и работать не будет (нужен только');
-        warn('  для Camoufox/ТГ на Windows). Пересоздать: удали tools/tg-venv и запусти install.sh');
+        warn('  для Camoufox/ТГ на Windows). Пересоздать: удали tools/tg-venv и запусти install-deps.sh');
     } else {
         ok('tools/tg-venv — путь совпадает');
     }

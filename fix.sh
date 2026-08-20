@@ -56,7 +56,10 @@ RC=$?
 # ── 4. Контрольные проверки ──────────────────────────────────────────────────
 step "4. Итоговая проверка"
 FAIL=0
-if [ -f tools/tg-venv/Scripts/python.exe ] && tools/tg-venv/Scripts/python -c 'import opentele, tgcrypto' >/dev/null 2>&1; then
+# Путь до интерпретатора venv платформозависим (Scripts/python.exe против
+# bin/python) — берём из резолвера tools/tg-venv-python.js, а не хардкодом.
+TGPY="$(node tools/tg-venv-python.js 2>/dev/null)"
+if [ -n "$TGPY" ] && [ -f "$TGPY" ] && "$TGPY" -c 'import opentele, tgcrypto' >/dev/null 2>&1; then
   ok "tg-venv: живой (✈ Открыть TG будет работать)"
 else
   err "tg-venv: НЕ собрался — скрин шага 3 выше, там причина"; FAIL=1

@@ -15,6 +15,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const script = path.resolve(__dirname, '..', 'routing', 'statusline-autoreger.sh');
 if (!fs.existsSync(script)) {
@@ -26,13 +27,25 @@ if (!fs.existsSync(script)) {
 // битый settings.json роняет Claude Code целиком.
 const unix = script.split('\\').join('/');
 
-// На Windows `bash` в PATH может оказаться WSL-овским (C:\Windows\system32\bash.exe):
-// он не открывает пути вида C:/…, их надо конвертировать wslpath/cygpath. А ещё
-// wslpath/cmd.exe в процессе запуска съедают stdin-пайп, из-за чего payload от CC
-// теряется и модель показывается как «unknown» — поэтому payload уезжает через
-// env STATUSLINE_PAYLOAD. На macOS/Linux ничего этого не нужно: bash родной,
-// путь обычный, stdin доходит как есть.
-const cmd = process.platform === 'win32'
+// Обёртка нужна РОВНО в одном случае: когда `bash` в PATH — это WSL-овский
+// C:\Windows\System32\bash.exe. Он не открывает пути вида C:/…, их надо
+// конвертировать wslpath, а ещё wslpath/cmd.exe по пути съедают stdin-пайп, из-за
+// чего payload от CC теряется и модель показывается как «unknown» — поэтому
+// payload уезжает через env STATUSLINE_PAYLOAD.
+// Для git-bash на Windows и для macOS/Linux обёртка вредна: install.sh ставит там
+// простую команду, и два установщика писали бы в settings.json разное.
+function bashIsWsl() {
+    if (process.platform !== 'win32') return false;
+    try {
+        const out = execFileSync('bash', ['-c', 'printf "%s|%s" "${WSL_DISTRO_NAME:-}" "$(uname -r)"'], {
+            encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        const [distro, kernel] = out.split('|');
+        return !!distro || /microsoft|wsl/i.test(kernel || '');
+    } catch { return false; }
+}
+
+const cmd = bashIsWsl()
     ? "bash -c 'pl=\"$(cat 2>/dev/null)\"; "
         + `s="${unix}"; `
         + 'if command -v wslpath >/dev/null 2>&1; then s=$(wslpath -u "$s"); '

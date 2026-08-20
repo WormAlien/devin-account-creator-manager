@@ -216,9 +216,15 @@ fi
 
 # 8. Права + карантин macOS
 step "Права и карантин macOS"
-chmod +x mac-support/shims/* routing/*.sh DASHBOARD.command 2>/dev/null
-xattr -cr . 2>/dev/null && ok "карантин снят"
+# exec-bit теперь хранится в индексе git (100755), но старые клоны приехали как
+# 100644, а core.fileMode=false заставляет git молчать о разнице — поэтому ставим
+# сами. Без этого двойной клик по DASHBOARD.command падает с «нет прав доступа»,
+# а node не может позвать shim-ы через execFile.
+chmod +x mac-support/shims/* routing/*.sh DASHBOARD.command install-mac.sh 2>/dev/null
 ok "shim-ы и скрипты — executable"
+# Карантин (com.apple.quarantine) вешается на всё, что скачано: .command тогда не
+# запускается двойным кликом вообще, без внятной ошибки.
+xattr -cr . 2>/dev/null && ok "карантин снят"
 
 # 9. Запуск
 step "Запуск дашборда"
@@ -232,5 +238,25 @@ if [ -t 0 ]; then
 else
   bash routing/restart-dashboard.sh
 fi
+
+# 10. Памятка. Печатаем в конце, потому что выше уже прокрутилось много вывода, а
+# «как остановить» и «можно ли переносить папку» — первые два вопроса на маке.
+cat <<EOF
+
+$(b "── Шпаргалка ──────────────────────────────────────")
+  Запуск     двойной клик DASHBOARD.command  ·  bash routing/restart-dashboard.sh
+  Стоп       bash routing/stop-dashboard.sh
+             (на маке дашборд живёт в фоне — закрыть Terminal НЕ достаточно)
+  Дашборд    http://localhost:8200/__switch
+
+  Перенос или переименование папки: стоп → перенести → запустить из нового места.
+  Больше ничего, путь нигде не прописан. Если в пути есть пробелы — в терминале
+  бери его в кавычки: cd "/путь/с пробелом/VibeCode"
+
+  Обновление   git pull  (потом рестарт дашборда)
+  Диагностика  node tools/mac-balance-probe.js ar   — точный баланс по шагам
+               node tools/enable-statusline.js      — вернуть статус-бар в CC
+
+EOF
 
 exit 0

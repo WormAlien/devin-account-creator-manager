@@ -59,6 +59,7 @@ const upstream = http.createServer((req, res) => {
       if (n === 1) { held.push(res); return; } // молчим навсегда
       return sse();
     }
+    if (mode === 'hangall') { held.push(res); return; } // молчим на ВСЕ попытки (тест G)
     if (mode === 'transient') {
       if (n === 1) {
         res.writeHead(500, { 'content-type': 'application/json' });
@@ -109,6 +110,25 @@ function ask() {
     });
     r.on('error', reject);
     r.end(body);
+  });
+}
+
+// Клиент, который сам уходит через abortMs. Нужен для теста G: шлюз молчит на все
+// попытки, ответа не будет никогда, а проверяем мы СКОЛЬКО копий он успел увидеть.
+function askAbort(abortMs) {
+  const body = JSON.stringify({ model: 'claude-opus-5', stream: true, messages: [] });
+  return new Promise((resolve) => {
+    const r = http.request({
+      port: PX_PORT, method: 'POST', path: '/v1/messages',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+        'accept-encoding': 'gzip, deflate',
+      },
+    }, (res) => { res.resume(); });
+    r.on('error', () => {});
+    r.end(body);
+    setTimeout(() => { r.destroy(); resolve(); }, abortMs);
   });
 }
 
@@ -220,6 +240,15 @@ async function waitProxy() {
     assert.deepStrictEqual(types, ['message_start', 'message_stop'],
       `F: поток должен разбираться в два события, вышло ${JSON.stringify(types)}`);
     console.log(`F ok: ${f.ms}ms, комментарий в середине события, поток разбираем`);
+
+    // --- G: cfg.maxHedges режет лавину дублей ---
+    // Шлюз молчит на ВСЕ попытки. Раньше scheduleHedge перевзводил себя и при
+    // maxAttempts=3 в воздухе оказывались три копии одного запроса. Дефолт maxHedges=1
+    // разрешает ровно один дубль, поэтому за 4× hedgeMs шлюз обязан увидеть 2 запроса.
+    mode = 'hangall'; seen = 0;
+    await askAbort(HEDGE_MS * 4);
+    assert.strictEqual(seen, 2, `G: при maxHedges=1 шлюз должен увидеть 2 копии, увидел ${seen}`);
+    console.log(`G ok: за ${HEDGE_MS * 4}ms копий у шлюза ${seen} (кэп дублей работает)`);
 
     console.log('\ntest-hedge OK');
   } catch (err) {

@@ -19,11 +19,14 @@ $script = Join-Path $dir 'keepalive-proxy.js'
 $profileDir = $env:USERPROFILE
 
 # Same env transparent-proxy.js passes when it spawns these instances.
-# Хедж/попытки/пре-коммит держим равными дефолтам keepalive-proxy.js (12с / 3 / 10с),
-# иначе ручной рестарт молча менял бы настройки вкладки.
+# HEDGE_MS / MAX_ATTEMPTS / MAX_HEDGES / PRE_COMMIT_MS deliberately NOT set here:
+# these four are the dashboard knobs, their source of truth is
+# keepalive-config-<PORT>.json (highest priority) and the const cfg defaults in
+# keepalive-proxy.js. Duplicating them in this script rotted twice already - a
+# manual restart silently reset a tab to whatever numbers were frozen here.
 $common = @{
-  IDLE_MS = '5000'; MAX_ATTEMPTS = '3'; HEDGE_MS = '12000'; RETRY_DELAY_MS = '1500';
-  COUNT_TOKENS_FALLBACK = '1'; PRE_COMMIT_MS = '10000'; UPSTREAM_TIMEOUT_MS = '600000';
+  IDLE_MS = '5000'; RETRY_DELAY_MS = '1500';
+  COUNT_TOKENS_FALLBACK = '1'; UPSTREAM_TIMEOUT_MS = '600000';
 }
 $perPort = @{
   20133 = @{ UPSTREAM = 'https://agentrouter.org'; KEY_FILE = "$profileDir\.claude\ar-active-key.txt";

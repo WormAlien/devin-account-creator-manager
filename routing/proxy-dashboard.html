@@ -1554,7 +1554,11 @@
           <div class="flex gap-2 items-end flex-wrap" id="ar-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
               <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
-              <input id="ar-keepalive-hedge" type="number" min="0" step="1" placeholder="12" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+              <input id="ar-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="ar-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
               <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
@@ -1667,7 +1671,11 @@
           <div class="flex gap-2 items-end flex-wrap" id="go-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
               <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
-              <input id="go-keepalive-hedge" type="number" min="0" step="1" placeholder="12" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+              <input id="go-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="go-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
               <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
@@ -1802,7 +1810,11 @@
           <div class="flex gap-2 items-end flex-wrap" id="tb-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
               <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
-              <input id="tb-keepalive-hedge" type="number" min="0" step="1" placeholder="12" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+              <input id="tb-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="tb-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
               <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
@@ -1940,7 +1952,11 @@
           <div class="flex gap-2 items-end flex-wrap" id="xp-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
               <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
-              <input id="xp-keepalive-hedge" type="number" min="0" step="1" placeholder="12" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+              <input id="xp-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="xp-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
               <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
@@ -5816,6 +5832,16 @@ function setStat(id, val, kind) {
   el.classList.add('stat-pop', 'stat-pop-sk');
 }
 
+// Одна формулировка конфига на три места (загрузка карточки, применение, тост):
+// раньше строка была скопирована трижды и новая ручка попала бы не во все.
+function keepaliveSummary(cfg) {
+  const sec = ms => (ms ? (ms / 1000) + 's' : 'выкл');
+  const hedge = cfg.hedgeMs
+    ? `${sec(cfg.hedgeMs)}${typeof cfg.maxHedges === 'undefined' ? '' : ` (дублей ≤${cfg.maxHedges})`}`
+    : 'выкл';
+  return `хедж ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
+}
+
 async function loadKeepaliveCard(pfx, api, statsOnly) {
   const st = $(pfx + '-keepalive-status');
   if (st && !statsOnly) st.textContent = '…';
@@ -5826,12 +5852,14 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
     if (!statsOnly) {
       const hedge = $(pfx + '-keepalive-hedge');
       const attempts = $(pfx + '-keepalive-attempts');
+      const maxhedges = $(pfx + '-keepalive-maxhedges');
       const precommit = $(pfx + '-keepalive-precommit');
       if (hedge) hedge.value = String(Math.round((data.cfg.hedgeMs || 0) / 1000));
       if (attempts) attempts.value = String(data.cfg.maxAttempts);
+      if (maxhedges && typeof data.cfg.maxHedges !== 'undefined') maxhedges.value = String(data.cfg.maxHedges);
       if (precommit) precommit.value = String(Math.round((data.cfg.preCommitMs || 0) / 1000));
     }
-    if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts} · пре-коммит ${data.cfg.preCommitMs ? (data.cfg.preCommitMs / 1000) + 's' : 'выкл'}`;
+    if (st) st.textContent = keepaliveSummary(data.cfg);
     const s = data.stats || {};
     for (const [id, key] of [[pfx + '-stat-requests','requests'],[pfx + '-stat-remaps','remaps'],[pfx + '-stat-keepalives','keepalives'],[pfx + '-stat-hedges','hedges'],[pfx + '-stat-retries','retries'],[pfx + '-stat-errors','errors']]) {
       setStat(id, s[key], key);
@@ -5845,9 +5873,11 @@ async function applyKeepaliveCard(pfx, api) {
     const patch = {};
     const hedgeSec = Number($(pfx + '-keepalive-hedge')?.value);
     const attempts = Number($(pfx + '-keepalive-attempts')?.value);
+    const maxhedgesRaw = $(pfx + '-keepalive-maxhedges')?.value;
     const precommitSec = Number($(pfx + '-keepalive-precommit')?.value);
     if (Number.isFinite(hedgeSec)) patch.hedgeMs = Math.round(hedgeSec * 1000);
     if (Number.isFinite(attempts) && attempts > 0) patch.maxAttempts = attempts;
+    if (maxhedgesRaw !== undefined && maxhedgesRaw !== '' && Number.isFinite(Number(maxhedgesRaw))) patch.maxHedges = Number(maxhedgesRaw);
     if (Number.isFinite(precommitSec)) patch.preCommitMs = Math.round(precommitSec * 1000);
     const res = await fetch(api + '/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5855,8 +5885,8 @@ async function applyKeepaliveCard(pfx, api) {
     });
     const data = await res.json();
     if (data && typeof data.cfg !== 'undefined') {
-      if (st) st.textContent = `хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'} · попыток ${data.cfg.maxAttempts} · пре-коммит ${data.cfg.preCommitMs ? (data.cfg.preCommitMs / 1000) + 's' : 'выкл'}`;
-      toast(`✓ keepalive применён: хедж ${data.cfg.hedgeMs ? (data.cfg.hedgeMs / 1000) + 's' : 'выкл'}, попыток ${data.cfg.maxAttempts}, пре-коммит ${data.cfg.preCommitMs ? (data.cfg.preCommitMs / 1000) + 's' : 'выкл'}`, 'success', 3500);
+      if (st) st.textContent = keepaliveSummary(data.cfg);
+      toast(`✓ keepalive применён: ${keepaliveSummary(data.cfg)}`, 'success', 3500);
     } else throw new Error((data && data.error) || 'keepalive не отвечает');
   } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; toast('keepalive config: ' + e.message, 'error'); }
 }

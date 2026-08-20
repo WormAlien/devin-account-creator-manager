@@ -758,15 +758,16 @@ function makeKeepaliveHandlers(port) {
         return jsonRes(res, 200, r.data);
     }
 
-    // POST .../keepalive/config { hedgeMs?, maxAttempts?, preCommitMs? } → патчим на лету.
+    // POST .../keepalive/config { hedgeMs?, maxHedges?, maxAttempts?, preCommitMs? } → патчим на лету.
     async function handleConfig(req, res) {
         let b = '';
         req.on('data', (c) => b += c);
         req.on('end', async () => {
             try {
                 const patch = JSON.parse(b || '{}');
-                if (!('hedgeMs' in patch) && !('maxAttempts' in patch) && !('preCommitMs' in patch))
-                    return jsonRes(res, 400, { error: 'ожидался { hedgeMs?, maxAttempts?, preCommitMs? }' });
+                const KNOBS = ['hedgeMs', 'maxHedges', 'maxAttempts', 'preCommitMs'];
+                if (!KNOBS.some(k => k in patch))
+                    return jsonRes(res, 400, { error: 'ожидался { ' + KNOBS.join('?, ') + '? }' });
                 const r = await keepaliveFetch('POST', '/__config', patch, port);
                 if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает' });
                 logLine(`keepalive config :${port} -> ${JSON.stringify(patch)}`);
@@ -6018,7 +6019,10 @@ async function arKeepaliveSpawn() {
             detached: true, stdio: 'ignore', env: {
                 ...process.env,
                 PORT: String(AR_KEEPALIVE_PORT),
-                PRE_COMMIT_MS: process.env.AR_PRE_COMMIT_MS || '10000',
+                // Литерал '10000' тут был четвёртой копией дефолта пре-коммита: смени
+                // его в keepalive-proxy.js — и спавн из дашборда всё равно навязал бы
+                // старое число. Переменную ставим ТОЛЬКО если её задали снаружи.
+                ...(process.env.AR_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.AR_PRE_COMMIT_MS } : {}),
             },
         });
         child.unref();
@@ -7594,7 +7598,7 @@ async function goKeepaliveSpawn() {
                 UPSTREAM: GO_UPSTREAM,
                 KEY_FILE: GO_ACTIVE_KEY_FILE,
                 MODELMAP_FILE: GO_MODELMAP_FILE,
-                PRE_COMMIT_MS: process.env.GO_PRE_COMMIT_MS || '10000',
+                ...(process.env.GO_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.GO_PRE_COMMIT_MS } : {}),
             },
         });
         child.unref();
@@ -8190,7 +8194,7 @@ async function tbKeepaliveSpawn() {
                 UPSTREAM: TB_BASE_URL,
                 KEY_FILE: TB_ACTIVE_KEY_FILE,
                 MODELMAP_FILE: TB_MODELMAP_FILE,
-                PRE_COMMIT_MS: process.env.TB_PRE_COMMIT_MS || '10000',
+                ...(process.env.TB_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.TB_PRE_COMMIT_MS } : {}),
             },
         });
         child.unref();
@@ -8952,7 +8956,7 @@ async function xpKeepaliveSpawn() {
                 UPSTREAM: XP_BASE_URL,
                 KEY_FILE: XP_ACTIVE_KEY_FILE,
                 MODELMAP_FILE: XP_MODELMAP_FILE,
-                PRE_COMMIT_MS: process.env.XP_PRE_COMMIT_MS || '10000',
+                ...(process.env.XP_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.XP_PRE_COMMIT_MS } : {}),
             },
         });
         child.unref();

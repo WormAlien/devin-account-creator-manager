@@ -299,7 +299,7 @@ boot-спавнится дашбордом, и без дашборда у CC н�
 | **Custom**    | активна   | произвольные провайдеры: имя + baseUrl + пул ключей (`routing/custom-providers.json`), пинг/модели по `{baseUrl}/models`, активация через API Helper (`~/.claude/custom-active-key.txt`). Если задан `modelMap` (opus/sonnet/haiku) — активация поднимает Anthropic→OpenAI конвертер (`custom-openai-proxy.js`) и направляет CC на `localhost:<port>` | `/api/custom/*` |
 | **Conduit**   | активна   | ТГ-аккаунты conduit.ozdoev.net, баланс/план/лимиты, реги из ТГ, активация через API Helper, **шкала запаса** | `/api/conduit/*` |
 | **Svrtr**     | активна   | ТГ-аккаунты svrtr.org (api.svrtr.org), кредиты, реги через @svrtrbot, активация через API Helper | `/api/svrtr/*` |
-| **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js: нет ключа → регистрация по рефке `?aff=`, есть ключ → `/console/topup`, чек-ин +$25), **🎁 таймер чек-ина +$25** (колонка + бейдж `🎁N` в сайдваре и статуслайне, суточная граница из `ar-checkin.json`, отметка автоматом по росту выдачи), **аккаунт без ключа** (`status: no_key`), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap,checkin-config}` |
+| **AgentRouter** | активна | ручной пул ключей agentrouter.org, пинг `/v1/models` с CC-заголовками (live/dead), **баланс ключа** (выдача − потрачено, кеш в sessions.json), **🌐 ЛК** (open-session.js: нет ключа → регистрация по рефке `?aff=`, есть ключ → `/console/topup`, чек-ин +$25), **🎁 таймер чек-ина +$25** (колонка + бейдж `🎁N` в сайдваре и статуслайне, суточная граница из `ar-checkin.json`, отметка автоматом по росту выдачи), **аккаунт без ключа** (`status: no_key`), выбор модели → `ar-active-model.txt` + `settings.model`; claude-* напрямую, gpt-* через прокси :20132, **маппинг claude-тиров** (`ar-modelmap.json`, применяется прокси по mtime) | `/api/ar/{sessions,ping,balance,set-grant,session/open,add,delete,models,activate,set-model,modelmap,checkin-config,checkin-mark}` |
 | **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **Tabi Token** | активна  | ручной пул ключей tabitoken.com, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, дефолт $100, реф-бонус $20), маппинг моделей, **активация через SSE keepalive :20155** (keepalive-proxy.js → tabitoken.com, срез `[1m]`, count_tokens fallback) | `/api/tb/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **XPeach** | активна    | ручной пул ключей xpeach.codes («🍑 Code», New-API ветки tabitoken → `HOST_AUTH='jwt'`), GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=0lre`, есть → `/console/topup`), **аккаунт без ключа** (`status: no_key`), **точный баланс** из `/api/user/auth/refresh` (валюта 🍑, курс к единице квоты как у $), маппинг моделей, **активация через SSE keepalive :20157**. Каталог 32 модели: 8 claude `anthropic+openai` (ходят нативно) + grok/gpt-5.x/картинки/видео — они `openai`-only и помечены бейджем. Чек-ина нет (`checkin_enabled=false`) | `/api/xp/{sessions,ping,balance,set-balance,map-profiles,session/open,add,key,rename,delete,activate,set-model,modelmap,models,share,import}` |
@@ -726,11 +726,12 @@ client detected` (проверено 2026-08-16, при прочих равны�
 Общий модуль на все четыре вкладки (ar/go/tb/xp) — `routing/lib/newapi-account.js`, общий
 расчёт — `newapiBalance()` в `transparent-proxy.js` (одна реализация вместо четырёх копий).
 
-**Три источника, первый сработавший побеждает** (поле `balanceSource` в записи):
+**Три источника** (поле `balanceSource` в записи). `usage` и `self` спрашиваются всегда,
+анкер решает только то, какую цифру ПОКАЗАТЬ:
 
-| приоритет | источник | бейдж | откуда |
+| приоритет показа | источник | бейдж | откуда |
 |---|---|---|---|
-| 1 | `anchor` | ✏️ вручную | вписанный из ЛК баланс + расход на момент вписывания: `balance = balanceAnchor − (spent − anchorSpent)`, дальше убывает сам |
+| 1 | `anchor` | ✏️ вручную | вписанный из ЛК баланс как **поправка**: `balance = balanceAnchor + (granted − anchorGrantedSelf) − (spent − anchorSpent)` — убывает по расходу и растёт на пополнения шлюза |
 | 2 | `self` | ⚡ точный | `GET /api/user/self` → `quota` (остаток) и `used_quota` (расход) в единицах квоты; USD = `quota / quota_per_unit` (500000, из `/api/status`) |
 | 3 | `guess` | ~ прикидка | последний резерв: `max(база, ceil(spent/шаг)*шаг) − spent`. База 175 / 70 / 100 |
 
@@ -741,7 +742,25 @@ client detected` (проверено 2026-08-16, при прочих равны�
   аккаунта — он приоритетнее». Посылка «точное лучше вписанного руками» неверна: владелец
   вписывает ровно тогда, когда посмотрел ЛК глазами и цифра шлюза его не устроила (у GoRouter
   `quota` расходится с кошельком в ЛК). Возврат к точному — пустое поле в ✏️ (сброс анкера).
-  Побочно экономится запрос `self` у аккаунтов с живым анкером — для WAF полезно.
+- ⚠️ **Приоритет показа ≠ право глушить `self`** (исправлено 2026-08-21). Первая версия
+  возвращала анкер **до** запроса `self` — «побочно экономим запрос, для WAF полезно».
+  Экономия сломала сразу две вещи, и обе выглядели как «аккаунт залагал»:
+  1. цифра умела только убывать на расход. Пополнение и суточный бонус не попадали в неё
+     никогда; `force` от клика по цифре не спасал — он снимает 20-минутный кеш `self`, до
+     которого дело не доходило;
+  2. **чек-ин не мог засчитаться в принципе** — детект смотрит на рост выдачи в ТОЧНОЙ цифре,
+     а её у анкерной записи не существовало. `checkinAt` не обновлялся ни разу, 🎁 горел вечно
+     (поймано на `lankymapping` и личном `wa`). Побочно `granted` у таких записей ещё и
+     удалялся (`granted: null` в анкерной ветке) — сравнивать было нечем и задним числом.
+
+  Теперь порядок ветвей: `usage` (живость ключа) → **`self`** → `anchor` → `guess`. Точная
+  цифра приезжает вложенным полем `bal.self` даже когда показываем анкер, и на неё смотрит
+  детект чек-ина в `newapiApplyBalance` (условие `balanceSource === 'self'` оттуда убрано).
+  Поля: `anchorGrantedSelf` — выдача шлюза на момент вписывания (база прироста; у записей до
+  фикса проставляется первым успешным `self`, поэтому цифра не прыгает, а сбрасывается вместе
+  с анкером и при вписывании без ответа `self` — иначе прирост учёлся бы дважды);
+  `selfBalance` — кеш точного остатка отдельно от `balance`, иначе кеш `SELF_REUSE_MS` у
+  анкерной записи опирался бы на вписанное руками число.
 - ⚠️ **Расход шлюза может поехать НАЗАД, и тогда анкер замирает.** Живой случай: `anchorSpent
   = 103.90` при текущем `usage = 59.10` (счётчик упал на $44.80 после вписывания). `drawn`
   отрицательный, режется в 0, вписанная цифра больше не убывает вообще. Лечение ручное —
@@ -830,8 +849,10 @@ client detected` (проверено 2026-08-16, при прочих равны�
   сохранили честный код 500; поздняя ошибка уходит с кодом 200 и полем `error` — поэтому в
   дашборде обязателен guard `if (!res.ok || data.error)`. `jsonRes` терпит уже начатый ответ.
 - Кеш — прямо в `{agentrouter,gorouter,tabi}-sessions.json`: `spent/balance/balanceSource/granted/
-  balanceAnchor/anchorSpent/selfCheckedAt/balanceCheckedAt`, у AgentRouter плюс
-  `checkinAt`/`checkinFrom` и `grantedSelf` (база сравнения для детекта чек-ина).
+  balanceAnchor/anchorSpent/anchorGrantedSelf/selfBalance/selfCheckedAt/balanceCheckedAt`,
+  у AgentRouter плюс `checkinAt`/`checkinFrom` и `grantedSelf` (база сравнения для детекта
+  чек-ина). `selfBalance` держит точный остаток отдельно от `balance`: у анкерной записи в
+  `balance` лежит вписанное руками, и кеш `SELF_REUSE_MS` опирался бы на него.
   `balanceCheckedAt` штампуется при
   **любом** исходе (иначе статусбар долбит обновление на каждом промпте), причина недоступности
   точной цифры — в `selfError`.
@@ -873,7 +894,8 @@ client detected` (проверено 2026-08-16, при прочих равны�
   факт из документации шлюза**, поэтому настраивается: `routing/ar-checkin.json`
   `{resetHhmmMsk: "20:30", bonusUsd: 25}`, читается по запросу (правка **без рестарта**
   прокси, как `ar-modelmap.json`), UI — поле в карточке `#ar-checkin`, роут
-  `GET/POST /api/ar/checkin-config` (`handleArCheckinConfig`).
+  `GET/POST /api/ar/checkin-config` (`handleArCheckinConfig`), ручная отметка —
+  `POST /api/ar/checkin-mark {id, on}` (`handleArCheckinMark`).
 - **Дефолт `20:30` зашит в ЧЕТЫРЁХ местах** — при смене править все, иначе разъедутся:
   `AR_CHECKIN_DEFAULTS` (`transparent-proxy.js`, отдаётся когда файла нет или он битый),
   `AR_CHECKIN_DEFAULT_HHMM` + внутренний фолбэк `isFinite(H) ? H : 20` и `placeholder`
@@ -904,9 +926,21 @@ client detected` (проверено 2026-08-16, при прочих равны�
     Сравнение по-прежнему строго self↔self: `guess` это `ceil(spent/25)*25` — она сама
     прыгает на 25 при переходе расхода через порог и дала бы ложное «уже забрал»;
     анкер — цифра из головы пользователя.
+  - ⚠️ **Точная цифра нужна и когда показываем анкер** (2026-08-21). Ветка детекта требовала
+    `bal.balanceSource === 'self'`, а анкерный ответ возвращался раньше запроса `self` — у
+    записи с вписанным балансом бонус не отмечался НИКОГДА, 🎁 горел вечно. Теперь `self`
+    приезжает вложенным полем `bal.self` в любом ответе, и детект смотрит на него:
+    `seen = bal.self ?? (balanceSource === 'self' ? bal : null)`.
   - `newapiSetBalance(..., {checkin:true})` — владелец вписал через ✏️ баланс, и полная
     выдача (`val + расход`) подскочила на ≥$20. Единственный путь для аккаунтов **без
     привязанного профиля**, где точной цифры нет никогда.
+  - **Ручная отметка — клик по самой ячейке колонки** (`POST /api/ar/checkin-mark {id, on}`,
+    `checkinFrom: 'manual'`; повторный клик по 📦 снимает). Добавлена 2026-08-21, потому что
+    детект видит **только рост между двумя точными чеками**, а есть случаи, где роста не
+    увидеть в принципе: бонус налился в паузу WAF или под анкером (пока тот глушил `self`),
+    забран вне дашборда, либо шлюз перестал наливать этому аккаунту и 🎁 горело бы вечно.
+    Восстановить пропущенный рост нечем — выдача уже новая, сравнивать не с чем. Не путать с
+    кнопкой 🎁 в Actions: та открывает браузер за бонусом, ячейка лишь правит учёт.
   - Реф-бонус +$100 и реальное пополнение тоже отметятся как чек-ин: ошибка в **безопасную**
     сторону (таймер скажет «ждать», а не «иди зря»), и в тот заход владелец всё равно был в ЛК.
   - Детект включён **только у AgentRouter** (`arApplyBalance`, `handleArSetBalance`): у
@@ -1340,7 +1374,7 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
    │  github/harvest-session.js <profileDir> <out>   headless storageState, ТОЛЬКО github.com
    ▼
 github/sessions/<ghId>.json          кеш снимка, TTL 7 суток (gitignored)
-   │  POST /api/{ar,go,tb,xp}/add-github {ghId}      newapiAddGithub
+   │  POST /api/{ar,go,tb,xp}/add-github {ghId, force?}  newapiAddGithub
    ▼
 <provider>/sessions/acct_<id>.json   { seed:'github', ghLogin, cookies, origins }
    │  <provider>/open-session.js → applyImportedSession → context.addCookies
@@ -1353,8 +1387,9 @@ github/sessions/<ghId>.json          кеш снимка, TTL 7 суток (giti
   `newapiMapProfiles`. Модуль индекса — `routing/lib/github-session.js`, сборщик —
   `routing/gh-index-build.js` (отдельный процесс, см. грабли 6).
 - Дашборд: одна модалка `#gh-seed-modal` на все вкладки (`newapiSeedPick(prov)` →
-  `newapiSeedLoad()` → `newapiAddGithub(ghId)`), провайдер помнится в `ghSeedProv`. Браузер
-  после создания открывает существующий `/session/open` — spawn-логика не дублируется.
+  `newapiSeedLoad()` → `newapiAddGithub(ghId, {force, mode})`), провайдер помнится в
+  `ghSeedProv`. Браузер после создания открывает существующий `/session/open` — spawn-логика
+  не дублируется; `mode` прокидывается туда явно (см. грабли 3).
 - `email` записи = **ник GitHub** осознанно: резервная ветка `newapiMapProfiles` сверяет
   `s.email || s.name` с `githubLogin(cookies)` (кука `dotcom_user`, а это и есть ник), так
   что связка профиль↔запись проставляется сама.
@@ -1383,6 +1418,35 @@ github/sessions/<ghId>.json          кеш снимка, TTL 7 суток (giti
    пишет её на диск только при закрытии, поэтому сразу после заселения `usedHere` ещё
    `false`. Вторая линия защиты на этот зазор — проверка дубля по `email` (= нику GitHub)
    в самом `newapiAddGithub`, она срабатывает мгновенно.
+
+   ⚠️ **Но это признак КОСВЕННЫЙ, и запретом он быть не может** (исправлено 2026-08-21).
+   Профиль на диске переживает удаление записи из пула, а сама регистрация могла и не
+   состояться — у провайдера она бывает закрыта. Живой случай: у друга на Tabi ник числился
+   занятым, запись из пула удалена, аккаунта у провайдера нет — и модалка отвечала
+   «свободных нет: все 2 либо уже засвечены здесь, либо без живой сессии». Тупик: кука в
+   профиле никуда не девается, значит ник заблокирован навсегда. Обратный промах тоже
+   был — `WormAlien` на Tabi: аккаунт у провайдера ЕСТЬ, а GitHub-кука в его профиле
+   выветрилась (`login: null`), гард промолчал и увёл на регистрацию, где сайт ответил
+   «не удалось выполнить вход».
+
+   Теперь два уровня, и это разные вещи:
+   - **запись в пуле** (`ghPoolEntryFor`: по `ghId` либо `email`/`name`) — прямое
+     доказательство. Жёсткий 409, `force` его НЕ обходит: дубль не нужен, надо открыть
+     существующую запись;
+   - **кука в профиле** — предупреждение. 409 с `canForce: true`, и владелец может
+     настоять: `POST /api/{ar,go,tb,xp}/add-github {ghId, force:true}`.
+
+   В модалке такой ник больше не серый: у него две кнопки — **«→ вход»** (аккаунт есть,
+   `session/open {mode:'console'}` → кошелёк) и **«→ рег»** (аккаунта нет, регистрация по
+   рефке, реф-кредит не теряется). Выбор за владельцем, потому что снаружи различить эти
+   два состояния нельзя. Поэтому же `session/open` у go/tb/xp стал принимать `mode` из
+   тела: раньше режим жёстко выводился из наличия ключа, и безключевая запись всегда
+   уходила на регистрацию.
+
+   Архивные профили (`_old_<label>_<ts>`, их создаёт пересоздание профиля) в занятость
+   больше не входят вовсе — `indexByLogin` не добавляет их в `hosts`, но оставляет
+   источниками сессии: кука в них живая, а вот аккаунт, к которому они относились, мог
+   быть удалён.
 4. **Живость GitHub-сессии проверять ТОЛЬКО настоящим браузером.** Сырой `https.request` с
    самодельным `User-Agent` GitHub считает угоном и гасит сессию: 2026-08-19 так были убиты
    `impeccableso`/`serpentinesep`/`lankymapping` (сначала 200, через 25 минут 302 → `/login`),

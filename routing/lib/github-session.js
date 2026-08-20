@@ -95,6 +95,14 @@ function saveIndex(entries) {
     } catch { /* индекс — ускоритель, без него всё работает, просто медленнее */ }
 }
 
+// Архивный профиль — тот, что уведён в сторону при пересоздании (`_old_<label>_<ts>`).
+// Он остаётся годным ИСТОЧНИКОМ GitHub-сессии (кука в нём живая), но «занятости хоста»
+// уже не означает: аккаунт провайдера, к которому он относился, мог быть удалён.
+// Иначе один раз использованный GitHub числился бы занятым навсегда.
+function isArchivedLabel(label) {
+    return /^_old_/.test(String(label || ''));
+}
+
 function scanProfiles() {
     const t0 = Date.now();
     const cached = loadIndex();
@@ -146,6 +154,7 @@ function scanProfiles() {
         out.push({
             tag: p.root.tag, host: p.root.host, label: p.label, dir: p.dir,
             login: rec.login, hasUserSession: rec.hasUserSession, lastUpdate: rec.lastUpdate,
+            archived: isArchivedLabel(p.label),
         });
     }
 
@@ -224,6 +233,7 @@ function profilesFromIndex() {
             login: rec.login,
             hasUserSession: !!rec.hasUserSession,
             lastUpdate: rec.lastUpdate || 0,
+            archived: isArchivedLabel(r.label),
         });
     }
     return out;
@@ -266,7 +276,11 @@ function indexByLogin(profiles = null) {
         if (!map.has(key)) map.set(key, { login: p.login, sources: [], hosts: new Set() });
         const e = map.get(key);
         e.sources.push(p);
-        e.hosts.add(p.tag);
+        // `hosts` = основание блокировать повторную регистрацию, поэтому архивные профили
+        // (`_old_*`) в него НЕ идут: как источник куки они годны, а как доказательство
+        // «аккаунт на хосте уже есть» — нет. Профиль пересоздают именно тогда, когда
+        // аккаунта больше нет либо в него надо войти заново.
+        if (!p.archived) e.hosts.add(p.tag);
     }
     for (const e of map.values()) {
         e.sources.sort((a, b) =>
@@ -284,6 +298,14 @@ function indexByLogin(profiles = null) {
 // Важно, почему это вообще проверяется: один GitHub на ДРУГОМ хосте = новый аккаунт
 // панели, а на ТОМ ЖЕ хосте = вход в аккаунт, который уже есть. Второе выглядит как
 // «регистрация не сработала», хотя всё честно.
+//
+// ⚠️ Признак КОСВЕННЫЙ, и это его слабое место. Профиль на диске переживает удаление
+// записи из пула, а сама регистрация могла не состояться (у провайдера была закрыта) —
+// тогда кука в профиле есть, аккаунта нет, и «занято» врёт. Обратный промах тоже
+// возможен: аккаунт у провайдера жив, а GitHub-кука в его профиле выветрилась
+// (`login: null`) — и «занято» молчит. Поэтому вызывающая сторона обязана трактовать
+// ответ как предупреждение, которое можно перебить (см. `force` в newapiAddGithub),
+// а не как запрет, и дополнять его проверкой по записям пула.
 function usedOnHost(index, login, tag) {
     const e = index.get(String(login || '').toLowerCase());
     return !!(e && e.hosts.has(tag));

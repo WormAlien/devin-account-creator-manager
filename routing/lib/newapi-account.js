@@ -723,18 +723,28 @@ function userIdFromUsername(username) {
 // хосту идут строго по очереди с паузой — балансы всё равно считаются в фоне,
 // и лишняя секунда на аккаунт заметно дешевле, чем потеря точной цифры.
 const HOST_GATE = new Map();       // host → хвост цепочки
+const HOST_LAST_START = new Map(); // host → когда СТАРТОВАЛ последний запрос (мс)
 const HOST_MIN_GAP_MS = 900;
 // agentrouter.org сидит за самым злым WAF: на 900мс он всё равно начинал отдавать
 // заглушку к середине пачки из 11 аккаунтов. Пачка балансов — фоновая операция,
 // лишние секунды дешевле потерянной точной цифры.
 const HOST_GAP_OVERRIDE = { 'agentrouter.org': 2500 };
 
+// Шлюз держит период МЕЖДУ СТАРТАМИ запросов, а не спит фиксированно после каждого.
+// Потолок частоты тот же (≤1 запрос на gap к хосту) — WAF считает именно частоту, —
+// но исчезают две паузы на пустом месте:
+//   • хвостовая: раньше после ПОСЛЕДНЕГО запроса цепочки всё равно спали gap;
+//   • перекрытая: сам запрос идёт 0.5–2с, и это время уже входит в период.
+// Одиночный чек баланса делает 3–4 запроса, так что раньше он стоил
+// (сумма запросов + 4×2.5с) ≈ 10с, теперь — (сумма запросов + добор до периода).
 function hostGate(host, fn) {
     const gap = HOST_GAP_OVERRIDE[host] || HOST_MIN_GAP_MS;
     const prev = HOST_GATE.get(host) || Promise.resolve();
     const run = async () => {
-        try { return await fn(); }
-        finally { await new Promise(r => setTimeout(r, gap)); }
+        const wait = gap - (Date.now() - (HOST_LAST_START.get(host) || 0));
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
+        HOST_LAST_START.set(host, Date.now());
+        return fn();
     };
     // Ошибка предыдущего звена не должна рвать очередь — глотаем её на стыке.
     const next = prev.then(run, run);

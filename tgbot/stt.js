@@ -12,8 +12,17 @@ const { spawn } = require('child_process');
 const path = require('path');
 const readline = require('readline');
 
-const PY = process.env.STT_PYTHON ||
-  path.resolve(__dirname, '..', 'tools', 'tg-venv', 'Scripts', 'python.exe');
+// Интерпретатор venv: Scripts/python.exe (Windows) против bin/python (macOS) —
+// спрашиваем резолвер. require в try: нет файла (обновление приехало не целиком)
+// → бот не должен падать на загрузке из-за голосовых, откатываемся на винду.
+function venvPython() {
+  try {
+    return require('../tools/tg-venv-python.js')();
+  } catch (e) {
+    return path.resolve(__dirname, '..', 'tools', 'tg-venv', 'Scripts', 'python.exe');
+  }
+}
+const PY = process.env.STT_PYTHON || venvPython();
 const SCRIPT = path.join(__dirname, 'stt_server.py');
 
 let proc = null;       // дочерний python

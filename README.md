@@ -64,6 +64,9 @@
 
 Подробная карта модулей, портов и внутренностей — в **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
+Шлюз тормозит или рвёт поток? Настройка SSE-прокси (хедж / пинги / пре-коммит) и
+диагностика «кто виноват» — **[`routing/KEEPALIVE-TUNING.md`](routing/KEEPALIVE-TUNING.md)**.
+
 ## Сервисы и порты
 
 | Порт | Сервис | Файл |
@@ -138,17 +141,20 @@ bash install.sh
 
 macOS — то же, но `bash install-mac.sh`.
 
-Что делает установщик (всё интерактивно, Enter = дефолт):
+Что делает установщик — за три вопроса (winget, если нет node/git · git identity, если не настроен · запустить дашборд?):
 
 1. Проверяет `node`/`npm`/`git`, при нехватке предлагает поставить через `winget`.
-2. `npm install` + (опц.) `npx playwright install chromium`.
-3. Ставит **Claude Code**, если его нет. Уже установленную версию не трогает (версию фиксировать не надо; если зачем-то нужна конкретная — `CLAUDE_CODE_VERSION=2.1.153 bash install.sh`).
-4. Создаёт `~/.claude/settings.json` из шаблона (если ещё нет).
-5. Копирует локальные конфиги из `*.example` (`routing/.env`, `al-sessions`, `video-keys`, `image-keys`).
-6. **OmniRoute** в Docker (по желанию) на `:20128`; без Docker можно жить на API Helper-бэкендах.
-7. **ТГ-бот** (по желанию) — спросит токен и whitelist, запишет в `tgbot/.env`.
-8. Python-зависимости (по желанию) — Camoufox + venv для ✈ Открыть TG. Установщик предпочитает Python 3.11; на 3.12 предупредит про Visual C++ Build Tools.
-9. Запускает дашборд.
+2. Настраивает git identity и `credential.helper` (без них `git pull` падает на merge-коммите).
+3. Дописывает `Git\usr\bin` в user-PATH, если `cat` не виден из cmd — иначе `apiKeyHelper` молча отдаёт пустой ключ и Claude Code пишет «Authentication failed».
+4. `npm install` + `npx playwright install chromium chromium-headless-shell`.
+5. Ставит **Claude Code**, если его нет. Уже установленную версию не трогает (версию фиксировать не надо; если зачем-то нужна конкретная — `CLAUDE_CODE_VERSION=2.1.153 bash install.sh`).
+6. Создаёт `~/.claude/settings.json` из шаблона (если ещё нет) и подключает статуслайн.
+7. Копирует локальные конфиги из `*.example` (`routing/.env`, `al-sessions`, `video-keys`, `image-keys`, `tgbot/.env`).
+8. Зовёт `install-deps.sh` — тяжёлое и опциональное: Python-стек (Camoufox-автореги, grok-launcher, venv для ✈ Открыть TG), `sqlite3.exe`, **OmniRoute** в Docker на `:20128`, `.env` ТГ-бота. Запускается и отдельно: `bash install-deps.sh`.
+9. Запускает дашборд и печатает шпаргалку.
+
+> [!NOTE]
+> API-ключи и токены установщик **не спрашивает**: в терминале секрет остаётся в скроллбэке и в истории. Ключ бэкенда вписывается в дашборде — вкладка провайдера → ключ → **Активировать**.
 
 Установщик дополнительно ловит частую ошибку `vibe-code-account-creator-manager/vibe-code-account-creator-manager`: такую двойную вложенность надо исправить **до** создания `tools/tg-venv`, иначе venv запомнит старый путь и сломается после переноса папки.
 
@@ -327,7 +333,11 @@ node gorouter/open-session.js <label>     # вход в кабинет GoRouter
 
 | Папка / файл | Что |
 | :--- | :--- |
-| `install.sh` | Интерактивный установщик с нуля |
+| `install.sh` | Установщик Windows: база, 3 вопроса |
+| `install-deps.sh` | Тяжёлое и опциональное: Python-стек, sqlite3, OmniRoute, ТГ-бот |
+| `install-lib.sh` | Общие хелперы установщиков (`ask`/`prompt`/`set_env` + режим `AUTO`) |
+| `install-mac.sh` | Установщик macOS (standalone, качается одним файлом) |
+| `tools/tg-venv-python.js` | Где интерпретатор `tools/tg-venv`: `Scripts/python.exe` или `bin/python` |
 | `routing/transparent-proxy.js` | Dashboard :8200 + HTTP API + пулы ключей |
 | `routing/keepalive-proxy.js` | SSE keepalive для agentrouter :20133 / tabi :20155 / gorouter :20156 (параметризован env: `PORT`/`UPSTREAM`/`KEY_FILE`/`MODELMAP_FILE`) |
 | `routing/agentrouter-proxy.js` | AgentRouter gpt-конвертер :20132 (Anthropic→OpenAI) |

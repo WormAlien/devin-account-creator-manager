@@ -1,0 +1,5 @@
+{
+  "enabled": false,
+  "port": 20100,
+  "_note": "enabled=true переводит Claude Code на фиксированный вход http://127.0.0.1:20100 (routing/frontdoor-proxy.js). Тогда переключение провайдера в дашборде не требует перезапуска CC: settings.json больше не меняет ANTHROPIC_BASE_URL, а активный бэкенд лежит в ~/.claude/active-backend.json. Тумблер — на вкладке «Настройки». Перед включением: node routing/frontdoor-proxy.js selftest и живой :20100 в Health. В git этот файл лежит с enabled:false и внесён в tools/git-pull-safe.js, чтобы pull не спотыкался о локальный тумблер."
+}

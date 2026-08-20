@@ -8,8 +8,9 @@
 # Каждый аккаунт = свой -workdir, профили не пересекаются и НЕ трогают
 # пользовательский AyuGram.
 #
-# Запуск только через tools/tg-venv (py3.12 + opentele). Пример:
-#   tools/tg-venv/Scripts/python.exe tools/tg-open.py 240718298
+# Запуск только через tools/tg-venv (opentele). Пример:
+#   tools/tg-venv/Scripts/python.exe tools/tg-open.py 240718298   # Windows
+#   tools/tg-venv/bin/python tools/tg-open.py 240718298           # macOS
 #   ... tg-open.py 240718298 --check        # офлайн-проверка, без сети/запуска
 #   ... tg-open.py 240718298 --no-launch     # сделать tdata, но не запускать
 
@@ -23,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 POOL = ROOT / "freemodel" / "tg_pool.json"
 PROFILES = ROOT / "tools" / "tg-profiles"
-TELEGRAM_EXE = ROOT / "tools" / "telegram-portable" / "Telegram" / "Telegram.exe"
+PORTABLE = ROOT / "tools" / "telegram-portable"
 
 # Prod DC адреса (как в freemodel/lib/tg-client.js). telethon знает их сам,
 # но из голой StringSession без bootstrap иногда не находит — задаём явно.
@@ -93,14 +94,52 @@ async def make_tdata(entry: dict) -> Path:
     return wd
 
 
+def telegram_candidates():
+    """Где искать клиент Telegram Desktop, в порядке предпочтения.
+
+    Windows: только портативный в репо — его кладёт install-deps.sh, и он
+    гарантированно не трогает пользовательский AyuGram.
+
+    macOS: портативной сборки для мака не существует, поэтому берём .app —
+    сначала свою в репо (если кто-то положил руками), потом системную из
+    /Applications (её ставит `brew install --cask telegram`) и из ~/Applications.
+    Изоляция профилей всё равно держится на -workdir, а не на копии бинаря.
+    """
+    if sys.platform == "darwin":
+        rel = Path("Contents") / "MacOS" / "Telegram"
+        return [
+            PORTABLE / "Telegram.app" / rel,
+            Path("/Applications/Telegram.app") / rel,
+            Path.home() / "Applications" / "Telegram.app" / rel,
+        ]
+    return [PORTABLE / "Telegram" / "Telegram.exe"]
+
+
+def find_telegram():
+    for p in telegram_candidates():
+        if p.exists():
+            return p
+    return None
+
+
 def launch(workdir: Path):
-    if not TELEGRAM_EXE.exists():
-        raise SystemExit(f"не найден портативный клиент: {TELEGRAM_EXE}")
-    subprocess.Popen(
-        [str(TELEGRAM_EXE), "-workdir", str(workdir)],
-        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
-        close_fds=True,
-    )
+    exe = find_telegram()
+    if exe is None:
+        tried = "\n  ".join(str(p) for p in telegram_candidates())
+        hint = ("поставь: brew install --cask telegram"
+                if sys.platform == "darwin"
+                else "поставь через install-deps.sh (скачает портативный)")
+        raise SystemExit(f"не найден клиент Telegram. Искал:\n  {tried}\n{hint}")
+    # Отвязываем от родителя, чтобы клиент жил после выхода этого скрипта.
+    # DETACHED_PROCESS — виндовый флаг, setsid (start_new_session) — POSIX-ный,
+    # и на Windows передавать его нельзя: subprocess бросит ValueError.
+    kw = {"close_fds": True}
+    if sys.platform == "win32":
+        kw["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
+    else:
+        kw["start_new_session"] = True
+    subprocess.Popen([str(exe), "-workdir", str(workdir)], **kw)
+    return exe
 
 
 def main():
@@ -116,16 +155,18 @@ def main():
 
     if args.check:
         build_session(entry)  # бросит SystemExit при битом ключе/dc
+        tg = find_telegram()
         print(f"OK check: {entry['phone']} dc={entry['dc_id']} "
               f"key_len={len(entry['auth_key_hex'])}")
+        print(f"клиент: {tg if tg else 'НЕ НАЙДЕН (см. telegram_candidates)'}")
         return
 
     wd = asyncio.run(make_tdata(entry))
     print(f"tdata: {wd / 'tdata'}")
     if args.no_launch:
         return
-    launch(wd)
-    print(f"launched: {TELEGRAM_EXE.name} -workdir {wd}")
+    exe = launch(wd)
+    print(f"launched: {exe.name} -workdir {wd}")
 
 
 if __name__ == "__main__":

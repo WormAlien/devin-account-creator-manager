@@ -230,10 +230,7 @@ function publicState() {
 // Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
 // AgentRouter в том же блоке, что и крутилки хеджа. retries — всего повторов,
 // byStatus/byModel — распределение финальных ответов для отладки.
-// winBy — КТО принёс ответ: `первый` / `хедж` / `ретрай`. Это единственная цифра,
-// по которой можно настраивать hedgeMs не наугад: если `хедж` почти нулевой, дубли
-// только грузят шлюз (его WAF чувствителен к пачкам) и hedgeMs надо ПОДНИМАТЬ.
-const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, byStatus: {}, byModel: {}, winBy: {} };
+const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, byStatus: {}, byModel: {} };
 const startedAt = Date.now();
 // Служебные пути: статус (health-check дашборда), состояние и патч конфига.
 function handleControl(req, res, reqPath) {
@@ -708,11 +705,7 @@ const server = http.createServer((req, res) => {
     // Победитель остаётся в activeSet: на обрыв клиента его тоже надо рвать.
     activeSet.clear();
     if (!r.destroyed) activeSet.add(r);
-    // Пишем ИМЕННО кто победил: без этого хедж настраивается наугад. `первый` = дубли
-    // не нужны, `хедж`/`ретрай` = спасли. Агрегат — в stats.winBy (GET /__state).
-    const wKind = r.__kind || 'первый';
-    stats.winBy[wKind] = (stats.winBy[wKind] || 0) + 1;
-    log(`${req.method} ${reqPath} winner: ${wKind} (попытка #${r.__attempt || 1} из ${launched}) за ${Date.now() - started}ms`);
+    log(`${req.method} ${reqPath} winner settled`);
   };
   const giveUp = (why) => {
     finished = true;
@@ -737,7 +730,7 @@ const server = http.createServer((req, res) => {
     if (launched < cfg.maxAttempts) {
       stats.retries += 1;
       log(`${req.method} ${reqPath} -> ретрай/дубль #${launched + 1} через ${delayMs}ms (${why})`);
-      setTimeout(() => { if (!aborted && !finished) makeUpstream('ретрай'); }, delayMs);
+      setTimeout(() => { if (!aborted && !finished) makeUpstream(); }, delayMs);
       return;
     }
     if (activeSet.size === 0) giveUp(why);
@@ -753,12 +746,12 @@ const server = http.createServer((req, res) => {
       if (finished || aborted) return;
       log(`${req.method} ${reqPath} хедж: тишина ${Date.now() - started}ms, пускаю дубль #${launched + 1}`);
       stats.hedges += 1;
-      makeUpstream('хедж');
+      makeUpstream();
       scheduleHedge();
     }, cfg.hedgeMs);
   };
 
-  const makeUpstream = (kind) => {
+  const makeUpstream = () => {
     if (finished || aborted) return;
     if (launched >= cfg.maxAttempts) {
       if (activeSet.size === 0) giveUp('попытки исчерпаны');
@@ -766,7 +759,6 @@ const server = http.createServer((req, res) => {
     }
     launched += 1;
     const attempt = launched;
-    const kindLabel = kind || 'первый';
     const body = reqBody;
     const t = tgt || { requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
     const headers = Object.assign({}, req.headers, { host: t.host });
@@ -861,8 +853,6 @@ const server = http.createServer((req, res) => {
     });
 
     activeSet.add(upReq);
-    upReq.__attempt = attempt;
-    upReq.__kind = kindLabel;
     upReq.on('timeout', () => {
       if (finished || aborted) return;
       log(`${req.method} ${reqPath} upstream timeout ${UPSTREAM_TIMEOUT_MS}ms (attempt ${attempt})`);

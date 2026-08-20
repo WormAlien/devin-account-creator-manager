@@ -37,6 +37,9 @@ const LOCAL_STATE_FILES = [
     'routing/tabi-modelmap.json',
     'routing/proxy-target.json',
     'routing/fm-openai-config.json',
+    // Тумблер front-door: в репо лежит enabled:false, у владельца включён — иначе
+    // каждый git pull упирался бы в «локальные правки» из-за одного булева.
+    'routing/frontdoor.json',
 ];
 
 function git(...args) {

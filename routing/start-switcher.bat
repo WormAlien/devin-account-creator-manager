@@ -44,6 +44,12 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20133 " ^| findstr LISTENIN
     taskkill /F /PID %%P >nul 2>&1
 )
 
+REM Kill front-door (:20100) — единый вход Claude Code, тоже boot-spawn'ится
+REM transparent-proxy.js. Порты :20155-20157 не трогаем: у них автоспавна нет.
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20100 " ^| findstr LISTENING') do (
+    taskkill /F /PID %%P >nul 2>&1
+)
+
 echo Starting Backend Switcher on :8200 ...
 start "Backend Switcher" node transparent-proxy.js
 timeout /t 2 /nobreak >nul

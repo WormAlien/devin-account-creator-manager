@@ -271,6 +271,10 @@ function writeSettings(obj) {
     } else if (obj.env) {
         delete obj.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
     }
+    // Front-door: перевести base URL на :20100 и записать active-backend.json.
+    // Стоит здесь, а не в хендлерах, по той же причине, что и нормализация модели —
+    // записей в settings.json много, а правило должно быть одно.
+    applyFrontdoor(obj);
     // timestamped backup before every write
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const bakPath = SETTINGS_FILE + '.bak-' + stamp;
@@ -331,11 +335,133 @@ function keyHelperCmd(keyFile) {
         + 'require(\'os\').homedir()+\'/.claude/' + keyFile + '\',\'utf8\').trim())"';
 }
 
+// ---- Front-door :20100 — фиксированный вход Claude Code ----------------------
+// `env` из settings.json Claude Code читает ОДИН раз, при старте процесса. Пока
+// свич провайдера менял ANTHROPIC_BASE_URL, каждое переключение требовало новой
+// сессии CC — а в Orca одновременно живёт несколько pty с `claude`, и перезапускать
+// их все на каждый свич нельзя. Поэтому base URL фиксируется на локальном
+// frontdoor-proxy.js, а выбор бэкенда переезжает в ~/.claude/active-backend.json.
+//
+// Чокпоинт ОДИН — writeSettings(): 15+ обработчиков активации по-прежнему пишут
+// свой base URL / apiKeyHelper, а applyFrontdoor() превращает это в состояние
+// front-door. Так новый режим не размазан по хендлерам (см. docs/HANDOFF-frontdoor.md).
+const FRONTDOOR_CONFIG_FILE = process.env.FRONTDOOR_CONFIG || path.join(__dirname, 'frontdoor.json');
+const ACTIVE_BACKEND_FILE = path.join(os.homedir(), '.claude', 'active-backend.json');
+// Ключ для удалённого шлюза, который обработчик записал литералом (единственный
+// такой путь — freemodel_rotator). Front-door читает ключи только из файлов, поэтому
+// литерал переезжает сюда, а не в состояние: секретам в active-backend.json не место.
+const FD_INLINE_KEY_FILE = path.join(os.homedir(), '.claude', 'fd-active-key.txt');
+const FD_DEFAULT_PORT = 20100;
+let FD_CFG_CACHE = { mtime: 0, cfg: { enabled: false, port: FD_DEFAULT_PORT } };
+
+function frontdoorConfig() {
+    try {
+        const st = fs.statSync(FRONTDOOR_CONFIG_FILE);
+        if (st.mtimeMs !== FD_CFG_CACHE.mtime) {
+            const raw = fs.readFileSync(FRONTDOOR_CONFIG_FILE, 'utf8');
+            const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+            FD_CFG_CACHE = {
+                mtime: st.mtimeMs,
+                cfg: { enabled: !!doc.enabled, port: Number(doc.port) || FD_DEFAULT_PORT },
+            };
+        }
+    } catch { /* нет файла — режим выключен, всё работает по-старому */ }
+    return FD_CFG_CACHE.cfg;
+}
+function frontdoorPort() { return frontdoorConfig().port; }
+function frontdoorUrl() { return `http://127.0.0.1:${frontdoorPort()}`; }
+
+// «Claude Code реально смотрит в front-door» — проверяем и localhost, и 127.0.0.1.
+function isFrontdoorBase(url) {
+    const p = frontdoorPort();
+    return new RegExp(`^https?://(127\\.0\\.0\\.1|localhost):${p}(/|$)`, 'i').test(String(url || ''));
+}
+function isLocalBase(url) {
+    return /^https?:\/\/(127\.\d+\.\d+\.\d+|localhost|\[::1\])(:|\/|$)/i.test(String(url || ''));
+}
+
+function readActiveBackend() {
+    try {
+        const raw = fs.readFileSync(ACTIVE_BACKEND_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return null; }
+}
+function writeActiveBackend(state) {
+    const tmp = ACTIVE_BACKEND_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, ACTIVE_BACKEND_FILE);   // атомарно: прокси читает файл на каждый запрос
+}
+
+// Имя key-файла из apiKeyHelper-команды (`…/.claude/cdt-active-key.txt`).
+function helperKeyFile(helper) {
+    const m = String(helper || '').match(/([A-Za-z0-9_-]+-active-key\.txt)/);
+    return m ? m[1] : null;
+}
+
+// Что записать в active-backend.json для объекта settings, который СОБИРАЕТСЯ
+// записать обработчик. Ничего не изобретаем: апстрим — ровно тот base URL, который
+// он выставил, ключ — ровно тот файл, который он повесил в apiKeyHelper.
+// null = вмешиваться нельзя (официальный Claude, пустой/непонятный конфиг).
+function frontdoorStateFrom(obj) {
+    const env = (obj && obj.env) || {};
+    const base = String(env.ANTHROPIC_BASE_URL || '').trim();
+    if (!base) return null;                       // official / Bedrock / Vertex — не наше дело
+    const backend = backendFromSettingsObj(obj);
+    if (backend === 'official' || String(backend).startsWith('error')) return null;
+    let keyFile = null;
+    let modelmap = null;
+    if (!isLocalBase(base)) {
+        // Удалённый шлюз: ключ инжектит сам front-door. Локальным ключ не нужен —
+        // его ставит keepalive/конвертер (keepalive-proxy.js:771), и второй раз
+        // перебивать его нельзя.
+        keyFile = helperKeyFile(obj.apiKeyHelper);
+        if (!keyFile) {
+            // Оба поля перебираем: AUTH_TOKEN может остаться заглушкой 'dummy' от
+            // предыдущего бэкенда, пока реальный ключ лежит в ANTHROPIC_API_KEY.
+            const literal = [env.ANTHROPIC_AUTH_TOKEN, env.ANTHROPIC_API_KEY]
+                .map(v => String(v || '').trim())
+                .find(v => v && v !== 'dummy');
+            if (literal) {
+                fs.writeFileSync(FD_INLINE_KEY_FILE, literal, 'utf8');
+                keyFile = path.basename(FD_INLINE_KEY_FILE);
+            }
+        }
+        // Карта тиров по тому же префиксу, что и key-файл: cdt-active-key.txt →
+        // cdt-modelmap.json. Файла может не быть — front-door тогда только срежет
+        // суффикс окна и напишет об этом в лог (шлюзы без claude-* в каталоге).
+        const prefix = keyFile && keyFile !== path.basename(FD_INLINE_KEY_FILE)
+            ? keyFile.replace(/-active-key\.txt$/, '') : null;
+        if (prefix) modelmap = `${prefix}-modelmap.json`;
+    }
+    return { backend, upstream: base, keyFile, modelmap, updatedAt: Date.now() };
+}
+
+// Вызывается ИЗ writeSettings(), до записи файла.
+function applyFrontdoor(obj) {
+    if (!frontdoorConfig().enabled) return;
+    const env = obj.env || (obj.env = {});
+    const base = String(env.ANTHROPIC_BASE_URL || '');
+    // Уже наш адрес: обработчик писал не про бэкенд (модель, тоггл, пресет), либо это
+    // второй writeSettings подряд (handleSettingsApply). Состояние НЕ трогаем —
+    // иначе второй проход затрёт активный бэкенд «фронтдором».
+    if (isFrontdoorBase(base)) return;
+    const state = frontdoorStateFrom(obj);
+    if (!state) return;                 // official и прочее — оставляем как есть
+    writeActiveBackend(state);
+    env.ANTHROPIC_BASE_URL = frontdoorUrl();
+    env.ANTHROPIC_AUTH_TOKEN = 'dummy';    // реальный ключ ставят front-door/keepalive
+    delete obj.apiKeyHelper;               // ключ больше не нужен Claude Code
+    delete env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+    delete env.ANTHROPIC_API_KEY;
+    logLine(`front-door: ${state.backend} → ${state.upstream}${state.keyFile ? ' (ключ ' + state.keyFile + ')' : ''}`);
+}
+
 // Figure out which backend/config matches the URL/key currently in settings.json.
 // apiKeyHelper → ApiHelper (FreeModel direct), direct API key → backend by URL.
-function currentTarget() {
+// Работает на ОБЪЕКТЕ, а не на файле: тот же вывод нужен front-door'у до записи,
+// чтобы понять, какой бэкенд имел в виду обработчик (см. applyFrontdoor).
+function backendFromSettingsObj(s) {
     try {
-        const s = readSettings();
         const url = (s.env && s.env.ANTHROPIC_BASE_URL) || '';
         const helper = s.apiKeyHelper || '';
         if (helper.includes('fm-active-key.txt') || helper.includes('freemodel')) {
@@ -405,6 +531,21 @@ function currentTarget() {
         return 'error: ' + e.message;
     }
 }
+
+function currentTarget() {
+    let s;
+    try { s = readSettings(); } catch (e) { return 'error: ' + e.message; }
+    // Front-door: пока base URL реально смотрит в :20100, источник правды —
+    // active-backend.json, а не settings.json (там всегда один и тот же адрес).
+    // Условие «реально смотрит» важно: с выключённым тумблером или на официальном
+    // Claude состояние может быть протухшим, и врать нельзя.
+    if (isFrontdoorBase((s.env && s.env.ANTHROPIC_BASE_URL) || '')) {
+        const st = readActiveBackend();
+        return (st && st.backend) || 'frontdoor';
+    }
+    return backendFromSettingsObj(s);
+}
+
 
 // Persisted state (informational; settings.json is the source of truth)
 function saveState(target) {
@@ -511,7 +652,8 @@ async function handleSettingsApply(req, res) {
             delete next.env.ANTHROPIC_API_KEY;
             let activeKey = '';
             try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
-            if (activeKey) next.env.ANTHROPIC_AUTH_TOKEN = activeKey;
+            // Заглушка: ключ инжектят прокси :20133/:20132 из ar-active-key.txt.
+            if (activeKey) next.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
             else delete next.env.ANTHROPIC_AUTH_TOKEN;
             writeSettings(next);
         }
@@ -2332,13 +2474,27 @@ async function handleTgRename(req, res) {
 // затем launch Telegram.exe -workdir. Первый раз идёт в сеть (~5-10с),
 // дальше tdata переиспользуется. AyuGram пользователя не трогаем.
 const { spawn } = require('child_process');
-const TG_VENV_PY = path.join(__dirname, '..', 'tools', 'tg-venv', 'Scripts', 'python.exe');
+// Путь до интерпретатора venv платформозависим: Scripts/python.exe на Windows,
+// bin/python на macOS. Резолвер спрашиваем НА КАЖДЫЙ запрос, а не один раз при
+// загрузке модуля: venv мог появиться после старта дашборда (UPDATE.bat), и
+// закешированный «не найден» держался бы до рестарта прокси.
+//
+// require в try: если обновление приехало не целиком и файла нет, дашборд НЕ
+// должен падать на загрузке целиком из-за одной кнопки ✈ — откатываемся на
+// виндовый layout, ломается только эта кнопка.
+let tgVenvPython;
+try {
+    tgVenvPython = require('../tools/tg-venv-python.js');
+} catch (e) {
+    tgVenvPython = () => path.join(__dirname, '..', 'tools', 'tg-venv', 'Scripts', 'python.exe');
+}
 const TG_OPEN_PY = path.join(__dirname, '..', 'tools', 'tg-open.py');
 
 async function handleTgOpen(req, res) {
     try {
         const { phone } = await readJsonBody(req);
         if (!phone) return jsonRes(res, 400, { error: 'phone обязателен' });
+        const TG_VENV_PY = tgVenvPython();
         if (!fs.existsSync(TG_VENV_PY)) {
             return jsonRes(res, 500, { error: `нет ${TG_VENV_PY} — venv не создан. Запусти UPDATE.bat в папке репо (git pull + установка), потом обнови страницу` });
         }
@@ -3507,6 +3663,7 @@ async function handleHealth(res) {
 
     const checks = [
         { name: 'Дашборд (switcher)', port: LISTEN_PORT, path: '/__switch/api/status' },
+        { name: 'Front Door', port: frontdoorPort(), path: '/__frontdoor/api/status', frontdoor: true },
         { name: 'FreeModel ротатор',  port: 20126, path: '/__fmrot/api/status' },
         { name: 'FreeModel OpenAI',   port: 20130, path: '/__fmoai/api/status' },
         { name: 'VyceAI',             port: 20131, path: '/__vyceai/api/status' },
@@ -3518,12 +3675,33 @@ async function handleHealth(res) {
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
-    // Custom-конвертеры из конфига (не забыть их, даже если порт не в диапазоне)
-    for (const p of (customLoad().providers || [])) {
-        if (p.proxyPort) {
+    // Custom-конвертеры из конфига (не забыть их, даже если порт не в диапазоне).
+    //
+    // Само-починка протухшей записи. proxyPort/proxyPid пишутся при спавне и снимаются
+    // только на ЯВНЫХ путях: переключение провайдера, стоп, удаление. Если конвертер умер
+    // сам — упал, попал под KILLPORT из restart-dashboard.bat, ребут машины — запись
+    // остаётся, и Health навсегда рисует красное «упал» провайдеру, которым даже не
+    // пользуются (жил месяцами: `:20150` BluesMinds с pid из прошлой загрузки).
+    // Порт никто не слушает и провайдер не активен → это протухший конфиг, а не поломка:
+    // чистим запись и строку не рисуем. У АКТИВНОГО провайдера мёртвый конвертер —
+    // настоящая авария (в него смотрит Claude Code), там красное остаётся.
+    {
+        const cdata = customLoad();
+        const activeId = (customReadActiveProvider() || {}).id || null;
+        let healed = false;
+        for (const p of (cdata.providers || [])) {
+            if (!p.proxyPort) continue;
+            if (!listening.has(p.proxyPort) && p.id !== activeId) {
+                logLine(`health: протухшая запись конвертера ${p.name} (:${p.proxyPort}, pid ${p.proxyPid || '—'}) — порт не слушают, чищу`);
+                p.proxyPort = null;
+                p.proxyPid = null;
+                healed = true;
+                continue;
+            }
             knownPorts.add(p.proxyPort);
             checks.push({ name: `Custom: ${p.name}`, port: p.proxyPort, path: '/__custom/api/status', custom: p });
         }
+        if (healed) customSave(cdata);
     }
     // Осиротевшие конвертеры 20150–20250 (слушают, но не в конфиге) — полезно знать
     for (const port of listening.keys()) {
@@ -3550,6 +3728,7 @@ async function handleHealth(res) {
             ms: Date.now() - t0,
             orphan: !!c.orphan,
             keepalive: !!c.keepalive,
+            frontdoor: !!c.frontdoor,
             custom: c.custom ? { id: c.custom.id, modelMap: c.custom.modelMap } : undefined,
             detail: summarizeStatus(data),
         };
@@ -3586,7 +3765,7 @@ async function handleHealth(res) {
     });
 
     // Куда смотрит Claude Code сейчас
-    let wired = { base: null, port: null, up: false, service: null };
+    let wired = { base: null, port: null, up: false, service: null, frontdoor: false, backend: null, effectivePort: null, effectiveService: null };
     try {
         const s = readSettings();
         const base = (s.env && s.env.ANTHROPIC_BASE_URL) || '';
@@ -3596,6 +3775,21 @@ async function handleHealth(res) {
         wired.up = wired.port ? listening.has(wired.port) : false;
         const svc = services.find(x => x.port === wired.port);
         wired.service = svc ? svc.name : null;
+        // Front-door: settings.json всегда показывает :20100, а настоящий апстрим
+        // лежит в active-backend.json. Без этого keepalive активного провайдера
+        // числился бы «не запущен» (серым), даже если он реально упал.
+        if (isFrontdoorBase(base)) {
+            wired.frontdoor = true;
+            const st = readActiveBackend();
+            wired.backend = (st && st.backend) || null;
+            const up = st && st.upstream ? String(st.upstream) : '';
+            const upm = up.match(/^https?:\/\/(?:127\.\d+\.\d+\.\d+|localhost|\[::1\]):(\d+)/i);
+            wired.effectivePort = upm ? +upm[1] : null;      // удалённый шлюз — порта нет
+            if (wired.effectivePort) {
+                const esvc = services.find(x => x.port === wired.effectivePort);
+                wired.effectiveService = esvc ? esvc.name : null;
+            }
+        }
     } catch {}
 
     // Обновления кода дашборда
@@ -5734,7 +5928,7 @@ const AR_CHECKIN_MIN_USD = 20;
 // Сколько браузеров чек-ина разрешено держать открытыми одновременно (см. предохранитель
 // в handleArSessionOpen): залп по всему пулу ловит рейт-лимит шлюза.
 const AR_CHECKIN_MAX_BROWSERS = 3;
-const AR_CHECKIN_DEFAULTS = { resetHhmmMsk: '08:30', bonusUsd: 25 };
+const AR_CHECKIN_DEFAULTS = { resetHhmmMsk: '20:30', bonusUsd: 25 };
 const AR_PROXY_PORT = 20132;
 const AR_PROXY_URL = `http://localhost:${AR_PROXY_PORT}`;
 // SSE keepalive proxy (friend's sse-keepalive-proxy, v1tusha) — стоит перед
@@ -5779,6 +5973,37 @@ async function arProxySpawn() {
 // форвардит всё в agentrouter.org, вставляя `: keepalive` при тишине > IDLE_MS
 // и ретраи 401/403/429/5xx. Спавнится как и agentrouter-proxy, только для полного
 // pass-through agentrouter-моделей (claude-*).
+// Front-door :20100 — единый вход Claude Code. Спавним на boot ВСЕГДА, даже с
+// выключенным тумблером: включение режима не должно требовать рестарта дашборда,
+// а лежащий прокси = мгновенная потеря всех сессий CC после флипа.
+const FRONTDOOR_PROXY_FILE = 'frontdoor-proxy.js';
+async function frontdoorSpawn() {
+    const port = frontdoorPort();
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(port, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, FRONTDOOR_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(port),
+                LOG_FILE: path.join(__dirname, 'frontdoor-proxy.log'),
+            },
+        });
+        child.unref();
+        logLine(`front-door spawn: :${port} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`front-door spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
 async function arKeepaliveSpawn() {
     try {
         const net = require('net');
@@ -6043,7 +6268,39 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         return { status: 'unknown', error: `usage parse: ${e.message}` };
     }
 
-    // ── 2. self: точный остаток аккаунта ──
+    // ── 2. anchor: вписанный руками баланс, убывает по расходу ──
+    // ПРИОРИТЕТ ВЫШЕ точного self, и это осознанно. Владелец вписывает цифру ровно
+    // тогда, когда видит ЛК своими глазами и цифра шлюза его не устроила (у gorouter
+    // /api/user/self отдаёт квоту, расходящуюся с кошельком в ЛК). Раньше self
+    // перебивал анкер: вписанное сохранялось в файл, а в таблице тут же возвращалось
+    // прежнее число с тостом «точный приоритетнее» — со стороны это выглядело как
+    // «ручное вписывание не работает» (поймано на личном gorouter-аккаунте 2026-08-20).
+    // Возврат к точному — пустое поле в промпте (сброс анкера).
+    // Анкер всегда привязан к ЛЕГАСИ-расходу (usageSpent) — на том же основании, на
+    // котором его записали, иначе цифра прыгнула бы при смене источника.
+    // Побочно это экономит запрос self к шлюзу (для WAF полезно): у аккаунта с живым
+    // анкером точная цифра всё равно не показывалась бы.
+    let anchorDrained = null;
+    const anchor = Number(target.balanceAnchor);
+    if (isFinite(anchor) && anchor > 0 && target.anchorSpent != null) {
+        const drawn = round2(usageSpent - Number(target.anchorSpent));
+        const left = round2(anchor - Math.max(0, drawn));
+        // Ушло в ноль или минус — привязка устарела (расход обогнал вписанное).
+        // Отдавать её как факт нельзя: пробуем self, потом прикидку, и UI просит вписать заново.
+        if (left > 0) {
+            return {
+                status: 'live',
+                balanceSource: 'anchor',
+                balance: left,
+                spent: usageSpent,
+                usageSpent,
+                granted: null,
+            };
+        }
+        anchorDrained = 'вписанный баланс исчерпан расходом — впиши заново';
+    }
+
+    // ── 3. self: точный остаток аккаунта ──
     // Экономия запросов. Если предыдущий self прошёл недавно и с тех пор ничего не
     // изменилось — берём сохранённое значение и на шлюз не идём. Без этого повторное
     // нажатие «Балансы всех» шлёт по запросу на каждый аккаунт, Aliyun WAF у agentrouter
@@ -6104,28 +6361,10 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             : 'профиля аккаунта нет — открой ЛК кнопкой 🌐 и войди, тогда баланс станет точным';
     }
 
-    // ── 3. anchor: вписанный руками баланс, убывает по расходу ──
-    // Анкер всегда привязан к ЛЕГАСИ-расходу (usageSpent) — на том же основании,
-    // на котором его записали, иначе цифра прыгнула бы при смене источника.
-    const anchor = Number(target.balanceAnchor);
-    if (isFinite(anchor) && anchor > 0 && target.anchorSpent != null) {
-        const drawn = round2(usageSpent - Number(target.anchorSpent));
-        const left = round2(anchor - Math.max(0, drawn));
-        // Ушло в ноль или минус — привязка устарела (расход обогнал вписанное).
-        // Отдавать её как факт нельзя: провалимся в прикидку, и UI попросит вписать заново.
-        if (left > 0) {
-            return {
-                status: 'live',
-                balanceSource: 'anchor',
-                balance: left,
-                spent: usageSpent,
-                usageSpent,
-                granted: null,
-                selfError,
-            };
-        }
-        selfError = selfError || 'вписанный баланс исчерпан расходом — впиши заново';
-    }
+    // Анкер уже проверен ДО self (шаг 2) — он приоритетнее точной цифры. Сюда попадаем
+    // только если анкера нет или он исчерпан расходом; во втором случае причина едет
+    // в UI, чтобы было понятно, почему показывается прикидка.
+    if (anchorDrained) selfError = selfError || anchorDrained;
 
     // ── 4. guess: старое угадывание, последний резерв ──
     const grant = guessGrant(usageSpent);
@@ -6468,11 +6707,12 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn,
             // Сброс — единственный случай, где нужен повторный расчёт: probe считался
             // ДО удаления анкера и всё ещё показывал его.
             bal = await balanceFn(target, { force: true });
-        } else if (probeOk && probe.balanceSource === 'self') {
-            bal = probe;   // точная цифра приоритетнее вписанной
         } else {
-            // Показываем вписанное. Статус мёртвого ключа не подменяем, но и ошибку
-            // чека не тащим в ответ — сохранение состоялось.
+            // Показываем ВПИСАННОЕ, даже если точный self отвечает. Он больше не
+            // перебивает анкер (см. приоритет в newapiBalance): раньше ответ подменялся
+            // на probe, и в таблице цифра тут же возвращалась к прежней — выглядело
+            // как «вписывание не работает». Статус мёртвого ключа не подменяем, но и
+            // ошибку чека не тащим в ответ — сохранение состоялось.
             bal = {
                 status: (probe && probe.status === 'dead') ? 'dead' : 'live',
                 balanceSource: 'anchor',
@@ -6485,10 +6725,13 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn,
         applyFn(target, bal);
         save(sessions);   // целиком: delete полей мержем (Object.assign) не выражается
         logLine(`${tag} set-balance: ***${key.slice(-6)} → ${val === null ? 'сброс анкера' : '$' + val}${probeOk ? '' : ' (чек не ответил)'}`);
-        const note = (val !== null && bal.balanceSource === 'self')
-            ? 'анкер сохранён, но показывается точный баланс из ЛК аккаунта — он приоритетнее'
-            : (val !== null && !probeOk)
-                ? `баланс $${round2(val)} сохранён; расход перепроверить не удалось (${(probe && probe.error) || 'шлюз не ответил'})`
+        const selfSaw = (val !== null && probeOk && probe.balanceSource === 'self' && probe.balance != null
+            && round2(probe.balance) !== round2(val))
+            ? round2(probe.balance) : null;
+        const note = (val !== null && !probeOk)
+            ? `баланс $${round2(val)} сохранён; расход перепроверить не удалось (${(probe && probe.error) || 'шлюз не ответил'})`
+            : selfSaw !== null
+                ? `вписано $${round2(val)} — этим перекрыт точный баланс шлюза ($${selfSaw}). Пустое поле вернёт точный`
                 : undefined;
         jsonRes(res, 200, { ok: true, ...bal, error: undefined, note });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -7175,7 +7418,11 @@ async function handleArSetModel(req, res) {
             delete settings.env.ANTHROPIC_API_KEY;
             clearOtEnv(settings);
             try { activeKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
-            if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = activeKey;   // прямой режим
+            // Заглушка, а не литерал: реальный ключ прокси читают из ar-active-key.txt
+            // на каждый запрос (keepalive-proxy.js:771), поэтому смена аккаунта не
+            // требует новой сессии CC. Литерал здесь был единственным местом, где
+            // ar вёл себя иначе, чем go/tb/xp, и ломал бесшовность.
+            if (activeKey) settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
             else delete settings.env.ANTHROPIC_AUTH_TOKEN;
             writeSettings(settings);
             settingsOk = true;
@@ -7228,7 +7475,7 @@ async function handleArModelMap(req, res) {
 // разлогинится и войдёт заново через GitHub. Сброс — не скользящие 24ч от момента
 // забора, а суточная граница (забрал вечером → следующий заход возможен уже утром;
 // именно поэтому днём после утреннего чек-ина деньги не капали, а на следующее утро
-// капали). Время границы настраивается: 08:30 МСК — наблюдение владельца, не факт
+// капали). Время границы настраивается: 20:30 МСК — наблюдение владельца, не факт
 // из документации шлюза.
 function arReadCheckinCfg() {
     try {
@@ -8046,11 +8293,15 @@ async function keepaliveRestart(port) {
         [TB_KEEPALIVE_PORT]: { name: 'Tabi', spawn: tbKeepaliveSpawn },
         [GO_KEEPALIVE_PORT]: { name: 'GoRouter', spawn: goKeepaliveSpawn },
         [XP_KEEPALIVE_PORT]: { name: 'XPeach', spawn: xpKeepaliveSpawn },
+        // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
+        // более: пока он лежит, у Claude Code нет бэкенда вообще.
+        [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
     };
     const inst = instances[port];
     if (!inst) {
         return { ok: false, error: `:${port} — не keepalive-инстанс (можно ${Object.keys(instances).join(', ')})` };
     }
+    const statusPath = inst.statusPath || '/__keepalive/api/status';
     const killed = killPortListeners(port);
     // Порт освобождается не мгновенно — иначе spawn увидит занятый порт и молча выйдет.
     for (let i = 0; i < 20; i += 1) {
@@ -8061,7 +8312,7 @@ async function keepaliveRestart(port) {
     if (!sp.ok) return { ok: false, error: sp.error || 'spawn failed', killed };
     for (let i = 0; i < 40; i += 1) {
         try {
-            const r = await fetch(`http://127.0.0.1:${port}/__keepalive/api/status`, { signal: AbortSignal.timeout(700) });
+            const r = await fetch(`http://127.0.0.1:${port}${statusPath}`, { signal: AbortSignal.timeout(700) });
             if (r.ok) {
                 const status = await r.json().catch(() => null);
                 logLine(`keepalive restart: ${inst.name} :${port} поднят (убито ${killed}, pid ${sp.pid || '?'})`);
@@ -9339,6 +9590,51 @@ async function handleVyceaiActivate(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ── Front-door: состояние и тумблер для вкладки «Настройки» ───────────────────
+async function handleFrontdoorState(res) {
+    try {
+        const cfg = frontdoorConfig();
+        let live = null;
+        try {
+            const r = await fetch(`http://127.0.0.1:${cfg.port}/__frontdoor/api/status`, { signal: AbortSignal.timeout(1200) });
+            if (r.ok) live = await r.json();
+        } catch { /* прокси лежит — так и покажем */ }
+        let wiredToFrontdoor = false;
+        try { wiredToFrontdoor = isFrontdoorBase((readSettings().env || {}).ANTHROPIC_BASE_URL || ''); } catch {}
+        return jsonRes(res, 200, {
+            enabled: cfg.enabled, port: cfg.port, url: frontdoorUrl(),
+            wired: wiredToFrontdoor, state: readActiveBackend(), live,
+            state_file: ACTIVE_BACKEND_FILE,
+        });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// Тумблер режима. settings.json тут НЕ трогаем: адрес переедет при следующей
+// активации провайдера — так и включение, и откат остаются одним кликом по ключу,
+// а не гонкой двух правок файла.
+async function handleFrontdoorToggle(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const cfg = frontdoorConfig();
+        const enabled = body.enabled === undefined ? !cfg.enabled : !!body.enabled;
+        const port = Number(body.port) || cfg.port;
+        // Мержим в существующий документ, а не перезаписываем: в файле лежит ещё и
+        // пояснение для человека (`_note`), терять его при каждом клике незачем.
+        let doc = {};
+        try {
+            const raw = fs.readFileSync(FRONTDOOR_CONFIG_FILE, 'utf8');
+            doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        } catch { /* нет файла — создадим */ }
+        doc.enabled = enabled;
+        doc.port = port;
+        fs.writeFileSync(FRONTDOOR_CONFIG_FILE, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+        FD_CFG_CACHE.mtime = 0;                     // перечитать конфиг немедленно
+        if (enabled) await frontdoorSpawn();        // включили — прокси обязан быть живым
+        logLine(`front-door: тумблер ${enabled ? 'ON' : 'OFF'} (порт ${port})`);
+        return jsonRes(res, 200, { ok: true, enabled, port, current: currentTarget() });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
 const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/__switch/api/status') {
         return jsonRes(res, 200, {
@@ -9349,6 +9645,19 @@ const server = http.createServer((req, res) => {
             oauth: oauthStatus(),
             settings_file: SETTINGS_FILE,
         });
+    }
+
+    // ── Front-door :20100 — состояние / тумблер / рестарт ─────────────────────
+    if (req.method === 'GET' && req.url === '/__switch/api/frontdoor') {
+        return handleFrontdoorState(res);
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/frontdoor/toggle') {
+        return handleFrontdoorToggle(req, res);
+    }
+    if (req.method === 'POST' && req.url === '/__switch/api/frontdoor/restart') {
+        return keepaliveRestart(frontdoorPort())
+            .then(r => jsonRes(res, r.ok ? 200 : 500, r))
+            .catch(e => jsonRes(res, 500, { error: e.message }));
     }
 
     // ── Health: что запущено / что упало ──────────────────────────────────────
@@ -9370,6 +9679,7 @@ const server = http.createServer((req, res) => {
                     return jsonRes(res, 400, { error: 'port required' });
                 const protected = new Set([
                     LISTEN_PORT, 20126, 20130, 20131, 20132, AR_KEEPALIVE_PORT,
+                    frontdoorPort(),   // убить front-door = оставить Claude Code без бэкенда
                     ...(customLoad().providers || []).map(x => x.proxyPort).filter(Boolean),
                 ]);
                 if (protected.has(p))
@@ -10778,5 +11088,14 @@ server.listen(LISTEN_PORT, () => {
         if (!r.ok) console.log('  keepalive proxy spawn error:', r.error || '?');
         else if (!r.already) console.log('  keepalive proxy spawned');
     }).catch(e => console.log('  keepalive proxy spawn error:', e.message));
+
+    // Front-door (:20100) — единый вход Claude Code. Поднимаем всегда: с включённым
+    // тумблером это единственный бэкенд CC, а с выключенным просто ждёт наготове,
+    // чтобы включение не требовало рестарта дашборда.
+    frontdoorSpawn().then(r => {
+        if (!r.ok) console.log('  front-door spawn error:', r.error || '?');
+        else if (!r.already) console.log(`  front-door spawned on :${frontdoorPort()}`);
+        if (frontdoorConfig().enabled) console.log(`  front-door: ВКЛЮЧЁН, активный бэкенд ${currentTarget()}`);
+    }).catch(e => console.log('  front-door spawn error:', e.message));
 });
 

@@ -100,7 +100,30 @@ raw_target=""
 settings_raw=""
 [ -f "$SETTINGS" ] && settings_raw="$(<"$SETTINGS")"
 helper=""; [[ "$settings_raw" =~ \"apiKeyHelper\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && helper="${BASH_REMATCH[1]}"
+# Команда helper'а — это node -e "…" с ЭКРАНИРОВАННЫМИ кавычками внутри JSON, а
+# захват выше обрывается на первом `\`. Поэтому если имени key-файла в захвате нет,
+# ищем его во всём тексте settings.json: правила ниже всё равно матчат подстрокой.
+case "$helper" in
+    *-active-key.txt*) ;;
+    *) [[ "$settings_raw" == *'"apiKeyHelper"'* ]] && helper="$settings_raw" ;;
+esac
 base_url=""; [[ "$settings_raw" =~ \"ANTHROPIC_BASE_URL\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && base_url="${BASH_REMATCH[1]}"
+# Режим front-door: base URL всегда :20100, поэтому провайдера по нему уже не
+# опознать — источник правды переезжает в ~/.claude/active-backend.json (его пишет
+# writeSettings() дашборда). Читаем файл целиком в память, как и settings.json:
+# 0 форков, 0 сети. Правила ниже остаются фолбэком для прямого режима.
+case "$base_url" in
+    *:20100|*:20100/*)
+        fd_state=""
+        [ -f "$PROF/.claude/active-backend.json" ] && fd_state="$(<"$PROF/.claude/active-backend.json")"
+        if [[ "$fd_state" =~ \"backend\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+            raw_target="${BASH_REMATCH[1]}"
+        else
+            raw_target="frontdoor"      # прокси есть, состояния нет — так и скажем
+        fi
+        ;;
+esac
+if [ -z "$raw_target" ]; then
 case "$helper" in
     *fm-active-key.txt*|*freemodel*) raw_target="apihelper" ;;
     *al-active-key.txt*)             raw_target="aerolink" ;;
@@ -140,6 +163,7 @@ if [ -z "$raw_target" ]; then
         *localhost:2015[0-9]*|*localhost:201[6-9][0-9]*|*localhost:202[0-5][0-9]*)  raw_target="custom" ;;
     esac
 fi
+fi   # закрывает ветку «front-door не сработал»
 
 # LABELS mirror proxy-dashboard.html:1261 (lowercased for /model format)
 case "$raw_target" in
@@ -436,12 +460,12 @@ fi
 # ---- AgentRouter: сколько аккаунтов готовы забрать +$25 --------------------
 # Считаем ВСЕГДА, а не только когда активен agentrouter: бонус лежит на всём пуле, и
 # знать про него надо, даже сидя на FreeModel. Сброс — суточная граница (по умолчанию
-# 08:30 МСК = 05:30 UTC, МСК это UTC+3 без переходов на летнее время).
+# 20:30 МСК = 17:30 UTC, МСК это UTC+3 без переходов на летнее время).
 # Оценка приблизительная: аккаунт, который забрал и потом умер, занижает счёт на 1.
 # Точную цифру считает дашборд — здесь важна не арифметика, а «пора идти».
 ar_ready=0
 if [ -f "$ROUTING/agentrouter-sessions.json" ]; then
-    ar_hh=8; ar_mm=30
+    ar_hh=20; ar_mm=30
     if [ -f "$ROUTING/ar-checkin.json" ]; then
         ar_hhmm="$(grep -oE '"resetHhmmMsk"[[:space:]]*:[[:space:]]*"[0-9]{1,2}:[0-9]{2}"' "$ROUTING/ar-checkin.json" 2>/dev/null | grep -oE '[0-9]{1,2}:[0-9]{2}' | head -n1)"
         if [ -n "$ar_hhmm" ]; then

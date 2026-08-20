@@ -429,6 +429,43 @@ else
 fi
 [ -n "$ctx_warn" ] && printf '%s%s%s' $'\033[38;5;220m' "$ctx_warn" "$RESET"
 
+# ---- AgentRouter: сколько аккаунтов готовы забрать +$25 --------------------
+# Считаем ВСЕГДА, а не только когда активен agentrouter: бонус лежит на всём пуле, и
+# знать про него надо, даже сидя на FreeModel. Сброс — суточная граница (по умолчанию
+# 08:30 МСК = 05:30 UTC, МСК это UTC+3 без переходов на летнее время).
+# Оценка приблизительная: аккаунт, который забрал и потом умер, занижает счёт на 1.
+# Точную цифру считает дашборд — здесь важна не арифметика, а «пора идти».
+ar_ready=0
+if [ -f "$ROUTING/agentrouter-sessions.json" ]; then
+    ar_hh=8; ar_mm=30
+    if [ -f "$ROUTING/ar-checkin.json" ]; then
+        ar_hhmm="$(grep -oE '"resetHhmmMsk"[[:space:]]*:[[:space:]]*"[0-9]{1,2}:[0-9]{2}"' "$ROUTING/ar-checkin.json" 2>/dev/null | grep -oE '[0-9]{1,2}:[0-9]{2}' | head -n1)"
+        if [ -n "$ar_hhmm" ]; then
+            ar_hh="${ar_hhmm%%:*}"; ar_mm="${ar_hhmm##*:}"
+            ar_hh=$((10#$ar_hh)); ar_mm=$((10#$ar_mm))
+        fi
+    fi
+    # Границу считаем секундами от начала UTC-суток: `date -d "…-1:30"` ломается,
+    # когда граница раньше 03:00 и час уходит в минус.
+    ar_day="$(date -u -d "$(date -u +%Y-%m-%d) 00:00:00" +%s 2>/dev/null || echo 0)"
+    if [ "$ar_day" -gt 0 ]; then
+        ar_b=$(( ar_day + (ar_hh - 3) * 3600 + ar_mm * 60 ))
+        [ "$ar_b" -gt "$(date +%s)" ] && ar_b=$(( ar_b - 86400 ))
+        ar_biso="$(date -u -d "@$ar_b" +%Y-%m-%dT%H:%M:%S 2>/dev/null)"
+        # checkinAt пишется toISOString() → UTC фиксированной ширины, поэтому
+        # лексикографическое сравнение строк здесь и есть хронологическое.
+        ar_got="$(grep -oE '"checkinAt"[[:space:]]*:[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]+"' "$ROUTING/agentrouter-sessions.json" 2>/dev/null \
+            | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]+' \
+            | awk -v b="$ar_biso" '$1 >= b { n++ } END { print n+0 }')"
+        ar_live="$(grep -c '"status"[[:space:]]*:[[:space:]]*"live"' "$ROUTING/agentrouter-sessions.json" 2>/dev/null | tr -cd 0-9)"
+        [ -z "$ar_live" ] && ar_live=0
+        [ -z "$ar_got" ] && ar_got=0
+        ar_ready=$(( ar_live - ar_got ))
+        [ "$ar_ready" -lt 0 ] && ar_ready=0
+    fi
+fi
+[ "$ar_ready" -gt 0 ] && printf ' %s🎁%d%s' $'\033[38;5;214m' "$ar_ready" "$RESET"
+
 # statusline вcегда уcпешен: поcледняя уcловная команда при пуcтом значении
 # может дать exit 1, а Claude Code может cчеcть ненулевой код cбоем.
 exit 0

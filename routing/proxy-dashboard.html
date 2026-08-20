@@ -1510,6 +1510,11 @@
 
         <div id="ar-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
+        <!-- Чек-ин +$25: сколько аккаунтов готовы и когда ближайший. Отдельная карточка,
+             а не строка в гейдже: renderEnergyGauge диффит по сигнатуре, и текст, который
+             меняется каждую секунду, заставлял бы её пересобирать рамку (мигание). -->
+        <div id="ar-checkin" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
         <!-- Models list -->
         <div id="ar-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
@@ -5298,6 +5303,163 @@ function agoShort(ts) {
   return Math.floor(s / 86400) + 'д';
 }
 
+// ───── Чек-ин +$25: суточная граница ────────────────────────────────────
+// Шлюз наливает +$25 на аккаунт раз в сутки, но только после захода в ЛК с
+// разлогином и повторным входом через GitHub. Сброс — НЕ скользящие 24ч от момента
+// забора, а суточная граница: забрал вечером → следующий заход возможен уже утром.
+// Время границы (08:30 МСК по умолчанию) настраивается в карточке ниже.
+// Отметку `checkinAt` ставит бэкенд сам, когда видит рост выдачи (см. ARCHITECTURE.md).
+const AR_CHECKIN_DEFAULT_HHMM = '08:30';
+
+// Начало текущего окна чек-ина. МСК = UTC+3 без переходов на летнее время с 2014,
+// поэтому 08:30 МСК = 05:30 UTC жёстко. Date.UTC сам откатит дату при H-3 < 0.
+function arCheckinWindowStart(hhmm, nowMs) {
+  const parts = String(hhmm || AR_CHECKIN_DEFAULT_HHMM).split(':');
+  const H = Number(parts[0]), M = Number(parts[1]);
+  const now = nowMs || Date.now();
+  const msk = new Date(now + 3 * 3600_000);        // «который час в Москве»
+  let b = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(), (isFinite(H) ? H : 8) - 3, isFinite(M) ? M : 30);
+  if (b > now) b -= 86400_000;                     // граница ещё не наступила → работает вчерашняя
+  return b;
+}
+
+function arCheckinCfg() {
+  const c = state.arCheckin || {};
+  return { resetHhmmMsk: c.resetHhmmMsk || AR_CHECKIN_DEFAULT_HHMM, bonusUsd: Number(c.bonusUsd) > 0 ? Number(c.bonusUsd) : 25 };
+}
+
+// Состояние одного аккаунта. Нет штампа вообще → считаем «можно забирать»: мы просто
+// не знаем, забирали ли, и лучше отправить владельца проверить, чем промолчать.
+// dead/no_key — вне зачёта: у мёртвого ключа забирать нечего, у безключевого нет аккаунта.
+function arCheckinState(s) {
+  if (!s || s.status === 'dead' || s.status === 'no_key' || !isRealKey(s.api_key)) return { skip: true };
+  const start = arCheckinWindowStart(arCheckinCfg().resetHhmmMsk);
+  const at = s.checkinAt ? Date.parse(s.checkinAt) : 0;
+  const collected = !!at && at >= start;
+  return { skip: false, collected, ready: !collected, at, deadline: start + 86400_000 };
+}
+
+function arCheckinReadyCount(sessions) {
+  let ready = 0, waiting = 0, nextDeadline = 0;
+  for (const s of (sessions || [])) {
+    const st = arCheckinState(s);
+    if (st.skip) continue;
+    if (st.ready) { ready++; continue; }
+    waiting++;
+    if (!nextDeadline || st.deadline < nextDeadline) nextDeadline = st.deadline;
+  }
+  return { ready, waiting, nextDeadline };
+}
+
+// «6ч 14м / 12м 03с / 41с» — остаток до границы. Свой формат, а не fmtDuration:
+// там нет секунд, а последнюю минуту хочется видеть тикающей.
+function arLeftFmt(msLeft) {
+  if (!isFinite(msLeft) || msLeft <= 0) return 'вот-вот';
+  const total = Math.floor(msLeft / 1000);
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  if (h > 0) return `${h}ч ${String(m).padStart(2, '0')}м`;
+  if (m > 0) return `${m}м ${String(s).padStart(2, '0')}с`;
+  return `${s}с`;
+}
+
+// Ячейка колонки «🎁 $25». Два состояния одной метафорой, без слов: 🎁 = подарок лежит,
+// 📦 = коробку уже унесли, придёт новая (дело не в грусти, а в том, что бонус забран).
+// Готовый подарок крупнее и в полную яркость, забранная коробка приглушена — глаз
+// цепляет только те строки, куда идти. Дедлайн уходит в data-атрибут: текст
+// перерисовывает общий тикер раз в секунду, строку заново не рендерим (приём Grok-кулдауна).
+function arCheckinCell(s) {
+  const st = arCheckinState(s);
+  if (st.skip) return '<span class="text-faint text-[11px]">—</span>';
+  const bonus = arCheckinCfg().bonusUsd;
+  if (st.ready) {
+    const tip = st.at
+      ? `+$${bonus} можно забирать: забирали ${agoShort(st.at)} назад, но сутки сменились`
+      : `+$${bonus} можно забирать — ещё не отмечался, значит бонус на месте`;
+    return `<span class="text-[15px] leading-none" title="${esc(tip)}">🎁</span>`;
+  }
+  const from = s.checkinFrom === 'anchor' ? 'по вписанному вручную балансу' : 'по точному балансу из ЛК';
+  const tip = `+$${bonus} уже забрали ${agoShort(st.at)} назад (${from}) · новый подарок после ${arCheckinCfg().resetHhmmMsk} МСК`;
+  return `<span class="text-faint text-[11px] whitespace-nowrap opacity-60" data-ar-checkin="${st.deadline}" title="${esc(tip)}">📦 ${arLeftFmt(st.deadline - Date.now())}</span>`;
+}
+
+// Карточка в шапке: сводка + настройка границы. Тикающую цифру держим в отдельном
+// span с data-атрибутом, чтобы общий тикер её обновлял, не трогая поле ввода
+// (перерисовка целиком сбрасывала бы фокус и набранный текст).
+function arRenderCheckinCard() {
+  const el = $('ar-checkin');
+  if (!el) return;
+  const cfg = arCheckinCfg();
+  const st = arCheckinReadyCount(state.agentrouter);
+  const summary = st.ready > 0
+    ? `<span class="text-emerald font-semibold">🎁 ${st.ready} ${st.ready === 1 ? 'подарок ждёт' : 'подарков ждут'}</span>`
+    : st.waiting > 0
+    ? `<span class="text-faint">📦 все подарки уже забраны</span>`
+    : `<span class="text-faint">нет живых ключей</span>`;
+  const next = st.nextDeadline
+    ? ` · <span class="text-faint">новый через <span data-ar-checkin="${st.nextDeadline}" data-ar-checkin-bare="1">${arLeftFmt(st.nextDeadline - Date.now())}</span></span>`
+    : '';
+  el.innerHTML = `
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+      <div class="text-sm">
+        <span class="font-semibold tracking-tight">🎁 Чек-ин +$${cfg.bonusUsd}</span>
+        <span class="text-muted ml-2 text-xs">${summary}${next}</span>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <span class="text-faint" title="Наблюдение владельца: после этого времени бонус можно забрать снова, независимо от того, во сколько забирал вчера.">граница суток</span>
+        <input id="ar-checkin-hhmm" value="${esc(cfg.resetHhmmMsk)}" size="5" maxlength="5" placeholder="08:30"
+          class="w-16 bg-elevated border border-line-soft rounded px-2 py-1 font-mono text-center text-ink focus:border-sky/60 outline-none">
+        <span class="text-faint">МСК</span>
+        <button onclick="arSaveCheckinCfg()" class="px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">💾</button>
+      </div>
+    </div>
+    <p class="text-[10px] text-faint mt-2">Забрать: 🎁 в строке — браузер откроется разлогиненным, жмёшь «Continue with GitHub», окно закрывается само (иначе свежая кука не ляжет на диск и точный баланс не прочитается). Потом 💰 — отметка встанет сама. <span class="text-amber/80">По одному-двум аккаунтам за раз: залпом по всему пулу шлюз ловит рейт-лимит и точный баланс на 10 минут выродится в прикидку.</span></p>`;
+}
+
+async function arSaveCheckinCfg() {
+  const raw = ($('ar-checkin-hhmm')?.value || '').trim();
+  if (!/^\d{1,2}:\d{2}$/.test(raw)) return toast('время границы в формате ЧЧ:ММ', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ar/checkin-config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resetHhmmMsk: raw, bonusUsd: arCheckinCfg().bonusUsd }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    state.arCheckin = data.checkin;
+    arRenderCheckinCard();
+    renderAr();
+    arSetNavCount();
+    toast(`✓ граница чек-ина ${data.checkin.resetHhmmMsk} МСК`, 'success');
+  } catch (e) { toast('чек-ин: ' + e.message, 'error'); }
+}
+
+// Забрать бонус: тот же браузер аккаунта, но разлогиненный и на странице входа.
+async function arCheckinLk(id) {
+  try {
+    const res = await fetch('/__switch/api/ar/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, mode: 'checkin' }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт — доведи вход в нём'
+      : '🎁 браузер открыт разлогиненным: жми «Continue with GitHub» — окно закроется само, потом 💰', 'success', 9000);
+  } catch (e) { toast('чек-ин: ' + e.message, 'error', 12000); }
+}
+
+// Счётчик в сайдваре. Есть готовые к забору → показываем 🎁N вместо числа ключей:
+// видно с любой вкладки, не заходя в AgentRouter.
+function arSetNavCount() {
+  const el = $('nav-count-agentrouter');
+  if (!el) return;
+  const total = (state.agentrouter || []).length;
+  const ready = arCheckinReadyCount(state.agentrouter).ready;
+  el.textContent = ready > 0 ? '🎁' + ready : String(total);
+  el.className = ready > 0 ? 'text-[10px] font-mono text-amber' : 'text-[10px] font-mono text-faint';
+  el.title = ready > 0 ? `${ready} аккаунт(ов) готовы забрать +$${arCheckinCfg().bonusUsd}` : '';
+}
+
 function renderArGauge() {
   const st = arPoolStats(state.agentrouter);
   // Баланс активного ключа — та же цифра, что в статусбаре Claude Code. Раньше в
@@ -5330,13 +5492,15 @@ async function loadArSessions(probe) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.agentrouter = data.sessions || [];
-    if ($('nav-count-agentrouter')) $('nav-count-agentrouter').textContent = state.agentrouter.length;
+    if (data.checkin) state.arCheckin = data.checkin;
+    arSetNavCount();
     if (!state.loaded.github && state.agentrouter.some(s => s.ghId && s.ghId !== 'personal')) {
       state.loaded.github = true;
       try { await loadGhKeys(); } catch (e) {}
     }
     renderAr();
     renderArGauge();
+    arRenderCheckinCard();
     loadArModels();
     loadArModelMap();
     if (probe) toast('✓ AgentRouter: статусы обновлены', 'success');
@@ -5354,9 +5518,11 @@ async function loadArSessionsLight() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.agentrouter = data.sessions || [];
-    if ($('nav-count-agentrouter')) $('nav-count-agentrouter').textContent = state.agentrouter.length;
+    if (data.checkin) state.arCheckin = data.checkin;
+    arSetNavCount();
     renderAr();
     renderArGauge();
+    arRenderCheckinCard();
   } catch (e) { /* молча — следующий тик повторит */ }
 }
 
@@ -5646,6 +5812,7 @@ function renderAr() {
       </td>
       <td class="px-3 py-2.5 text-center">${statusCell}</td>
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${arCheckinCell(s)}</td>
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${ghBadge}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${noKey ? '' : actBtn(`arCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
@@ -5654,6 +5821,7 @@ function renderAr() {
         ${actBtn(`arRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
         ${noKey ? '' : actBtn(`arActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
         ${noKey ? '' : actBtn(`arPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${noKey ? '' : actBtn(`arCheckinLk(${idJ})`, `Забрать +$25: ЛК откроется разлогиненным, останется клик «Continue with GitHub»`, '🎁', 'amber')}
         ${actBtn(`arOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть ЛК (GitHub-сессия, чек-ин +$25)', '🌐', 'violet')}
         ${actBtn(`arDelete(${idJ})`,    'Удалить',                '🗑', 'crimson')}
       </td>
@@ -5666,6 +5834,7 @@ function renderAr() {
       { label: 'API Key' },
       { label: 'Status', align: 'center', w: 'w-16' },
       { label: 'Баланс', align: 'center', w: 'w-24' },
+      { label: '🎁 $25', align: 'center', w: 'w-24' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
       { label: 'Actions', align: 'right' },
     ],
@@ -5918,6 +6087,7 @@ async function arPing(api_key) {
     if (idx >= 0) state.agentrouter[idx].status = data.status;
     renderAr();
     renderArGauge();
+    arSetNavCount();   // live→dead убирает аккаунт из зачёта подарков
     toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
   } catch (e) { toast('ping: ' + e.message, 'error'); }
 }
@@ -5938,9 +6108,17 @@ async function arCheckBalance(api_key) {
         s.accessUntil = data.accessUntil; s.selfError = data.selfError;
       }
       s.balanceCheckedAt = new Date().toISOString();
+      // Метка чек-ина приходит вместе с балансом: именно этот чек её и мог поставить
+      // (бэкенд видит рост выдачи). Без переноса в state колонка 🎁 не менялась бы
+      // до перезагрузки страницы.
+      const wasCollected = !!s.checkinAt;
+      if (data.checkinAt) { s.checkinAt = data.checkinAt; s.checkinFrom = data.checkinFrom; }
+      if (data.checkinAt && !wasCollected) toast(`🎁 отмечено: бонус забран, следующий после ${arCheckinCfg().resetHhmmMsk} МСК`, 'success', 5000);
     }
     renderAr();
     renderArGauge();
+    arRenderCheckinCard();
+    arSetNavCount();
     if (data.status === 'live') {
       const lbl = (BAL_SRC[data.balanceSource] || {}).label || '?';
       toast(`💰 баланс $${Number(data.balance).toFixed(2)} (${lbl} · потрачено $${Number(data.spent).toFixed(2)})`, 'success', 4000);
@@ -5960,8 +6138,11 @@ async function arCheckAllBalances() {
     // тела (keepalive, см. jsonKeepalive), и код ответа на поздней ошибке остаётся 200.
     if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
     state.agentrouter = data.sessions || [];
+    if (data.checkin) state.arCheckin = data.checkin;
     renderAr();
     renderArGauge();
+    arRenderCheckinCard();
+    arSetNavCount();
     balanceBatchToast(state.agentrouter);
   } catch (e) {
     $('ar-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
@@ -14414,6 +14595,24 @@ setInterval(() => {
     el.textContent = '⏳ ' + grokCooldownFmt(left);
   });
   if (expired) grokRenderSaved().catch(() => {});
+}, 1000);
+
+// Живой таймер чек-ина AgentRouter: те же правила, что у грок-кулдауна — раз в
+// секунду переписываем ТЕКСТ бейджей по дедлайну из data-атрибута, строку и карточку
+// заново не рендерим. Когда таймер дотикал, разово перерисовываем таблицу, карточку и
+// счётчик сайдвара: ⏳ должен стать ✅ без ручного F5 («часики протекли»).
+setInterval(() => {
+  if (document.querySelector('[data-tab-content="agentrouter"]')?.offsetParent === null) return;
+  const badges = document.querySelectorAll('[data-ar-checkin]');
+  if (!badges.length) return;
+  const now = Date.now();
+  let expired = false;
+  badges.forEach(el => {
+    const left = Number(el.getAttribute('data-ar-checkin')) - now;
+    if (left <= 0) { expired = true; return; }
+    el.textContent = (el.hasAttribute('data-ar-checkin-bare') ? '' : '📦 ') + arLeftFmt(left);
+  });
+  if (expired) { renderAr(); arRenderCheckinCard(); arSetNavCount(); }
 }, 1000);
 
 </script>

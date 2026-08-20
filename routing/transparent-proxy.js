@@ -5725,6 +5725,16 @@ const AR_BASE_URL = 'https://agentrouter.org';
 // вписанного вручную баланса.
 const AR_GRANT_STEP = 25;
 const AR_DEFAULT_GRANT = 175;
+// Чек-ин +$25 раз в сутки: настройки границы лежат в отдельном файле, читаются по
+// запросу (правка применяется без рестарта прокси, как ar-modelmap.json).
+// Порог детекта ниже 25: сравниваем цифры, снятые в разные моменты, и между ними
+// мог утечь расход — точное равенство здесь недостижимо.
+const AR_CHECKIN_FILE = path.join(__dirname, 'ar-checkin.json');
+const AR_CHECKIN_MIN_USD = 20;
+// Сколько браузеров чек-ина разрешено держать открытыми одновременно (см. предохранитель
+// в handleArSessionOpen): залп по всему пулу ловит рейт-лимит шлюза.
+const AR_CHECKIN_MAX_BROWSERS = 3;
+const AR_CHECKIN_DEFAULTS = { resetHhmmMsk: '08:30', bonusUsd: 25 };
 const AR_PROXY_PORT = 20132;
 const AR_PROXY_URL = `http://localhost:${AR_PROXY_PORT}`;
 // SSE keepalive proxy (friend's sse-keepalive-proxy, v1tusha) — стоит перед
@@ -6187,7 +6197,9 @@ async function handleArSessions(req, res) {
             // триггеры не пошли следом дублировать свежий батч.
             for (const s of sessions) AR_BALANCE_LAST.set(s.api_key, Date.now());
         }
-        jsonRes(res, 200, { sessions, activeModel: arReadActiveModel() });
+        // Конфиг чек-ина отдаём вместе с пулом: фронту он нужен для расчёта таймера
+        // ещё на boot (счётчик 🎁N в сайдваре), а второй запрос там был бы лишним.
+        jsonRes(res, 200, { sessions, activeModel: arReadActiveModel(), checkin: arReadCheckinCfg() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
@@ -6199,13 +6211,42 @@ async function handleArSessions(req, res) {
 // (а он медленный, 1-2с) штамп оставался старым → статусбар считал кеш протухшим и
 // дёргал обновление на КАЖДОМ рендере строки, т.е. на каждом промпте. Теперь неудача
 // тоже отмечена — бар подождёт до следующего порога, а ошибку видно в balanceError.
-function newapiApplyBalance(target, bal) {
+// Чек-ин: opts.checkin включает детект «+$25 налили» (только AgentRouter, см. ниже).
+function newapiApplyBalance(target, bal, opts) {
     if (!target || !bal) return bal;
     // Аккаунт без ключа — это не ошибка чека: balanceError бы зажёг «⚠ ошибка чека»
     // в гейдже пула. Просто помечаем статус и уходим, штамп проверки не ставим.
     if (bal.status === 'no_key') { target.status = 'no_key'; delete target.balanceError; return bal; }
     target.status = bal.status;
     target.balanceCheckedAt = new Date().toISOString();
+    // Чек-ин +$25 виден по РОСТУ выдачи: granted = остаток + расход, и он растёт
+    // только когда шлюз налил денег (сам чек-ин поднимает quota, не двигая
+    // used_quota — см. комментарий к newapiLkVisited). Сравнение строго self↔self:
+    // прикидка guess это ceil(spent/25)*25, она сама прыгает на 25 при переходе
+    // расхода через порог и дала бы ложное «уже забрал»; анкер — цифра из головы
+    // пользователя. Реф-бонус +$100 или реальное пополнение тоже отметятся как
+    // чек-ин: ошибка в безопасную сторону (таймер скажет «ждать», а не «иди зря»),
+    // и в тот заход владелец всё равно был в ЛК.
+    //
+    // Базу сравнения держим в ОТДЕЛЬНОМ поле grantedSelf, а не в target.granted.
+    // Почему: любой неточный чек между двумя точными (пауза WAF, истёкшая кука)
+    // перезаписывает balanceSource на guess и стирает granted — и рост уже не с чем
+    // сравнить. Именно так пропал забранный бонус faithfulpho: $300 → пауза шлюза →
+    // $325, а базы к этому моменту не осталось. grantedSelf обновляется ТОЛЬКО
+    // успешным self и переживает любые откаты на прикидку.
+    if (opts && opts.checkin && bal.status === 'live' && bal.balanceSource === 'self') {
+        const nextGranted = Number(bal.granted);
+        const prevGranted = Number(
+            target.grantedSelf != null ? target.grantedSelf
+                : (target.balanceSource === 'self' ? target.granted : NaN),
+        );
+        if (isFinite(prevGranted) && isFinite(nextGranted) && nextGranted - prevGranted >= AR_CHECKIN_MIN_USD) {
+            target.checkinAt = new Date().toISOString();
+            target.checkinFrom = 'self';
+            logLine(`agentrouter чек-ин: ***${String(target.api_key || '').slice(-6)} выдача $${prevGranted.toFixed(2)} → $${nextGranted.toFixed(2)}`);
+        }
+        if (isFinite(nextGranted)) target.grantedSelf = nextGranted;
+    }
     if (bal.status === 'live') {
         target.spent = bal.spent;
         target.balance = bal.balance;
@@ -6236,7 +6277,9 @@ function newapiApplyBalance(target, bal) {
     return bal;
 }
 
-function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
+// Детект чек-ина включён только здесь: у GoRouter чек-ина нет вообще, у XPeach
+// шлюз сам отдаёт checkin_enabled: false.
+function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { checkin: true }); }
 
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
 async function handleArPing(req, res) {
@@ -6350,7 +6393,11 @@ async function handleArBalance(req, res) {
         }
         // Явный запрос цифры (клик по балансу в дашборде) — только со свежим self.
         const bal = await arBalanceOnce(api_key, true);
-        jsonRes(res, 200, bal);
+        // Метку чек-ина отдаём вместе с балансом: фронт патчит запись точечно (не
+        // перезагружая весь пул), и без этих полей колонка 🎁 обновлялась бы только
+        // после F5 — именно так и выглядело со стороны.
+        const cur = arLoad().find(s => s.api_key === api_key);
+        jsonRes(res, 200, { ...bal, checkinAt: cur && cur.checkinAt || null, checkinFrom: cur && cur.checkinFrom || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6366,7 +6413,7 @@ async function handleArBalance(req, res) {
 //
 // balance = null|'' → сброс анкера. Если у аккаунта есть куки, точный баланс из
 // /api/user/self всё равно приоритетнее — об этом сообщаем в ответе.
-async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn }) {
+async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn, checkin }) {
     try {
         const body = await readJsonBody(req);
         const key = String(body.api_key || '').trim();
@@ -6395,6 +6442,21 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn 
             delete target.balanceAnchor; delete target.anchorSpent;
             delete target.anchoredAt; delete target.anchorFrom;
         } else {
+            // Второй (и для аккаунтов без профиля — единственный) способ узнать про
+            // чек-ин: владелец вписывает то, что ВИДИТ в ЛК. Полная выдача = остаток +
+            // расход; если она подскочила на бонус, значит деньги налили. Прикидку
+            // (guess) за прежнюю выдачу не берём — она вычислена из расхода, а не с сайта.
+            if (checkin) {
+                const prevTotal = target.balanceSource === 'self'
+                    ? Number(target.granted)
+                    : Number(target.balanceAnchor) + Number(target.anchorSpent);
+                const nextTotal = val + basis;
+                if (isFinite(prevTotal) && nextTotal - prevTotal >= AR_CHECKIN_MIN_USD) {
+                    target.checkinAt = new Date().toISOString();
+                    target.checkinFrom = 'anchor';
+                    logLine(`${tag} чек-ин: ***${key.slice(-6)} вписанная выдача $${prevTotal.toFixed(2)} → $${nextTotal.toFixed(2)}`);
+                }
+            }
             target.balanceAnchor = round2(val);
             target.anchorSpent = basis;
             target.anchoredAt = new Date().toISOString();
@@ -6433,7 +6495,7 @@ async function newapiSetBalance(req, res, { tag, load, save, balanceFn, applyFn 
 }
 
 function handleArSetBalance(req, res) {
-    return newapiSetBalance(req, res, { tag: 'agentrouter', load: arLoad, save: arSave, balanceFn: arBalance, applyFn: arApplyBalance });
+    return newapiSetBalance(req, res, { tag: 'agentrouter', load: arLoad, save: arSave, balanceFn: arBalance, applyFn: arApplyBalance, checkin: true });
 }
 
 // POST /__switch/api/{ar,go,tb}/map-profiles
@@ -6616,11 +6678,29 @@ async function handleArSessionOpen(req, res) {
         }
 
         const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
+        // Режим приходит с фронта: 🎁 «забрать» просит checkin (браузер разлогинится
+        // сам, встанет на странице входа и закроется после входа). Остальное — по ключу.
+        const wantCheckin = String(body.mode || '') === 'checkin' && isRealKey(target.api_key);
+        // Предохранитель от залпа. Пользователь нажал 🎁 на всех 11 аккаунтах разом:
+        // одиннадцать браузеров плюс одиннадцать чеков баланса — и Aliyun WAF у
+        // agentrouter включил защиту, из-за чего ТОЧНЫЙ баланс всего пула на 10 минут
+        // выродился в прикидку (см. coolDownHost в newapi-account.js). Чек-ин по своей
+        // природе последовательный: зашёл, вошёл, забрал, закрылось.
+        if (wantCheckin) {
+            const alive = [...arLkPids.entries()].filter(([, pid]) => arPidAlive(pid));
+            if (alive.length >= AR_CHECKIN_MAX_BROWSERS) {
+                return jsonRes(res, 429, {
+                    error: `уже открыто ${alive.length} браузеров чек-ина — доведи их до конца (войди через GitHub, окно закроется само), потом бери следующий. Залпом по всему пулу шлюз ловит рейт-лимит и точный баланс на 10 минут пропадает.`,
+                });
+            }
+        }
         // Перед запуском отдаём профилю ротированные куки: иначе браузер пойдёт со
         // значением, которое наш чек баланса уже погасил, и разлогинится.
-        newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
+        // Для чек-ина — пропускаем: заливать куки, которые ветка checkin тут же
+        // удалит, бессмысленно.
+        if (!wantCheckin) newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
-        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        const mode = wantCheckin ? 'checkin' : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`agentrouter session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
@@ -7140,6 +7220,44 @@ async function handleArModelMap(req, res) {
             return jsonRes(res, 200, { ok: true, modelMap: mm });
         }
         jsonRes(res, 200, { ok: true, modelMap: arReadModelMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Чек-ин +$25: конфиг суточной границы ─────────────────────────────
+// Шлюз наливает +$25 на аккаунт раз в сутки, но только если владелец зайдёт в ЛК,
+// разлогинится и войдёт заново через GitHub. Сброс — не скользящие 24ч от момента
+// забора, а суточная граница (забрал вечером → следующий заход возможен уже утром;
+// именно поэтому днём после утреннего чек-ина деньги не капали, а на следующее утро
+// капали). Время границы настраивается: 08:30 МСК — наблюдение владельца, не факт
+// из документации шлюза.
+function arReadCheckinCfg() {
+    try {
+        const raw = fs.readFileSync(AR_CHECKIN_FILE, 'utf8');
+        const j = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        return {
+            resetHhmmMsk: /^\d{1,2}:\d{2}$/.test(String(j.resetHhmmMsk || '')) ? String(j.resetHhmmMsk) : AR_CHECKIN_DEFAULTS.resetHhmmMsk,
+            bonusUsd: Number(j.bonusUsd) > 0 ? Number(j.bonusUsd) : AR_CHECKIN_DEFAULTS.bonusUsd,
+        };
+    } catch { return { ...AR_CHECKIN_DEFAULTS }; }
+}
+
+// GET /__switch/api/ar/checkin-config → конфиг; POST {resetHhmmMsk, bonusUsd} → сохранить.
+async function handleArCheckinConfig(req, res) {
+    try {
+        if (req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const hhmm = String(body.resetHhmmMsk || '').trim();
+            if (!/^\d{1,2}:\d{2}$/.test(hhmm)) return jsonRes(res, 400, { error: 'время границы в формате ЧЧ:ММ' });
+            const [H, M] = hhmm.split(':').map(Number);
+            if (!(H >= 0 && H <= 23 && M >= 0 && M <= 59)) return jsonRes(res, 400, { error: 'некорректное время границы' });
+            const bonus = body.bonusUsd === undefined ? AR_CHECKIN_DEFAULTS.bonusUsd : Number(body.bonusUsd);
+            if (!(isFinite(bonus) && bonus > 0)) return jsonRes(res, 400, { error: 'бонус должен быть числом больше 0' });
+            const cfg = { resetHhmmMsk: `${String(H).padStart(2, '0')}:${String(M).padStart(2, '0')}`, bonusUsd: round2(bonus) };
+            fs.writeFileSync(AR_CHECKIN_FILE, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+            logLine(`agentrouter checkin-config: граница ${cfg.resetHhmmMsk} МСК, бонус $${cfg.bonusUsd}`);
+            return jsonRes(res, 200, { ok: true, checkin: cfg });
+        }
+        jsonRes(res, 200, { ok: true, checkin: arReadCheckinCfg() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -9720,6 +9838,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/import')   return handleArImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/rename')   return handleArRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/key')      return handleArSetKey(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
 
     // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157) — реальное время без рестарта.
     if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);

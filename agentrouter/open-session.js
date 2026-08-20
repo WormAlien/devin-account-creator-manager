@@ -15,10 +15,11 @@
 // как storageState (cookies + localStorage), тогда GitHub/agentrouter сразу залогинены.
 //
 // Использование:
-//   node agentrouter/open-session.js <label> [register|console|auto]
+//   node agentrouter/open-session.js <label> [register|console|auto|checkin]
 //     label — имя профиля (папка agentrouter/profiles/<label>/)
 //     режим — register: регистрация по рефке (у аккаунта ещё нет sk-ключа),
 //             console:  страница баланса/пополнения (ключ уже есть),
+//             checkin:  разлогин + страница входа (забрать суточные +$25),
 //             auto (по умолчанию): чистый профиль = register, иначе console.
 //
 // Код возврата 0 = профиль открыт, 2 = таймаут ожидания GitHub-логина (первый вход), 1 = ошибка.
@@ -33,6 +34,12 @@ const REGISTER_URL = 'https://agentrouter.org/register?aff=oUm3';
 const CONSOLE_URL = 'https://agentrouter.org/console/topup';
 // Корень нужен для прогрева перед регистрацией (см. openRegisterViaRef).
 const ROOT_URL = 'https://agentrouter.org/';
+// Чек-ин +$25 капает раз в сутки только после ПОВТОРНОГО входа через GitHub, поэтому
+// режим checkin гасит сессию и ставит браузер на страницу входа.
+const LOGIN_URL = 'https://agentrouter.org/login';
+// Роут разлогина у New-API не задокументирован — пробуем best-effort, чтобы погасить
+// сессию и на сервере. Результат не проверяем: куки профиля мы всё равно чистим сами.
+const LOGOUT_URL = 'https://agentrouter.org/api/user/logout';
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
@@ -40,7 +47,7 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitH
 
 const labelArg = process.argv[2];
 const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
-const mode = String(process.argv[3] || 'auto'); // register | console | auto
+const mode = String(process.argv[3] || 'auto'); // register | console | auto | checkin
 const profileDir = path.join(PROFILES_DIR, label);
 
 // Если рядом лежит <label>.json — применяем его как storageState: cookies + localStorage.
@@ -214,6 +221,158 @@ async function waitForLogin(page, context) {
   return false;
 }
 
+// ───── Резервная копия GitHub-сессии профиля ─────────────────────────────
+// GitHub-куки — самое дорогое, что есть в профиле: вход обратно должен стоить один клик
+// «Continue with GitHub», а у авторегов пароля и 2FA под рукой может не быть вообще.
+// Поэтому перед КАЖДЫМ разлогином снимаем копию на диск. Копия нужна не только от нашего
+// кода: GitHub сам гасит сессию, если тем же аккаунтом вошли в другом месте (и тем более
+// если по нему стучались сырыми запросами) — тогда следующий чек-ин восстановит её отсюда.
+// В файле лежат сессионные секреты — каталог в .gitignore, значения в лог не пишем.
+const GH_BACKUP_DIR = path.join(__dirname, 'gh-sessions');
+
+function ghBackupPath(lbl) {
+  return path.join(GH_BACKUP_DIR, lbl + '.json');
+}
+
+function isGithubCookie(c) {
+  const d = String(c.domain || '').replace(/^\./, '');
+  return d === 'github.com' || d.endsWith('.github.com');
+}
+
+// Сохраняем только куки с ненулевым сроком: сессионные (expires ≤ 0) всё равно умирают
+// вместе с браузером, и восстанавливать их бессмысленно.
+function saveGhBackup(lbl, cookies) {
+  const keep = cookies.filter(c => isGithubCookie(c) && c.expires > 0);
+  if (!keep.length) return 0;
+  try {
+    fs.mkdirSync(GH_BACKUP_DIR, { recursive: true });
+    fs.writeFileSync(ghBackupPath(lbl), JSON.stringify({ savedAt: new Date().toISOString(), cookies: keep }, null, 2) + '\n', 'utf8');
+    return keep.length;
+  } catch (e) {
+    console.log(`⚠️  копию GitHub-сессии сохранить не удалось: ${e.message}`);
+    return 0;
+  }
+}
+
+// Только не истёкшие: просроченную куку Chromium примет и молча выбросит, а в логе
+// это выглядело бы как «восстановил», хотя вход всё равно попросит пароль.
+function loadGhBackup(lbl) {
+  try {
+    const j = JSON.parse(fs.readFileSync(ghBackupPath(lbl), 'utf8'));
+    const now = Date.now() / 1000;
+    return { savedAt: j.savedAt, cookies: (j.cookies || []).filter(c => c.expires > now) };
+  } catch { return null; }
+}
+
+// Копия свежей GitHub-сессии после успешного входа/открытия ЛК. Именно этот снимок
+// потом вернёт чек-ин, если GitHub погасит сессию сам. Пустую копию не пишем — иначе
+// один заход с уже мёртвым GitHub затёр бы годную.
+async function backupGhAfterLogin(context) {
+  const gh = await context.cookies('https://github.com').catch(() => []);
+  const n = saveGhBackup(label, gh);
+  if (n) console.log(`🐙 копия GitHub-сессии обновлена (${n} кук) — чек-ин сможет её вернуть`);
+}
+
+// Сразу после входа сайт любит отдать «未登录或登录已过期» / «failed to get user info» —
+// это транзиентное: SPA поднялась на данных погашенной сессии. Лечится тем же, чем при
+// регистрации, — перезагрузкой. Два прохода, потом просто говорим правду.
+const CHECKIN_STALE_RE = /未登录|登录已过期|not logged in|failed to get user info/i;
+
+async function settleAfterCheckin(page) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const txt = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
+    if (!CHECKIN_STALE_RE.test(txt) && !AUTH_ERROR_RE.test(txt)) return true;
+    console.log(`⚠️  сайт показывает «сессия истекла» — обновляю страницу (${attempt}/2)…`);
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(1800);
+  }
+  const txt = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
+  const bad = CHECKIN_STALE_RE.test(txt) || AUTH_ERROR_RE.test(txt);
+  if (bad) console.log('⚠️  сообщение осталось — вход всё равно прошёл (кука есть), баланс проверится с диска.');
+  return !bad;
+}
+
+// Чек-ин +$25: гасим сессию agentrouter и ставим браузер на страницу входа.
+// Порядок важен: сначала best-effort logout на сервере (пока куки ещё живые), потом
+// удаляем куки домена — это и есть гарантия разлогина, не зависящая от роутов сайта.
+//
+// ⚠️ ПОЧЕМУ CDP, А НЕ context.clearCookies({domain}) — ловушка, стоившая GitHub-сессии
+// (2026-08-20, аккаунт lankymapping). Фильтр в Playwright реализован как «снести ВЕСЬ
+// cookie-store и переставить обратно то, что не подошло под фильтр». В ПАМЯТИ всё
+// правильно (лог честно печатал «GitHub 4/4 на месте»), но удаление ложится в SQLite
+// профиля сразу, а переставленные куки — лениво. Пользователь закрывает окно браузера
+// (или процесс убивают) до флаша — и GitHub-кук на диске больше НЕТ.
+// Замерено на чистых профилях: clearCookies-фильтр → GitHub 0/3 на диске,
+// Network.deleteCookies → GitHub 3/3. CDP удаляет ровно названные записи и чужих
+// не касается вообще, поэтому терять нечего.
+// localStorage не трогаем: там реф-код `aff`, к сессии он не относится.
+async function doCheckinLogout(context, page) {
+  const ghBefore = (await context.cookies('https://github.com').catch(() => []));
+  const saved = saveGhBackup(label, ghBefore);
+  console.log(`🐙 GitHub-сессия: ${ghBefore.length} кук в профиле${saved ? `, копия сохранена (${saved} долгоживущих)` : ', сохранять нечего'}`);
+
+  await page.goto(LOGOUT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(800);
+
+  const arCookies = await context.cookies('https://agentrouter.org').catch(() => []);
+  let deleted = 0;
+  try {
+    const cdp = await context.newCDPSession(page);
+    for (const k of arCookies) {
+      await cdp.send('Network.deleteCookies', { name: k.name, domain: k.domain, path: k.path || '/' });
+      deleted++;
+    }
+    await cdp.detach().catch(() => {});
+  } catch (e) {
+    // Последний резерв — НЕ clearCookies(): он снёс бы GitHub (см. выше). Лучше
+    // оставить пользователя разлогиниться руками, чем потерять вход одним кликом.
+    console.log(`⚠️  удалить куки через CDP не удалось (${e.message})`);
+    console.log('   GitHub трогать не буду — разлогинься на странице сам (меню профиля → Logout).');
+  }
+
+  const arLeft = (await context.cookies('https://agentrouter.org').catch(() => [])).length;
+  console.log(`🚪 куки agentrouter.org: удалено ${deleted}/${arCookies.length}, осталось ${arLeft}${arLeft === 0 ? ' — сессия погашена' : ' (разлогинься вручную)'}`);
+  await restoreGithubIfLost(context, ghBefore);
+
+  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await reportRender(page);
+}
+
+// Страховка: сверяем GitHub-куки по ИМЕНАМ (а не по количеству — так видно, что именно
+// пропало) и возвращаем недостающие. Сначала из снимка «до», потом из копии на диске:
+// второй случай — когда GitHub погасил сессию сам, ещё до нашего разлогина.
+async function restoreGithubIfLost(context, ghBefore) {
+  const after = await context.cookies('https://github.com').catch(() => []);
+  const have = new Set(after.map(c => c.name));
+  let missing = ghBefore.filter(c => !have.has(c.name));
+
+  if (!missing.length) {
+    const bk = loadGhBackup(label);
+    if (!after.length && bk && bk.cookies.length) {
+      console.log(`🐙 GitHub-кук в профиле нет — восстанавливаю из копии от ${bk.savedAt}`);
+      missing = bk.cookies;
+    } else {
+      console.log(`🐙 GitHub-куки: ${after.length}/${ghBefore.length} на месте — вход одним кликом`);
+      return;
+    }
+  } else {
+    console.log(`⚠️  пропали GitHub-куки: ${missing.map(c => c.name).join(', ')} — возвращаю`);
+  }
+
+  try {
+    await context.addCookies(missing);
+    const fixed = await context.cookies('https://github.com').catch(() => []);
+    const ok = fixed.some(c => c.name === 'user_session');
+    console.log(`🐙 GitHub-куки возвращены в открытый браузер: ${fixed.length}${ok ? ' (user_session на месте — вход одним кликом)' : ' — ⚠️ user_session нет, вход попросит пароль/2FA'}`);
+    // Возврат — это ВСТАВКА, а Chromium пишет вставки в SQLite лениво: закроешь окно
+    // сразу — на диске их может не оказаться. Это не страшно, потому что источник
+    // истины — копия на диске: следующий чек-ин восстановит заново из неё же.
+    console.log('   (копия остаётся на диске — если закроешь окно слишком быстро, следующий чек-ин вернёт её снова)');
+  } catch (e) {
+    console.log(`⚠️  вернуть GitHub-куки не удалось (${e.message}) — войди в GitHub вручную, копия лежит в ${ghBackupPath(label)}`);
+  }
+}
+
 async function main() {
   if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
   const fresh = isFreshProfile();
@@ -231,6 +390,39 @@ async function main() {
 
   const page = context.pages()[0] || await context.newPage();
   await disableHttpCache(context, page);
+
+  // Чек-ин идёт раньше всего остального: импортированные куки и рефка тут не при чём,
+  // задача ровно одна — разлогинить и показать вход.
+  if (mode === 'checkin') {
+    try {
+      console.log('🎁 Чек-ин +$25: гашу сессию и открываю вход.');
+      await doCheckinLogout(context, page);
+      console.log('   Жми «Continue with GitHub» — GitHub-сессия в профиле осталась, пароль и 2FA не нужны.');
+
+      // Ждём, пока пользователь войдёт обратно. Дальше — САМИ закрываем браузер, и это
+      // не косметика: Chromium пишет НОВЫЕ куки в SQLite профиля лениво, а точный баланс
+      // читается именно с диска (см. newapi-account.js). Пока окно открыто, свежей куки
+      // на диске нет — и чек честно откатывался на прикидку с «в профиле нет куки».
+      // Корректное закрытие гарантирует флаш, поэтому после входа окно больше не нужно:
+      // за ним пришли ровно за одним кликом.
+      const ok = await waitForLogin(page, context);
+      if (!ok) {
+        console.error('❌ Не дождался входа (10 мин). Закрываю — бонус не забран, зайди ещё раз.');
+        await context.close().catch(() => {});
+        process.exit(2);
+      }
+      await settleAfterCheckin(page);
+      await backupGhAfterLogin(context);
+      console.log('✅ Вход выполнен. Закрываю браузер, чтобы куки легли на диск —');
+      console.log('   без этого точный баланс не читается и чек показал бы прикидку.');
+      await context.close().catch(() => {});
+      console.log('🎁 Готово. Жми 💰 в дашборде: увидишь +$25 и колонка станет 📦.');
+      process.exit(0);
+    } catch (e) {
+      await context.close().catch(() => {});
+      throw e;
+    }
+  }
 
   // Импортированная чужая сессия: подкладываем cookies/localStorage до навигации.
   let appliedSession = false;
@@ -275,6 +467,7 @@ async function main() {
         process.exit(2);
       }
       const settled = await settleAfterLogin(page);
+      await backupGhAfterLogin(context);
       console.log(settled
         ? '✅ Вход выполнен, профиль сохранён на диск. Забирай ключ и вставляй кнопкой 🔑.'
         : '⚠️  Вход прошёл, но сайт всё ещё отдаёт «failed to get user information» — обнови страницу вручную (F5).');
@@ -287,6 +480,7 @@ async function main() {
 
     if (!fresh) {
       await reportRender(page);
+      await backupGhAfterLogin(context);
       console.log('✅ Профиль восстановлен (agentrouter уже залогинен, если заходил раньше).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await new Promise(() => {}); // держим открытым, закрытие — вручную
@@ -302,6 +496,7 @@ async function main() {
       process.exit(2);
     }
 
+    await backupGhAfterLogin(context);
     console.log('✅ Вход выполнен, профиль сохранён на диск. Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
     await new Promise(() => {});
   } finally {

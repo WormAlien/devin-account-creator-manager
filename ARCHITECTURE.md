@@ -13,7 +13,7 @@
 | Порт   | Сервис                  | Файл                           | Роль |
 |--------|-------------------------|--------------------------------|------|
 | `8200` | **Backend Switcher / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |
-| `20100`| **Front Door** (фиксированный вход CC) | `routing/frontdoor-proxy.js` | Единственный адрес в `ANTHROPIC_BASE_URL`, когда режим включён (`routing/frontdoor.json`). На каждый запрос читает `~/.claude/active-backend.json` по mtime и форвардит в апстрим активного бэкенда: локальным (keepalive/конвертеры) — как есть, удалённым — с инжектом ключа из `<p>-active-key.txt` + срезом суффикса `[1m]` + `<p>-modelmap.json`. Ретраев нет (они в keepalive). Слушает только `127.0.0.1`. Самопроверка: `node routing/frontdoor-proxy.js selftest`. |
+| `20100`| **Front Door** (фиксированный вход CC) | `routing/frontdoor-proxy.js` | Единственный адрес в `ANTHROPIC_BASE_URL` — **режим по умолчанию** (`routing/frontdoor.json`, `enabled:true`). На каждый запрос читает `~/.claude/active-backend.json` по mtime и форвардит в апстрим активного бэкенда: локальным (keepalive/конвертеры) — как есть, удалённым — с инжектом ключа из `<p>-active-key.txt` + срезом суффикса `[1m]` + `<p>-modelmap.json`. Ретраев нет (они в keepalive). Слушает только `127.0.0.1`. Самопроверка: `node routing/frontdoor-proxy.js selftest`. |
 | `20126`| **FreeModel Key Rotator** | `routing/freemodel-rotator.js` | Менеджер прямых ключей для backend `freemodel_rotator`. Пишет ключ в `settings.json`. |
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
 | `20131`| **VyceAI OpenAI Proxy** | `routing/vyceai-openai-proxy.js` | Anthropic→OpenAI конвертер: `/v1/messages` → `vyceai.com/v1/chat/completions`. Ключ из `vyceai/keys.txt`. Маппинг моделей — `vyceai/config.js` (opus→claude-sonnet-5, sonnet→claude-sonnet-4-6, haiku→claude-haiku-4-5). |
@@ -161,9 +161,19 @@ cat без файла виснет на stdin. Выяснено на чисто�
   `~/.claude/fd-active-key.txt`: прокси читает ключи только из файлов, секретам в состоянии не место.
 
 **Тумблер** — вкладка «Настройки» (`routing/frontdoor.json`, `{enabled, port}`, читается по
-mtime). В репо лежит `enabled:false`: у друга установка не меняется, пока он сам не включит.
-Адрес переезжает при следующей активации провайдера; откат — выключить тумблер и кликнуть
-по ключу (или восстановить бэкап `settings.json`).
+mtime). **В репо лежит `enabled:true` — это дефолтный режим:** после `git clone` + запуска
+дашборда у любого пользователя один и тот же адрес `http://127.0.0.1:20100`, который он один
+раз вбивает во все клиенты (терминал, Warp, Orca, Claude Code Desktop → Third-Party Inference,
+ssh-туннель со второй машины) и больше не трогает. Реальный ключ во внешний клиент не нужен:
+`AUTH_TOKEN=dummy`, ключ подставляет front-door. Адрес прописывается при первой активации
+провайдера; выключать тумблер имеет смысл только для отладки прямого пути (откат — выключить
+и кликнуть по ключу, либо восстановить бэкап `settings.json`).
+
+**Плата за дефолт-ON:** пока режим включён, `:8200` должен быть запущен — front-door
+boot-спавнится дашбордом, и без дашборда у CC нет бэкенда вообще. Для локальных бэкендов
+(`ar/go/tb/xp` через keepalive) это было верно и раньше; новое — что теперь и helper-шлюзы
+(conduit, svrtr, freemodel) тоже зависят от живого дашборда. Пока состояния нет, front-door
+отвечает не молчанием, а `503` с текстом «открой дашборд :8200 и выбери провайдера».
 
 **Грабли, уже закрытые:**
 

@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "port": 20100,
-  "_note": "enabled=true переводит Claude Code на фиксированный вход http://127.0.0.1:20100 (routing/frontdoor-proxy.js). Тогда переключение провайдера в дашборде не требует перезапуска CC: settings.json больше не меняет ANTHROPIC_BASE_URL, а активный бэкенд лежит в ~/.claude/active-backend.json. Тумблер — на вкладке «Настройки». Перед включением: node routing/frontdoor-proxy.js selftest и живой :20100 в Health. В git этот файл лежит с enabled:false и внесён в tools/git-pull-safe.js, чтобы pull не спотыкался о локальный тумблер."
+  "_note": "enabled=true — дефолт репо. Claude Code получает ОДИН фиксированный вход http://127.0.0.1:20100 (routing/frontdoor-proxy.js): адрес вбивается один раз куда угодно (терминал, Warp, Orca, Claude Code Desktop, второй ноут) и больше не меняется — settings.json не трогает ANTHROPIC_BASE_URL, активный бэкенд лежит в ~/.claude/active-backend.json, свич провайдера в дашборде не требует перезапуска ни одной сессии. Плата: пока режим включён, дашборд :8200 должен быть запущен, он boot-спавнит :20100. Выключать имеет смысл только для отладки прямого пути — тумблер на вкладке «Настройки». Файл внесён в tools/git-pull-safe.js, поэтому локально выключенный тумблер переживает git pull."
 }

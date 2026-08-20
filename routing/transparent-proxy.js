@@ -8287,8 +8287,10 @@ function portIsFree(port) {
 
 const napMs = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function keepaliveRestart(port) {
-    const instances = {
+// Порт → как его поднять. Один список на кнопку «перезапустить» в Health и на
+// boot-респавн активного бэкенда, чтобы новый keepalive не забыли ни там, ни там.
+function keepaliveInstances() {
+    return {
         [AR_KEEPALIVE_PORT]: { name: 'AgentRouter', spawn: arKeepaliveSpawn },
         [TB_KEEPALIVE_PORT]: { name: 'Tabi', spawn: tbKeepaliveSpawn },
         [GO_KEEPALIVE_PORT]: { name: 'GoRouter', spawn: goKeepaliveSpawn },
@@ -8297,6 +8299,10 @@ async function keepaliveRestart(port) {
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
         [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
     };
+}
+
+async function keepaliveRestart(port) {
+    const instances = keepaliveInstances();
     const inst = instances[port];
     if (!inst) {
         return { ok: false, error: `:${port} — не keepalive-инстанс (можно ${Object.keys(instances).join(', ')})` };
@@ -8323,6 +8329,43 @@ async function keepaliveRestart(port) {
     }
     logLine(`keepalive restart: ${inst.name} :${port} НЕ ответил после спавна`);
     return { ok: false, error: `спавн прошёл, но :${port} не ответил за 10с`, killed, pid: sp.pid || null };
+}
+
+// Boot-респавн keepalive АКТИВНОГО бэкенда.
+//
+// Каждый keepalive — отдельный detached-процесс, он умирает вместе с прошлым
+// запуском дашборда. На boot мы поднимали только agentrouter :20133 и front-door
+// :20100, поэтому активный gorouter/tabi/xpeach оставался без апстрима: front-door
+// жив, состояние читается, а порт пустой — и каждый запрос Claude Code получает 502
+// до тех пор, пока юзер не догадается нажать «перезапустить» в Health или
+// переактивировать провайдера. Поймано 2026-08-20: после рестарта дашборда активный
+// gorouter :20156 не поднялся, CC ловил `502 front-door → gorouter: EACCES` десятками.
+//
+// Порт берём оттуда, куда реально смотрит Claude Code: с включённым front-door это
+// upstream из active-backend.json, иначе — ANTHROPIC_BASE_URL из settings.json.
+// Удалённый шлюз (домен вместо loopback) и чужие порты (конвертеры, omniroute)
+// пропускаем: поднимать нечего или не наше дело.
+const LOOPBACK_PORT_RE = /^https?:\/\/(?:127\.\d+\.\d+\.\d+|localhost|\[::1\]):(\d+)/i;
+
+async function bootSpawnActiveBackend() {
+    let base = '';
+    try { base = (readSettings().env || {}).ANTHROPIC_BASE_URL || ''; } catch { return; }
+    let target = base;
+    if (isFrontdoorBase(base)) {
+        const st = readActiveBackend();
+        target = (st && st.upstream) ? String(st.upstream) : '';
+    }
+    const m = target.match(LOOPBACK_PORT_RE);
+    if (!m) return;                                   // удалённый шлюз или официальный Claude
+    const port = Number(m[1]);
+    if (port === frontdoorPort()) return;             // его спавнит frontdoorSpawn()
+    const inst = keepaliveInstances()[port];
+    if (!inst) return;                                // конвертеры/omniroute живут своей жизнью
+    const r = await inst.spawn();
+    if (!r.ok) logLine(`boot: keepalive активного бэкенда ${inst.name} :${port} НЕ поднялся: ${r.error || '?'}`);
+    else if (r.already) logLine(`boot: keepalive активного бэкенда ${inst.name} :${port} уже слушает`);
+    else logLine(`boot: поднял keepalive активного бэкенда ${inst.name} :${port} (pid ${r.pid || '?'})`);
+    return r;
 }
 
 // Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
@@ -11097,5 +11140,13 @@ server.listen(LISTEN_PORT, () => {
         else if (!r.already) console.log(`  front-door spawned on :${frontdoorPort()}`);
         if (frontdoorConfig().enabled) console.log(`  front-door: ВКЛЮЧЁН, активный бэкенд ${currentTarget()}`);
     }).catch(e => console.log('  front-door spawn error:', e.message));
+
+    // Keepalive активного бэкенда: он тоже умер вместе с прошлым дашбордом, а на boot
+    // поднимался только agentrouter — активный gorouter/tabi/xpeach оставлял CC без
+    // апстрима и с непрозрачным 502 на каждый запрос.
+    bootSpawnActiveBackend().then(r => {
+        if (r && !r.ok) console.log('  active backend keepalive spawn error:', r.error || '?');
+        else if (r && !r.already) console.log('  active backend keepalive spawned');
+    }).catch(e => console.log('  active backend keepalive spawn error:', e.message));
 });
 

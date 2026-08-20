@@ -78,6 +78,25 @@ function isLocalHost(h) {
     return /^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?|0\.0\.0\.0)$/i.test(String(h || ''));
 }
 
+// Локальный апстрим бьём строго в IPv4. `localhost` на Windows разрешается в ::1
+// ПЕРВЫМ, а connect в IPv6-loopback, где никто не слушает, отдаёт EACCES вместо
+// ECONNREFUSED (замерено 2026-08-20: net.connect('::1',20156) → EACCES,
+// ('127.0.0.1',20156) → ECONNREFUSED). Пока прокси жив, happy-eyeballs это прячет —
+// ::1 отваливается, IPv4 отвечает; но стоит прокси умереть, и упавший бэкенд
+// выглядит как загадочный «502 front-door → gorouter: EACCES» вместо «не слушает».
+// Все наши прокси слушают 127.0.0.1, так что терять нечего — заодно уходит
+// лишний ::1-заход на каждом соединении.
+function connectHost(hostname, local) {
+    return local && /^(localhost|0\.0\.0\.0)$/i.test(String(hostname)) ? '127.0.0.1' : hostname;
+}
+
+// Локальный апстрим не отвечает на connect = процесса нет. Код при этом зависит от
+// стека (ECONNREFUSED на IPv4, EACCES на ::1, ETIMEDOUT если порт съел файрвол) —
+// подсказка одна на все, иначе юзер читает код ошибки и идёт искать причину в CC.
+const UPSTREAM_DOWN = new Set([
+    'ECONNREFUSED', 'ECONNRESET', 'EACCES', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'EADDRNOTAVAIL',
+]);
+
 // Читаем по mtime: кеш не длиннее одного запроса по смыслу — иначе теряется
 // бесшовность свича, ради которой всё и делается.
 function readState() {
@@ -254,7 +273,7 @@ function forward(req, res, state, reqBody, reqPath) {
 
     const upReq = requester({
         protocol: u.protocol,
-        hostname: u.hostname,
+        hostname: connectHost(u.hostname, state.local),
         port: u.port || (u.protocol === 'https:' ? 443 : 80),
         method: req.method,
         path: joinUpstreamPath(u.pathname, reqPath),
@@ -274,7 +293,7 @@ function forward(req, res, state, reqBody, reqPath) {
     });
     upReq.on('error', (e) => {
         // Ретраев тут нет сознательно: они живут в keepalive, дубль = второй платный запрос.
-        const hint = e.code === 'ECONNREFUSED' && state.local
+        const hint = state.local && UPSTREAM_DOWN.has(e.code)
             ? ` Прокси ${state.upstream} не слушает — подними его кнопкой в Health или переактивируй провайдера.`
             : '';
         log(`${req.method} ${reqPath} ${state.backend}: ${e.code || e.message}`);
@@ -343,6 +362,18 @@ if (process.argv[2] === 'selftest') {
         model: 'claude-opus-5[1m]', stream: false, messages: [{ role: 'user', content: 'x' }, { role: 'assistant', content: 'y' }],
     }), noMap);
     assert.strictEqual(probe.to, 'claude-opus-5', 'пробник /model проходит как обычный запрос');
+
+    // 3b. Хост соединения: локальный `localhost` → 127.0.0.1, удалённый не трогаем.
+    assert.strictEqual(connectHost('localhost', true), '127.0.0.1', 'локальный localhost уходит в IPv4');
+    assert.strictEqual(connectHost('0.0.0.0', true), '127.0.0.1', '0.0.0.0 тоже (connect в него бессмысленен)');
+    assert.strictEqual(connectHost('127.0.0.1', true), '127.0.0.1', 'уже IPv4 — без изменений');
+    assert.strictEqual(connectHost('::1', true), '::1', 'явный ::1 — воля пользователя, не подменяем');
+    assert.strictEqual(connectHost('localhost', false), 'localhost', 'удалённый апстрим не переписываем');
+    assert.strictEqual(connectHost('api.evomap.ai', false), 'api.evomap.ai', 'домен шлюза не трогаем');
+    // Подсказка «прокси не слушает» должна ловить и EACCES: именно так выглядел
+    // мёртвый gorouter :20156 через localhost/::1 (2026-08-20).
+    assert.ok(UPSTREAM_DOWN.has('EACCES') && UPSTREAM_DOWN.has('ECONNREFUSED'),
+        'оба кода мёртвого локального апстрима дают подсказку');
 
     // 4. Локальный апстрим: тело и ключ не трогаем (это делает keepalive).
     //    Проверяем самим кодом forward() — что ветка инжекта под !state.local.

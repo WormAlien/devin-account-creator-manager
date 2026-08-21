@@ -5131,6 +5131,61 @@ async function handleGhUpdate(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── Честный ответ ручек session/open ────────────────────────────────────
+//
+// Все пять ручек (github, ar, go, tb, xp) спавнят видимый Chromium detached-процессом
+// и отвечают `ok` сразу же. Если процесс умирал на старте — нет бинаря браузера под
+// установленную версию playwright, профиль занят, пропал скрипт — дашборд всё равно
+// рисовал зелёный тост «браузер аккаунта открыт», а окно не появлялось. Причина
+// оставалась только в Server Logs, и снаружи это выглядело как «кнопка молча не работает».
+//
+// Поэтому даём процессу шанс умереть: не умер за SESSION_OPEN_PROBE_MS — считаем, что
+// окно поднимается, и отвечаем ok как раньше. Умер — отвечаем ошибкой, дашборд покажет
+// красный тост (обработка `data.error` во фронте уже есть, править её не нужно).
+const SESSION_OPEN_PROBE_MS = 2000;
+
+// Частые причины падения — с готовым рецептом вместо стектрейса playwright.
+function describeSessionOpenFailure(stderr, code) {
+    const text = String(stderr || '').trim();
+    if (/Executable doesn'?t exist|playwright install/i.test(text)) {
+        return 'Chromium для playwright не установлен: выполни в корне репо `npx playwright install chromium`';
+    }
+    if (/Cannot find module/i.test(text)) {
+        return 'не хватает node-зависимостей: выполни в корне репо `npm install`';
+    }
+    if (/ProcessSingleton|SingletonLock|profile appears to be in use/i.test(text)) {
+        return 'профиль занят другим Chromium: закрой окно этого аккаунта и попробуй снова';
+    }
+    const tail = text.split('\n').map(s => s.trim()).filter(Boolean).pop();
+    return tail
+        ? `браузер не открылся: ${tail.slice(0, 200)}`
+        : `браузер не открылся (процесс вышел с кодом ${code})`;
+}
+
+// null — процесс жив (или вышел штатно), строка — текст ошибки для тоста.
+function sessionOpenEarlyFailure(proc) {
+    return new Promise(resolve => {
+        let err = '';
+        let timer = null;
+        const onData = d => { err += String(d); };
+        const finish = (result) => {
+            if (timer) clearTimeout(timer);
+            proc.removeListener('exit', onExit);
+            proc.removeListener('error', onError);
+            if (proc.stderr) proc.stderr.removeListener('data', onData);
+            resolve(result);
+        };
+        // open-session.js держит браузер открытым и сам не выходит, так что выход в первые
+        // секунды — это падение. Код 0 всё же не считаем ошибкой: ругаться не на что.
+        const onExit = (code) => finish(code === 0 ? null : describeSessionOpenFailure(err, code));
+        const onError = (e) => finish(`процесс браузера не запустился: ${e.message}`);
+        if (proc.stderr) proc.stderr.on('data', onData);
+        proc.once('exit', onExit);
+        proc.once('error', onError);
+        timer = setTimeout(() => finish(null), SESSION_OPEN_PROBE_MS);
+    });
+}
+
 // Открыть GitHub в персональном профиле браузера на аккаунт (сохраняет сессию).
 const ghLkPids = new Map();
 function ghPidAlive(pid) {
@@ -5162,6 +5217,12 @@ async function handleGhOpen(req, res) {
         proc.on('exit', (code, sig) => { ghLkPids.delete(label); logLine(`github session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         ghLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            ghLkPids.delete(label);
+            logLine(`github session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
         logLine(`github session/open: ${label} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -7073,6 +7134,12 @@ async function handleArSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { arLkPids.delete(label); logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         arLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            arLkPids.delete(label);
+            logLine(`agentrouter session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
         // Отметка визита: в ЛК могли сделать чек-ин, и сохранённая точная цифра
         // перестаёт быть годной, даже если расход не сдвинулся (см. newapiLkVisited).
         newapiLkVisited(label);
@@ -7904,6 +7971,12 @@ async function handleGoSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { goLkPids.delete(label); logLine(`gorouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         goLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            goLkPids.delete(label);
+            logLine(`gorouter session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`gorouter session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
@@ -8670,6 +8743,12 @@ async function handleTbSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { tbLkPids.delete(label); logLine(`tabi session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         tbLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            tbLkPids.delete(label);
+            logLine(`tabi session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`tabi session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
@@ -9272,6 +9351,12 @@ async function handleXpSessionOpen(req, res) {
         proc.on('exit', (code, sig) => { xpLkPids.delete(label); logLine(`xpeach session/open: ${label} — exited (code ${code}, sig ${sig})`); });
         proc.unref();
         xpLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            xpLkPids.delete(label);
+            logLine(`xpeach session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
         newapiLkVisited(label);   // в ЛК могли пополнить — кеш точной цифры снят
         logLine(`xpeach session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });

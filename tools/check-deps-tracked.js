@@ -34,7 +34,16 @@ function git(args) {
 }
 
 const tracked = new Set(git(['ls-files']).split('\n').map(s => s.trim()).filter(Boolean));
-const jsFiles = [...tracked].filter(f => f.endsWith('.js') && !f.startsWith('node_modules/'));
+const SELF = rel(__filename);
+const jsFiles = [...tracked].filter(f => f.endsWith('.js')
+    && !f.startsWith('node_modules/')
+    && f !== SELF);   // в этом файле require'ы живут в комментариях как примеры
+
+// Комментарии выкидываем: закомментированный require — не зависимость. `//` рубим
+// только когда перед ним не двоеточие и не кавычка, иначе под нож уходят URL'ы.
+function stripComments(src) {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+}
 
 // Резолв как у Node: сначала как есть, потом +.js, потом /index.js.
 function resolveLocal(fromFile, spec) {
@@ -58,7 +67,7 @@ const RE_SPAWNISH = /\b(?:spawn|spawnSync|fork|execFile|execFileSync)\s*\(/g;
 const RE_JS_LITERAL = /['"]([\w.@/-]+\.js)['"]/g;
 
 for (const file of jsFiles) {
-    const src = fs.readFileSync(path.join(REPO, file), 'utf8');
+    const src = stripComments(fs.readFileSync(path.join(REPO, file), 'utf8'));
 
     for (const m of src.matchAll(RE_REQUIRE)) {
         const abs = resolveLocal(file, m[1]);

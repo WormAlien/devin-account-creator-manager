@@ -46,6 +46,11 @@ const LOCAL_STATE_FILES = [
     'routing/xpeach-modelmap.json',
     'routing/proxy-target.json',
     'routing/fm-openai-config.json',
+    // Время сброса чек-ина AR и размер бонуса. Дашборд пишет файл сам
+    // (`AR_CHECKIN_FILE`, transparent-proxy.js:8136 — тот же `JSON.stringify + '\n'`,
+    // что и тир-карты), но под паттерн `*-modelmap.json` он не попадает, поэтому
+    // здесь перечислением. Те же грабли, что были с `xpeach-modelmap.json`.
+    'routing/ar-checkin.json',
     // Тумблер front-door: в репо лежит enabled:false, у владельца включён — иначе
     // каждый git pull упирался бы в «локальные правки» из-за одного булева.
     'routing/frontdoor.json',
@@ -62,6 +67,34 @@ function isStateFile(f) {
 
 function git(...args) {
     return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim();
+}
+
+// Грязь спрашиваем ДВУМЯ командами, потому что одна врёт.
+//
+// `git diff --name-only HEAD` сравнивает HEAD с рабочим деревом ПОСЛЕ нормализации
+// переводов строк, поэтому файл, отличающийся от индекса только CRLF/LF, для него
+// чистый — а `git pull` в него всё равно упирается. Живой случай: дашборд
+// перезаписывает тир-карту из Node (`JSON.stringify(...) + '\n'`, то есть LF), а
+// `.gitattributes` (`*.json text`) с `core.autocrlf=true` требуют в рабочей копии
+// CRLF. Итог для человека — тупик без выхода: `git diff` по файлу ПУСТ (откатывать
+// нечего), `git pull` встаёт на «local changes would be overwritten», наш dirty
+// оказывался пустым, `resettable` тоже, и наружу уходил сырой текст git'а. Починка
+// же доезжает только тем самым обновлением, которое и встало.
+//
+// `git diff-files` сравнивает индекс с деревом и такое расхождение видит. Берём
+// объединение: diff-files не покажет то, что уже добавлено в индекс (`git add`),
+// diff HEAD — покажет.
+function dirtyFiles() {
+    const out = new Set();
+    for (const args of [['diff', '--name-only', 'HEAD'], ['diff-files', '--name-only']]) {
+        let raw = '';
+        try { raw = git(...args); } catch { continue; }
+        for (const line of raw.split('\n')) {
+            const f = line.trim();
+            if (f) out.add(f);
+        }
+    }
+    return [...out];
 }
 
 // Untracked-файлы `git diff --name-only HEAD` не видит В ПРИНЦИПЕ: он сравнивает
@@ -150,7 +183,7 @@ function pullSafe(opts = {}) {
         if (!/would be overwritten|local changes/i.test(msg)) {
             return { ...empty, error: msg.trim() };
         }
-        const dirty = git('diff', '--name-only', 'HEAD').split('\n').map(s => s.trim()).filter(Boolean);
+        const dirty = dirtyFiles();
         const untracked = parseUntracked(msg);
         const resettable = dirty.filter(isStateFile);
         // Апстрим завёл тир-карту, а у человека уже лежит своя (её создал дашборд, пока

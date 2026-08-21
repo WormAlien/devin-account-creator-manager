@@ -31,16 +31,33 @@ const path = require('path');
 const REPO = path.resolve(__dirname, '..');
 
 // Пути от корня репо, ровно как их печатает `git diff --name-only`.
+// ⚠️ Перечисление держим только для обратной совместимости и как «якорь» в тесте:
+// решает isStateFile(), у него паттерн. Причина — живой случай 21.08: список знал
+// ar/gorouter/tabi-modelmap.json, а `routing/xpeach-modelmap.json` в нём забыли,
+// хотя дашборд его пишет ровно так же (XP_MODELMAP_FILE). Второй пользователь
+// поправил тир-карту XPeach в UI, и обновление встало насмерть: кнопка в дашборде
+// показывала сырое «Your local changes … would be overwritten by merge», а
+// починка этой ошибки доезжает только через то же обновление.
 const LOCAL_STATE_FILES = [
     'routing/ar-modelmap.json',
     'routing/gorouter-modelmap.json',
     'routing/tabi-modelmap.json',
+    'routing/xpeach-modelmap.json',
     'routing/proxy-target.json',
     'routing/fm-openai-config.json',
     // Тумблер front-door: в репо лежит enabled:false, у владельца включён — иначе
     // каждый git pull упирался бы в «локальные правки» из-за одного булева.
     'routing/frontdoor.json',
 ];
+
+// Тир-карты заводятся вместе с провайдером, и строчку в списке забыть легко.
+// Поэтому любой трекаемый `routing/<что-то>-modelmap.json` — файл состояния
+// по определению: его единственный писатель — вкладка провайдера в дашборде.
+const STATE_PATTERNS = [/^routing\/[A-Za-z0-9_-]+-modelmap\.json$/];
+
+function isStateFile(f) {
+    return LOCAL_STATE_FILES.includes(f) || STATE_PATTERNS.some(re => re.test(f));
+}
 
 function git(...args) {
     return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim();
@@ -58,8 +75,8 @@ function pullSafe() {
             return { ok: false, output: '', preserved: [], blocking: [], error: msg.trim() };
         }
         const dirty = git('diff', '--name-only', 'HEAD').split('\n').map(s => s.trim()).filter(Boolean);
-        const resettable = dirty.filter(f => LOCAL_STATE_FILES.includes(f));
-        const blocking = dirty.filter(f => !LOCAL_STATE_FILES.includes(f));
+        const resettable = dirty.filter(isStateFile);
+        const blocking = dirty.filter(f => !isStateFile(f));
         if (blocking.length) return { ok: false, output: '', preserved: [], blocking, error: msg.trim() };
         if (!resettable.length) return { ok: false, output: '', preserved: [], blocking: [], error: msg.trim() };
 
@@ -83,7 +100,7 @@ function pullSafe() {
     }
 }
 
-module.exports = { REPO, LOCAL_STATE_FILES, pullSafe };
+module.exports = { REPO, LOCAL_STATE_FILES, isStateFile, pullSafe };
 
 if (require.main === module) {
     const r = pullSafe();

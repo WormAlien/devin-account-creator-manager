@@ -60,4 +60,20 @@ ok('C: pullSafe().ok', r.ok === true);
 ok('C: preserved — массив', Array.isArray(r.preserved));
 ok('C: LOCAL_STATE_FILES экспортирован', mod.LOCAL_STATE_FILES.includes('routing/ar-modelmap.json'));
 
+// D: НИ ОДНА трекаемая тир-карта не осталась без защиты.
+// Проверяем против настоящего репо, а не против списка в коде: список и был
+// источником бага — `routing/xpeach-modelmap.json` трекался и писался из UI, но в
+// перечислении его забыли, и обновление у второго пользователя встало насмерть
+// (21.08). Заводя нового провайдера, эту проверку уронит именно забытая карта.
+const real = require(path.resolve(__dirname, 'git-pull-safe.js'));
+const tracked = run(path.resolve(__dirname, '..'), 'ls-files', 'routing/*-modelmap.json')
+    .split('\n').map(s => s.trim()).filter(Boolean);
+ok('D: тир-карты в репо нашлись', tracked.length >= 4);
+const unprotected = tracked.filter(f => !real.isStateFile(f));
+ok(`D: все ${tracked.length} тир-карт защищены${unprotected.length ? ' — ДЫРКА: ' + unprotected.join(', ') : ''}`,
+   unprotected.length === 0);
+// И обратное: настоящий код файлом состояния не считается, иначе pull молча
+// откатывал бы правки в коде вместо того, чтобы о них сказать.
+ok('D: код не считается состоянием', real.isStateFile('routing/transparent-proxy.js') === false);
+
 fs.rmSync(root, { recursive: true, force: true });

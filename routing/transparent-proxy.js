@@ -14,6 +14,10 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
+// Минутные бакеты времени ответа: тот же модуль пишет keepalive-proxy.js. Дашборд читает
+// историю С ДИСКА, когда прокси провайдера не запущен — иначе график был бы только у
+// активного бэкенда, а у остальных «не отвечает» при готовых данных в файле рядом.
+const latencyStore = require('./latency-store.js');
 
 // ---- Load routing/.env (gitignored real keys) ------------------------------
 // Tiny inline parser — no dotenv dep required.
@@ -298,6 +302,28 @@ function resolveCcModel(obj) {
 // `real_max`) — получалось 16% при реальной занятости 90%, потому что компактит CC
 // по своему числу, а не по нарисованному.
 const MODEL_WINDOWS_FILE = path.join(__dirname, 'model-windows.json');
+
+// ── История финансов ────────────────────────────────────────────────────────
+// sessions.json хранит только снимок «здесь и сейчас»: spent, balance и штамп
+// проверки. Прошлых значений не хранил никто, поэтому нарисовать расход по дням
+// было физически нечем. Теперь каждый чек баланса, изменивший цифры, дописывает
+// строку сюда — из этих дельт вкладка «Финансы» и собирает график.
+// Формат: одна JSON-строка на событие, append-only, без перезаписи файла.
+const FINANCE_HISTORY_FILE = path.join(__dirname, 'finance-history.jsonl');
+const FINANCE_HISTORY_MAX_BYTES = 8 * 1024 * 1024;   // ~40k событий, дальше режем половину
+function financeLog(entry) {
+    try {
+        fs.appendFileSync(FINANCE_HISTORY_FILE, JSON.stringify(entry) + '\n');
+        // Обрезка: файл растёт вечно, а график смотрит максимум на месяц назад.
+        // Режем по строкам, а не по байтам, чтобы не оставить обрубок строки.
+        const st = fs.statSync(FINANCE_HISTORY_FILE);
+        if (st.size > FINANCE_HISTORY_MAX_BYTES) {
+            const lines = fs.readFileSync(FINANCE_HISTORY_FILE, 'utf8').split('\n').filter(Boolean);
+            fs.writeFileSync(FINANCE_HISTORY_FILE, lines.slice(Math.floor(lines.length / 2)).join('\n') + '\n');
+        }
+    } catch (e) { /* история — не критичный путь, чек баланса ронять нельзя */ }
+}
+
 let MODEL_WINDOWS_CACHE = { mtime: 0, map: {} };
 function modelWindows() {
     try {
@@ -852,7 +878,44 @@ function makeKeepaliveHandlers(port) {
         req.on('error', () => jsonRes(res, 400, { error: 'read error' }));
     }
 
-    return { state: handleState, config: handleConfig };
+    // GET .../keepalive/latency?window=<сек> → история времени ответа для графика.
+    //
+    // Прокси провайдера может быть НЕ ЗАПУЩЕН — это норма: keepalive поднимается под
+    // активный бэкенд, остальные лежат. Но история за сутки при этом лежит в файле
+    // рядом, и «график только у активного провайдера» — не то, чего от него ждут.
+    // Поэтому: живой процесс → из памяти, иначе → с диска (`source: 'file'`).
+    async function handleLatency(req, res) {
+        const qi = req.url.indexOf('?');
+        const win = qi >= 0 ? (new URLSearchParams(req.url.slice(qi + 1)).get('window') || '') : '';
+        const apiPath = '/__latency' + (win ? '?window=' + encodeURIComponent(win) : '');
+        const r = await keepaliveFetch('GET', apiPath, null, port);
+        if (r.ok && r.status === 200 && r.data && Array.isArray(r.data.points)) {
+            return jsonRes(res, 200, Object.assign({ source: 'live', port }, r.data));
+        }
+        // 404 = процесс поднят из кода без этой ручки (график добавлен 21.08); молчание =
+        // не запущен вовсе. Оба случая читаются с диска одинаково, различие — только в
+        // подписи для человека, поэтому его и передаём.
+        const st = latencyStore.readFile(latencyStore.fileFor(port, __dirname));
+        if (st && st.buckets.length) {
+            const data = latencyStore.series(st.buckets, win, st);
+            return jsonRes(res, 200, Object.assign({
+                source: 'file', port,
+                proxy_state: r.ok && r.status === 404 ? 'stale' : 'down',
+            }, data));
+        }
+        if (r.ok && r.status === 404) {
+            return jsonRes(res, 409, {
+                error: 'прокси :' + port + ' запущен на старом коде — перезапусти его '
+                    + '(Здоровье → 🔄 перезапустить), график появится сразу', port, stale: true,
+            });
+        }
+        // Ни процесса, ни файла: провайдер ещё ни разу не работал с этой версией прокси.
+        return jsonRes(res, 200, Object.assign({
+            source: 'empty', port, proxy_state: 'down',
+        }, latencyStore.series([], win, {})));
+    }
+
+    return { state: handleState, config: handleConfig, latency: handleLatency };
 }
 
 // Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156, XPeach :20157.
@@ -5121,6 +5184,9 @@ function ghNormalizeAccount(raw) {
             : String(raw.recoveryCodes || '').split(/[,;\s]+/).map(c => c.trim()).filter(Boolean),
         nickname: nickname || login,
         status: ['live', 'cooldown', 'dead', 'error'].includes(raw.status) ? raw.status : 'live',
+        // Возраст «от рега»: месячные аккаунты AgentRouter не пропускает, поэтому
+        // покупка помечается прямо при импорте. null = не указан (старые записи).
+        regAge: ['month', 'year'].includes(raw.regAge) ? raw.regAge : null,
         note: String(raw.note || '').trim(),
         added: new Date().toISOString().slice(0, 19).replace('T', ' '),
     };
@@ -5199,9 +5265,10 @@ async function handleGhUpdate(req, res) {
                 : String(patch.recoveryCodes || '').split(/[,;\s]+/).map(c => c.trim()).filter(Boolean);
         }
         if (patch.status !== undefined && ['live', 'cooldown', 'dead', 'error'].includes(patch.status)) cur.status = patch.status;
+        if (patch.regAge !== undefined) cur.regAge = ['month', 'year'].includes(patch.regAge) ? patch.regAge : null;
         if (patch.note !== undefined) cur.note = String(patch.note || '').trim();
         ghSave(keys);
-        logLine(`github update: ${cur.login} (статус ${cur.status})`);
+        logLine(`github update: ${cur.login} (статус ${cur.status}, возраст ${cur.regAge || 'не указан'})`);
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -5473,6 +5540,7 @@ async function handleGhAvailable(req, res) {
                 nickname: nick,
                 login: g.login || '',
                 status: g.status || 'live',
+                regAge: g.regAge || null,
                 usedOn: entry ? [...entry.hosts] : [],
                 usedHere: !!(entry && entry.hosts.has(tag)),
                 // Запись в пуле — прямое доказательство занятости, кука в профиле лишь косвенное.
@@ -6134,8 +6202,18 @@ if (AR_KEEPALIVE_URL_EARLY !== AR_KEEPALIVE_URL) {
 
 // ????????? agentrouter-proxy.js (:) ???? ???? ???????? ? ???????? ??? Claude Code:
 // claude-* ? pass-through ? agentrouter /v1/messages, gpt-* ? ??????????? ? OpenAI /v1/chat/completions.
-async function arProxySpawn() {
+async function arProxySpawn(opts = {}) {
     try {
+        // force = пересоздать безусловно (boot после обновления). Ждём, пока порт реально
+        // освободится: он отпускается не мгновенно, а иначе проверка ниже прочитает его
+        // как занятый, спавн молча выйдет — и конвертера не будет вообще.
+        if (opts.force) {
+            const killed = killPortListeners(AR_PROXY_PORT);
+            for (let i = 0; i < 20 && killed; i += 1) {
+                if (await portIsFree(AR_PROXY_PORT)) break;
+                await napMs(100);
+            }
+        }
         const net = require('net');
         const free = await new Promise(resolve => {
             const sock = net.createServer();
@@ -6728,6 +6806,9 @@ function newapiApplyBalance(target, bal, opts) {
         if (isFinite(nextGranted)) target.grantedSelf = nextGranted;
     }
     if (bal.status === 'live') {
+        // Дельты считаем ДО записи новых цифр: расход за интервал — это прирост
+        // spent, наливка — прирост granted (новый аккаунт, реф-бонус, чек-ин).
+        const prevSpent = Number(target.spent), prevGrant = Number(target.granted);
         target.spent = bal.spent;
         target.balance = bal.balance;
         target.balanceSource = bal.balanceSource;
@@ -6762,6 +6843,23 @@ function newapiApplyBalance(target, bal, opts) {
         if (seen) delete target.selfError;
         else if (bal.selfError) target.selfError = bal.selfError;
         delete target.balanceError;
+        // Пишем историю только когда цифры реально сдвинулись. Первый чек аккаунта
+        // (prev === NaN) даёт дельту 0, а не весь накопленный расход: иначе в день
+        // подключения пула на график прилетел бы фальшивый пик на всю историю.
+        const dSpent = isFinite(prevSpent) && typeof bal.spent === 'number' ? bal.spent - prevSpent : 0;
+        const dGrant = isFinite(prevGrant) && bal.granted != null ? Number(bal.granted) - prevGrant : 0;
+        if (Math.abs(dSpent) > 0.0001 || Math.abs(dGrant) > 0.0001) {
+            financeLog({
+                t: new Date().toISOString(),
+                p: (opts && opts.provider) || 'newapi',
+                id: target.id || target.email || String(target.api_key || '').slice(-6),
+                dSpent: Number(dSpent.toFixed(4)),
+                dGrant: Number(dGrant.toFixed(4)),
+                spent: typeof bal.spent === 'number' ? Number(bal.spent.toFixed(4)) : null,
+                balance: typeof bal.balance === 'number' ? Number(bal.balance.toFixed(4)) : null,
+                src: bal.balanceSource || null,
+            });
+        }
     } else {
         // Цифры оставляем прошлые (лучше устаревшие, чем нули), но помечаем причину.
         target.balanceError = bal.error || bal.status;
@@ -6771,7 +6869,63 @@ function newapiApplyBalance(target, bal, opts) {
 
 // Детект чек-ина включён только здесь: у GoRouter чек-ина нет вообще, у XPeach
 // шлюз сам отдаёт checkin_enabled: false.
-function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { checkin: true }); }
+function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { checkin: true, provider: 'agentrouter' }); }
+
+// GET /__switch/api/finance/history?range=day|week|month
+// Отдаёт бакеты для графика: расход (прирост spent) и наливка (прирост granted).
+// Бакет — час для «дня», сутки для остальных. Плюс текущий снимок пулов, чтобы
+// вкладка не дёргала четыре ручки сессий ради двух сумм.
+async function handleFinanceHistory(req, res) {
+    try {
+        // CORS нужен только пока вкладку смотрят из черновика по file:// — внутри
+        // дашборда origin тот же. Отдаём агрегат, ключей и почты здесь нет.
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const range = q.get('range') || 'week';
+        const conf = { day: { n: 24, hour: true }, week: { n: 7 }, month: { n: 30 } }[range]
+            || { n: 7 };
+        const now = new Date();
+        const keyOf = d => conf.hour
+            ? d.toISOString().slice(0, 13)                       // YYYY-MM-DDTHH
+            : d.toISOString().slice(0, 10);                      // YYYY-MM-DD
+        // Пустая сетка бакетов: график должен рисоваться и когда истории ещё нет.
+        const buckets = [];
+        for (let i = conf.n - 1; i >= 0; i--) {
+            const d = new Date(now);
+            if (conf.hour) d.setHours(d.getHours() - i); else d.setDate(d.getDate() - i);
+            buckets.push({ k: keyOf(d), spend: 0, topup: 0, events: 0 });
+        }
+        const idx = new Map(buckets.map((b, i) => [b.k, i]));
+        let lines = [];
+        try { lines = fs.readFileSync(FINANCE_HISTORY_FILE, 'utf8').split('\n'); } catch (e) { /* истории ещё нет */ }
+        let parsed = 0, skipped = 0;
+        for (const ln of lines) {
+            if (!ln) continue;
+            let e; try { e = JSON.parse(ln); } catch (_) { skipped++; continue; }
+            const i = idx.get(conf.hour ? String(e.t).slice(0, 13) : String(e.t).slice(0, 10));
+            if (i == null) continue;                             // вне окна — молча мимо
+            parsed++;
+            if (e.dSpent > 0) buckets[i].spend += e.dSpent;
+            if (e.dGrant > 0) buckets[i].topup += e.dGrant;
+            buckets[i].events++;
+        }
+        // Текущие суммы по пулам — из тех же файлов, что читает сайдбар.
+        const pools = {};
+        const sum = (arr, f) => (arr || []).reduce((a, s) => a + (Number(s[f]) || 0), 0);
+        const usable = arr => (arr || []).filter(s => s.status !== 'dead' && s.status !== 'no_key');
+        try { const a = arLoad(); pools.agentrouter = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = goLoad(); pools.gorouter    = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = tbLoad(); pools.tabitoken   = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = xpLoad(); pools.xpeach      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        const totals = Object.values(pools).reduce((a, p) => ({
+            spent: a.spent + p.spent, balance: a.balance + p.balance, keys: a.keys + p.keys,
+        }), { spent: 0, balance: 0, keys: 0 });
+        jsonRes(res, 200, {
+            range, hour: !!conf.hour, buckets, pools, totals,
+            history: { file: path.basename(FINANCE_HISTORY_FILE), lines: lines.filter(Boolean).length, used: parsed, bad: skipped },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
 async function handleArPing(req, res) {
@@ -7950,7 +8104,7 @@ async function goBalance(target, opts = {}) {
     });
 }
 
-function goApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
+function goApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'gorouter' }); }
 
 async function handleGoSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
@@ -8738,26 +8892,93 @@ const keepaliveRestart = (port) => keepaliveBring(port, { force: true });
 // пропускаем: поднимать нечего или не наше дело.
 const LOOPBACK_PORT_RE = /^https?:\/\/(?:127\.\d+\.\d+\.\d+|localhost|\[::1\]):(\d+)/i;
 
-async function bootSpawnActiveBackend() {
+// Порт, куда реально смотрит Claude Code: с включённым front-door это upstream из
+// active-backend.json, иначе ANTHROPIC_BASE_URL. 0 = удалённый шлюз или официальный
+// Claude. Вынесено отдельно, потому что то же число решает, кого на boot ПЕРЕСОЗДАТЬ,
+// а кого просто снять.
+function activeBackendPort() {
     let base = '';
-    try { base = (readSettings().env || {}).ANTHROPIC_BASE_URL || ''; } catch { return; }
+    try { base = (readSettings().env || {}).ANTHROPIC_BASE_URL || ''; } catch { return 0; }
     let target = base;
     if (isFrontdoorBase(base)) {
         const st = readActiveBackend();
         target = (st && st.upstream) ? String(st.upstream) : '';
     }
     const m = target.match(LOOPBACK_PORT_RE);
-    if (!m) return;                                   // удалённый шлюз или официальный Claude
-    const port = Number(m[1]);
+    return m ? Number(m[1]) : 0;
+}
+
+async function bootSpawnActiveBackend() {
+    const port = activeBackendPort();
+    if (!port) return;                                // удалённый шлюз или официальный Claude
     if (port === frontdoorPort()) return;             // его спавнит frontdoorSpawn()
     const inst = keepaliveInstances()[port];
     if (!inst) return;                                // конвертеры/omniroute живут своей жизнью
-    // keepaliveBring, а не inst.spawn(): мёртвый порт, занятый зомби, спавн читал как
-    // «уже поднято» и молча уходил — ровно так :20156 переживал рестарт дашборда.
-    const r = await keepaliveBring(port);
+    // force: рестарт дашборда обязан означать рестарт стека. Без force живой процесс
+    // прошлого запуска читался как «уже поднято», оставался на СТАРОМ коде, и человек
+    // после обновления добивал его руками — «нажимаю перезагрузить, а перезагружается
+    // не всё» (21.08). Секунда простоя здесь и так есть: bat гасит front-door и :20133.
+    const r = await keepaliveBring(port, { force: true });
     if (!r.ok) logLine(`boot: keepalive активного бэкенда ${inst.name} :${port} НЕ поднялся: ${r.error || '?'}`);
-    else if (r.already) logLine(`boot: keepalive активного бэкенда ${inst.name} :${port} уже слушает`);
-    else logLine(`boot: поднял keepalive активного бэкенда ${inst.name} :${port} (pid ${r.pid || '?'})`);
+    else logLine(`boot: пересоздал keepalive активного бэкенда ${inst.name} :${port} (pid ${r.pid || '?'})`);
+    return r;
+}
+
+// Снять детей ПРОШЛОГО запуска, которых на boot никто не поднимает обратно.
+//
+// Они не умирают вместе с дашбордом (detached) и остаются на старом коде: рестарт
+// дашборда их не касался вовсе. Именно так `:20155`/`:20156` переживали обновление и
+// не получали ни фиксов, ни новых ручек — снаружи это выглядит как «перезагрузил, а
+// не помогло». Спавнить их обратно не нужно: активация провайдера поднимет свежий
+// процесс сама, а лежащий порт неактивного провайдера — покой, не поломка.
+async function bootSweepStaleChildren() {
+    const active = activeBackendPort();
+    const keep = new Set([AR_KEEPALIVE_PORT, frontdoorPort(), active]);   // эти пересоздаём отдельно
+    const swept = [];
+    for (const [p, inst] of Object.entries(keepaliveInstances())) {
+        const port = Number(p);
+        if (keep.has(port)) continue;
+        if (await portIsFree(port)) continue;
+        const killed = killPortListeners(port);
+        if (killed) swept.push(`${inst.name} :${port}`);
+    }
+    // Конвертеры Custom-провайдеров (20150–20250) — тот же расклад, но АКТИВНЫЙ не
+    // трогаем ни в каком случае: на boot его никто не поднимает обратно, и снять его
+    // значило бы оставить Claude Code вообще без бэкенда.
+    try {
+        for (const prov of customLoad().providers) {
+            const port = Number(prov.proxyPort);
+            if (!port || port === active || keep.has(port)) continue;
+            if (await portIsFree(port)) continue;
+            const killed = killPortListeners(port);
+            if (killed) swept.push(`конвертер ${prov.name || prov.id} :${port}`);
+        }
+    } catch (e) { logLine(`boot sweep: конвертеры пропущены — ${e.message}`); }
+    if (swept.length) logLine(`boot: снял процессы прошлого запуска (обратно поднимет активация): ${swept.join(', ')}`);
+    return swept;
+}
+
+// Активный бэкенд — конвертер Custom-провайдера. Его на boot не поднимал никто: он
+// просто доживал с прошлого запуска, а значит и на старом коде. Пересоздаём, но строго
+// НА ТОМ ЖЕ порту: `customSpawnProxy` при занятом порте молча выбирает другой, а на
+// старый смотрят settings.json / active-backend.json — переезд оставил бы Claude Code
+// без бэкенда. Поэтому сначала убиваем держателя и ждём, пока порт отпустят.
+async function bootRecreateActiveCustomProxy() {
+    const port = activeBackendPort();
+    if (!port || keepaliveInstances()[port]) return null;   // не custom — не наша ветка
+    let prov = null;
+    try { prov = customLoad().providers.find(p => Number(p.proxyPort) === port) || null; } catch { }
+    if (!prov) return null;                                 // чужой порт (omniroute и пр.)
+    const killed = killPortListeners(port);
+    for (let i = 0; i < 20 && killed; i += 1) {
+        if (await portIsFree(port)) break;
+        await napMs(100);
+    }
+    const r = await customSpawnProxy(prov);
+    const label = prov.name || prov.id;
+    if (!r.ok) logLine(`boot: конвертер активного провайдера ${label} :${port} НЕ поднялся: ${r.error || '?'}`);
+    else if (Number(r.port) !== port) logLine(`boot: конвертер ${label} уехал :${port} → :${r.port} — порт не освободился, Claude Code смотрит в пустоту`);
+    else logLine(`boot: пересоздал конвертер активного провайдера ${label} :${port} (pid ${r.pid || '?'})`);
     return r;
 }
 
@@ -8791,7 +9012,7 @@ async function tbBalance(target, opts = {}) {
     });
 }
 
-function tbApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
+function tbApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'tabitoken' }); }
 
 async function handleTbSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
@@ -9402,7 +9623,7 @@ async function xpBalance(target, opts = {}) {
     });
 }
 
-function xpApplyBalance(target, bal) { return newapiApplyBalance(target, bal); }
+function xpApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'xpeach' }); }
 
 async function handleXpSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
@@ -10238,8 +10459,9 @@ const server = http.createServer((req, res) => {
                 const r = pullSafe({ stashBlocking: wantStash });
                 if (!r.ok && r.blocking.length) {
                     return jsonRes(res, 409, {
-                        error: 'Обновлению мешают локальные правки в коде:\n  ' + r.blocking.join('\n  '),
+                        error: 'Обновлению мешает локальное состояние рабочей копии:\n  ' + r.blocking.join('\n  '),
                         dirty: r.blocking,
+                        untracked: r.untracked || [],   // из них — новые файлы, не в git
                         can_stash: true,   // UI покажет «спрятать в stash и обновить»
                     });
                 }
@@ -10247,7 +10469,16 @@ const server = http.createServer((req, res) => {
                     if (r.stashed && r.stashed.length) {
                         logLine(`dashboard git pull: pull не прошёл, но правки уже в stash (${r.stashed.join(', ')}) — вернуть: git stash pop`);
                     }
-                    return jsonRes(res, 500, { error: r.error || 'git pull failed', stashed: r.stashed || [] });
+                    if (r.preserved && r.preserved.length) {
+                        logLine(`dashboard git pull: pull не прошёл, локальные настройки возвращены на место (${r.preserved.join(', ')})`);
+                    }
+                    // Разошедшиеся истории кнопкой не лечатся (reset --hard выбросил бы
+                    // собственные коммиты) — отдаём готовый текст «что случилось и чем
+                    // разрулить» и НЕ предлагаем автопочинку.
+                    return jsonRes(res, 500, {
+                        error: r.error || 'git pull failed',
+                        stashed: r.stashed || [], diverged: !!r.diverged,
+                    });
                 }
                 if (r.preserved.length) logLine(`dashboard git pull: локальные настройки возвращены (${r.preserved.join(', ')})`);
                 if (r.stashed && r.stashed.length) logLine(`dashboard git pull: правки кода спрятаны в git stash (${r.stashed.join(', ')}) — вернуть: git stash pop`);
@@ -10687,6 +10918,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-mark')   return handleArCheckinMark(req, res);
 
+    // История финансов для вкладки «Финансы»: расход и наливка по бакетам.
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/finance/history')) return handleFinanceHistory(req, res);
+
     // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157) — реальное время без рестарта.
     if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/keepalive/config') return keepaliveAr.config(req, res);
@@ -10696,6 +10930,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/xp/keepalive/state')  return keepaliveXp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/keepalive/config') return keepaliveXp.config(req, res);
+    // История времени ответа (график) — startsWith: у запроса есть ?window=<сек>.
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/keepalive/latency'))    return keepaliveAr.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/keepalive/latency')) return keepaliveXp.latency(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
@@ -11588,9 +11827,11 @@ server.listen(LISTEN_PORT, () => {
     grokLauncherStart().catch(e => console.log('  Grok launcher start error:', e.message));
 
     // AgentRouter-прокси (:20132) и keepalive-прокси (:20133) для claude-*/gpt-* через agentrouter.
-    arProxySpawn().then(r => {
+    // Конвертер тоже пересоздаём (force): он такой же detached-ребёнок прошлого запуска и
+    // после обновления сидел бы на старом коде — bat его гасит, а START.bat и mac-путь нет.
+    arProxySpawn({ force: true }).then(r => {
         if (!r.ok) console.log('  ar proxy spawn error:', r.error || '?');
-        else if (!r.already) console.log('  ar proxy spawned');
+        else console.log('  ar proxy recreated');
     }).catch(e => console.log('  ar proxy spawn error:', e.message));
     // Keepalive AR :20133, затем keepalive АКТИВНОГО бэкенда — строго последовательно.
     // Параллельно нельзя: если активен сам AgentRouter, обе ветки увидели бы мёртвый
@@ -11605,22 +11846,31 @@ server.listen(LISTEN_PORT, () => {
     if (process.env.SWITCHER_NO_BOOT_KEEPALIVE === '1') {
         console.log('  keepalive boot: пропущен (SWITCHER_NO_BOOT_KEEPALIVE=1)');
     } else {
-        keepaliveBring(AR_KEEPALIVE_PORT).then(r => {
+        // force — рестарт дашборда = рестарт стека. Дети прошлого запуска живут своей
+        // жизнью (detached) и на старом коде; без force они читались как «уже поднято»
+        // и человек добивал их руками.
+        keepaliveBring(AR_KEEPALIVE_PORT, { force: true }).then(r => {
             if (!r.ok) console.log('  keepalive proxy spawn error:', r.error || '?');
-            else if (!r.already) console.log('  keepalive proxy spawned');
+            else console.log('  keepalive proxy recreated');
             return bootSpawnActiveBackend();
         }).then(r => {
             if (r && !r.ok) console.log('  active backend keepalive spawn error:', r.error || '?');
-            else if (r && !r.already) console.log('  active backend keepalive spawned');
+            else if (r) console.log('  active backend keepalive recreated');
+            return bootSweepStaleChildren();
+        }).then(swept => {
+            if (swept && swept.length) console.log(`  stale children swept: ${swept.join(', ')}`);
+            return bootRecreateActiveCustomProxy();
+        }).then(r => {
+            if (r) console.log(r.ok ? `  active custom converter recreated on :${r.port}` : `  active custom converter error: ${r.error || '?'}`);
         }).catch(e => console.log('  keepalive boot error:', e.message));
     }
 
     // Front-door (:20100) — единый вход Claude Code. Поднимаем всегда: с включённым
     // тумблером это единственный бэкенд CC, а с выключенным просто ждёт наготове,
     // чтобы включение не требовало рестарта дашборда.
-    keepaliveBring(frontdoorPort()).then(r => {
+    keepaliveBring(frontdoorPort(), { force: true }).then(r => {
         if (!r.ok) console.log('  front-door spawn error:', r.error || '?');
-        else if (!r.already) console.log(`  front-door spawned on :${frontdoorPort()}`);
+        else console.log(`  front-door recreated on :${frontdoorPort()}`);
         if (frontdoorConfig().enabled) console.log(`  front-door: ВКЛЮЧЁН, активный бэкенд ${currentTarget()}`);
     }).catch(e => console.log('  front-door spawn error:', e.message));
 });

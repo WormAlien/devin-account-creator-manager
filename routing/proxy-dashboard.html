@@ -1570,6 +1570,7 @@
             </label>
             <div class="flex items-center gap-2">
               <button onclick="arApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="arResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
               <span id="ar-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
@@ -1687,6 +1688,7 @@
             </label>
             <div class="flex items-center gap-2">
               <button onclick="goApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="goResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
               <span id="go-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
@@ -1826,6 +1828,7 @@
             </label>
             <div class="flex items-center gap-2">
               <button onclick="tbApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="tbResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
               <span id="tb-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
@@ -1968,6 +1971,7 @@
             </label>
             <div class="flex items-center gap-2">
               <button onclick="xpApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="xpResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
               <span id="xp-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
@@ -5867,12 +5871,23 @@ function setStat(id, val, kind) {
 
 // Одна формулировка конфига на три места (загрузка карточки, применение, тост):
 // раньше строка была скопирована трижды и новая ручка попала бы не во все.
-function keepaliveSummary(cfg) {
+// Дефолты прокси отдаёт сам (/__state → defaults) — дашборд их НЕ хранит, иначе это
+// была бы пятая копия обкатанных цифр, которая once again разъедется с кодом.
+const KEEPALIVE_DEFAULTS = {};   // pfx → defaults, как их назвал прокси
+
+function keepaliveSummary(cfg, defaults) {
   const sec = ms => (ms ? (ms / 1000) + 's' : 'выкл');
   const hedge = cfg.hedgeMs
     ? `${sec(cfg.hedgeMs)}${typeof cfg.maxHedges === 'undefined' ? '' : ` (дублей ≤${cfg.maxHedges})`}`
     : 'выкл';
-  return `хедж ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
+  let s = `хедж ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
+  // Расхождение с поставочными дефолтами видно сразу: у юзера мог остаться
+  // keepalive-config-<PORT>.json с прошлых экспериментов, а он приоритетнее кода.
+  if (defaults) {
+    const drift = Object.keys(defaults).filter(k => Number(cfg[k]) !== Number(defaults[k]));
+    s += drift.length ? ` · ⚠ не дефолт (${drift.join(', ')})` : ' · дефолт';
+  }
+  return s;
 }
 
 async function loadKeepaliveCard(pfx, api, statsOnly) {
@@ -5882,6 +5897,19 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
     const res = await fetch(api + '/state');
     const data = await res.json();
     if (!data || typeof data.cfg === 'undefined') throw new Error('keepalive не отвечает');
+    // Прокси сам сообщает свои поставочные дефолты — держим их для плейсхолдеров и
+    // кнопки «Рекомендованные». Старый прокси (до 21.08) поля не отдаёт: тогда
+    // плейсхолдеры из разметки остаются как есть, а кнопка честно скажет, что нечем.
+    if (data.defaults) {
+      KEEPALIVE_DEFAULTS[pfx] = data.defaults;
+      const ph = [
+        [pfx + '-keepalive-hedge', Math.round((data.defaults.hedgeMs || 0) / 1000)],
+        [pfx + '-keepalive-attempts', data.defaults.maxAttempts],
+        [pfx + '-keepalive-maxhedges', data.defaults.maxHedges],
+        [pfx + '-keepalive-precommit', Math.round((data.defaults.preCommitMs || 0) / 1000)],
+      ];
+      for (const [id, v] of ph) { const el = $(id); if (el && typeof v !== 'undefined') el.placeholder = String(v); }
+    }
     if (!statsOnly) {
       const hedge = $(pfx + '-keepalive-hedge');
       const attempts = $(pfx + '-keepalive-attempts');
@@ -5892,7 +5920,7 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
       if (maxhedges && typeof data.cfg.maxHedges !== 'undefined') maxhedges.value = String(data.cfg.maxHedges);
       if (precommit) precommit.value = String(Math.round((data.cfg.preCommitMs || 0) / 1000));
     }
-    if (st) st.textContent = keepaliveSummary(data.cfg);
+    if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx]);
     const s = data.stats || {};
     for (const [id, key] of [[pfx + '-stat-requests','requests'],[pfx + '-stat-remaps','remaps'],[pfx + '-stat-keepalives','keepalives'],[pfx + '-stat-hedges','hedges'],[pfx + '-stat-retries','retries'],[pfx + '-stat-errors','errors']]) {
       setStat(id, s[key], key);
@@ -5918,10 +5946,25 @@ async function applyKeepaliveCard(pfx, api) {
     });
     const data = await res.json();
     if (data && typeof data.cfg !== 'undefined') {
-      if (st) st.textContent = keepaliveSummary(data.cfg);
-      toast(`✓ keepalive применён: ${keepaliveSummary(data.cfg)}`, 'success', 3500);
+      if (data.defaults) KEEPALIVE_DEFAULTS[pfx] = data.defaults;
+      if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx]);
+      toast(`✓ keepalive применён: ${keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx])}`, 'success', 3500);
     } else throw new Error((data && data.error) || 'keepalive не отвечает');
   } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; toast('keepalive config: ' + e.message, 'error'); }
+}
+
+// Кнопка «Рекомендованные»: ставит обкатанные цифры прокси, а не свои. Нужна потому,
+// что keepalive-config-<PORT>.json приоритетнее кода — юзер, который однажды покрутил
+// ручки, останется на них навсегда и обновление прокси ему ничего не привезёт.
+async function resetKeepaliveCard(pfx, api) {
+  const d = KEEPALIVE_DEFAULTS[pfx];
+  if (!d) { toast('keepalive ещё не отвечал — нажми ↻ и попробуй снова', 'error'); return; }
+  const set = (id, v) => { const el = $(id); if (el && typeof v !== 'undefined') el.value = String(v); };
+  set(pfx + '-keepalive-hedge', Math.round((d.hedgeMs || 0) / 1000));
+  set(pfx + '-keepalive-attempts', d.maxAttempts);
+  set(pfx + '-keepalive-maxhedges', d.maxHedges);
+  set(pfx + '-keepalive-precommit', Math.round((d.preCommitMs || 0) / 1000));
+  await applyKeepaliveCard(pfx, api);
 }
 
 const arLoadKeepalive   = () => loadKeepaliveCard('ar', '/__switch/api/keepalive');
@@ -5932,6 +5975,10 @@ const tbLoadKeepalive   = () => loadKeepaliveCard('tb', '/__switch/api/tb/keepal
 const tbApplyKeepalive  = () => applyKeepaliveCard('tb', '/__switch/api/tb/keepalive');
 const xpLoadKeepalive   = () => loadKeepaliveCard('xp', '/__switch/api/xp/keepalive');
 const xpApplyKeepalive  = () => applyKeepaliveCard('xp', '/__switch/api/xp/keepalive');
+const arResetKeepalive  = () => resetKeepaliveCard('ar', '/__switch/api/keepalive');
+const goResetKeepalive  = () => resetKeepaliveCard('go', '/__switch/api/go/keepalive');
+const tbResetKeepalive  = () => resetKeepaliveCard('tb', '/__switch/api/tb/keepalive');
+const xpResetKeepalive  = () => resetKeepaliveCard('xp', '/__switch/api/xp/keepalive');
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.

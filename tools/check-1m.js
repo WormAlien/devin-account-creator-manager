@@ -166,6 +166,58 @@ if (src) {
 }
 
 
+// ---- 6. Резолв пустой модели (delete settings.model → 200k) -----------------
+// Инвариант: writeSettings() не пропускает наружу settings.json без model, если
+// модель вообще можно резолвить. 14 activate-обработчиков сносят её защитным
+// сбросом (см. комментарий у resolveCcModel), и перекрывает их только чокпоинт.
+if (src) {
+    const ws = src.match(/function writeSettings\(obj\) \{[\s\S]*?\n\}/);
+    if (ws && !/resolveCcModel\(obj\)/.test(ws[0])) {
+        fails.push('writeSettings(): нет resolveCcModel() — снесённая activate-обработчиком model уедет в файл пустой = 200k');
+    }
+    const i = src.indexOf('const CC_MODEL_PREFIX');
+    const e = src.indexOf('\n}', src.indexOf('function resolveCcModel'));
+    const defM = src.match(/const CC_DEFAULT_MODEL = '[^']+';/);
+    if (i < 0 || e < 0 || !defM) fails.push('transparent-proxy.js: блок CC_MODEL_PREFIX/resolveCcModel() не найден');
+    else {
+        // Фальшивый HOME (файлов моделей в нём нет), но НАСТОЯЩИЕ тир-карты из routing/:
+        // так тест ловит и «карту почистили на вкладке, а пин остался».
+        const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'check1m-'));
+        fs.mkdirSync(path.join(fakeHome, '.claude'));
+        const ROUTING = path.join(__dirname, '..', 'routing');
+        const DEF = defM[0].match(/'([^']+)'/)[1];
+        let resolve;
+        const build = (backendName) => new Function(
+            'fs', 'path', 'os', '__dirname', 'isFrontdoorBase', 'readActiveBackend', 'backendFromSettingsObj', 'logLine',
+            `${defM[0]}\n${src.slice(i, e + 2)}; return resolveCcModel;`,
+        )(
+            fs, path, { homedir: () => fakeHome }, ROUTING,
+            () => false, () => null, () => backendName, () => {},
+        );
+        try {
+            // Модель, выбранную человеком на вкладке, уважаем как есть.
+            fs.writeFileSync(path.join(fakeHome, '.claude', 'gorouter-active-model.txt'), 'claude-opus-5\n');
+            const cases = [
+                ['gorouter', 'claude-opus-5', 'файл провайдера'],
+                ['tabi', DEF, 'файла нет, тир-карта умеет opus → пин'],
+                ['xpeach', '', 'тир-карта пустая → вслепую не пиним'],
+                ['official', DEF, 'официальный Claude'],
+                ['unknown', '', 'провайдер не опознан'],
+            ];
+            for (const [backendName, want, why] of cases) {
+                resolve = build(backendName);
+                const got = resolve({ env: { ANTHROPIC_BASE_URL: 'https://example.invalid' } });
+                if (got !== want) fails.push(`resolveCcModel(${backendName}) = ${JSON.stringify(got)}, ожидалось ${JSON.stringify(want)} (${why})`);
+            }
+            ok.push(`resolveCcModel: ${cases.length} кейсов`);
+        } catch (e2) {
+            fails.push(`resolveCcModel не исполняется: ${e2.message}`);
+        } finally {
+            try { fs.rmSync(fakeHome, { recursive: true, force: true }); } catch {}
+        }
+    }
+}
+
 for (const s of ok) console.log(`  ok   ${s}`);
 for (const s of warns) console.log(`  warn ${s}`);
 for (const s of fails) console.log(`  FAIL ${s}`);

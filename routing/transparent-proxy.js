@@ -221,6 +221,74 @@ function normalizeCcModel(m) {
     return /^claude-(opus|sonnet)-/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
 }
 
+// ---- Отсутствие модели = 200k, поэтому пустой `model` тоже чиним здесь -------
+// `delete settings.model` в activate-обработчиках (их 14) задумывался как
+// защитный сброс: имя модели от прошлого шлюза может отсутствовать в каталоге
+// нового → 400/404 на каждом запросе. Пусть окно меньше, зато работает.
+//
+// Защита оказалась ложной по двум причинам, обе замерены 2026-08-21:
+//   1. Живую сессию она не спасает физически. Модель резолвится ОДИН раз на
+//      старте (`--model` → settings.json → дефолт), в транскрипте её нет.
+//      Поэтому прыжок ar → go по 🔑 внутри сессии бесшовен — CC едет на том,
+//      что разрешил при запуске. Сброс срабатывает только при следующем старте.
+//   2. Опасность снята ниже по стеку. keepalive-proxy срезает суффикс окна и
+//      переписывает модель по тир-карте `<prefix>-modelmap.json`
+//      (`tierTargetFor`, TIER_RE ловит `opus` в `claude-opus-5`), а в ответе
+//      возвращает запрошенное имя (MODEL_ECHO). Точное имя в settings.model в
+//      каталоге шлюза быть НЕ обязано: у agentrouter `claude-opus-5` в каталоге
+//      нет, а `ar-active-model.txt` = `claude-opus-5` и работает.
+// Итого сброс — чистый минус: не защищает то, что и без него живёт, и роняет
+// окно при следующем запуске. Комментарии «вслепую пинить нельзя» писались до
+// появления тир-карт.
+//
+// Порядок резолва (от точного к общему):
+//   1. `~/.claude/<prefix>-active-model.txt` — модель, выбранную человеком на
+//      вкладке этого шлюза; она заведомо из его каталога.
+//   2. CC_DEFAULT_MODEL — только если тир-карта шлюза умеет `opus`, т.е. имя
+//      будет переписано на внутреннее. Карта читается с диска, а не хардкодится:
+//      её правят на вкладке провайдера, и пин обязан ходить за ней.
+//   3. Иначе оставляем пусто и пишем в лог. Вслепую пинить нельзя: без карты
+//      имя уедет на шлюз как есть (xpeach-modelmap.json пустой) → 503.
+const CC_MODEL_PREFIX = {
+    agentrouter: 'ar',
+    gorouter: 'gorouter',
+    tabi: 'tabi',
+    xpeach: 'xpeach',
+    ourtoken: 'ot',
+    cun: 'cun',
+    conduit: 'cdt',
+};
+function ccModelMapHasOpus(prefix) {
+    if (!prefix) return false;
+    try {
+        const raw = fs.readFileSync(path.join(__dirname, `${prefix}-modelmap.json`), 'utf8');
+        const mm = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return !!String(mm.opus || '').trim();
+    } catch { return false; }
+}
+function resolveCcModel(obj) {
+    let backend;
+    // Второй writeSettings подряд: base уже наш, провайдера знает active-backend.json.
+    if (isFrontdoorBase((obj.env && obj.env.ANTHROPIC_BASE_URL) || '')) {
+        const st = readActiveBackend();
+        backend = (st && st.backend) || null;
+    } else {
+        backend = backendFromSettingsObj(obj);
+    }
+    // Официальный Claude: апстрим анпропиковский, claude-opus-5 там есть по определению.
+    if (backend === 'official') return CC_DEFAULT_MODEL;
+    const prefix = CC_MODEL_PREFIX[backend] || null;
+    if (prefix) {
+        try {
+            const m = fs.readFileSync(path.join(os.homedir(), '.claude', `${prefix}-active-model.txt`), 'utf8').trim();
+            if (m) return m;
+        } catch { /* файла нет — идём дальше */ }
+    }
+    if (ccModelMapHasOpus(prefix)) return CC_DEFAULT_MODEL;
+    logLine(`model: ${backend || '?'} — модели нет ни в <prefix>-active-model.txt, ни тир-карты opus → settings.model оставлен пустым, Claude Code поедет на 200k`);
+    return '';
+}
+
 // ---- Окно контекста для моделей, которых Claude Code не знает ---------------
 // У gpt-моделей суффикс [1m] не работает (в CC это перечисление, и на gpt-путь он
 // вообще не доедет: keepalive уводит isGptLike() на конвертер ДО среза суффикса).
@@ -258,6 +326,11 @@ function writeSettings(obj) {
     // он валит сборку, если кто-то опять пишет файл напрямую). ANTHROPIC_MODEL правим
     // тоже: cun/conduit пишут его рядом с top-level model, расхождение = 200k.
     if (typeof obj.model === 'string') obj.model = normalizeCcModel(obj.model);
+    // Пустая/снесённая модель — тоже даунгрейд до 200k, лечим тут же (см. resolveCcModel).
+    if (typeof obj.model !== 'string' || !obj.model.trim()) {
+        const fb = normalizeCcModel(resolveCcModel(obj));
+        if (fb) obj.model = fb; else delete obj.model;
+    }
     if (obj.env && typeof obj.env.ANTHROPIC_MODEL === 'string') {
         obj.env.ANTHROPIC_MODEL = normalizeCcModel(obj.env.ANTHROPIC_MODEL);
     }
@@ -10231,10 +10304,24 @@ const server = http.createServer((req, res) => {
                 const src = path.join(SETTINGS_BACKUP_DIR, base);
                 if (!fs.existsSync(src)) return jsonRes(res, 404, { error: 'backup not found' });
                 const raw = fs.readFileSync(src, 'utf8');
-                try { JSON.parse(raw.replace(/^﻿/, '')); } catch { return jsonRes(res, 400, { error: 'backup не валидный JSON' }); }
+                let parsed;
+                try { parsed = JSON.parse(raw.replace(/^﻿/, '')); } catch { return jsonRes(res, 400, { error: 'backup не валидный JSON' }); }
                 const prev = makeSettingsBackup('settings-prerestore');
-                fs.writeFileSync(SETTINGS_FILE, raw, 'utf8');
-                logLine(`settings restored from ${base} (prev → ${prev})`);
+                // Восстановление — единственная запись мимо чокпоинта: пишем сырой текст,
+                // чтобы вернуть ровно то, что было. Но окно контекста в «то, что было»
+                // входить не должно: бэкап мог быть снят в момент, когда activate снёс
+                // model, и восстановление молча вернуло бы 200k. Поэтому если чокпоинт
+                // тронул бы модель — идём через него, иначе оставляем текст как есть.
+                const fixed = Object.assign({}, parsed);
+                fixed.model = normalizeCcModel(typeof fixed.model === 'string' && fixed.model.trim()
+                    ? fixed.model : resolveCcModel(fixed));
+                if (fixed.model && fixed.model !== parsed.model) {
+                    writeSettings(fixed);
+                    logLine(`settings restored from ${base} + модель дотянута до ${fixed.model} (prev → ${prev})`);
+                } else {
+                    fs.writeFileSync(SETTINGS_FILE, raw, 'utf8');
+                    logLine(`settings restored from ${base} (prev → ${prev})`);
+                }
                 return jsonRes(res, 200, { ok: true, restored: base, previous: prev });
             } catch (e) { return jsonRes(res, 500, { error: e.message }); }
         })();

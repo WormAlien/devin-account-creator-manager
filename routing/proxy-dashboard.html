@@ -13244,13 +13244,33 @@ async function checkDashboardUpdate() {
   }
 }
 
-async function pullDashboardUpdate() {
+async function pullDashboardUpdate(stash) {
   const badge = $('dash-update-badge'), btn = $('dash-update-btn');
-  if (!confirm('git pull --ff-only свежий код дашборда?\n\nПосле — перезапусти прокси (restart-dashboard.bat).')) return;
+  if (!stash && !confirm('git pull --ff-only свежий код дашборда?\n\nПосле — перезапусти прокси (restart-dashboard.bat).')) return;
   btn.disabled = true; badge.textContent = 'обновляю…'; badge.className = 'shrink-0 text-xs text-faint';
   try {
-    const res = await fetch('/__switch/api/dashboard/update-pull', { method: 'POST' });
+    const res = await fetch('/__switch/api/dashboard/update-pull', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stash: !!stash }),
+    });
     const d = await res.json();
+    // 409 + can_stash: мешают правки в коде. Раньше здесь всё заканчивалось сырой
+    // ошибкой git, и человек оставался со старым дашбордом (а починка этой самой
+    // ошибки едет только через обновление). Теперь предлагаем спрятать в stash —
+    // это обратимо, и мы говорим, чем вернуть.
+    if (res.status === 409 && d.can_stash) {
+      const files = (d.dirty || []).join('\n  ');
+      if (confirm('Обновлению мешают твои правки в коде:\n\n  ' + files
+          + '\n\nСпрятать их в git stash и обновиться?\n'
+          + 'Правки не пропадут — лягут в стэш. Вернуть:  git stash pop\n'
+          + '(если апстрим менял тот же файл, git попросит разрешить конфликт)')) {
+        return pullDashboardUpdate(true);
+      }
+      badge.textContent = '✗ мешают локальные правки';
+      badge.className = 'shrink-0 text-xs text-amber';
+      btn.disabled = false;
+      return;
+    }
     if (!res.ok) throw new Error(d.error || 'fail');
     badge.textContent = '✓ обновлено — нужен перезапуск';
     badge.className = 'shrink-0 text-xs text-emerald';
@@ -13258,6 +13278,10 @@ async function pullDashboardUpdate() {
     // откатил, подтянул код и вписал назад. Говорим об этом, чтобы не выглядело магией.
     if (Array.isArray(d.preserved) && d.preserved.length) {
       toast('Твои настройки сохранены: ' + d.preserved.map(f => f.split('/').pop()).join(', '), 'success', 6000);
+    }
+    if (Array.isArray(d.stashed) && d.stashed.length) {
+      toast('Правки кода спрятаны в git stash: ' + d.stashed.map(f => f.split('/').pop()).join(', ')
+        + ' · вернуть: git stash pop', 'info', 12000);
     }
     openDashRestartModal();
   } catch (e) {

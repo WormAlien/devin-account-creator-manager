@@ -63,22 +63,65 @@ function git(...args) {
     return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim();
 }
 
-// Возвращает { ok, output, preserved, blocking, error }.
+// Спрятать ИМЕННО мешающие файлы, а не всё дерево: `git stash push -- <пути>`.
+// Без ограничения путями stash уносит и то, что pull'у не мешало (в т.ч. файлы
+// состояния, которые мы бережём отдельно) — человек потом ищет, куда делись
+// настройки. Возвращает { ok, ref, error }: ref нужен, чтобы сказать «лежит вот тут».
+function stashPaths(paths, label) {
+    try {
+        git('stash', 'push', '-m', label, '--', ...paths);
+        // Ссылка на только что созданную запись. Пусто = git решил, что прятать
+        // нечего (например файл вернулся к HEAD между проверкой и стэшем).
+        let ref = '';
+        try { ref = git('stash', 'list', '--format=%gd %gs', '-1'); } catch { }
+        return { ok: true, ref };
+    } catch (e) {
+        return { ok: false, ref: '', error: (e.stderr || e.stdout || e.message || '').toString().trim() };
+    }
+}
+
+// Возвращает { ok, output, preserved, blocking, stashed, stashRef, error }.
 // blocking непустой → pull не делали, мешают правки кода.
-function pullSafe() {
+//
+// opts.stashBlocking = true → правки кода не блокируют обновление: они уходят в
+// `git stash` (по путям), pull проходит, в ответе стоят `stashed` и `stashRef`.
+// Это то, что раньше умел ТОЛЬКО update.sh, из-за чего кнопка в дашборде
+// оказывалась глупее батника и запирала человека (21.08, разбор в
+// docs/ + Debug Reference). Теперь умеет один код на всех вызывающих.
+//
+// Почему stash, а НЕ `reset --hard`: stash обратим и мы про него говорим, а reset
+// выбрасывает и незапушенные коммиты. Автоматически такое делать нельзя — остаётся
+// последним средством в CLI (update.sh), из UI не предлагается.
+function pullSafe(opts = {}) {
+    const stashBlocking = !!opts.stashBlocking;
     const pull = () => git('pull', '--ff-only', '--no-edit');
     try {
-        return { ok: true, output: pull(), preserved: [], blocking: [] };
+        return { ok: true, output: pull(), preserved: [], blocking: [], stashed: [] };
     } catch (e1) {
         const msg = (e1.stderr || e1.stdout || e1.message || '').toString();
         if (!/would be overwritten|local changes/i.test(msg)) {
-            return { ok: false, output: '', preserved: [], blocking: [], error: msg.trim() };
+            return { ok: false, output: '', preserved: [], blocking: [], stashed: [], error: msg.trim() };
         }
         const dirty = git('diff', '--name-only', 'HEAD').split('\n').map(s => s.trim()).filter(Boolean);
         const resettable = dirty.filter(isStateFile);
         const blocking = dirty.filter(f => !isStateFile(f));
-        if (blocking.length) return { ok: false, output: '', preserved: [], blocking, error: msg.trim() };
-        if (!resettable.length) return { ok: false, output: '', preserved: [], blocking: [], error: msg.trim() };
+
+        let stashed = [], stashRef = '';
+        if (blocking.length) {
+            if (!stashBlocking) {
+                return { ok: false, output: '', preserved: [], blocking, stashed: [], error: msg.trim() };
+            }
+            const label = `git-pull-safe auto-stash ${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}`;
+            const st = stashPaths(blocking, label);
+            if (!st.ok) {
+                return { ok: false, output: '', preserved: [], blocking, stashed: [], error: st.error || 'git stash не удался' };
+            }
+            stashed = blocking.slice();
+            stashRef = st.ref;
+        }
+        if (!resettable.length && !stashed.length) {
+            return { ok: false, output: '', preserved: [], blocking: [], stashed: [], error: msg.trim() };
+        }
 
         const backup = new Map();
         for (const f of resettable) {
@@ -86,33 +129,48 @@ function pullSafe() {
         }
         let output;
         try {
-            git('checkout', '--', ...resettable);
+            if (resettable.length) git('checkout', '--', ...resettable);
             output = pull();
         } catch (e2) {
             const m2 = (e2.stderr || e2.stdout || e2.message || '').toString().trim();
-            return { ok: false, output: '', preserved: [], blocking: [], error: m2 };
+            // Правки уже в стэше — обязаны сказать, где они, иначе выглядит как потеря.
+            return { ok: false, output: '', preserved: [], blocking: [], stashed, stashRef, error: m2 };
         }
         const preserved = [];
         for (const [f, content] of backup) {
             try { fs.writeFileSync(path.join(REPO, f), content, 'utf8'); preserved.push(f); } catch { }
         }
-        return { ok: true, output, preserved, blocking: [] };
+        return { ok: true, output, preserved, blocking: [], stashed, stashRef };
     }
 }
 
 module.exports = { REPO, LOCAL_STATE_FILES, isStateFile, pullSafe };
 
 if (require.main === module) {
-    const r = pullSafe();
+    // --stash: правки кода не блокируют, а уходят в git stash. Тот же режим, что
+    // жмёт кнопка в дашборде после подтверждения — одна реализация на всех.
+    const wantStash = process.argv.includes('--stash');
+    const r = pullSafe({ stashBlocking: wantStash });
     if (r.ok) {
         if (r.output) console.log(r.output);
         if (r.preserved.length) console.log(`локальные настройки сохранены: ${r.preserved.join(', ')}`);
+        if (r.stashed.length) {
+            console.log(`правки кода спрятаны в git stash: ${r.stashed.join(', ')}`);
+            if (r.stashRef) console.log(`  ${r.stashRef}`);
+            console.log('  вернуть: git stash pop  (если апстрим менял тот же файл — будет конфликт, разрешить руками)');
+        }
         process.exit(0);
+    }
+    if (r.stashed && r.stashed.length) {
+        console.error(`ВНИМАНИЕ: правки уже в git stash (${r.stashed.join(', ')}), но pull не прошёл.`);
+        if (r.stashRef) console.error(`  ${r.stashRef}`);
+        console.error('  вернуть: git stash pop');
     }
     if (r.blocking.length) {
         console.error('Обновлению мешают локальные правки в коде:');
         for (const f of r.blocking) console.error(`  ${f}`);
-        console.error('Откати их (git checkout -- <файл>) или сохрани (git stash) и повтори.');
+        console.error('Откати их (git checkout -- <файл>), сохрани (git stash)');
+        console.error('или запусти с --stash, чтобы спрятать их автоматически.');
         process.exit(3);
     }
     console.error(r.error || 'git pull не удался');

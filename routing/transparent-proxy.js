@@ -11421,7 +11421,7 @@ process.on('unhandledRejection', (err) => {
 });
 
 server.listen(LISTEN_PORT, () => {
-    console.log(`Switcher panel on http://localhost:${LISTEN_PORT}/`);
+    console.log(`ABUSE HUB on http://localhost:${LISTEN_PORT}/__switch`);
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);

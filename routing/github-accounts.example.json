@@ -8,6 +8,7 @@
     "recoveryCodes": ["00000-00000", "11111-11111"],
     "nickname": "example_nick",
     "status": "live",
+    "regAge": "year",
     "note": "2FA-секрет — base32, из него TOTP считается в браузере",
     "added": "2026-08-13"
   }

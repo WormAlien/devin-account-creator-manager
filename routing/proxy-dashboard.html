@@ -355,6 +355,19 @@ function randomThemeId() {
         <span id="side-mode" class="hidden shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium"></span>
       </div>
       <div id="side-url" class="text-[10px] text-faint font-mono mt-1 truncate">…</div>
+      <!-- Баланс активного аккаунта + запас пула. Видно только у провайдеров с
+           правдивым денежным балансом (AR/GoRouter/Tabi/XPeach), у остальных
+           блок остаётся hidden. Заполняет paintSideBalance(). -->
+      <div id="side-balance" class="hidden mt-1.5 pt-1.5 border-t border-line-soft/60">
+        <div class="flex items-baseline gap-1.5 text-[11px] font-mono">
+          <span id="side-bal-num" class="font-semibold">—</span>
+          <span id="side-bal-fresh" class="shrink-0"></span>
+          <span id="side-bal-pool" class="ml-auto text-[10px] text-dim truncate"></span>
+        </div>
+        <div class="mt-1 h-1.5 rounded-full bg-bg/60 border border-line-soft/60 overflow-hidden">
+          <div id="side-bal-bar" class="h-full rounded-full transition-[width] duration-500" style="width:0%"></div>
+        </div>
+      </div>
       <div id="side-auto" class="hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-1.5 text-[10px]">
         <span class="text-azure">💸</span>
         <span class="text-dim">авто-подмена $0</span>
@@ -1771,6 +1784,13 @@ function randomThemeId() {
               <span id="ar-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
+          <div class="mt-3 flex gap-3 items-start" id="ar-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="ar-lat-chart" class="w-full"></div>
+              <div id="ar-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="ar-lat-windows"></div>
+          </div>
           <div id="ar-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
             <span>запросов: <b id="ar-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="ar-stat-remaps" class="text-ink">—</b></span>
@@ -1778,6 +1798,7 @@ function randomThemeId() {
             <span>хеджей: <b id="ar-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="ar-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="ar-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="ar-stat-last" class="text-ink">—</b></span>
           </div>
         </div>
 
@@ -1889,6 +1910,13 @@ function randomThemeId() {
               <span id="go-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
+          <div class="mt-3 flex gap-3 items-start" id="go-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="go-lat-chart" class="w-full"></div>
+              <div id="go-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="go-lat-windows"></div>
+          </div>
           <div id="go-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
             <span>запросов: <b id="go-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="go-stat-remaps" class="text-ink">—</b></span>
@@ -1896,6 +1924,7 @@ function randomThemeId() {
             <span>хеджей: <b id="go-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="go-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="go-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="go-stat-last" class="text-ink">—</b></span>
           </div>
         </div>
 
@@ -2029,6 +2058,13 @@ function randomThemeId() {
               <span id="tb-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
+          <div class="mt-3 flex gap-3 items-start" id="tb-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="tb-lat-chart" class="w-full"></div>
+              <div id="tb-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="tb-lat-windows"></div>
+          </div>
           <div id="tb-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
             <span>запросов: <b id="tb-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="tb-stat-remaps" class="text-ink">—</b></span>
@@ -2036,6 +2072,7 @@ function randomThemeId() {
             <span>хеджей: <b id="tb-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="tb-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="tb-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="tb-stat-last" class="text-ink">—</b></span>
           </div>
         </div>
 
@@ -2172,6 +2209,13 @@ function randomThemeId() {
               <span id="xp-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
           </div>
+          <div class="mt-3 flex gap-3 items-start" id="xp-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="xp-lat-chart" class="w-full"></div>
+              <div id="xp-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="xp-lat-windows"></div>
+          </div>
           <div id="xp-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
             <span>запросов: <b id="xp-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="xp-stat-remaps" class="text-ink">—</b></span>
@@ -2179,6 +2223,7 @@ function randomThemeId() {
             <span>хеджей: <b id="xp-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="xp-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="xp-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="xp-stat-last" class="text-ink">—</b></span>
           </div>
         </div>
 
@@ -2241,6 +2286,7 @@ function randomThemeId() {
             <p class="text-sm text-muted mt-1">купленные аккаунты · форматы <code class="font-mono text-emerald text-xs">Логин:Пароль:2FA:Recovery:Ник</code> / <code class="font-mono text-emerald text-xs">Логин:Пароль:2FA:дата:токен:email</code> · 2FA-код считается локально (TOTP) · <code class="font-mono text-azure text-xs">routing/github-accounts.json</code></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
+            <span id="gh-age-filter" class="flex gap-1"></span>
             <input id="gh-search" oninput="ghRenderGrid()" placeholder="🔍 поиск по нику/логину…" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             <button onclick="ghRefreshCodes()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить коды</button>
             <button onclick="ghShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
@@ -2267,6 +2313,14 @@ function randomThemeId() {
               <span class="text-[10px] text-faint">2FA-секрет</span>
               <input id="gh-add-secret" placeholder="ABCDEFGH…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
             </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">возраст от рега</span>
+              <select id="gh-add-age" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-emerald/60">
+                <option value="">не указан</option>
+                <option value="month">📅 1 месяц</option>
+                <option value="year">📅 1 год</option>
+              </select>
+            </label>
             <label class="flex flex-col gap-1 flex-1">
               <span class="text-[10px] text-faint">recovery codes (через запятую)</span>
               <input id="gh-add-rec" placeholder="aaaaa-bbbbb, ccccc-ddddd…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
@@ -2279,8 +2333,13 @@ function randomThemeId() {
         <!-- Import form (скрыта по умолчанию) -->
         <div id="gh-import-form" class="hidden rounded-xl bg-surface border border-sky/40 p-4">
           <div class="flex flex-col gap-2">
-            <span class="text-[10px] text-faint">вставь строки, по одной на аккаунт. Форматы:<br><code class="font-mono">Логин:Пароль:2FA-секрет:Recovery codes:Ник</code><br><code class="font-mono">Username:Password:2FA-секрет:DateSignup:ApiKey:Email</code></span>
+            <span class="text-[10px] text-faint">вставь строки, по одной на аккаунт. Форматы:<br><code class="font-mono">Логин:Пароль:2FA-секрет:Recovery codes:Ник</code><br><code class="font-mono">Username:Password:2FA-секрет:DateSignup:ApiKey:Email</code><br><code class="font-mono">Логин:Пароль:2FA-секрет</code> (без recovery-кодов)</span>
             <textarea id="gh-import-text" rows="6" placeholder="baker51607553@gmail.com:пароль:X6JAFHSZN7UYPC7X:26a52-37ce0,170cb-98522:cyclopswormnight" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60"></textarea>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-[10px] text-faint">📅 возраст от рега (на все строки):</span>
+              <span id="gh-import-age" class="flex gap-1"></span>
+              <span class="text-[10px] text-faint">месячные AgentRouter не пропускает — метка предупредит при заселении</span>
+            </div>
             <div id="gh-import-preview" class="text-xs text-faint"></div>
             <div class="flex gap-2">
               <button onclick="ghImport()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Импортировать</button>
@@ -3189,6 +3248,10 @@ function paintStatus() {
   try { fmPaintProvider(); } catch (e) { console.warn('fmPaintProvider', e); }
   try { paintClaudeTab(); } catch (e) { console.warn('paintClaudeTab', e); }
   try { paintConnectButtons(); } catch (e) { console.warn('paintConnectButtons', e); }
+  // Баланс в бейдже ACTIVE: провайдер мог только что смениться — цифра и пул должны
+  // переехать на новый шлюз сразу, не ожидая своего 10-секундного тика.
+  try { paintSideBalance(); } catch (e) { console.warn('paintSideBalance', e); }
+  try { sideBalanceTick(); } catch (e) { console.warn('sideBalanceTick', e); }
 }
 
 // ═══════════════════ HEALTH ═════════════════════════════════
@@ -5927,6 +5990,7 @@ async function loadArSessionsLight() {
     renderAr();
     renderArGauge();
     arRenderCheckinCard();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
   } catch (e) { /* молча — следующий тик повторит */ }
 }
 
@@ -6086,12 +6150,15 @@ async function arSaveModelMap() {
 const STAT_COLORS = {
   requests: '#38bdf8', remaps: '#a78bfa', keepalives: '#2dd4bf',
   hedges: '#fbbf24', retries: '#fbbf24', errors: '#f43f5e',
+  latency: '#38bdf8',
 };
 // Обновляет число с pop-анимацией ТОЛЬКО если значение изменилось.
 function setStat(id, val, kind) {
+  setStatText(id, Number(val ?? 0).toLocaleString('ru-RU'), kind);
+}
+function setStatText(id, txt, kind) {
   const el = $(id);
   if (!el) return;
-  const txt = Number(val ?? 0).toLocaleString('ru-RU');
   if (el.textContent === txt) return;
   el.textContent = txt;
   el.classList.remove('stat-pop', 'stat-pop-sk');
@@ -6194,7 +6261,16 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
     for (const [id, key] of [[pfx + '-stat-requests','requests'],[pfx + '-stat-remaps','remaps'],[pfx + '-stat-keepalives','keepalives'],[pfx + '-stat-hedges','hedges'],[pfx + '-stat-retries','retries'],[pfx + '-stat-errors','errors']]) {
       setStat(id, s[key], key);
     }
+    // Время последнего ответа + как давно он был: цифра без «когда» врёт — 3 секунды
+    // могли быть вчера, а сейчас шлюз уже лежит.
+    const L = data.latency || {};
+    setStatText(pfx + '-stat-last', L.last_at ? `${latFmt(L.last_ms)} · ${latAgo(L.last_at)}` : '—', 'latency');
   } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; }
+  // График — ВНЕ try со /state и после него. У неактивного провайдера keepalive не
+  // запущен, /state отдаёт 502, и раньше исключение уносило с собой и загрузку графика:
+  // на вкладке GoRouter он не появлялся вообще. А история за сутки лежит в файле и
+  // отдаётся дашбордом с диска — показывать её можно без живого прокси.
+  if (!statsOnly) { latRenderWindows(pfx); latLoadChart(pfx); }
 }
 
 async function applyKeepaliveCard(pfx, api, retried) {
@@ -6257,18 +6333,273 @@ async function resetKeepaliveCard(pfx, api) {
   await applyKeepaliveCard(pfx, api);
 }
 
-const arLoadKeepalive   = () => loadKeepaliveCard('ar', '/__switch/api/keepalive');
-const arApplyKeepalive  = () => applyKeepaliveCard('ar', '/__switch/api/keepalive');
-const goLoadKeepalive   = () => loadKeepaliveCard('go', '/__switch/api/go/keepalive');
-const goApplyKeepalive  = () => applyKeepaliveCard('go', '/__switch/api/go/keepalive');
-const tbLoadKeepalive   = () => loadKeepaliveCard('tb', '/__switch/api/tb/keepalive');
-const tbApplyKeepalive  = () => applyKeepaliveCard('tb', '/__switch/api/tb/keepalive');
-const xpLoadKeepalive   = () => loadKeepaliveCard('xp', '/__switch/api/xp/keepalive');
-const xpApplyKeepalive  = () => applyKeepaliveCard('xp', '/__switch/api/xp/keepalive');
-const arResetKeepalive  = () => resetKeepaliveCard('ar', '/__switch/api/keepalive');
-const goResetKeepalive  = () => resetKeepaliveCard('go', '/__switch/api/go/keepalive');
-const tbResetKeepalive  = () => resetKeepaliveCard('tb', '/__switch/api/tb/keepalive');
-const xpResetKeepalive  = () => resetKeepaliveCard('xp', '/__switch/api/xp/keepalive');
+// ── График времени ответа (TTFB) по минутам ──────────────────────────────────
+// Прокси отдаёт агрегат по минутам (GET .../keepalive/latency?window=<сек>), панель
+// только рисует. Никаких библиотек: inline-SVG дешевле и не тянет CDN.
+// Окно по умолчанию — сутки: смысл графика в том, чтобы видеть, КОГДА шлюз тупит
+// (утро/ночь/после чекина), а на пятиминутке этого не разглядеть.
+const KEEPALIVE_API = {
+  ar: '/__switch/api/keepalive', tb: '/__switch/api/tb/keepalive',
+  go: '/__switch/api/go/keepalive', xp: '/__switch/api/xp/keepalive',
+};
+const LAT_WINDOWS = [[15, '15м'], [60, '1ч'], [360, '6ч'], [1440, '24ч']];
+const LAT_MIN = {};    // pfx → выбранное окно в минутах (помним в localStorage)
+const LAT_DATA = {};   // pfx → последний ответ /latency (для перерисовки на resize)
+const LAT_GEOM = {};   // pfx → геометрия последней отрисовки (для курсора-полоски)
+const LAT_LEGEND = {}; // pfx → подпись без наведения (курсор её временно подменяет)
+const LAT_HOVER = {};  // pfx → мышь над графиком (тогда поллинг не перерисовывает)
+
+function latWindow(pfx) {
+  if (!LAT_MIN[pfx]) {
+    const saved = Number(localStorage.getItem('kp_lat_win_' + pfx));
+    LAT_MIN[pfx] = LAT_WINDOWS.some(([m]) => m === saved) ? saved : 1440;
+  }
+  return LAT_MIN[pfx];
+}
+const latFmt = (ms) => (ms >= 10000 ? Math.round(ms / 1000) + 's' : ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'мс');
+const latAgo = (ts) => {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return s + 'с назад';
+  if (s < 3600) return Math.round(s / 60) + 'м назад';
+  return Math.round(s / 3600) + 'ч назад';
+};
+const latClock = (ts) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+// На суточном окне «18:34→18:34» читается как ошибка — дата обязательна, иначе не
+// видно, что левый край это вчера.
+const latStamp = (ts, winMin) => (winMin >= 360
+  ? new Date(ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  : latClock(ts));
+
+function latSetWindow(pfx, m) {
+  LAT_MIN[pfx] = m;
+  try { localStorage.setItem('kp_lat_win_' + pfx, String(m)); } catch (e) {}
+  latRenderWindows(pfx);
+  latLoadChart(pfx);
+}
+function latRenderWindows(pfx) {
+  const host = $(pfx + '-lat-windows');
+  if (!host) return;
+  const cur = latWindow(pfx);
+  host.innerHTML = LAT_WINDOWS.map(([m, label]) => `<button onclick="latSetWindow('${pfx}',${m})"
+    title="показать время ответа за последние ${label}"
+    class="text-[10px] px-2 py-1 rounded border font-mono transition ${m === cur
+      ? 'bg-sky/15 border-sky/50 text-sky'
+      : 'bg-surface border-line-soft text-faint hover:border-line'}">${label}</button>`).join('');
+}
+
+// Рисуем в РЕАЛЬНЫХ пикселях контейнера (viewBox совпадает с размером), а не тянем
+// условный viewBox через preserveAspectRatio="none": иначе линию и точки растягивает
+// по горизонтали и кривая врёт о крутизне.
+function latChartSvg(pfx, d, width) {
+  const W = Math.max(200, Math.round(width));
+  const H = 92, PAD = 8, PADL = 30;
+  const pts = (d && d.points) || [];
+  if (!pts.length) {
+    // Разные причины пустоты — разные слова. «Ответов не было» при не запущенном прокси
+    // звучит как поломка, хотя это норма: keepalive поднимается под активный провайдер.
+    const why = d && d.proxy_state === 'down'
+      ? `keepalive :${d.port || '?'} не запущен (провайдер не активен) — точки появятся, когда он станет активным`
+      : 'за это окно ответов не было';
+    return `<div class="h-[92px] flex items-center justify-center text-[10px] text-faint border border-dashed border-line-soft rounded-lg text-center px-3">
+      ${esc(why)}</div>`;
+  }
+  const t1 = d.now, t0 = d.now - d.window_sec * 1000;
+  const peak = pts.reduce((a, p) => Math.max(a, p.max), 0);
+  const yMax = Math.max(2000, Math.ceil(peak * 1.1 / 1000) * 1000);
+  const X = (t) => PADL + Math.max(0, Math.min(1, (t - t0) / (t1 - t0))) * (W - PADL - PAD);
+  const Y = (v) => H - PAD - Math.max(0, Math.min(1, v / yMax)) * (H - 2 * PAD);
+  // Разрыв больше 3.5 бакетов = в эти минуты запросов не было. Рвём линию, а не
+  // соединяем: соединённая прямая через час тишины выглядит как реальный замер.
+  const gap = (d.bucket_ms || 60000) * 3.5;
+  const path = (key) => {
+    let out = '', prev = null;
+    for (const p of pts) {
+      out += (prev === null || p.t - prev > gap ? 'M' : 'L') + X(p.t).toFixed(1) + ' ' + Y(p[key]).toFixed(1) + ' ';
+      prev = p.t;
+    }
+    return out.trim();
+  };
+  const grid = [yMax, yMax / 2].map((v) => `
+    <line x1="${PADL}" y1="${Y(v).toFixed(1)}" x2="${W - PAD}" y2="${Y(v).toFixed(1)}" stroke="currentColor" stroke-opacity="0.18" stroke-width="1"/>
+    <text x="${PADL - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" font-size="8" fill="currentColor" fill-opacity="0.5">${latFmt(v)}</text>`).join('');
+  // Точки ставим только когда их немного — на суточном окне 1440 кружков превращают
+  // линию в кашу и раздувают DOM. Нативных <title> на точках нет намеренно: цифры
+  // показывает курсор-полоска, а всплывающая подсказка перекрывала бы её.
+  const dots = pts.length <= 120 ? pts.map((p) => `<circle cx="${X(p.t).toFixed(1)}" cy="${Y(p.avg).toFixed(1)}" r="2"
+    fill="currentColor" class="text-sky"/>`).join('') : '';
+  // Геометрия нужна ещё и курсору-полоске: он ищет ближайшую точку по времени, а для
+  // этого обязан считать x/y ровно тем же преобразованием, что и линия.
+  LAT_GEOM[pfx] = { W, H, PAD, PADL, t0, t1, X, Y, pts };
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" class="text-dim overflow-visible" role="img"
+    aria-label="время ответа за последние ${d.window_sec / 60} минут">
+    ${grid}
+    <path d="${path('max')}" fill="none" stroke="currentColor" stroke-opacity="0.35" stroke-width="1" stroke-linejoin="round"/>
+    <path d="${path('avg')}" fill="none" stroke="#38bdf8" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <g class="text-sky">${dots}</g>
+    <g class="lat-cursor" style="display:none">
+      <line class="lat-cursor-line" y1="${PAD}" y2="${H - PAD}" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="1" shape-rendering="crispEdges"/>
+      <circle class="lat-cursor-dot" r="3" fill="#38bdf8" stroke="var(--color-bg)" stroke-width="1.2"/>
+      <circle class="lat-cursor-max" r="2" fill="currentColor" fill-opacity="0.7"/>
+    </g>
+    <rect x="${PADL}" y="0" width="${W - PADL - PAD}" height="${H}" fill="transparent" style="cursor:crosshair"/>
+  </svg>`;
+}
+
+function latDraw(pfx) {
+  const box = $(pfx + '-lat-chart');
+  const leg = $(pfx + '-lat-legend');
+  if (!box) return;
+  const d = LAT_DATA[pfx];
+  if (!d) { box.innerHTML = `<div class="h-[92px] flex items-center justify-center text-[10px] text-faint">загрузка…</div>`; return; }
+  // Под мышкой не перерисовываем: поллинг раз в ~18с иначе выбрасывал бы полоску и
+  // цифры прямо из-под курсора. Свежие данные уже в LAT_DATA — попадут в следующую
+  // отрисовку, как только мышь уйдёт.
+  if (LAT_HOVER[pfx]) return;
+  box.innerHTML = latChartSvg(pfx, d, box.clientWidth || 600);
+  if (leg) {
+    const winMin = Math.round(d.window_sec / 60);
+    const win = LAT_WINDOWS.find(([m]) => m === winMin);
+    const label = win ? win[1] : winMin + 'м';
+    LAT_LEGEND[pfx] = d.total
+      ? `окно ${label} · ${latStamp(d.now - d.window_sec * 1000, winMin)} → ${latStamp(d.now, winMin)} · ответов ${d.total} · среднее ${latFmt(d.avg_ms)} · макс ${latFmt(d.max_ms)} · линия = среднее по минуте, бледная = худший ответ минуты`
+      : `окно ${label} · ответов не было`;
+    // Данные с диска — это норма для неактивного провайдера, но человек должен знать,
+    // что новых точек не будет, пока его keepalive не поднят: иначе «график замёрз».
+    if (d.source === 'file') {
+      LAT_LEGEND[pfx] += d.proxy_state === 'stale'
+        ? ` · ⚠ история с диска: прокси :${d.port} на старом коде`
+        : ` · ⚠ история с диска: keepalive :${d.port} не запущен, новых точек не будет`;
+    }
+    leg.textContent = LAT_LEGEND[pfx];
+  }
+  latBindCursor(pfx);
+}
+
+// Курсор-полоска: вертикальная линия по мыши + маркеры на среднем и максимуме минуты,
+// цифры уходят в подпись под графиком. Наводить на 2-пиксельные точки мышью нельзя —
+// нативные <title> для этого не годятся, нужен именно захват по всей высоте.
+// Слушатели вешаются заново на каждую перерисовку: innerHTML их всё равно выбрасывает.
+function latBindCursor(pfx) {
+  const box = $(pfx + '-lat-chart');
+  const svg = box && box.querySelector('svg');
+  const g = svg && svg.querySelector('.lat-cursor');
+  const geom = LAT_GEOM[pfx];
+  if (!svg || !g || !geom || !geom.pts.length) return;
+  const line = g.querySelector('.lat-cursor-line');
+  const dot = g.querySelector('.lat-cursor-dot');
+  const dotMax = g.querySelector('.lat-cursor-max');
+  const leg = $(pfx + '-lat-legend');
+  const winMin = Math.round((LAT_DATA[pfx] || {}).window_sec / 60) || 0;
+
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect();
+    if (!r.width) return;
+    // Курсор в координатах viewBox: он равен пиксельной ширине контейнера НА МОМЕНТ
+    // отрисовки, а окно с тех пор могли потянуть — поэтому масштабируем, а не берём
+    // clientX как есть.
+    const xv = (ev.clientX - r.left) * (geom.W / r.width);
+    const span = geom.W - geom.PADL - geom.PAD;
+    const frac = Math.max(0, Math.min(1, (xv - geom.PADL) / span));
+    const t = geom.t0 + frac * (geom.t1 - geom.t0);
+    let best = geom.pts[0], bestD = Infinity;
+    for (const p of geom.pts) {
+      const dt = Math.abs(p.t - t);
+      if (dt < bestD) { bestD = dt; best = p; }
+    }
+    const x = geom.X(best.t);
+    line.setAttribute('x1', x.toFixed(1));
+    line.setAttribute('x2', x.toFixed(1));
+    dot.setAttribute('cx', x.toFixed(1));
+    dot.setAttribute('cy', geom.Y(best.avg).toFixed(1));
+    dotMax.setAttribute('cx', x.toFixed(1));
+    dotMax.setAttribute('cy', geom.Y(best.max).toFixed(1));
+    g.style.display = '';
+    LAT_HOVER[pfx] = true;
+    if (leg) leg.textContent = `${latStamp(best.t, winMin)} · ответов ${best.n} · среднее ${latFmt(best.avg)} · быстрейший ${latFmt(best.min)} · худший ${latFmt(best.max)}`;
+  };
+  const leave = () => {
+    g.style.display = 'none';
+    LAT_HOVER[pfx] = false;
+    if (leg && LAT_LEGEND[pfx]) leg.textContent = LAT_LEGEND[pfx];
+  };
+  svg.addEventListener('mousemove', move);
+  svg.addEventListener('mouseleave', leave);
+  // Палец на тач-экране: то же поведение, без «залипшей» полоски после отпускания.
+  svg.addEventListener('touchmove', (ev) => { const t = ev.touches[0]; if (t) move(t); }, { passive: true });
+  svg.addEventListener('touchend', leave);
+}
+
+async function latLoadChart(pfx) {
+  const api = KEEPALIVE_API[pfx];
+  if (!api) return;
+  const box = $(pfx + '-lat-chart');
+  try {
+    const res = await fetch(api + '/latency?window=' + latWindow(pfx) * 60);
+    const d = await res.json();
+    // Прокси жив, но поднят из кода без /__latency (график добавлен 21.08). Рестарт
+    // дашборда его не пересоздаёт — спавн не трогает занятый порт с живым /status,
+    // поэтому единственный выход человеку тут и предлагаем кнопкой.
+    if (d && d.stale) {
+      LAT_DATA[pfx] = null;
+      if (box) box.innerHTML = `<div class="h-[92px] flex flex-col items-center justify-center gap-2 text-[10px] text-faint border border-dashed border-amber/40 rounded-lg text-center px-3">
+        <span>${esc(d.error || 'прокси на старом коде')}</span>
+        <button onclick="latRestartStale('${pfx}',${Number(d.port) || 0})"
+          class="text-[10px] px-3 py-1 rounded border bg-amber/10 border-amber/50 text-amber hover:bg-amber/20">🔄 перезапустить :${Number(d.port) || '?'}</button></div>`;
+      const leg = $(pfx + '-lat-legend');
+      if (leg) leg.textContent = 'график появится сразу после перезапуска — счётчики и ручки работают как раньше';
+      return;
+    }
+    if (!d || !Array.isArray(d.points)) throw new Error((d && d.error) || 'нет данных');
+    LAT_DATA[pfx] = d;
+    latDraw(pfx);
+    // Цифра последнего ответа приходит и с диска — значит, она есть даже когда keepalive
+    // провайдера не запущен и /state отвечает 502. Иначе на неактивной вкладке было бы
+    // «—» при живой истории.
+    if (d.last_at) setStatText(pfx + '-stat-last', `${latFmt(d.last_ms)} · ${latAgo(d.last_at)}`, 'latency');
+  } catch (e) {
+    if (box && !LAT_DATA[pfx]) box.innerHTML = `<div class="h-[92px] flex items-center justify-center text-[10px] text-faint">график недоступен: ${esc(e.message)}</div>`;
+  }
+}
+
+// Тем же путём, что кнопка «🔄 перезапустить» в Здоровье: kill держателя порта → спавн →
+// ожидание живого /status. Рвёт запросы, которые прямо сейчас идут через этот прокси, —
+// поэтому это кнопка, а не автоматика.
+async function latRestartStale(pfx, port) {
+  if (!port) { toast('не знаю порт этого keepalive — нажми ↻ на карточке', 'error'); return; }
+  const box = $(pfx + '-lat-chart');
+  if (box) box.innerHTML = `<div class="h-[92px] flex items-center justify-center text-[10px] text-faint">перезапускаю :${port}…</div>`;
+  try {
+    await keepaliveLift(port);
+    toast(`✓ keepalive :${port} перезапущен — история пишется с этой минуты`, 'success', 4000);
+    await loadKeepaliveCard(pfx, KEEPALIVE_API[pfx]);
+  } catch (e) {
+    toast('перезапуск :' + port + ': ' + e.message, 'error');
+    if (box) box.innerHTML = `<div class="h-[92px] flex items-center justify-center text-[10px] text-faint">не удалось перезапустить: ${esc(e.message)}</div>`;
+  }
+}
+
+// Перерисовка на resize: viewBox прибит к пикселям контейнера, иначе после
+// разворота окна кривая осталась бы нарисованной под прежнюю ширину.
+let latResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (latResizeTimer) clearTimeout(latResizeTimer);
+  latResizeTimer = setTimeout(() => { for (const pfx of Object.keys(LAT_DATA)) if (LAT_DATA[pfx]) latDraw(pfx); }, 200);
+});
+
+// Пути к keepalive-мосту живут в KEEPALIVE_API — обёртки берут их оттуда, чтобы
+// путь провайдера был записан один раз (график читает тот же base).
+const arLoadKeepalive   = () => loadKeepaliveCard('ar', KEEPALIVE_API.ar);
+const arApplyKeepalive  = () => applyKeepaliveCard('ar', KEEPALIVE_API.ar);
+const goLoadKeepalive   = () => loadKeepaliveCard('go', KEEPALIVE_API.go);
+const goApplyKeepalive  = () => applyKeepaliveCard('go', KEEPALIVE_API.go);
+const tbLoadKeepalive   = () => loadKeepaliveCard('tb', KEEPALIVE_API.tb);
+const tbApplyKeepalive  = () => applyKeepaliveCard('tb', KEEPALIVE_API.tb);
+const xpLoadKeepalive   = () => loadKeepaliveCard('xp', KEEPALIVE_API.xp);
+const xpApplyKeepalive  = () => applyKeepaliveCard('xp', KEEPALIVE_API.xp);
+const arResetKeepalive  = () => resetKeepaliveCard('ar', KEEPALIVE_API.ar);
+const goResetKeepalive  = () => resetKeepaliveCard('go', KEEPALIVE_API.go);
+const tbResetKeepalive  = () => resetKeepaliveCard('tb', KEEPALIVE_API.tb);
+const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.
@@ -6289,7 +6620,12 @@ async function pollKeepaliveStats() {
   try {
     await loadKeepaliveCard(cfg[0], cfg[1], true);
   } catch (e) { /* молча: следующий тик попробует снова */ }
+  // График живой, но не на каждом тике: бакет минутный, чаще раза в ~18с смысла нет.
+  // Отдельно от статов намеренно: у неактивного провайдера /state отвечает 502, и общий
+  // try унёс бы с собой обновление графика, который читается с диска и работает всегда.
+  if (++latPollTick % 6 === 0) latLoadChart(cfg[0]);
 }
+let latPollTick = 0;
 
 function renderAr() {
   const all = state.agentrouter.slice().sort((a, b) => {
@@ -6931,7 +7267,10 @@ function newapiSeedRender(data) {
   // Годные — сверху. Засвеченные тоже выбираемы (с подтверждением), поэтому в «годные»
   // они не входят, но и в мёртвый низ списка не падают: между ними и запретами разница.
   const hardBlock = a => a.inPool || a.status === 'dead' || !a.hasSession || a.allSourcesBusy;
-  const ok = a => !hardBlock(a) && !a.usedHere;
+  // Месячный аккаунт — не запрет, а предупреждение: AgentRouter такие не пропускает,
+  // но заселить его в другой шлюз никто не мешает. Поэтому средний тир, как «засвечен».
+  const young = a => a.regAge === 'month';
+  const ok = a => !hardBlock(a) && !a.usedHere && !young(a);
   const rank = a => ok(a) ? 0 : hardBlock(a) ? 2 : 1;
   const list = [...(data.accounts || [])].sort((a, b) => rank(a) - rank(b));
   for (const a of list) {
@@ -6948,6 +7287,13 @@ function newapiSeedRender(data) {
       : a.sessionFrom ? `${a.sessionFrom}${a.sessionAgeDays !== null ? ` · ${a.sessionAgeDays} дн.` : ''}`
       : '—';
     const idJ = JSON.stringify(a.id).replace(/'/g, '&#39;');
+    // Метка возраста: месячный — заметная жёлтая, годовой — спокойная, без метки — молчим.
+    const ageTip = 'аккаунту месяц от регистрации — AgentRouter такие не пропускает';
+    const ageMark = young(a)
+      ? `<span class="text-[10px] text-amber shrink-0" title="${esc(ageTip)}">⚠ 1 мес</span>`
+      : a.regAge === 'year'
+        ? `<span class="text-[10px] text-teal shrink-0" title="возраст от регистрации — год">📅 1 год</span>`
+        : '';
     if (why) {
       rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated/40 border-line-soft opacity-50 cursor-not-allowed" title="${esc(why)}">
            <span class="text-xs text-faint truncate max-w-[18ch]">🐙 ${esc(a.nickname)}</span>
@@ -6965,6 +7311,7 @@ function newapiSeedRender(data) {
            <span class="flex items-center gap-1.5 min-w-0">
              <span class="text-xs text-ink truncate max-w-[14ch]">🐙 ${esc(a.nickname)}</span>
              <span class="text-[10px] text-amber shrink-0" title="${esc(tip)}">⚠ засвечен</span>
+             ${ageMark}
            </span>
            <span class="flex items-center gap-1 shrink-0">
              <button onclick='newapiAddGithub(${idJ}, { force: true, mode: "console" })'
@@ -6977,9 +7324,12 @@ function newapiSeedRender(data) {
          </div>`);
       continue;
     }
-    rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated border-line-soft hover:border-azure/60 cursor-pointer transition"
-             onclick='newapiAddGithub(${idJ})'>
-           <span class="text-xs text-ink truncate max-w-[18ch]">🐙 ${esc(a.nickname)}</span>
+    rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated ${young(a) ? 'border-amber/40' : 'border-line-soft'} hover:border-azure/60 cursor-pointer transition"
+             onclick='newapiAddGithub(${idJ})'${young(a) ? ` title="${esc(ageTip)}"` : ''}>
+           <span class="flex items-center gap-1.5 min-w-0">
+             <span class="text-xs text-ink truncate max-w-[14ch]">🐙 ${esc(a.nickname)}</span>
+             ${ageMark}
+           </span>
            <span class="flex items-center gap-1.5 shrink-0">
              <span class="font-mono text-[10px] text-faint truncate max-w-[20ch]" title="источник сессии">${esc(src)}</span>
              <span class="text-[10px] px-1 py-px rounded border ${st.badge}">${st.label}</span>
@@ -6988,11 +7338,13 @@ function newapiSeedRender(data) {
   }
   const free = list.filter(ok).length;
   const warned = list.filter(a => !hardBlock(a) && a.usedHere).length;
+  const monthly = list.filter(a => !hardBlock(a) && !a.usedHere && young(a)).length;
   $('gh-seed-hint').textContent = (free
     ? `свободно ${free} из ${list.length}${warned ? ` · +${warned} засвеченных (можно взять с выбором вход/рег)` : ''} · пароль и 2FA не понадобятся`
-    : warned
-      ? `свободных нет, но ${warned} засвеченных доступны: выбери «вход», если аккаунт у провайдера есть, иначе «рег»`
+    : warned || monthly
+      ? `чистых нет${warned ? `, но ${warned} засвеченных доступны: «вход», если аккаунт у провайдера есть, иначе «рег»` : ''}`
       : `свободных нет: все ${list.length} либо уже в пуле, либо без живой сессии`)
+    + (monthly ? ` · ${monthly} месячных (AgentRouter такие не пропускает)` : '')
     + (data.building ? ' · индекс обновляется в фоне, список обновится сам' : '');
   $('gh-seed-list').innerHTML = rows.join('') || '<div class="text-xs text-faint px-1 py-3">хранилище GitHub пусто — добавь аккаунты во вкладке GitHub</div>';
 }
@@ -7226,6 +7578,7 @@ async function loadGoSessionsLight() {
     if ($('nav-count-gorouter')) $('nav-count-gorouter').textContent = state.gorouter.length;
     renderGo();
     renderGoGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
   } catch (e) { /* молча — следующий тик повторит */ }
 }
 
@@ -7748,6 +8101,7 @@ async function loadTbSessionsLight() {
     if ($('nav-count-tabi')) $('nav-count-tabi').textContent = state.tabi.length;
     renderTb();
     renderTbGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
   } catch (e) { /* молча — следующий тик повторит */ }
 }
 
@@ -8271,6 +8625,7 @@ async function loadXpSessionsLight() {
     if ($('nav-count-xpeach')) $('nav-count-xpeach').textContent = state.xpeach.length;
     renderXp();
     renderXpGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
   } catch (e) { /* молча — следующий тик повторит */ }
 }
 
@@ -8945,11 +9300,12 @@ async function loadGhKeys() {
 
 function ghShowAdd(show = true) {
   $('gh-add-form').classList.toggle('hidden', !show);
-  if (show) { $('gh-add-login').value=''; $('gh-add-nick').value=''; $('gh-add-pass').value=''; $('gh-add-secret').value=''; $('gh-add-rec').value=''; $('gh-add-login').focus(); }
+  if (show) { $('gh-add-login').value=''; $('gh-add-nick').value=''; $('gh-add-pass').value=''; $('gh-add-secret').value=''; $('gh-add-rec').value=''; $('gh-add-age').value=''; $('gh-add-login').focus(); }
 }
 function ghShowImport(show = true) {
   $('gh-import-form').classList.toggle('hidden', !show);
-  if (show) $('gh-import-text').focus();
+  ghRenderImportAge();
+  if (show) { ghRenderImportPreview(); $('gh-import-text').focus(); }
 }
 
 async function ghAdd() {
@@ -8957,11 +9313,12 @@ async function ghAdd() {
   const password = $('gh-add-pass').value;
   const totpSecret = $('gh-add-secret').value.trim();
   const recoveryCodes = $('gh-add-rec').value;
+  const regAge = $('gh-add-age').value || null;
   if (!login) return toast('логин обязателен', 'warn');
   try {
     const res = await fetch('/__switch/api/gh/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ login, password, totpSecret, recoveryCodes, nickname: $('gh-add-nick').value.trim() }),
+      body: JSON.stringify({ login, password, totpSecret, recoveryCodes, regAge, nickname: $('gh-add-nick').value.trim() }),
     });
     const data = await res.json();
     if (data.ok) { toast('✓ аккаунт добавлен', 'success'); ghShowAdd(false); loadGhKeys(); }
@@ -9011,10 +9368,27 @@ function ghParseLine(line) {
     };
   }
 
+  // Формат 3 (3-4 поля): Логин:Пароль:2FA-секрет — recovery-кодов у таких покупок нет.
+  // Детект по хвосту: последнее поле — base32-секрет. Пароль с «:» переживает склейку.
+  if (parts.length >= 3 && parts.length <= 4 && isB32(parts[parts.length - 1])) {
+    const login = parts[0];
+    const secret = parts[parts.length - 1];
+    const password = parts.slice(1, -1).join(':');
+    if (!login) return { error: 'логин пустой' };
+    return {
+      login,
+      password,
+      totpSecret: secret.toUpperCase(),
+      recoveryCodes: [],
+      nickname: isEmail(login) ? login.split('@')[0] : login,
+      note: isEmail(login) ? `email: ${login}` : '',
+    };
+  }
+
   // Fallback: устойчиво к «:» внутри пароля — последние 3 справа фиксированы
   // (ник / recovery / секрет). Если вытащенный «секрет» не похож на base32,
   // а следующий слева — похож, значит перед ним были доп. поля (дата и т.п.).
-  if (parts.length < 5) return { error: `нужно минимум 5 полей, нашлось ${parts.length}` };
+  if (parts.length < 5) return { error: `нашлось ${parts.length} пол(я): нужно либо 3 (логин:пароль:2FA-секрет), либо 5+` };
   const nickname = parts.pop();
   const recoveryRaw = parts.pop();
   let secret = parts.pop();
@@ -9037,6 +9411,22 @@ function ghParseLine(line) {
 }
 
 let ghParsePreview = null;
+// Возраст, который будет проставлен ВСЕЙ вставленной пачке. Покупка обычно однородная:
+// либо все аккаунты месячные, либо все годовые — поэтому выбор один на импорт.
+let ghImportAge = null;
+function ghSetImportAge(v) { ghImportAge = v || null; ghRenderImportAge(); ghRenderImportPreview(); }
+function ghRenderImportAge() {
+  const el = $('gh-import-age');
+  if (!el) return;
+  const btn = (v, label) => {
+    const on = (ghImportAge || '') === v;
+    return `<button onclick="ghSetImportAge('${v}')" class="text-xs px-3 py-1.5 rounded-lg border transition ${
+      on ? 'bg-sky/15 border-sky/50 text-sky font-medium' : 'bg-surface border-line-soft text-muted hover:border-line'
+    }">${label}</button>`;
+  };
+  el.innerHTML = btn('month', '📅 1 месяц') + btn('year', '📅 1 год') + btn('', 'не указан');
+}
+
 function ghRenderImportPreview() {
   const text = $('gh-import-text').value;
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -9045,7 +9435,7 @@ function ghRenderImportPreview() {
   lines.forEach((ln, i) => {
     const r = ghParseLine(ln);
     if (r.error) errors.push(`строка ${i + 1}: ${r.error}`);
-    else parsed.push(r);
+    else parsed.push({ ...r, regAge: ghImportAge });
   });
   ghParsePreview = { parsed, errors };
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -9054,6 +9444,7 @@ function ghRenderImportPreview() {
       <td class="py-0.5 pr-2 font-mono text-ink">${esc(a.nickname)}</td>
       <td class="py-0.5 pr-2 font-mono text-faint">${esc(a.login)}</td>
       <td class="py-0.5 pr-2">${a.totpSecret ? '<span class="text-emerald">✓ 2FA</span>' : '<span class="text-faint">—</span>'}</td>
+      <td class="py-0.5 pr-2">${ghAgeBadge(a.regAge)}</td>
       <td class="py-0.5 pr-2 font-mono text-faint">${esc(a.note)}</td>
       <td class="py-0.5">${a.apiToken ? '<span class="text-emerald">✓ токен</span>' : a.recoveryCodes.length ? `<span class="text-emerald">✓ ${a.recoveryCodes.length}</span>` : '<span class="text-faint">—</span>'}</td>
     </tr>`
@@ -9061,7 +9452,7 @@ function ghRenderImportPreview() {
   $('gh-import-preview').innerHTML = errors.length
     ? `<div class="text-crimson">⚠ ${errors.length} из ${lines.length} строк с ошибкой: ${errors.join(' · ')}</div>`
     : (parsed.length
-      ? `<div class="text-emerald mb-1">✓ ${parsed.length} строк(и) готово к импорту</div><table class="w-full text-[11px]"><thead><tr class="text-faint text-left"><th class="py-0.5 pr-2 font-normal">ник</th><th class="py-0.5 pr-2 font-normal">логин</th><th class="py-0.5 pr-2 font-normal">2FA</th><th class="py-0.5 pr-2 font-normal">доп</th><th class="py-0.5 font-normal">токены</th></tr></thead><tbody>${rows}</tbody></table>`
+      ? `<div class="text-emerald mb-1">✓ ${parsed.length} строк(и) готово к импорту${ghImportAge ? ` · возраст ${ghAgeMeta(ghImportAge).short}` : ' · возраст не указан'}</div><table class="w-full text-[11px]"><thead><tr class="text-faint text-left"><th class="py-0.5 pr-2 font-normal">ник</th><th class="py-0.5 pr-2 font-normal">логин</th><th class="py-0.5 pr-2 font-normal">2FA</th><th class="py-0.5 pr-2 font-normal">возраст</th><th class="py-0.5 pr-2 font-normal">доп</th><th class="py-0.5 font-normal">токены</th></tr></thead><tbody>${rows}</tbody></table>`
       : `<span class="text-faint">вставь строки выше</span>`);
 }
 $('gh-import-text').addEventListener('input', ghRenderImportPreview);
@@ -9079,6 +9470,10 @@ async function ghImport() {
     if (data.ok) {
       toast(`✓ импортировано ${data.added}, пропущено ${data.skipped}, ошибок ${data.errors.length}`, 'success');
       ghShowImport(false);
+      $('gh-import-text').value = '';
+      ghParsePreview = null;
+      ghImportAge = null;
+      ghRenderImportAge();
       loadGhKeys();
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('Import: ' + e.message, 'error'); }
@@ -9109,11 +9504,35 @@ async function ghSetStatus(id, status) {
   } catch (e) { toast('Status: ' + e.message, 'error'); }
 }
 
+async function ghSetAge(id, regAge) {
+  try {
+    const res = await fetch('/__switch/api/gh/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, regAge: regAge || null }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast(`возраст → ${ghAgeMeta(regAge || 'none').short}`, 'info'); ghToggleMenu(id); loadGhKeys(); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Age: ' + e.message, 'error'); }
+}
+
 function ghToggleMenu(id) { state.ghMenuOpen = state.ghMenuOpen === id ? null : id; ghRenderGrid(); }
 
 function ghTogglePass(id) { state.ghReveal[id] = state.ghReveal[id] || {}; state.ghReveal[id].pass = !state.ghReveal[id].pass; ghRenderGrid(); }
 function ghToggleSecret(id) { state.ghReveal[id] = state.ghReveal[id] || {}; state.ghReveal[id].secret = !state.ghReveal[id].secret; ghRenderGrid(); }
-function ghToggleRec(id) { state.ghReveal[id] = state.ghReveal[id] || {}; state.ghReveal[id].rec = !state.ghReveal[id].rec; ghRenderGrid(); }
+function ghToggleRec(id) {
+  const acc = state.github.find(x => x.id === id);
+  state.ghReveal[id] = state.ghReveal[id] || {};
+  state.ghReveal[id].rec = acc ? !ghRecShown(acc) : !state.ghReveal[id].rec;
+  ghRenderGrid();
+}
+// Recovery-коды видны СРАЗУ, если у аккаунта нет 2FA-секрета: тогда вход возможен
+// только по ним, прятать их за ⋯-меню бессмысленно. Явный клик всё равно главнее.
+function ghRecShown(a) {
+  const rev = state.ghReveal[a.id] || {};
+  if (rev.rec !== undefined) return rev.rec;
+  return !a.totpSecret && (a.recoveryCodes || []).length > 0;
+}
 
 async function ghCopy(text, label) {
   try { await navigator.clipboard.writeText(text); toast('📋 ' + label, 'info'); }
@@ -9150,6 +9569,12 @@ function ghCopySecret(id) {
   const a = ghAccount(id);
   if (!a) return;
   ghCopy(a.totpSecret, '2FA-секрет скопирован');
+}
+
+function ghCopyRec(id) {
+  const a = ghAccount(id);
+  if (!a || !(a.recoveryCodes || []).length) return;
+  ghCopy(a.recoveryCodes.join('\n'), `recovery-коды скопированы (${a.recoveryCodes.length})`);
 }
 
 async function ghCopyCode(id) {
@@ -9252,10 +9677,43 @@ const GH_STATUS_META = {
   unknown:  { color: 'gray',    bar: 'bg-gray-500',   badge: 'bg-elevated   text-faint   border-line-soft',     label: 'unknown' },
 };
 
+// Возраст «от рега». Хранится в поле regAge ('month' | 'year' | null): у купленных
+// аккаунтов это единственный способ отличить месячные — AgentRouter такие не пропускает,
+// а `added` говорит лишь о дате попадания в дашборд.
+const GH_AGE_META = {
+  month: { label: '📅 1 мес',  badge: 'bg-amber/15 text-amber border-amber/40', short: 'месяц' },
+  year:  { label: '📅 1 год',  badge: 'bg-teal/15  text-teal  border-teal/40',  short: 'год' },
+  none:  { label: 'возраст ?', badge: 'bg-elevated text-faint border-line-soft', short: 'без метки' },
+};
+const ghAgeMeta = v => GH_AGE_META[v] || GH_AGE_META.none;
+function ghAgeBadge(v, extraCls = '') {
+  const m = ghAgeMeta(v);
+  return `<span class="inline-block text-[10px] px-1.5 py-0.5 rounded border ${m.badge} ${extraCls}">${m.label}</span>`;
+}
+
+// Фильтр по возрасту в шапке вкладки: '' = все, 'month' | 'year' | 'none'.
+let ghAgeFilter = '';
+function ghSetAgeFilter(v) { ghAgeFilter = v; ghRenderGrid(); }
+function ghRenderAgeFilter() {
+  const el = $('gh-age-filter');
+  if (!el) return;
+  const all = state.github || [];
+  const n = v => v === '' ? all.length : all.filter(a => (a.regAge || 'none') === v).length;
+  const chip = (v, label) => {
+    const on = ghAgeFilter === v;
+    return `<button onclick="ghSetAgeFilter('${v}')" class="text-xs px-2.5 py-2 rounded-lg border transition ${
+      on ? 'bg-teal/15 border-teal/50 text-teal' : 'bg-surface border-line-soft text-muted hover:border-line'
+    }">${label} <span class="opacity-60">${n(v)}</span></button>`;
+  };
+  el.innerHTML = chip('', 'все') + chip('month', '📅 месяц') + chip('year', '📅 год') + chip('none', 'без метки');
+}
+
 async function ghRenderGrid() {
   const query = ($('gh-search').value || '').trim().toLowerCase();
+  ghRenderAgeFilter();
   const rows = state.github.filter(a =>
-    !query || a.nickname.toLowerCase().includes(query) || a.login.toLowerCase().includes(query));
+    (!query || a.nickname.toLowerCase().includes(query) || a.login.toLowerCase().includes(query))
+    && (!ghAgeFilter || (a.regAge || 'none') === ghAgeFilter));
   const $grid = $('gh-grid');
   if (!state.github.length) {
     $grid.innerHTML = `<div class="col-span-full rounded-xl bg-surface border border-line-soft p-12 text-center text-faint text-xs">
@@ -9263,7 +9721,9 @@ async function ghRenderGrid() {
     return;
   }
   if (!rows.length) {
-    $grid.innerHTML = `<div class="col-span-full p-12 text-center text-faint text-xs">ничего не найдено по запросу «${esc(query)}»</div>`;
+    const what = [query ? `запросу «${esc(query)}»` : '', ghAgeFilter ? `фильтру «${ghAgeMeta(ghAgeFilter).short}»` : '']
+      .filter(Boolean).join(' + ');
+    $grid.innerHTML = `<div class="col-span-full p-12 text-center text-faint text-xs">ничего не найдено по ${what}</div>`;
     return;
   }
   const cards = await Promise.all(rows.map(async a => {
@@ -9287,10 +9747,15 @@ function ghCardHtml(a, code, secs) {
   const menuOpen = state.ghMenuOpen === a.id;
   const passShown = rev.pass ? esc(a.password) : '••••••••';
   const secretShown = rev.secret;
-  const recShown = rev.rec;
+  const recShown = ghRecShown(a);
   const tokenShown = rev.token;
   const cd = ghCountdownMeta(secs);
-  const codeText = code === null
+  // Секрета нет вообще — это не ошибка, а аккаунт без TOTP: вход по recovery-коду.
+  // «Ошибка 2FA» красным оставлена только для битого секрета, который не считается.
+  const noTotp = !a.totpSecret;
+  const codeText = noTotp
+    ? `<span class="text-faint text-xs">2FA не настроена — вход по recovery-коду</span>`
+    : code === null
     ? `<span class="text-crimson text-sm font-mono">Ошибка 2FA</span>`
     : `<span data-gh-code class="font-mono text-2xl tracking-[0.15em] select-all ${secs <= 3 ? 'text-crimson' : secs <= 10 ? 'text-amber' : 'text-emerald'}">${code.slice(0, 3)}&nbsp;${code.slice(3)}</span>`;
   const menu = menuOpen ? `<div class="absolute right-0 bottom-14 z-20 w-52 rounded-lg bg-elevated border border-line-soft p-1 shadow-xl text-xs">
@@ -9303,12 +9768,23 @@ function ghCardHtml(a, code, secs) {
     <button onclick="ghSetStatus('${idJ}', 'cooldown')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${a.status === 'cooldown' ? 'text-amber' : ''}">🟠 cooldown</button>
     <button onclick="ghSetStatus('${idJ}', 'dead')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${a.status === 'dead' ? 'text-crimson' : ''}">🔴 dead</button>
     <div class="my-1 border-t border-line-soft"></div>
+    <button onclick="ghSetAge('${idJ}', 'month')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${a.regAge === 'month' ? 'text-amber' : ''}">📅 от рега 1 месяц</button>
+    <button onclick="ghSetAge('${idJ}', 'year')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${a.regAge === 'year' ? 'text-teal' : ''}">📅 от рега 1 год</button>
+    <button onclick="ghSetAge('${idJ}', '')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface flex items-center gap-2 ${!a.regAge ? 'text-faint' : ''}">— возраст не указан</button>
+    <div class="my-1 border-t border-line-soft"></div>
     <button onclick="ghDelete('${idJ}')" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-surface text-crimson">🗑 Удалить</button>
   </div>` : '';
+  const recCodes = a.recoveryCodes || [];
   const recBlock = recShown
-    ? `<div class="mt-1 flex flex-col gap-0.5">${(a.recoveryCodes || []).length
-        ? a.recoveryCodes.map(r => `<span class="font-mono text-[11px] text-faint select-all">${esc(r)}</span>`).join('')
-        : `<span class="text-[11px] text-faint">recovery-кодов нет</span>`}</div>`
+    ? `<div class="mt-1 rounded-md bg-elevated/60 border ${noTotp && recCodes.length ? 'border-amber/40' : 'border-line-soft'} px-2.5 py-1.5">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-[10px] uppercase tracking-wide text-faint">Recovery-коды${recCodes.length ? ` · ${recCodes.length}` : ''}</span>
+          ${recCodes.length ? `<button onclick="ghCopyRec('${idJ}')" title="Скопировать все recovery-коды" class="shrink-0 w-7 h-7 rounded-md text-faint hover:text-ink hover:bg-surface flex items-center justify-center">📋</button>` : ''}
+        </div>
+        <div class="flex flex-col gap-0.5">${recCodes.length
+          ? recCodes.map(r => `<span class="font-mono text-[11px] ${noTotp ? 'text-ink' : 'text-faint'} select-all">${esc(r)}</span>`).join('')
+          : `<span class="text-[11px] text-faint">recovery-кодов нет — в строке покупки их не было</span>`}</div>
+      </div>`
     : '';
   const tokenBlock = (a.apiToken && tokenShown) ? `<div class="rounded-md bg-elevated/60 border border-line-soft px-2.5 py-1.5">
     <div class="text-[10px] uppercase tracking-wide text-faint">API-токен</div>
@@ -9327,6 +9803,7 @@ function ghCardHtml(a, code, secs) {
         <div class="min-w-0 flex-1">
           <div class="text-sm font-semibold text-ink truncate" title="${esc(a.nickname)}">${esc(a.nickname)}</div>
           <span class="inline-block text-[10px] px-1.5 py-0.5 rounded border ${st.badge}">${st.label}</span>
+          ${ghAgeBadge(a.regAge, 'ml-1')}
         </div>
       </div>
       <div class="flex items-center justify-between text-[10px] text-faint mt-0.5">
@@ -9362,9 +9839,9 @@ function ghCardHtml(a, code, secs) {
           ${codeText}
           ${code === null ? '' : `<span data-gh-sec class="text-[11px] font-mono ${cd.label === 'critical' ? 'text-crimson' : cd.label === 'warning' ? 'text-amber' : 'text-faint'}">${secs}s</span>`}
         </div>
-        <div class="mt-2 h-1 rounded bg-elevated overflow-hidden">
+        ${noTotp ? '' : `<div class="mt-2 h-1 rounded bg-elevated overflow-hidden">
           <div data-gh-bar class="h-full rounded transition-all duration-1000 ${cd.cls}" style="width:${(secs / 30) * 100}%"></div>
-        </div>
+        </div>`}
         ${secretShown ? `<div class="mt-2 flex items-center justify-between gap-2 rounded-md bg-elevated/60 border border-line-soft px-2.5 py-1.5">
           <span class="text-[10px] uppercase tracking-wide text-faint">2FA-секрет</span>
           <span class="shrink-0 flex items-center gap-1">
@@ -10536,6 +11013,136 @@ function trLiveStats(accounts, usageMap) {
 // с глаз — считай, что его нет. Иначе шкала обещала деньги на шлюзе, которого в
 // сайдбаре не видно, и сойтись с ней глазами было невозможно.
 
+// Провайдеры с правдивым денежным балансом — ОДИН список на все места, где он нужен:
+// шкала «Общий запас» в шапке (renderGlobalGauge), пинок пересчёта активного ключа
+// (nudgeActiveBalance) и баланс в бейдже ACTIVE в сайдбаре (paintSideBalance).
+// Раньше это были два разъехавшихся списка: в BAL_TABS были p/stateKey/загрузчик, а
+// база выдачи и символ валюты — отдельно внутри renderGlobalGauge. Добавление шлюза
+// требовало правки в двух местах, и забыть одно из них было легко.
+//
+// id      — он же имя вкладки в сайдбаре (по нему проверяется, не скрыта ли вкладка)
+//           и он же значение state.current, когда провайдер активен;
+// p       — префикс эндпоинтов /__switch/api/<p>/{sessions,balance};
+// base    — база выдачи, нужна только чтобы не делить на ноль в знаменателе шкалы;
+// sym     — вывеска валюты: у XPeach 🍑, курс к единице квоты тот же (quota/500000),
+//           поэтому цифры складываются с остальными без пересчёта;
+// reload  — лёгкий перечит сессий из локального JSON (без апстрима).
+const MONEY_PROVIDERS = {
+  agentrouter: { id: 'agentrouter', p: 'ar', stateKey: 'agentrouter', base: 175, sym: '$',  label: 'AgentRouter', icon: '🧭', color: 'sky',    reload: () => loadArSessionsLight() },
+  gorouter:    { id: 'gorouter',    p: 'go', stateKey: 'gorouter',    base: 70,  sym: '$',  label: 'GoRouter',    icon: '🌐', color: 'teal',   reload: () => loadGoSessionsLight() },
+  tabi:        { id: 'tabi',        p: 'tb', stateKey: 'tabi',        base: 100, sym: '$',  label: 'Tabi Token',  icon: '🎫', color: 'violet', reload: () => loadTbSessionsLight() },
+  xpeach:      { id: 'xpeach',      p: 'xp', stateKey: 'xpeach',      base: 10,  sym: '🍑', label: 'XPeach',      icon: '🍑', color: 'rose',   reload: () => loadXpSessionsLight() },
+};
+
+// Аккаунты денежного провайдера. По умолчанию отдаём уже загруженное в state (шапке
+// хватает того, что положили счётчики), force=1 — перечитать локальный JSON с сервера.
+// В апстрим этот эндпоинт без ?probe=1/?balance=1 не ходит, поэтому вызов дешёвый.
+async function moneySessions(id, force = false) {
+  const mp = MONEY_PROVIDERS[id];
+  if (!mp) return [];
+  const cached = state[mp.stateKey];
+  if (!force && cached && cached.length) return cached;
+  try {
+    const res = await fetch(`/__switch/api/${mp.p}/sessions`);
+    const data = await res.json();
+    if (res.ok) { state[mp.stateKey] = data.sessions || []; return state[mp.stateKey]; }
+  } catch (e) { /* молча: следующий тик повторит */ }
+  return cached || [];
+}
+
+// ── Баланс в бейдже ACTIVE (сайдбар) ───────────────────────────────────────────
+// Владелец: «источник правды баланса — статус-бар CC», а он показывает баланс
+// АКТИВНОГО ключа из того же кеша (`balance` у записи с active:true в
+// routing/<provider>-sessions.json, см. gauge_from_balance_cache в
+// statusline-autoreger.sh). Поэтому первая цифра здесь обязана сходиться с ним до
+// копейки — считаем ровно из того же поля, ничего не пересчитывая.
+//
+// Вторая цифра — запас пула, через poolMoneyStat: та же функция, которой считается
+// «Общий запас» в шапке. Иначе две цифры на одном экране разъезжались бы, и сойтись
+// с ними глазами было бы невозможно.
+//
+// ВАЖНО про свежесть пула: пересчёт баланса дёргается только для активного ключа
+// (решение владельца — обход всех 22 аккаунтов = пачка запросов в billing каждую
+// минуту, это похоже на абуз). Значит цифра пула считается по кешу, где неактивные
+// ключи могут быть двухдневными. Это сказано в подсказке, а не спрятано.
+function paintSideBalance() {
+  const box = $('side-balance');
+  if (!box) return;
+  const mp = MONEY_PROVIDERS[state.current];
+  const accounts = mp ? (state[mp.stateKey] || []) : [];
+  const act = accounts.find(s => s && s.active);
+  // Провайдер без денежного баланса, либо данных ещё нет, либо у активного ключа
+  // баланс не опрошен — блок просто не показываем. Пустая строка «—» врала бы,
+  // что денег нет.
+  if (!mp || !act || typeof act.balance !== 'number') { box.classList.add('hidden'); return; }
+
+  const st = poolMoneyStat(accounts, mp.base);
+  const pct = st.sumGrant > 0 ? Math.max(0, Math.min(100, Math.round((st.sumBalance / st.sumGrant) * 100))) : 0;
+  const shown = Math.max(0, act.balance);   // минус физически невозможен, см. newapiBalanceCell
+  const sym = mp.sym || '$';
+  // Деньги на мёртвом/безключевом аккаунте — не деньги (balanceUsable): забрать нельзя,
+  // и в пул они не идут. Поймано на XPeach: активный ключ dead, а бейдж бодро показывал
+  // 🍑10.00 при пуле 🍑0.00. Показываем 🔴, как это делает ячейка баланса в таблице.
+  const usable = balanceUsable(act);
+  const num = usable ? `${sym}${shown.toFixed(2)}` : '🔴';
+  const pool = `пул ${sym}${st.sumBalance.toFixed(2)} · ${st.withBalance}`;
+  const barColor = energyColorName(pct);
+
+  // Diff-обновление: тик ходит каждые 10с, а paintStatus — каждые 5с. Переписывать
+  // разметку на каждый проход = мерцание текста и рестарт CSS-перехода полосы.
+  const sig = `${num}|${pool}|${pct}|${barColor}|${act.balanceCheckedAt || ''}`;
+  box.classList.remove('hidden');
+  if (box.dataset.sbSig === sig) return;
+  box.dataset.sbSig = sig;
+
+  const numEl = $('side-bal-num'), freshEl = $('side-bal-fresh'), poolEl = $('side-bal-pool'), barEl = $('side-bal-bar');
+  if (numEl) {
+    numEl.textContent = num;
+    numEl.className = `font-semibold ${usable ? balanceColor(shown) : 'text-crimson'}`;
+  }
+  if (freshEl) freshEl.innerHTML = balanceFreshMark(act);
+  if (poolEl) poolEl.textContent = pool;
+  if (barEl) {
+    barEl.style.width = pct + '%';
+    barEl.style.background = `var(--color-${barColor})`;
+  }
+  box.title = `${mp.label}: активный аккаунт ${act.name || act.email || '—'} — `
+    + (usable ? `${num} (та же цифра, что в статус-баре Claude Code)`
+              : `ключ ${act.status === 'no_key' ? 'отсутствует' : 'мёртв'}, остаток забрать нельзя`)
+    + `\nПул: ${sym}${st.sumBalance.toFixed(2)} на ${st.withBalance} живых ключах из ${st.total}`
+    + `, запас ${pct}% от выданного (${sym}${st.sumGrant.toFixed(0)})`
+    + `\nПересчитывается только активный ключ — у остальных цифра из кеша, может быть вчерашней.`;
+}
+
+// Свой тик для бейджа. Зачем отдельный, когда state[stateKey] и так наполняют
+// счётчики: refreshNavCounts пропускает СКРЫТЫЕ вкладки и ОТКРЫТУЮ, а autoRefreshTick
+// ведёт только открытую и слушается тумблера «Автообновление». Итого две дыры, в
+// которых сайдбар остался бы без цифры: провайдер спрятан в «Настроить вкладки», либо
+// сидишь на его вкладке с выключенным тумблером.
+//
+// Тик намеренно НЕ зовёт load*SessionsLight() — тот перерисовывает таблицу вкладки, и
+// при выключенном тумблере она прыгала бы под курсором. Здесь только чтение локального
+// JSON и перекраска трёх узлов в сайдбаре.
+const SIDE_BAL_POLL_MS = 10000;
+let _sideBalLastAt = 0;
+let _sideBalProv = null;
+async function sideBalanceTick() {
+  if (document.hidden) return;
+  const prov = state.current;
+  if (!MONEY_PROVIDERS[prov]) return;
+  // Троттл, потому что зовут из двух мест: свой интервал и paintStatus (тот дёргается
+  // каждые 5с). Смена провайдера троттл обходит — цифра должна переехать сразу.
+  const switched = prov !== _sideBalProv;
+  if (!switched && Date.now() - _sideBalLastAt < SIDE_BAL_POLL_MS * 0.9) return;
+  _sideBalLastAt = Date.now();
+  _sideBalProv = prov;
+  await moneySessions(prov, true);
+  paintSideBalance();
+  // Пересчёт цифры — по АКТИВНОМУ провайдеру, а не по открытой вкладке. Свой троттл
+  // внутри (60с на ключ), поэтому на каждом 10-секундном тике в billing не летит.
+  try { nudgeActiveBalance(prov); } catch (e) { console.warn('[side] bal-nudge fail', prov, e); }
+}
+
 // Одна арифметика на все четыре шлюза: было четыре копии одного цикла.
 // base — база выдачи провайдера, нужна только чтобы не делить на ноль.
 function poolMoneyStat(accounts, base) {
@@ -10555,57 +11162,14 @@ function poolMoneyStat(accounts, base) {
 }
 
 async function renderGlobalGauge() {
-  // Правдивые провайдеры. Добавить нового = одна запись. fetchData возвращает
-  // массив аккаунтов вида { api_key, status, balance, grant }.
-  // id — он же имя вкладки в сайдбаре: по нему проверяется, не скрыта ли она.
-  const truthfulProviders = [
-    {
-      id: 'agentrouter', label: 'AgentRouter', icon: '🧭', color: 'sky',
-      fetchData: async () => {
-        if (state.agentrouter && state.agentrouter.length) return state.agentrouter;
-        const res = await fetch('/__switch/api/ar/sessions');
-        const data = await res.json();
-        if (res.ok) { state.agentrouter = data.sessions || []; return state.agentrouter; }
-        return [];
-      },
-      stat: (accounts) => poolMoneyStat(accounts, 175),
-    },
-    {
-      id: 'gorouter', label: 'GoRouter', icon: '🌐', color: 'teal',
-      fetchData: async () => {
-        if (state.gorouter && state.gorouter.length) return state.gorouter;
-        const res = await fetch('/__switch/api/go/sessions');
-        const data = await res.json();
-        if (res.ok) { state.gorouter = data.sessions || []; return state.gorouter; }
-        return [];
-      },
-      stat: (accounts) => poolMoneyStat(accounts, 70),
-    },
-    {
-      id: 'tabi', label: 'Tabi Token', icon: '🎫', color: 'violet',
-      fetchData: async () => {
-        if (state.tabi && state.tabi.length) return state.tabi;
-        const res = await fetch('/__switch/api/tb/sessions');
-        const data = await res.json();
-        if (res.ok) { state.tabi = data.sessions || []; return state.tabi; }
-        return [];
-      },
-      stat: (accounts) => poolMoneyStat(accounts, 100),
-    },
-    {
-      // XPeach считает в 🍑, но курс к единице квоты тот же (quota/500000), поэтому
-      // цифры складываются с остальными без пересчёта. База выдачи — 10.
-      id: 'xpeach', label: 'XPeach', icon: '🍑', color: 'rose', sym: '🍑',
-      fetchData: async () => {
-        if (state.xpeach && state.xpeach.length) return state.xpeach;
-        const res = await fetch('/__switch/api/xp/sessions');
-        const data = await res.json();
-        if (res.ok) { state.xpeach = data.sessions || []; return state.xpeach; }
-        return [];
-      },
-      stat: (accounts) => poolMoneyStat(accounts, 10),
-    },
-  ];
+  // Правдивые провайдеры — из общей карты MONEY_PROVIDERS. Добавить нового = одна
+  // запись там. fetchData возвращает массив аккаунтов вида
+  // { api_key, status, balance, grant }.
+  const truthfulProviders = Object.values(MONEY_PROVIDERS).map(mp => ({
+    ...mp,
+    fetchData: () => moneySessions(mp.id),
+    stat: (accounts) => poolMoneyStat(accounts, mp.base),
+  }));
 
   const hiddenTabs = effectiveHiddenSet();
   let sumBalance = 0, sumGrant = 0, accounts = 0, providers = 0, hiddenCount = 0;
@@ -13260,15 +13824,30 @@ async function pullDashboardUpdate(stash) {
     // это обратимо, и мы говорим, чем вернуть.
     if (res.status === 409 && d.can_stash) {
       const files = (d.dirty || []).join('\n  ');
-      if (confirm('Обновлению мешают твои правки в коде:\n\n  ' + files
+      // Часть помех может быть новыми файлами, которых нет в git (апстрим завёл такой
+      // же путь). Они прячутся тем же стэшем (-u), но человеку это надо сказать: иначе
+      // «правки в коде» про файл, который он не правил, выглядит враньём.
+      const newFiles = (d.untracked || []);
+      if (confirm('Обновлению мешает то, что лежит в рабочей копии:\n\n  ' + files
+          + (newFiles.length ? '\n\nИз них новые, не в git (апстрим завёл такие же):\n  ' + newFiles.join('\n  ') : '')
           + '\n\nСпрятать их в git stash и обновиться?\n'
-          + 'Правки не пропадут — лягут в стэш. Вернуть:  git stash pop\n'
+          + 'Ничего не пропадёт — ляжет в стэш. Вернуть:  git stash pop\n'
           + '(если апстрим менял тот же файл, git попросит разрешить конфликт)')) {
         return pullDashboardUpdate(true);
       }
       badge.textContent = '✗ мешают локальные правки';
       badge.className = 'shrink-0 text-xs text-amber';
       btn.disabled = false;
+      return;
+    }
+    // Разошлись истории: у человека свои коммиты. Кнопка это не решает и решать не
+    // должна — reset --hard выбросил бы именно их. Показываем полный текст с командой,
+    // а не обрезанную строчку в бейдже.
+    if (d.diverged) {
+      badge.textContent = '✗ своя история — нужен git pull --rebase';
+      badge.className = 'shrink-0 text-xs text-amber';
+      btn.disabled = false;
+      alert(d.error);
       return;
     }
     if (!res.ok) throw new Error(d.error || 'fail');
@@ -13825,34 +14404,41 @@ let _lastTgPoll = 0;
 //   · CC молчит → пересчёта нет вовсе, цифра стоит до F5;
 //   · неактивные аккаунты не обновляет никто (в gorouter-sessions.json нашлись
 //     записи с balanceCheckedAt 2-3 дня назад).
-// Теперь тик пинает сам. Нагрузки это НЕ добавляет: сервер дедупит по ключу и
+// Нагрузки это НЕ добавляет: сервер дедупит по ключу и
 // держит паузу BALANCE_MIN_GAP_MS = 60с на ключ, а nudge=1 отвечает мгновенно и
 // считает в своём процессе. Пинаем только АКТИВНЫЙ ключ: он же тратится, а
 // обход всех аккаунтов означал бы пачку запросов в billing шлюза каждую минуту.
-const BAL_TABS = {
-  agentrouter: { p: 'ar', key: 'agentrouter', reload: () => loadArSessionsLight() },
-  gorouter:    { p: 'go', key: 'gorouter',    reload: () => loadGoSessionsLight() },
-  tabi:        { p: 'tb', key: 'tabi',        reload: () => loadTbSessionsLight() },
-  xpeach:      { p: 'xp', key: 'xpeach',      reload: () => loadXpSessionsLight() },
-};
+//
+// Список шлюзов — общий MONEY_PROVIDERS (см. рядом с poolMoneyStat). Раньше здесь был
+// свой BAL_TABS, разъезжавшийся с картой в renderGlobalGauge.
 const BAL_NUDGE_MS = 60000;      // = серверный BALANCE_MIN_GAP_MS, чаще бессмысленно
 const _balNudgedAt = new Map();  // api_key → ts последнего пинка (клиентский троттл)
 
-async function nudgeActiveBalance(tab) {
-  const cfg = BAL_TABS[tab];
-  if (!cfg) return;
-  const acct = (state[cfg.key] || []).find(s => s && s.active);
+// prov — ключ MONEY_PROVIDERS. Зовут из двух мест: по ОТКРЫТОЙ вкладке (autoRefreshTick)
+// и по АКТИВНОМУ провайдеру (sideBalanceTick). Второе принципиально: сидя на Health при
+// молчащем CC, пересчёта не дёргал никто — цифра в сайдбаре стояла бы до F5.
+async function nudgeActiveBalance(prov) {
+  const mp = MONEY_PROVIDERS[prov];
+  if (!mp) return;
+  const acct = (state[mp.stateKey] || []).find(s => s && s.active);
   if (!acct || !acct.api_key) return;
   if (Date.now() - (_balNudgedAt.get(acct.api_key) || 0) < BAL_NUDGE_MS) return;
   _balNudgedAt.set(acct.api_key, Date.now());
   try {
-    const res = await fetch(`/__switch/api/${cfg.p}/balance`
+    const res = await fetch(`/__switch/api/${mp.p}/balance`
       + `?api_key=${encodeURIComponent(acct.api_key)}&nudge=1`);
     const d = await res.json().catch(() => null);
     // queued=true → сервер реально пошёл в billing. Ответ мгновенный, новая цифра
     // ляжет в JSON через пару секунд — перечитываем, не дожидаясь следующего тика
     // (иначе свежее значение показалось бы только через TAB_POLL_MS).
-    if (d && d.queued) setTimeout(() => { try { cfg.reload(); } catch (e) {} }, 4000);
+    if (d && d.queued) setTimeout(() => {
+      // Таблицу вкладки перерисовываем только если она открыта И автообновление
+      // включено — иначе таблица прыгала бы под курсором у человека, который
+      // тумблер намеренно выключил. Сайдбар обновляем всегда: он и есть просьба.
+      const openTab = localStorage.getItem('opencode_active_tab') || 'claude';
+      if (openTab === prov && autoRefreshEnabled()) { try { mp.reload(); } catch (e) {} }
+      else { moneySessions(prov, true).then(paintSideBalance).catch(() => {}); }
+    }, 4000);
   } catch (e) { /* молча: следующий тик повторит */ }
 }
 
@@ -13922,6 +14508,11 @@ function autoRefreshTick() {
 // ═══════════════════ INIT ════════════════════════════════════════════
 loadStatus();
 setInterval(loadStatus, 5000);
+
+// Баланс в бейдже ACTIVE — свой тик, независимый от вкладок и от тумблера
+// «Автообновление» (см. sideBalanceTick). Читает локальный JSON, в апстрим не ходит.
+sideBalanceTick();
+setInterval(sideBalanceTick, SIDE_BAL_POLL_MS);
 
 // ── Счётчики сайдбара и бейдж Health на старте ──────────────────────────────
 // `nav-count-*` заполнялся ТОЛЬКО внутри load-функции своей вкладки, а та висела
@@ -14002,6 +14593,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { clearTimeout(_autoRefTimer); return; }
   autoRefreshTick();        // сразу после возврата в браузер
   refreshNavCounts(false);  // и счётчики: пока браузер был свёрнут, тик не шёл
+  sideBalanceTick();        // и баланс в сайдбаре — он тоже стоял на паузе
   scheduleAutoRefresh();
 });
 scheduleAutoRefresh();

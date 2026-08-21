@@ -325,3 +325,5 @@ github/profiles/
 # НИКОГДА не коммитить. Кладёт их github/harvest-session.js, читает
 # routing/lib/github-session.js.
 github/sessions/
+# Суточная история финансов (пишется чеком баланса, у каждого своя)
+routing/finance-history.jsonl

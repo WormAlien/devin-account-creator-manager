@@ -77,3 +77,57 @@ ok(`D: все ${tracked.length} тир-карт защищены${unprotected.le
 ok('D: код не считается состоянием', real.isStateFile('routing/transparent-proxy.js') === false);
 
 fs.rmSync(root, { recursive: true, force: true });
+
+// E/F: файл, грязный ТОЛЬКО переводами строк. С core.autocrlf=true git ждёт в
+// рабочей копии CRLF, а дашборд пишет JSON через Node, т.е. LF. Контент байт-в-байт
+// тот же: `git diff` пуст, а `git pull` (если апстрим менял этот же файл) падает с
+// «local changes … would be overwritten». Так вставало обновление: детект спрашивал
+// только `git diff --name-only HEAD`, получал пусто и сдавался.
+// Песочница: заданные .gitattributes, autocrlf=true, апстрим ушёл вперёд по коду и
+// по тир-карте, дашборд перезаписал карту ТЕМ ЖЕ содержимым с LF.
+function eolSandbox(attrs) {
+    const r = fs.mkdtempSync(path.join(os.tmpdir(), 'pullsafe-eol-'));
+    const org = path.join(r, 'origin.git'), sd = path.join(r, 'seed'), wk = path.join(r, 'work');
+    execFileSync('git', ['init', '--bare', '-b', 'master', org]);
+    execFileSync('git', ['clone', org, sd]);
+    run(sd, 'config', 'user.email', 't@t'); run(sd, 'config', 'user.name', 't');
+    fs.mkdirSync(path.join(sd, 'routing')); fs.mkdirSync(path.join(sd, 'tools'));
+    fs.writeFileSync(path.join(sd, '.gitattributes'), attrs);
+    fs.writeFileSync(path.join(sd, 'routing/ar-modelmap.json'), '{"opus":"repo-default"}\n');
+    fs.writeFileSync(path.join(sd, 'code.js'), 'v1\n');
+    fs.copyFileSync(path.join(__dirname, 'git-pull-safe.js'), path.join(sd, 'tools/git-pull-safe.js'));
+    run(sd, 'add', '-A'); run(sd, 'commit', '-m', 'init'); run(sd, 'push', 'origin', 'master');
+
+    execFileSync('git', ['-c', 'core.autocrlf=true', 'clone', org, wk]);
+    run(wk, 'config', 'core.autocrlf', 'true');
+    run(wk, 'config', 'user.email', 't@t'); run(wk, 'config', 'user.name', 't');
+
+    fs.writeFileSync(path.join(sd, 'code.js'), 'v2\n');
+    fs.writeFileSync(path.join(sd, 'routing/ar-modelmap.json'), '{"opus":"repo-new"}\n');
+    run(sd, 'add', '-A'); run(sd, 'commit', '-m', 'up'); run(sd, 'push', 'origin', 'master');
+
+    fs.writeFileSync(path.join(wk, 'routing/ar-modelmap.json'), '{"opus":"repo-default"}\n');   // дашборд, LF
+    return { root: r, work: wk };
+}
+const tryPull = (cwd) => { try { run(cwd, 'pull', '--ff-only'); return ''; } catch (e) { return (e.stderr || '') + (e.stdout || ''); } };
+
+// E: как у пользователя до фикса — `*.json text` + autocrlf. pull встаёт, и вывезти
+// это обязан pullSafe: иначе кнопка «Обновить» показывает сырую ошибку git, а
+// починка доезжает только через то же обновление.
+const E = eolSandbox('*.json text\n');
+ok('E: git diff слеп к eol-грязи (тот самый слепой угол)', run(E.work, 'diff', '--name-only', 'HEAD').trim() === '');
+ok('E: diff-files её видит', run(E.work, 'diff-files', '--name-only').includes('routing/ar-modelmap.json'));
+ok('E: обычный git pull об неё спотыкается', /would be overwritten|local changes/i.test(tryPull(E.work)));
+const e = cli(E.work);
+ok('E: CLI вышел 0', e.code === 0);
+ok('E: код обновился', fs.readFileSync(path.join(E.work, 'code.js'), 'utf8').trim() === 'v2');
+ok('E: локальное значение выжило', fs.readFileSync(path.join(E.work, 'routing/ar-modelmap.json'), 'utf8').includes('repo-default'));
+fs.rmSync(E.root, { recursive: true, force: true });
+
+// F: с `text eol=lf` (как теперь в .gitattributes) eol-грязь не возникает вообще —
+// LF-запись дашборда не считается изменением, и обычный git pull проходит сам.
+const F = eolSandbox('*.json text eol=lf\n');
+ok('F: eol=lf — рабочая копия чистая', run(F.work, 'status', '--porcelain').trim() === '');
+ok('F: eol=lf — обычный git pull проходит', tryPull(F.work) === '');
+ok('F: eol=lf — код обновился', fs.readFileSync(path.join(F.work, 'code.js'), 'utf8').trim() === 'v2');
+fs.rmSync(F.root, { recursive: true, force: true });

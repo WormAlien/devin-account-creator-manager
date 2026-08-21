@@ -45,6 +45,10 @@ const LOCAL_STATE_FILES = [
     'routing/xpeach-modelmap.json',
     'routing/proxy-target.json',
     'routing/fm-openai-config.json',
+    // Чек-ин AgentRouter: дашборд пишет его сам (AR_CHECKIN_FILE в
+    // transparent-proxy.js), а паттерн тир-карт его не ловит — без строчки тут
+    // упирались бы в то же самое обновление.
+    'routing/ar-checkin.json',
     // Тумблер front-door: в репо лежит enabled:false, у владельца включён — иначе
     // каждый git pull упирался бы в «локальные правки» из-за одного булева.
     'routing/frontdoor.json',
@@ -74,7 +78,16 @@ function pullSafe() {
         if (!/would be overwritten|local changes/i.test(msg)) {
             return { ok: false, output: '', preserved: [], blocking: [], error: msg.trim() };
         }
-        const dirty = git('diff', '--name-only', 'HEAD').split('\n').map(s => s.trim()).filter(Boolean);
+        const dirty = [...new Set([
+            // Файл, грязный ТОЛЬКО переводами строк, `git diff` НЕ показывает: с
+            // core.autocrlf=true git ждёт в рабочей копии CRLF, дашборд пишет через
+            // Node (LF), контент байт-в-байт тот же — diff пуст, а pull падает.
+            // Живой случай: список грязи выходил пустым, pullSafe сдавался и печатал
+            // сырую ошибку git. diff-files сравнивает рабочую копию с индексом и
+            // такую грязь видит.
+            ...git('diff', '--name-only', 'HEAD').split('\n'),
+            ...git('diff-files', '--name-only').split('\n'),
+        ])].map(s => s.trim()).filter(Boolean);
         const resettable = dirty.filter(isStateFile);
         const blocking = dirty.filter(f => !isStateFile(f));
         if (blocking.length) return { ok: false, output: '', preserved: [], blocking, error: msg.trim() };

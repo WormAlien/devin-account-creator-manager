@@ -15,3 +15,14 @@ mac-support/shims/* text eol=lf
 *.html  text
 *.json  text
 *.md    text
+
+# JSON'ы состояния дашборд перезаписывает сам, а Node пишет \n. С autocrlf=true
+# git ждёт в рабочей копии CRLF, видит LF — и файл ВЕЧНО «изменён», причём
+# `git diff` пуст (разница только в переводах строк), а обновление падает с
+# «Your local changes … would be overwritten by merge». eol=lf убирает
+# расхождение: git ждёт ровно то, что пишет дашборд.
+routing/*modelmap.json         text eol=lf
+routing/ar-checkin.json        text eol=lf
+routing/proxy-target.json      text eol=lf
+routing/fm-openai-config.json  text eol=lf
+routing/frontdoor.json         text eol=lf

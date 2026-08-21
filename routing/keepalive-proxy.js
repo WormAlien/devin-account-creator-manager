@@ -243,11 +243,39 @@ function patchNum(v, min, max, allowZero) {
   if (allowZero && n === 0) return 0;
   return Math.min(max, Math.max(min, Math.round(n)));
 }
+// Версия набора дефолтов. **Поднимать при каждой смене DEFAULT_CFG.** Конфиг с прошлой
+// версией не читается вовсе: он архивируется рядом и переписывается новыми дефолтами.
+// Иначе новая цифра не доедет до тех, кто однажды нажал «Применить» — json приоритетнее
+// кода, и они навсегда останутся на настройках того дня. А это ровно те люди, которые
+// потом жгут баланс дублями на плоском тарифе и приходят с «у меня деньги текут».
+const CFG_VERSION = 2;
+// Платный хедж: на плоскотарифных шлюзах дубль стоит полную цену запроса, поэтому там
+// его нельзя включить ни из json, ни из панели, ни curl'ом — только осознанным
+// ALLOW_PAID_HEDGE=1 при запуске процесса. Гвоздь прибит НАД конфигом намеренно:
+// «не высасывать баланс» важнее, чем «уважать любую цифру в файле».
+const ALLOW_PAID_HEDGE = process.env.ALLOW_PAID_HEDGE === '1';
+const PAID_HEDGE_HOST = FLAT_RATE_HOSTS.has(upstream.hostname) && !ALLOW_PAID_HEDGE;
+function clampPaidHedge(why) {
+  if (!PAID_HEDGE_HOST || !(cfg.maxHedges > 0)) return false;
+  log(`${why}: у ${upstream.hostname} тариф плоский за запрос — дубль стоит столько же, `
+    + `сколько сам ответ. maxHedges ${cfg.maxHedges} → 0 (перебить: ALLOW_PAID_HEDGE=1)`);
+  cfg.maxHedges = 0;
+  return true;
+}
 function loadConfig() {
   let raw;
   try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch (e) { return; }
   let c;
   try { c = JSON.parse(raw); } catch (e) { log(`config.json битый, игнорирую: ${e.message}`); return; }
+  const was = Number(c.v) || 1;
+  if (was !== CFG_VERSION) {
+    const bak = `${CONFIG_FILE}.v${was}.bak`;
+    try { fs.writeFileSync(bak, raw); } catch (e) { /* бэкап не критичен */ }
+    log(`config версии ${was} устарел (сейчас ${CFG_VERSION}) — беру дефолты кода, `
+      + `прежние настройки в ${path.basename(bak)}`);
+    saveConfig();
+    return;
+  }
   const h = patchNum(c.hedgeMs, 1000, 120000, true);
   if (h !== null) cfg.hedgeMs = h;
   const a = patchNum(c.maxAttempts, 1, 10, false);
@@ -258,7 +286,7 @@ function loadConfig() {
   if (p !== null) cfg.preCommitMs = p;
 }
 function saveConfig() {
-  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
+  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({ v: CFG_VERSION }, cfg), null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
 }
 function applyPatch(p) {
   if ('hedgeMs' in p) {
@@ -277,11 +305,23 @@ function applyPatch(p) {
     const pc = patchNum(p.preCommitMs, 2000, 120000, true);
     if (pc !== null) cfg.preCommitMs = pc;
   }
+  const clamped = clampPaidHedge('патч конфига');
   saveConfig();
   log(`config updated: хедж ${hedgeOff(cfg) ? 'off' : `${cfg.hedgeMs}ms`}, дублей максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
+  return clamped;
 }
 function publicState() {
-  return { cfg: Object.assign({}, cfg), defaults: Object.assign({}, DEFAULT_CFG), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt, stats: Object.assign({}, stats) };
+  return {
+    cfg: Object.assign({}, cfg),
+    defaults: Object.assign({}, DEFAULT_CFG),
+    // flatRate — чтобы панель могла объяснить, почему дублей 0, а не делать вид, что
+    // юзер сам так настроил. paidHedgeLocked = ручку крутить бессмысленно, зажмём.
+    flatRate: FLAT_RATE_HOSTS.has(upstream.hostname),
+    paidHedgeLocked: PAID_HEDGE_HOST,
+    cfgVersion: CFG_VERSION,
+    upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt,
+    stats: Object.assign({}, stats),
+  };
 }
 // Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
 // AgentRouter в том же блоке, что и крутилки хеджа. retries — всего повторов,
@@ -1127,6 +1167,9 @@ if (process.argv[2] === 'selftest') {
 }
 
 loadConfig();
+// Гвоздь после чтения конфига: даже если в json лежит maxHedges от прошлых
+// экспериментов (или его вписали руками), на плоскотарифном шлюзе дубли не поедут.
+if (clampPaidHedge('старт')) saveConfig();
 
 server.keepAliveTimeout = 0;   // не убивать долгие SSE-соединения (v1tusha)
 server.headersTimeout = 0;

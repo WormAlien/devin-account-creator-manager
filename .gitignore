@@ -129,6 +129,8 @@ routing/mode.txt
 routing/keepalive-config-*.json
 # Архив настроек предыдущей версии дефолтов (пишется при смене CFG_VERSION)
 routing/keepalive-config-*.json.v*.bak
+# Суточная история времени ответа (минутные бакеты, у каждого своя)
+routing/keepalive-latency-*.json
 # Логи вложенных модулей (в tr_debug.log лежал абсолютный путь прежней папки репо)
 routing/**/*.log
 

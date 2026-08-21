@@ -20,7 +20,8 @@
  *   require('../tools/git-pull-safe')    # дашборд, ручка update-pull
  *
  * Коды выхода CLI: 0 — обновлено (или уже актуально), 3 — мешают правки кода,
- * 1 — прочая ошибка git (нет сети, конфликт, не репо).
+ * 4 — история разошлась (свои коммиты; грубая починка запрещена), 1 — прочая
+ * ошибка git (нет сети, конфликт, не репо).
  */
 'use strict';
 
@@ -63,13 +64,57 @@ function git(...args) {
     return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim();
 }
 
+// Untracked-файлы `git diff --name-only HEAD` не видит В ПРИНЦИПЕ: он сравнивает
+// индекс и дерево с коммитом, а неотслеживаемого файла ни там, ни там нет. Поэтому
+// когда апстрим завёл файл, который у человека уже лежит своей копией, pull падает
+// на «The following untracked working tree files would be overwritten by merge»,
+// наш dirty оказывается пустым и наружу уходил сырой текст git'а.
+// Список путей забираем из самого сообщения — git печатает их построчно с отступом.
+function parseUntracked(msg) {
+    const out = [];
+    let inside = false;
+    for (const raw of msg.split(/\r?\n/)) {
+        if (/untracked working tree files would be overwritten/i.test(raw)) { inside = true; continue; }
+        if (!inside) continue;
+        if (/^\s+\S/.test(raw)) { out.push(raw.trim()); continue; }
+        break;  // первая строка без отступа = конец списка («Please move or remove them…»)
+    }
+    return out;
+}
+
+// «fatal: Not possible to fast-forward» — у человека свои коммиты, разошедшиеся с
+// master. Починить это автоматически нельзя: `reset --hard` выбросил бы именно их.
+// Но и сырая строчка git'а не говорит человеку ни что случилось, ни что делать.
+function divergedMessage(raw) {
+    let ahead = '?', behind = '?';
+    try {
+        const c = git('rev-list', '--left-right', '--count', 'HEAD...@{u}').split(/\s+/);
+        if (c.length >= 2) { ahead = c[0]; behind = c[1]; }
+    } catch { }
+    return [
+        `История разошлась: у тебя ${ahead} своих коммит(ов), в апстриме ${behind} новых — fast-forward невозможен.`,
+        'Сами не сливаем: это решение человека, а reset --hard выбросил бы твои коммиты.',
+        'Разрулить:  git pull --rebase     (посмотреть своё:  git log --oneline @{u}..HEAD)',
+        raw.trim(),
+    ].filter(Boolean).join('\n');
+}
+
+function isDiverged(msg) {
+    return /not possible to fast-forward|divergent branches/i.test(msg);
+}
+
 // Спрятать ИМЕННО мешающие файлы, а не всё дерево: `git stash push -- <пути>`.
 // Без ограничения путями stash уносит и то, что pull'у не мешало (в т.ч. файлы
 // состояния, которые мы бережём отдельно) — человек потом ищет, куда делись
 // настройки. Возвращает { ok, ref, error }: ref нужен, чтобы сказать «лежит вот тут».
-function stashPaths(paths, label) {
+//
+// includeUntracked → добавляем -u: без него `stash push` неотслеживаемые файлы не
+// заберёт, они останутся в дереве и pull упрётся в них повторно.
+function stashPaths(paths, label, includeUntracked) {
     try {
-        git('stash', 'push', '-m', label, '--', ...paths);
+        const args = ['stash', 'push', '-m', label];
+        if (includeUntracked) args.push('-u');
+        git(...args, '--', ...paths);
         // Ссылка на только что созданную запись. Пусто = git решил, что прятать
         // нечего (например файл вернулся к HEAD между проверкой и стэшем).
         let ref = '';
@@ -95,46 +140,71 @@ function stashPaths(paths, label) {
 function pullSafe(opts = {}) {
     const stashBlocking = !!opts.stashBlocking;
     const pull = () => git('pull', '--ff-only', '--no-edit');
+    const empty = { ok: false, output: '', preserved: [], blocking: [], stashed: [] };
     try {
         return { ok: true, output: pull(), preserved: [], blocking: [], stashed: [] };
     } catch (e1) {
         const msg = (e1.stderr || e1.stdout || e1.message || '').toString();
+        // Свои коммиты — не «грязное дерево», ниже их лечить нечем.
+        if (isDiverged(msg)) return { ...empty, diverged: true, error: divergedMessage(msg) };
         if (!/would be overwritten|local changes/i.test(msg)) {
-            return { ok: false, output: '', preserved: [], blocking: [], stashed: [], error: msg.trim() };
+            return { ...empty, error: msg.trim() };
         }
         const dirty = git('diff', '--name-only', 'HEAD').split('\n').map(s => s.trim()).filter(Boolean);
+        const untracked = parseUntracked(msg);
         const resettable = dirty.filter(isStateFile);
-        const blocking = dirty.filter(f => !isStateFile(f));
+        // Апстрим завёл тир-карту, а у человека уже лежит своя (её создал дашборд, пока
+        // файла не было в репо). Это ровно тот же случай, что грязная трекаемая карта:
+        // содержимое в память → убрать с пути → pull → вписать назад.
+        const untrackedState = untracked.filter(isStateFile);
+        const blocking = dirty.filter(f => !isStateFile(f))
+            .concat(untracked.filter(f => !isStateFile(f)));
+        const blockingUntracked = untracked.filter(f => !isStateFile(f));
 
         let stashed = [], stashRef = '';
         if (blocking.length) {
             if (!stashBlocking) {
-                return { ok: false, output: '', preserved: [], blocking, stashed: [], error: msg.trim() };
+                return { ...empty, blocking, untracked: blockingUntracked, error: msg.trim() };
             }
             const label = `git-pull-safe auto-stash ${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}`;
-            const st = stashPaths(blocking, label);
+            const st = stashPaths(blocking, label, blockingUntracked.length > 0);
             if (!st.ok) {
-                return { ok: false, output: '', preserved: [], blocking, stashed: [], error: st.error || 'git stash не удался' };
+                return { ...empty, blocking, error: st.error || 'git stash не удался' };
             }
             stashed = blocking.slice();
             stashRef = st.ref;
         }
-        if (!resettable.length && !stashed.length) {
-            return { ok: false, output: '', preserved: [], blocking: [], stashed: [], error: msg.trim() };
+        if (!resettable.length && !untrackedState.length && !stashed.length) {
+            return { ...empty, error: msg.trim() };
         }
 
         const backup = new Map();
-        for (const f of resettable) {
+        for (const f of resettable.concat(untrackedState)) {
             try { backup.set(f, fs.readFileSync(path.join(REPO, f), 'utf8')); } catch { }
         }
         let output;
         try {
             if (resettable.length) git('checkout', '--', ...resettable);
+            // Untracked git'у не откатить — файла нет ни в индексе, ни в HEAD. Убираем
+            // сами, только уже сняв копию в память (строчкой выше), иначе это потеря.
+            for (const f of untrackedState) {
+                if (backup.has(f)) { try { fs.unlinkSync(path.join(REPO, f)); } catch { } }
+            }
             output = pull();
         } catch (e2) {
             const m2 = (e2.stderr || e2.stdout || e2.message || '').toString().trim();
+            // Настройки уже сняты с пути — вернуть их обязаны в любом случае, иначе
+            // упавший pull выглядит как «дашборд сбросил мои тиры».
+            const restored = [];
+            for (const [f, content] of backup) {
+                try { fs.writeFileSync(path.join(REPO, f), content, 'utf8'); restored.push(f); } catch { }
+            }
             // Правки уже в стэше — обязаны сказать, где они, иначе выглядит как потеря.
-            return { ok: false, output: '', preserved: [], blocking: [], stashed, stashRef, error: m2 };
+            return {
+                ...empty, preserved: restored, stashed, stashRef,
+                diverged: isDiverged(m2) || undefined,
+                error: isDiverged(m2) ? divergedMessage(m2) : m2,
+            };
         }
         const preserved = [];
         for (const [f, content] of backup) {
@@ -166,13 +236,21 @@ if (require.main === module) {
         if (r.stashRef) console.error(`  ${r.stashRef}`);
         console.error('  вернуть: git stash pop');
     }
+    if (r.preserved && r.preserved.length) {
+        console.error(`локальные настройки возвращены на место: ${r.preserved.join(', ')}`);
+    }
     if (r.blocking.length) {
-        console.error('Обновлению мешают локальные правки в коде:');
-        for (const f of r.blocking) console.error(`  ${f}`);
+        const newFiles = new Set(r.untracked || []);
+        console.error('Обновлению мешает локальное состояние рабочей копии:');
+        for (const f of r.blocking) console.error(`  ${f}${newFiles.has(f) ? '   (новый файл, не в git — апстрим завёл такой же)' : ''}`);
         console.error('Откати их (git checkout -- <файл>), сохрани (git stash)');
         console.error('или запусти с --stash, чтобы спрятать их автоматически.');
         process.exit(3);
     }
     console.error(r.error || 'git pull не удался');
-    process.exit(1);
+    // Отдельный код для разошедшихся историй: вызывающим скриптам (update.sh/fix.sh)
+    // нельзя в этом случае доезжать до `reset --hard origin/master` — он выбросит
+    // именно те коммиты, из-за которых pull и не прошёл. По коду 1 они имеют право
+    // на грубую починку (нет сети/конфликт), по 4 — обязаны остановиться.
+    process.exit(r.diverged ? 4 : 1);
 }

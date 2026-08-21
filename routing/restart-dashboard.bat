@@ -16,11 +16,15 @@ REM Usage: double-click, or call from cmd.
 cd /d "%~dp0"
 
 REM ---- Self-elevation: run as Administrator so taskkill works on all old PIDs ----
+REM `exit`, а не `exit /b`: второе завершает только скрипт, и если консоль запущена с
+REM `cmd /k` (так делал дашборд), окно остаётся жить в промпте — по одному на каждый
+REM клик «перезапустить». Здесь работу продолжает элевированная копия, эта консоль
+REM больше не нужна вообще.
 net session >nul 2>&1
 if not "%errorlevel%"=="0" (
     echo Requesting Administrator rights ^(UAC^) ...
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs -WorkingDirectory '%~dp0'"
-    exit /b
+    exit
 )
 
 REM Гасим всё разом, потом даём ОС отпустить сокеты (не фиксированной паузой,
@@ -34,11 +38,10 @@ call :KILLPORT 20132 "agentrouter proxy"
 call :KILLPORT 20133 "keepalive proxy"
 REM Front-door :20100 — единый вход Claude Code. Убивать безопасно только потому,
 REM что transparent-proxy.js спавнит его обратно на boot. Порты :20155-20157
-REM (keepalive провайдеров) здесь НЕ трогаем: на boot дашборд поднимает keepalive
-REM только АКТИВНОГО бэкенда, а settings.json может смотреть ровно в один из них —
-REM снесём неактивный, и его порт останется пустым до активации. Мёртвый порт при
-REM этом больше не выглядит живым: keepaliveBring() проверяет /status по HTTP и
-REM снимает зомби, а не считает «занято» за «работает».
+REM (keepalive провайдеров) здесь НЕ перечислены намеренно: их разбирает сам дашборд
+REM на boot — активный пересоздаёт (force), лежалых детей прошлого запуска снимает
+REM (bootSweepStaleChildren), а поднимает их обратно активация провайдера. Так «весь
+REM стек» перезапускается и из START.bat, и на mac, а не только из этого файла.
 call :KILLPORT 20100 "front-door"
 if "%FAILED%"=="1" goto FAILED
 

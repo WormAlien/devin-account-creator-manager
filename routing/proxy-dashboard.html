@@ -368,10 +368,18 @@ function randomThemeId() {
           <div id="side-bal-bar" class="h-full rounded-full transition-[width] duration-500" style="width:0%"></div>
         </div>
       </div>
-      <div id="side-auto" class="hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-1.5 text-[10px]">
+      <!-- Авторотация активного провайдера. Одна строка на два механизма: у денежных
+           шлюзов (AR/GoRouter/Tabi/XPeach) это подмена аккаунта по отказу шлюза «нет
+           баланса», у FreeModel — существующая авто-подмена $0 (fmAuto). Тумблер
+           относится к тому провайдеру, который активен ПРЯМО СЕЙЧАС: сидим на
+           GoRouter — крутится пул GoRouter. Заполняет paintSideAuto(). -->
+      <div id="side-auto" class="hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-2 text-[10px]">
         <span class="text-azure">💸</span>
-        <span class="text-dim">авто-подмена $0</span>
-        <span id="side-auto-state" class="ml-auto font-mono font-medium">—</span>
+        <span id="side-auto-label" class="text-dim truncate">авторотация</span>
+        <button id="side-auto-toggle" type="button" role="switch" aria-checked="false" onclick="sideAutoToggle()"
+                class="shrink-0 relative w-9 h-5 rounded-full border transition-colors disabled:opacity-50 bg-elevated border-line-soft hover:border-azure/50">
+          <span id="side-auto-knob" class="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full transition-all duration-200 left-[3px] bg-dim"></span>
+        </button>
       </div>
     </div>
 
@@ -385,11 +393,6 @@ function randomThemeId() {
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="claude">
         <span class="text-base">✳</span>
         <span class="flex-1">Claude Code</span>
-      </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="freemodel">
-        <span class="text-base">🆓</span>
-        <span class="flex-1">FreeModel</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-freemodel">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="vyceai">
         <span class="text-base">⚡</span>
@@ -451,11 +454,6 @@ function randomThemeId() {
         <span class="flex-1">Tabi Token</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-tabi">—</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="xpeach">
-        <span class="w-5 text-center text-[14px]">🍑</span>
-        <span class="flex-1">XPeach</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-xpeach">—</span>
-      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="github">
         <span class="w-5 text-center text-[14px]">🐙</span>
         <span class="flex-1">GitHub аккаунты</span>
@@ -511,7 +509,7 @@ function randomThemeId() {
         </div>
       </div>
 
-      <!-- Чтим память (deprecated: Devin, Notion) -->
+      <!-- Чтим память (deprecated: XPeach, FreeModel, TokenRouter, Devin, Notion) -->
       <div data-extra-nav="memory" class="mt-4 pt-3 border-t border-line-soft">
         <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
              onclick="const s=this.nextElementSibling;const c=this.querySelector('.chev');s.classList.toggle('hidden');c.classList.toggle('rotate-90')">
@@ -519,6 +517,14 @@ function randomThemeId() {
           <span>Чтим память</span>
         </div>
         <div class="hidden pl-4 space-y-0.5 mt-0.5">
+          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="xpeach" title="все ключи 403 banned — регистрация больше не проходит">
+            🍑 XPeach
+            <span class="text-[10px] font-mono opacity-50" id="nav-count-xpeach">—</span>
+          </button>
+          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="freemodel" title="автореги свёрнуты — аккаунты и ротатор :20126 остались на месте">
+            🆓 FreeModel
+            <span class="text-[10px] font-mono opacity-50" id="nav-count-freemodel">—</span>
+          </button>
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="tokenrouter">
             🔑 TokenRouter
             <span class="text-[10px] font-mono opacity-50" id="nav-count-tokenrouter">—</span>
@@ -1727,6 +1733,8 @@ function randomThemeId() {
         </header>
 
         <div id="ar-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+        <!-- Журнал авторотации — см. renderMoneyRotateLog(), скрыт до первой подмены. -->
+        <div id="ar-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Чек-ин +$25: сколько аккаунтов готовы и когда ближайший. Отдельная карточка,
              а не строка в гейдже: renderEnergyGauge диффит по сигнатуре, и текст, который
@@ -1807,16 +1815,18 @@ function randomThemeId() {
           <div class="flex gap-2 items-end flex-wrap">
             <label class="flex flex-col gap-1">
               <span class="text-[10px] text-faint">email (логин)</span>
-              <input id="ar-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+              <input id="ar-add-email" oninput="newapiAddGhHint('ar')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
             <label class="flex flex-col gap-1 flex-1">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="ar-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="arAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('ar')" title="взять email и ник из менеджера GitHub'ов — заодно видно, кто ещё не израсходован" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">🐙 из менеджера</button>
             <button onclick="newapiSeedPick('ar')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="arShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
+          <div id="ar-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
         </div>
 
         <!-- Import form (скрыта по умолчанию) -->
@@ -1869,6 +1879,11 @@ function randomThemeId() {
         </header>
 
         <div id="go-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <!-- Журнал авторотации. Скрыт, пока подмен не было: пустая карточка сообщала бы
+             «ничего не работает», хотя механизм просто не понадобился. Заполняет
+             renderMoneyRotateLog(). -->
+        <div id="go-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Model map (настраиваемый, как в Custom) -->
         <div id="go-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -1944,16 +1959,18 @@ function randomThemeId() {
           <div class="flex gap-2 items-end flex-wrap">
             <label class="flex flex-col gap-1">
               <span class="text-[10px] text-faint">email (логин)</span>
-              <input id="go-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+              <input id="go-add-email" oninput="newapiAddGhHint('go')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
             <label class="flex flex-col gap-1 flex-1">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="go-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="goAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('go')" title="взять email и ник из менеджера GitHub'ов — заодно видно, кто ещё не израсходован" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">🐙 из менеджера</button>
             <button onclick="newapiSeedPick('go')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="goShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
+          <div id="go-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
         </div>
 
         <!-- Import form (скрыта по умолчанию) -->
@@ -2006,6 +2023,8 @@ function randomThemeId() {
         </header>
 
         <div id="tb-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+        <!-- Журнал авторотации — см. renderMoneyRotateLog(), скрыт до первой подмены. -->
+        <div id="tb-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Models list -->
         <div id="tb-models" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -2081,16 +2100,18 @@ function randomThemeId() {
           <div class="flex gap-2 items-end flex-wrap">
             <label class="flex flex-col gap-1">
               <span class="text-[10px] text-faint">email (логин)</span>
-              <input id="tb-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+              <input id="tb-add-email" oninput="newapiAddGhHint('tb')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
             <label class="flex flex-col gap-1 flex-1">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="tb-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="tbAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('tb')" title="взять email и ник из менеджера GitHub'ов — заодно видно, кто ещё не израсходован" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">🐙 из менеджера</button>
             <button onclick="newapiSeedPick('tb')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="tbShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
+          <div id="tb-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
         </div>
 
         <!-- Import form (скрыта по умолчанию) -->
@@ -2143,6 +2164,8 @@ function randomThemeId() {
         </header>
 
         <div id="xp-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+        <!-- Журнал авторотации — см. renderMoneyRotateLog(), скрыт до первой подмены. -->
+        <div id="xp-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Models list -->
         <div id="xp-models" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -2232,16 +2255,18 @@ function randomThemeId() {
           <div class="flex gap-2 items-end flex-wrap">
             <label class="flex flex-col gap-1">
               <span class="text-[10px] text-faint">email (логин)</span>
-              <input id="xp-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+              <input id="xp-add-email" oninput="newapiAddGhHint('xp')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
             <label class="flex flex-col gap-1 flex-1">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="xp-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="xpAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('xp')" title="взять email и ник из менеджера GitHub'ов — заодно видно, кто ещё не израсходован" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">🐙 из менеджера</button>
             <button onclick="newapiSeedPick('xp')" title="создать аккаунт под уже залогиненным GitHub — пароль и 2FA не понадобятся" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">🐙 Взять готовый GitHub</button>
             <button onclick="xpShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
+          <div id="xp-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
         </div>
 
         <!-- Import form (скрыта по умолчанию) -->
@@ -2284,11 +2309,13 @@ function randomThemeId() {
               <span class="text-emerald">🐙</span> <a href="https://github.com" target="_blank" rel="noopener" class="text-ink underline underline-offset-4 hover:text-emerald">GitHub аккаунты</a>
             </h1>
             <p class="text-sm text-muted mt-1">купленные аккаунты · форматы <code class="font-mono text-emerald text-xs">Логин:Пароль:2FA:Recovery:Ник</code> / <code class="font-mono text-emerald text-xs">Логин:Пароль:2FA:дата:токен:email</code> · 2FA-код считается локально (TOTP) · <code class="font-mono text-azure text-xs">routing/github-accounts.json</code></p>
+            <p id="gh-usage-summary" class="text-xs text-faint mt-1"></p>
           </div>
           <div class="flex gap-2 items-center flex-wrap">
             <span id="gh-age-filter" class="flex gap-1"></span>
             <input id="gh-search" oninput="ghRenderGrid()" placeholder="🔍 поиск по нику/логину…" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             <button onclick="ghRefreshCodes()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить коды</button>
+            <button onclick="ghRelink()" title="дописать ghId в записи шлюзов, которые сошлись с GitHub только по нику — связка тогда переживёт правку ника" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20">🔗 Сверить привязки</button>
             <button onclick="ghShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
             <button onclick="ghShowImport()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📥 Импорт</button>
           </div>
@@ -2356,6 +2383,8 @@ function randomThemeId() {
           <span>2FA-код считается прямо в браузере из секрета (base32 + HMAC-SHA1, RFC 6238)</span>
           <span class="mx-2 opacity-40">·</span>
           <span>status: emerald live / amber cooldown / crimson dead — меняется в меню карточки</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>плашки <span class="text-azure">AR</span>/<span class="text-violet">GO</span>/<span class="text-amber">TB</span>/<span class="text-rose">XP</span> — запись в пуле шлюза (сверка по <code class="font-mono">ghId</code> и по нику/логину); «свободен» = записи в пуле нет</span>
         </div>
       </div>
     </div>
@@ -2999,6 +3028,7 @@ const state = {
   xpActiveModel: '',
   xpModelMap: {},
   github: [],
+  ghUsage: {},           // ghId -> [{ tag, status, name, recordId }] — где аккаунт уже израсходован
   ghReveal: {},          // id -> { pass:bool, secret:bool, rec:bool }
   ghMenuOpen: null,      // id открытого меню «⋯»
   ghTotpCache: {},       // id -> { code, until } кеш TOTP, чтобы не дёргать crypto на каждый тик
@@ -3251,6 +3281,7 @@ function paintStatus() {
   // Баланс в бейдже ACTIVE: провайдер мог только что смениться — цифра и пул должны
   // переехать на новый шлюз сразу, не ожидая своего 10-секундного тика.
   try { paintSideBalance(); } catch (e) { console.warn('paintSideBalance', e); }
+  try { paintSideAuto(); } catch (e) { console.warn('paintSideAuto', e); }
   try { sideBalanceTick(); } catch (e) { console.warn('sideBalanceTick', e); }
 }
 
@@ -5821,6 +5852,7 @@ function arCheckinCell(s) {
   }
   const from = s.checkinFrom === 'anchor' ? 'по вписанному вручную балансу'
     : s.checkinFrom === 'manual' ? 'отмечено вручную'
+    : s.checkinFrom === 'auto' ? 'забрано автоподарком ⚡ (шлюз подтвердил)'
     : 'по точному балансу из ЛК';
   const tip = `+$${bonus} уже забрали ${agoShort(st.at)} назад (${from}) · новый подарок после ${arCheckinCfg().resetHhmmMsk} МСК`
     + ' · клик = снять отметку';
@@ -5915,6 +5947,50 @@ async function arCheckinLk(id) {
   } catch (e) { toast('чек-ин: ' + e.message, 'error', 12000); }
 }
 
+// ⚡ Автоподарок: тот же роут, но режим autocheckin — скрипт сам жмёт вход через
+// GitHub, сам закрывает окно и сам зовёт точный баланс. POST отвечает сразу после
+// спавна, поэтому итог забираем поллингом статуса (SSE в проекте нет).
+const AR_AUTO_POLL_MS = 3000;
+const AR_AUTO_MAX_MS = 3 * 60 * 1000;
+
+async function arAutoCheckin(id) {
+  try {
+    const res = await fetch('/__switch/api/ar/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, mode: 'autocheckin' }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    if (data.already) return toast('🌐 браузер этого аккаунта уже открыт — доведи вход в нём или закрой окно', 'warn', 9000);
+    toast('⚡ автоподарок: разлогин и вход через GitHub — окно закроется само', 'info', 8000);
+    arAutoCheckinWatch(id, data.label);
+  } catch (e) { toast('автоподарок: ' + e.message, 'error', 12000); }
+}
+
+async function arAutoCheckinWatch(id, label) {
+  const until = Date.now() + AR_AUTO_MAX_MS;
+  while (Date.now() < until) {
+    await new Promise(r => setTimeout(r, AR_AUTO_POLL_MS));
+    let run = null;
+    try {
+      const res = await fetch('/__switch/api/ar/checkin-status');
+      const data = await res.json();
+      run = (data.runs || []).find(r => r.label === label);
+    } catch { continue; }              // дашборд перезапустили/сеть дёрнулась — ждём дальше
+    if (!run || run.state === 'running') continue;
+    if (run.state === 'error') return toast('⚡ автоподарок: ' + (run.message || 'не получилось'), 'error', 14000);
+    // Готово. Баланс и отметку бэкенд уже посчитал — тянем их тем же путём, что 💰:
+    // arCheckBalance патчит запись и перерисовывает колонку 🎁, сайдвар и шапку.
+    const s = (state.agentrouter || []).find(x => x.id === id);
+    if (s) await arCheckBalance(s.api_key);
+    toast(run.checkedIn === false
+      ? '⚡ вошёл, но чек-ин не зачтён — суточное окно ещё не сменилось'
+      : '⚡ ' + (run.message || 'чек-ин зачтён'), run.checkedIn === false ? 'warn' : 'success', 9000);
+    return;
+  }
+  toast('⚡ автоподарок: за 3 минуты результат не пришёл — глянь Server Logs', 'warn', 12000);
+}
+
 // Счётчик в сайдваре. Есть готовые к забору → показываем 🎁N вместо числа ключей:
 // видно с любой вкладки, не заходя в AgentRouter.
 function arSetNavCount() {
@@ -5928,6 +6004,9 @@ function arSetNavCount() {
 }
 
 function renderArGauge() {
+  // Журнал авторотации рядом со шкалой пула: подмена аккаунта — это событие про пул.
+  // Троттл 10с внутри moneyAutoFetch, поэтому вызов на каждой перерисовке дешёвый.
+  moneyAutoFetch('agentrouter').then(() => renderMoneyRotateLog('agentrouter')).catch(() => {});
   const st = arPoolStats(state.agentrouter);
   // Баланс активного ключа — та же цифра, что в статусбаре Claude Code. Раньше в
   // шапке была только Σ по пулу, и расхождение с баром выглядело как «баланс не едет».
@@ -5961,10 +6040,7 @@ async function loadArSessions(probe) {
     state.agentrouter = data.sessions || [];
     if (data.checkin) state.arCheckin = data.checkin;
     arSetNavCount();
-    if (!state.loaded.github && state.agentrouter.some(s => s.ghId && s.ghId !== 'personal')) {
-      state.loaded.github = true;
-      try { await loadGhKeys(); } catch (e) {}
-    }
+    await newapiEnsureGhNames(state.agentrouter);
     renderAr();
     renderArGauge();
     arRenderCheckinCard();
@@ -6346,7 +6422,6 @@ const LAT_WINDOWS = [[15, '15м'], [60, '1ч'], [360, '6ч'], [1440, '24ч']];
 const LAT_MIN = {};    // pfx → выбранное окно в минутах (помним в localStorage)
 const LAT_DATA = {};   // pfx → последний ответ /latency (для перерисовки на resize)
 const LAT_GEOM = {};   // pfx → геометрия последней отрисовки (для курсора-полоски)
-const LAT_LEGEND = {}; // pfx → подпись без наведения (курсор её временно подменяет)
 const LAT_HOVER = {};  // pfx → мышь над графиком (тогда поллинг не перерисовывает)
 
 function latWindow(pfx) {
@@ -6424,7 +6499,8 @@ function latChartSvg(pfx, d, width) {
     <text x="${PADL - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" font-size="8" fill="currentColor" fill-opacity="0.5">${latFmt(v)}</text>`).join('');
   // Точки ставим только когда их немного — на суточном окне 1440 кружков превращают
   // линию в кашу и раздувают DOM. Нативных <title> на точках нет намеренно: цифры
-  // показывает курсор-полоска, а всплывающая подсказка перекрывала бы её.
+  // отдаёт tooltip у курсора (latTip), который ловит мышь по всей высоте графика, —
+  // в 2-пиксельный кружок мышью не попасть, да и <title> ждёт секунду и не стилизуется.
   const dots = pts.length <= 120 ? pts.map((p) => `<circle cx="${X(p.t).toFixed(1)}" cy="${Y(p.avg).toFixed(1)}" r="2"
     fill="currentColor" class="text-sky"/>`).join('') : '';
   // Геометрия нужна ещё и курсору-полоске: он ищет ближайшую точку по времени, а для
@@ -6455,29 +6531,64 @@ function latDraw(pfx) {
   // цифры прямо из-под курсора. Свежие данные уже в LAT_DATA — попадут в следующую
   // отрисовку, как только мышь уйдёт.
   if (LAT_HOVER[pfx]) return;
+  latTipHide(); // перерисовка выбрасывает svg — подсказка от него осталась бы висеть
   box.innerHTML = latChartSvg(pfx, d, box.clientWidth || 600);
   if (leg) {
     const winMin = Math.round(d.window_sec / 60);
     const win = LAT_WINDOWS.find(([m]) => m === winMin);
     const label = win ? win[1] : winMin + 'м';
-    LAT_LEGEND[pfx] = d.total
+    // Подпись — только контекст всего окна и он не меняется под мышью: цифры
+    // конкретной минуты показывает tooltip у курсора.
+    let txt = d.total
       ? `окно ${label} · ${latStamp(d.now - d.window_sec * 1000, winMin)} → ${latStamp(d.now, winMin)} · ответов ${d.total} · среднее ${latFmt(d.avg_ms)} · макс ${latFmt(d.max_ms)} · линия = среднее по минуте, бледная = худший ответ минуты`
       : `окно ${label} · ответов не было`;
     // Данные с диска — это норма для неактивного провайдера, но человек должен знать,
     // что новых точек не будет, пока его keepalive не поднят: иначе «график замёрз».
     if (d.source === 'file') {
-      LAT_LEGEND[pfx] += d.proxy_state === 'stale'
+      txt += d.proxy_state === 'stale'
         ? ` · ⚠ история с диска: прокси :${d.port} на старом коде`
         : ` · ⚠ история с диска: keepalive :${d.port} не запущен, новых точек не будет`;
     }
-    leg.textContent = LAT_LEGEND[pfx];
+    leg.textContent = txt;
   }
   latBindCursor(pfx);
 }
 
+// Tooltip у курсора: один узел на все графики провайдеров, живёт в <body> с
+// position:fixed. Внутри карточки его резала бы её геометрия — график всего 92px
+// высотой, а подсказка выше.
+let LAT_TIP = null;
+let LAT_TIP_SYNC = null; // «навести заново по прежним координатам мыши» активного графика
+function latTip() {
+  if (LAT_TIP) return LAT_TIP;
+  LAT_TIP = document.createElement('div');
+  LAT_TIP.className = 'fixed z-[90] hidden pointer-events-none rounded-lg border border-line '
+    + 'bg-elevated shadow-xl shadow-black/60 px-2.5 py-1.5 font-mono text-[10px] leading-[1.6]';
+  document.body.appendChild(LAT_TIP);
+  // Скролл (колесо под курсором или подскок вёрстки на автообновлении) мышь не двигает
+  // → mousemove не придёт, и приклеенная к экрану подсказка осталась бы над чужой
+  // минутой. Гасить нельзя: при неподвижной мыши её нечем вернуть, подсказка мигала бы
+  // каждые пару секунд. Поэтому наводимся заново по последним координатам курсора.
+  window.addEventListener('scroll', () => { if (LAT_TIP_SYNC) LAT_TIP_SYNC(); }, true);
+  return LAT_TIP;
+}
+function latTipHide() {
+  if (LAT_TIP) LAT_TIP.classList.add('hidden');
+  LAT_TIP_SYNC = null;
+}
+// Держимся справа от курсора, у правого края экрана разворачиваемся влево, по вертикали
+// центруемся и не вылезаем за окно.
+function latTipPlace(tip, cx, cy) {
+  const GAP = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = cx + GAP;
+  if (x + w > window.innerWidth - 8) x = cx - GAP - w;
+  tip.style.left = Math.max(8, x) + 'px';
+  tip.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, cy - h / 2)) + 'px';
+}
+
 // Курсор-полоска: вертикальная линия по мыши + маркеры на среднем и максимуме минуты,
-// цифры уходят в подпись под графиком. Наводить на 2-пиксельные точки мышью нельзя —
-// нативные <title> для этого не годятся, нужен именно захват по всей высоте.
+// цифры — в tooltip, который едет за курсором. Наводить на 2-пиксельные точки мышью
+// нельзя, поэтому ловим по всей высоте графика.
 // Слушатели вешаются заново на каждую перерисовку: innerHTML их всё равно выбрасывает.
 function latBindCursor(pfx) {
   const box = $(pfx + '-lat-chart');
@@ -6488,10 +6599,12 @@ function latBindCursor(pfx) {
   const line = g.querySelector('.lat-cursor-line');
   const dot = g.querySelector('.lat-cursor-dot');
   const dotMax = g.querySelector('.lat-cursor-max');
-  const leg = $(pfx + '-lat-legend');
   const winMin = Math.round((LAT_DATA[pfx] || {}).window_sec / 60) || 0;
 
   const move = (ev) => {
+    // Карточку могли перерисовать целиком — тогда этот svg уже вне документа и его
+    // rect нулевой: подсказка от мёртвого графика висела бы над пустотой.
+    if (!svg.isConnected) { leave(); return; }
     const r = svg.getBoundingClientRect();
     if (!r.width) return;
     // Курсор в координатах viewBox: он равен пиксельной ширине контейнера НА МОМЕНТ
@@ -6515,12 +6628,23 @@ function latBindCursor(pfx) {
     dotMax.setAttribute('cy', geom.Y(best.max).toFixed(1));
     g.style.display = '';
     LAT_HOVER[pfx] = true;
-    if (leg) leg.textContent = `${latStamp(best.t, winMin)} · ответов ${best.n} · среднее ${latFmt(best.avg)} · быстрейший ${latFmt(best.min)} · худший ${latFmt(best.max)}`;
+    // Цвета совпадают с графиком: sky = линия среднего, тусклый = линия худшего.
+    const tip = latTip();
+    tip.innerHTML = `<div class="text-ink font-semibold pb-1 mb-1 border-b border-line-soft">${latStamp(best.t, winMin)}</div>
+      <div class="grid grid-cols-2 gap-x-3">
+        <span class="text-muted">среднее</span><span class="text-right" style="color:#38bdf8">${latFmt(best.avg)}</span>
+        <span class="text-muted">быстрейший</span><span class="text-right text-emerald">${latFmt(best.min)}</span>
+        <span class="text-muted">худший</span><span class="text-right text-dim">${latFmt(best.max)}</span>
+        <span class="text-muted">ответов</span><span class="text-right text-ink">${best.n}</span>
+      </div>`;
+    tip.classList.remove('hidden');
+    latTipPlace(tip, ev.clientX, ev.clientY);
+    LAT_TIP_SYNC = () => move({ clientX: ev.clientX, clientY: ev.clientY });
   };
   const leave = () => {
     g.style.display = 'none';
     LAT_HOVER[pfx] = false;
-    if (leg && LAT_LEGEND[pfx]) leg.textContent = LAT_LEGEND[pfx];
+    latTipHide();
   };
   svg.addEventListener('mousemove', move);
   svg.addEventListener('mouseleave', leave);
@@ -6656,7 +6780,7 @@ function renderAr() {
     const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
     const idJ = JSON.stringify(s.id || '');
     const balanceCell = arBalanceCell(s, kJ);
-    const ghBadge = arGhBadge(s);
+    const ghBadge = newapiGhBadge(s, 'ar');
     const keyCell = noKey ? noKeyCell(`arSetKey(${idJ})`) : `<button onclick='arActivate(${kJ})' title="Сделать активным (ключ → ar-active-key.txt, на лету)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-sky hover:border-sky/50'} transition">${esc(keyMask)}</button>`;
     return `<tr class="hover:bg-elevated/40 transition ${rowClass}">
@@ -6677,7 +6801,8 @@ function renderAr() {
         ${actBtn(`arRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
         ${noKey ? '' : actBtn(`arActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
         ${noKey ? '' : actBtn(`arPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
-        ${noKey ? '' : actBtn(`arCheckinLk(${idJ})`, `Забрать +$25: ЛК откроется разлогиненным, останется клик «Continue with GitHub»`, '🎁', 'amber')}
+        ${noKey ? '' : actBtn(`arAutoCheckin(${idJ})`, `Автоподарок: разлогин, вход через GitHub и пересчёт баланса без твоих кликов`, '⚡', 'emerald')}
+        ${noKey ? '' : actBtn(`arCheckinLk(${idJ})`, `Забрать +$25 руками: ЛК откроется разлогиненным, останется клик «Continue with GitHub»`, '🎁', 'amber')}
         ${actBtn(`arOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть ЛК (GitHub-сессия, чек-ин +$25)', '🌐', 'violet')}
         ${actBtn(`arDelete(${idJ})`,    'Удалить',                '🗑', 'crimson')}
       </td>
@@ -6921,6 +7046,7 @@ function arBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'ar'); }
 
 function arShowAdd(show = true) {
   $('ar-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('ar');
   if (show) { $('ar-add-email').value = ''; $('ar-add-key').value = ''; $('ar-add-email').focus(); }
 }
 
@@ -6931,7 +7057,7 @@ async function arAdd() {
   try {
     const res = await fetch('/__switch/api/ar/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, api_key }),
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.ar }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -7094,27 +7220,47 @@ async function arOpenLk(id) {
   } catch (e) { toast('ЛК: ' + e.message, 'error'); }
 }
 
-// Бейдж «какой GitHub привязан» в колонке GitHub таблицы AR. Метка-организация:
-// 'personal' — личный GitHub владельца; 'gh_…' — ник из хранилища; нет — «—».
-// Клик открывает модалку выбора (сменить/отвязать).
-function arGhBadge(s) {
+// Хранилище GitHub-аккаунтов нужно бейджу, чтобы показать ник, а не голый id: без него
+// привязка рисуется как «🐙 —», то есть выглядит потерянной. Тянем список ровно один раз
+// и только если в пуле есть хоть одна привязка — на вкладке без привязок запрос лишний.
+async function newapiEnsureGhNames(pool) {
+  if (state.loaded.github) return;
+  if (!(pool || []).some(s => s.ghId && s.ghId !== 'personal')) return;
+  state.loaded.github = true;
+  try { await loadGhKeys(); } catch (e) { /* loadGhKeys сама пишет ошибку в gh-grid */ }
+}
+
+// Бейдж «какой GitHub привязан» в колонке GitHub таблиц NewAPI-шлюзов (ar/go/tb/xp).
+// Метка-организация: 'personal' — личный GitHub владельца; 'gh_…' — ник из хранилища;
+// нет — «—». Клик открывает модалку выбора (сменить/отвязать).
+//
+// До 22.08 колонка была только у AgentRouter, хотя регистрация через GitHub одинакова
+// у всех четырёх шлюзов, а плашки «где уже используется» на вкладке GitHub читают
+// именно `ghId` — без метки на go/tb/xp занятость там угадывалась по совпадению ника
+// с email записи и молчала, если аккаунт назван иначе.
+function newapiGhBadge(s, prov) {
   const kJ = JSON.stringify(s.api_key);
+  const pJ = JSON.stringify(prov);
   if (s.ghId === 'personal') {
-    return `<button onclick='arPickGithub(${kJ})' title="GitHub: личный (мой) · клик — сменить/отвязать"
+    return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="GitHub: личный (мой) · клик — сменить/отвязать"
       class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-violet/10 border border-violet/40 text-violet rounded font-mono hover:bg-violet/20 whitespace-nowrap">🐙 Личный</button>`;
   }
   const gh = s.ghId ? (state.github || []).find(g => g.id === s.ghId) : null;
   if (gh) {
-    return `<button onclick='arPickGithub(${kJ})' title="${esc('GitHub: ' + gh.login + ' · клик — сменить/отвязать')}"
+    return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="${esc('GitHub: ' + gh.login + ' · клик — сменить/отвязать')}"
       class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-teal/10 border border-teal/40 text-teal rounded font-mono hover:bg-teal/20 whitespace-nowrap">🐙 ${esc(gh.nickname || gh.login)}</button>`;
   }
-  return `<button onclick='arPickGithub(${kJ})' title="GitHub не выбран · клик — выбрать"
+  return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="GitHub не выбран · клик — выбрать"
     class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-teal/60 hover:text-teal whitespace-nowrap">🐙 —</button>`;
 }
 
-// Модалка выбора GitHub-аккаунта для AR-аккаунта. Первый пункт — «личный GitHub» (вне хранилища),
+// Модалка выбора GitHub-аккаунта для записи шлюза. Первый пункт — «личный GitHub» (вне хранилища),
 // ниже — импортированные аккаунты из routing/github-accounts.json. ghId=null → отвязать.
-async function arPickGithub(api_key) {
+// Модалка одна на все четыре вкладки, поэтому prov едет в каждом onclick — иначе привязка
+// уходила бы в пул той вкладки, которая открывала её в прошлый раз.
+async function newapiPickGithub(prov, api_key) {
+  const meta = NEWAPI_SEED_PROV[prov];
+  if (!meta) return toast('GitHub: неизвестный шлюз ' + prov, 'error');
   if (!(state.github || []).length && !state.loaded.github) {
     try {
       await loadGhKeys();
@@ -7123,56 +7269,178 @@ async function arPickGithub(api_key) {
   const list = state.github || [];
   const kJ = JSON.stringify(api_key);
   const kJs = kJ.replace(/'/g, '&#39;');
-  const cur = state.agentrouter.find(x => x.api_key === api_key);
+  const pJs = JSON.stringify(prov).replace(/'/g, '&#39;');
+  const cur = (meta.list() || []).find(x => x.api_key === api_key);
   const curGhId = cur && cur.ghId ? cur.ghId : null;
   const rows = [
     `<div class="flex items-center justify-between px-3 py-2 rounded-lg border cursor-pointer transition ${curGhId === 'personal' ? 'bg-violet/10 border-violet/50' : 'bg-elevated border-line-soft hover:border-violet/60'}"
-       onclick='arSetGithub(${kJs}, "personal")'>
+       onclick='newapiSetGithub(${pJs}, ${kJs}, "personal")'>
       <span class="text-xs text-ink">🌟 Личный GitHub <span class="text-muted">(мой)</span></span>
       ${curGhId === 'personal' ? '<span class="text-violet text-xs">✓</span>' : ''}
     </div>`,
   ];
-  for (const g of (list || [])) {
+  for (const g of ghPickSorted(list, prov)) {
     const st = GH_STATUS_META[g.status] || GH_STATUS_META.unknown;
     const sel = curGhId === g.id;
     const gJ = JSON.stringify(g.id).replace(/'/g, '&#39;');
-    rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border cursor-pointer transition ${sel ? 'bg-teal/10 border-teal/50' : 'bg-elevated border-line-soft hover:border-teal/60'}"
-       onclick='arSetGithub(${kJs}, ${gJ})'>
-      <span class="text-xs text-ink truncate max-w-[18ch]">🐙 ${esc(g.nickname || g.login)}</span>
+    rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border cursor-pointer transition ${sel ? 'bg-teal/10 border-teal/50' : ghUsedHere(g.id, prov) ? 'bg-crimson/5 border-crimson/30 hover:border-crimson/60' : 'bg-elevated border-line-soft hover:border-teal/60'}"
+       onclick='newapiSetGithub(${pJs}, ${kJs}, ${gJ})'>
+      <span class="text-xs ${ghUsedHere(g.id, prov) && !sel ? 'text-muted' : 'text-ink'} truncate max-w-[18ch]">🐙 ${esc(g.nickname || g.login)}</span>
       <span class="flex items-center gap-1.5 shrink-0">
+        ${ghPickBadges(g.id, prov)}
         <span class="font-mono text-[10px] text-faint truncate max-w-[16ch]">${esc(g.login)}</span>
         <span class="text-[10px] ${st.badge.split(' ').slice(-2).join(' ')} px-1 py-px rounded border ${st.badge}">${st.label}</span>
         ${sel ? '<span class="text-teal text-xs">✓</span>' : ''}
       </span>
     </div>`);
   }
-  $('ar-gh-modal-list').innerHTML = rows.join('');
-  $('ar-gh-modal-subtitle').textContent = cur ? (cur.email || cur.name || api_key.slice(-6)) : '—';
+  $('gh-bind-modal-list').innerHTML = rows.join('');
+  $('gh-bind-modal-provider').textContent = meta.label;
+  $('gh-bind-modal-subtitle').textContent = cur ? (cur.email || cur.name || api_key.slice(-6)) : '—';
   const unbindBtn = curGhId
-    ? `<button onclick='arSetGithub(${kJs}, null)' class="text-xs px-3 py-1.5 rounded-lg border border-crimson/40 text-crimson hover:bg-crimson/10 transition">Отвязать</button>`
+    ? `<button onclick='newapiSetGithub(${pJs}, ${kJs}, null)' class="text-xs px-3 py-1.5 rounded-lg border border-crimson/40 text-crimson hover:bg-crimson/10 transition">Отвязать</button>`
     : '';
-  $('ar-gh-modal-unbind').innerHTML = unbindBtn;
-  $('ar-gh-modal').classList.remove('hidden');
+  $('gh-bind-modal-unbind').innerHTML = unbindBtn;
+  $('gh-bind-modal').classList.remove('hidden');
 }
 
-function closeArGhModal() {
-  $('ar-gh-modal').classList.add('hidden');
+function closeGhBindModal() {
+  $('gh-bind-modal').classList.add('hidden');
 }
 
-async function arSetGithub(api_key, ghId) {
+async function newapiSetGithub(prov, api_key, ghId) {
+  const meta = NEWAPI_SEED_PROV[prov];
+  if (!meta) return toast('GitHub: неизвестный шлюз ' + prov, 'error');
   try {
-    const res = await fetch('/__switch/api/ar/set-github', {
+    const res = await fetch(`/__switch/api/${prov}/set-github`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key, ghId }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
-    closeArGhModal();
-    const sess = (state.agentrouter || []).find(x => x.api_key === api_key);
+    closeGhBindModal();
+    const sess = (meta.list() || []).find(x => x.api_key === api_key);
     if (sess) sess.ghId = ghId;
-    renderAr();
+    meta.render();
+    // Плашки «где уже используется» на вкладке GitHub читают ghId — после смены метки
+    // их надо перерисовать, иначе аккаунт остаётся «свободен» до перезагрузки вкладки.
+    if (state.loaded.github) loadGhKeys();
     toast(ghId === null ? '🐙 GitHub отвязан' : ghId === 'personal' ? '🐙 привязан личный GitHub' : '🐙 GitHub привязан', 'success', 2500);
   } catch (e) { toast('GitHub: ' + e.message, 'error'); }
+}
+
+// ───── «🐙 из менеджера» — привязка ДО создания записи ─────
+//
+// Дыра, которую это закрывает: владелец создавал запись шлюза руками, копируя логин или
+// email из менеджера GitHub'ов в поле формы. Ник совпадал, но `ghId` не появлялся, и
+// связка держалась только на строке — а её правят (у покупок из 3 полей ник берётся из
+// email и часто не равен настоящему юзернейму GitHub). Теперь есть две страховки: кнопка
+// подставляет email/ник и запоминает `ghId`, а при ручном вводе тот же `ghId` дописывает
+// бэкенд по совпадению (`ghLinkForNew`).
+//
+// Правило трёх состояний в списке (иначе главный факт тонет):
+//   свободен на ЭТОМ шлюзе → плашки нет вообще, пустая строка = «бери»;
+//   занят ЗДЕСЬ            → громко, красным: только это мешает регистрации;
+//   занят на ДРУГИХ        → тихая серая справка, здесь не помеха.
+const ghUsageFor = ghId => (state.ghUsage && state.ghUsage[ghId]) || [];
+const ghUsedHere = (ghId, prov) => ghUsageFor(ghId).find(r => r.tag === prov) || null;
+const ghUsedElse = (ghId, prov) => ghUsageFor(ghId).filter(r => r.tag !== prov);
+
+function ghPickBadges(ghId, prov) {
+  const here = ghUsedHere(ghId, prov), other = ghUsedElse(ghId, prov);
+  const out = [];
+  if (here) {
+    const what = here.source === 'manual' ? 'отмечен вручную' : here.status;
+    out.push(`<span class="text-[10px] px-1.5 py-0.5 rounded border bg-crimson/15 text-crimson border-crimson/50 font-medium whitespace-nowrap"
+      title="${esc(`${NEWAPI_SEED_PROV[prov] ? NEWAPI_SEED_PROV[prov].label : prov}: запись уже есть (${what})${here.name ? ' — ' + here.name : ''}. Второй аккаунт под тем же GitHub тут не заведётся — открой существующий.`)}">🔗 занят здесь · ${esc(what)}</span>`);
+  }
+  if (other.length) {
+    out.push(`<span class="text-[10px] px-1.5 py-0.5 rounded border border-line-soft text-faint font-mono whitespace-nowrap"
+      title="${esc('занят на: ' + other.map(r => (GH_USE_META[r.tag] ? GH_USE_META[r.tag].label : r.tag) + ' ' + r.status).join(', ') + ' — регистрации здесь не мешает')}">${other.map(r => r.tag.toUpperCase()).join(' · ')}</span>`);
+  }
+  return out.join(' ');
+}
+// Годные сверху, занятые здесь — в самый низ: выбирать глазами приходится из верхних строк.
+const ghPickSorted = (list, prov) => [...(list || [])].sort((a, b) => {
+  const r = g => ghUsedHere(g.id, prov) ? 2 : ghUsageFor(g.id).length ? 1 : 0;
+  return r(a) - r(b) || String(a.nickname || a.login).localeCompare(String(b.nickname || b.login));
+});
+
+// Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
+const ghAddPick = { ar: null, go: null, tb: null, xp: null };
+
+function newapiAddGhReset(prov) {
+  ghAddPick[prov] = null;
+  const h = $(`${prov}-add-gh-hint`);
+  if (h) h.innerHTML = '';
+}
+
+// Строка под полем email: что дашборд знает про введённое руками.
+function newapiAddGhHint(prov) {
+  const h = $(`${prov}-add-gh-hint`);
+  if (!h) return;
+  const mail = ($(`${prov}-add-email`).value || '').trim().toLowerCase();
+  if (!mail) return newapiAddGhReset(prov);
+  const g = (state.github || []).find(x => String(x.nickname || '').toLowerCase() === mail
+    || String(x.login || '').toLowerCase() === mail);
+  if (!g) {
+    ghAddPick[prov] = null;
+    h.innerHTML = `<span class="text-faint">🐙 в менеджере такого нет — запись создам, но привязки не будет</span>`;
+    return;
+  }
+  ghAddPick[prov] = g.id;
+  const here = ghUsedHere(g.id, prov);
+  h.innerHTML = `🐙 <span class="text-ink">${esc(g.nickname || g.login)}</span> · `
+    + (here
+      ? `${ghPickBadges(g.id, prov)} <span class="text-crimson">запись на этом шлюзе уже есть — заводить вторую нечего</span>`
+      : `<span class="text-emerald">свободен здесь — привяжу автоматически</span> ${ghPickBadges(g.id, prov)}`);
+}
+
+// Модалка выбора для НОВОЙ записи. Переиспользует #gh-bind-modal: тот же список, другое
+// действие по клику — не пишем ghId в пул, а заполняем форму.
+async function newapiAddPickGithub(prov) {
+  const meta = NEWAPI_SEED_PROV[prov];
+  if (!meta) return toast('GitHub: неизвестный шлюз ' + prov, 'error');
+  if (!(state.github || []).length && !state.loaded.github) {
+    try { await loadGhKeys(); } catch (e) { /* loadGhKeys сама пишет ошибку */ }
+  }
+  const list = state.github || [];
+  const pJs = JSON.stringify(prov).replace(/'/g, '&#39;');
+  const free = list.filter(g => !ghUsedHere(g.id, prov)).length;
+  const rows = ghPickSorted(list, prov).map(g => {
+    const st = GH_STATUS_META[g.status] || GH_STATUS_META.unknown;
+    const here = ghUsedHere(g.id, prov);
+    const gJs = JSON.stringify(g.id).replace(/'/g, '&#39;');
+    return `<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border cursor-pointer transition ${
+      here ? 'bg-crimson/5 border-crimson/30 hover:border-crimson/60' : 'bg-elevated border-line-soft hover:border-teal/60'}"
+       onclick='newapiAddTakeGh(${pJs}, ${gJs})'>
+      <span class="text-xs ${here ? 'text-muted' : 'text-ink'} truncate max-w-[18ch]">🐙 ${esc(g.nickname || g.login)}</span>
+      <span class="flex items-center gap-1.5 shrink-0">
+        ${ghPickBadges(g.id, prov)}
+        <span class="font-mono text-[10px] text-faint truncate max-w-[16ch]">${esc(g.login)}</span>
+        <span class="text-[10px] px-1 py-px rounded border ${st.badge}">${st.label}</span>
+      </span>
+    </div>`;
+  });
+  $('gh-bind-modal-list').innerHTML = rows.join('')
+    || `<div class="text-xs text-faint px-1 py-3">хранилище GitHub пусто — добавь аккаунты во вкладке GitHub</div>`;
+  $('gh-bind-modal-provider').textContent = meta.label;
+  $('gh-bind-modal-subtitle').textContent = `новая запись · годны ${free} из ${list.length} · без плашки = свободен здесь`;
+  $('gh-bind-modal-unbind').innerHTML = '';
+  $('gh-bind-modal').classList.remove('hidden');
+}
+
+// Выбор в модалке: подставляем email/ник в форму и запоминаем ghId до «Сохранить».
+function newapiAddTakeGh(prov, ghId) {
+  const g = (state.github || []).find(x => x.id === ghId);
+  if (!g) return;
+  const mail = $(`${prov}-add-email`);
+  if (mail) mail.value = g.login || g.nickname || '';
+  ghAddPick[prov] = g.id;
+  closeGhBindModal();
+  newapiAddGhHint(prov);
+  // Ник у покупок из 3 полей берётся из email и настоящему юзернейму не равен — а `name`
+  // записи участвует в сверке. Поэтому уходит именно ник из менеджера, а не часть email.
 }
 
 // ───── Заселение готовой GitHub-сессии (общее для ar/go/tb/xp) ─────
@@ -7185,11 +7453,14 @@ async function arSetGithub(api_key, ghId) {
 //
 // Тот же GitHub на ДРУГОМ хосте = новый аккаунт панели; на ТОМ ЖЕ = вход в существующий,
 // поэтому занятые здесь аккаунты в списке заблокированы.
+// Реестр NewAPI-шлюзов: одна запись на вкладку. `reload` перечитывает пул с бэка,
+// `list`/`render` дают доступ к уже загруженному пулу и перерисовку без запроса —
+// ими живёт привязка GitHub (newapiGhBadge / newapiPickGithub / newapiSetGithub).
 const NEWAPI_SEED_PROV = {
-  ar: { label: 'AgentRouter', host: 'agentrouter.org', color: 'azure',   reload: () => loadArSessions() },
-  go: { label: 'GoRouter',    host: 'gorouter.app',    color: 'violet',  reload: () => loadGoSessions() },
-  tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions() },
-  xp: { label: 'XPeach',      host: 'xpeach.codes',    color: 'rose',    reload: () => loadXpSessions() },
+  ar: { label: 'AgentRouter', host: 'agentrouter.org', color: 'azure',   reload: () => loadArSessions(), list: () => state.agentrouter, render: () => renderAr() },
+  go: { label: 'GoRouter',    host: 'gorouter.app',    color: 'violet',  reload: () => loadGoSessions(), list: () => state.gorouter,    render: () => renderGo() },
+  tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions(), list: () => state.tabi,        render: () => renderTb() },
+  xp: { label: 'XPeach',      host: 'xpeach.codes',    color: 'rose',    reload: () => loadXpSessions(), list: () => state.xpeach,      render: () => renderXp() },
 };
 
 let ghSeedProv = null;   // какой провайдер открыл модалку
@@ -7534,6 +7805,7 @@ function goPoolStats(sessions) {
 }
 
 function renderGoGauge() {
+  moneyAutoFetch('gorouter').then(() => renderMoneyRotateLog('gorouter')).catch(() => {});
   const st = goPoolStats(state.gorouter);
   renderEnergyGauge($('go-energy'), {
     title: 'GoRouter · запас пула',
@@ -7559,6 +7831,7 @@ async function loadGoSessions(probe) {
     if (!res.ok) throw new Error(data.error);
     state.gorouter = data.sessions || [];
     if ($('nav-count-gorouter')) $('nav-count-gorouter').textContent = state.gorouter.length;
+    await newapiEnsureGhNames(state.gorouter);
     renderGo();
     renderGoGauge();
     loadGoModels();
@@ -7685,6 +7958,7 @@ function renderGo() {
       </td>
       <td class="px-3 py-2.5 text-center">${statusCell}</td>
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'go')}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${noKey ? '' : actBtn(`goCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
         ${actBtn(`goShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
@@ -7704,6 +7978,7 @@ function renderGo() {
       { label: 'API Key' },
       { label: 'Status', align: 'center', w: 'w-16' },
       { label: 'Баланс', align: 'center', w: 'w-24' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -7715,6 +7990,7 @@ function goBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'go'); }
 
 function goShowAdd(show = true) {
   $('go-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('go');
   if (show) { $('go-add-email').value = ''; $('go-add-key').value = ''; $('go-add-email').focus(); }
 }
 
@@ -7725,7 +8001,7 @@ async function goAdd() {
   try {
     const res = await fetch('/__switch/api/go/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, api_key }),
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.go }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -8056,6 +8332,7 @@ function tbPoolStats(sessions) {
 }
 
 function renderTbGauge() {
+  moneyAutoFetch('tabi').then(() => renderMoneyRotateLog('tabi')).catch(() => {});
   const st = tbPoolStats(state.tabi);
   renderEnergyGauge($('tb-energy'), {
     title: 'Tabi Token · запас пула',
@@ -8082,6 +8359,7 @@ async function loadTbSessions(probe) {
     state.tabi = data.sessions || [];
     if (data.activeModel) state.tbActiveModel = data.activeModel;
     if ($('nav-count-tabi')) $('nav-count-tabi').textContent = state.tabi.length;
+    await newapiEnsureGhNames(state.tabi);
     renderTb();
     renderTbGauge();
     loadTbModels();
@@ -8213,6 +8491,7 @@ function renderTb() {
       </td>
       <td class="px-3 py-2.5 text-center">${statusCell}</td>
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'tb')}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${noKey ? '' : actBtn(`tbCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
         ${actBtn(`tbShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
@@ -8232,6 +8511,7 @@ function renderTb() {
       { label: 'API Key' },
       { label: 'Status', align: 'center', w: 'w-16' },
       { label: 'Баланс', align: 'center', w: 'w-24' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -8243,6 +8523,7 @@ function tbBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'tb'); }
 
 function tbShowAdd(show = true) {
   $('tb-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('tb');
   if (show) { $('tb-add-email').value = ''; $('tb-add-key').value = ''; $('tb-add-email').focus(); }
 }
 
@@ -8253,7 +8534,7 @@ async function tbAdd() {
   try {
     const res = await fetch('/__switch/api/tb/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, api_key }),
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.tb }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -8580,6 +8861,7 @@ function xpPoolStats(sessions) {
 }
 
 function renderXpGauge() {
+  moneyAutoFetch('xpeach').then(() => renderMoneyRotateLog('xpeach')).catch(() => {});
   const st = xpPoolStats(state.xpeach);
   renderEnergyGauge($('xp-energy'), {
     title: 'XPeach · запас пула',
@@ -8606,6 +8888,7 @@ async function loadXpSessions(probe) {
     state.xpeach = data.sessions || [];
     if (data.activeModel) state.xpActiveModel = data.activeModel;
     if ($('nav-count-xpeach')) $('nav-count-xpeach').textContent = state.xpeach.length;
+    await newapiEnsureGhNames(state.xpeach);
     renderXp();
     renderXpGauge();
     loadXpModels();
@@ -8749,6 +9032,7 @@ function renderXp() {
       </td>
       <td class="px-3 py-2.5 text-center">${statusCell}</td>
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'xp')}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${noKey ? '' : actBtn(`xpCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
         ${actBtn(`xpShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'rose')}
@@ -8768,6 +9052,7 @@ function renderXp() {
       { label: 'API Key' },
       { label: 'Status', align: 'center', w: 'w-16' },
       { label: 'Баланс', align: 'center', w: 'w-24' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -8779,6 +9064,7 @@ function xpBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'xp', XP_SYM); }
 
 function xpShowAdd(show = true) {
   $('xp-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('xp');
   if (show) { $('xp-add-email').value = ''; $('xp-add-key').value = ''; $('xp-add-email').focus(); }
 }
 
@@ -8789,7 +9075,7 @@ async function xpAdd() {
   try {
     const res = await fetch('/__switch/api/xp/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, api_key }),
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.xp }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -9291,6 +9577,7 @@ async function loadGhKeys() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     state.github = data.keys || [];
+    state.ghUsage = data.usage || {};
     if ($('nav-count-github')) $('nav-count-github').textContent = state.github.length;
     ghRenderGrid();
   } catch (e) {
@@ -9693,27 +9980,243 @@ function ghAgeBadge(v, extraCls = '') {
 
 // Фильтр по возрасту в шапке вкладки: '' = все, 'month' | 'year' | 'none'.
 let ghAgeFilter = '';
+// Фильтр по занятости: '' = все, 'free' = записи в пуле нет, 'used' = есть.
+let ghUseFilter = '';
+
+// ───── плашки «где уже используется» ─────
+//
+// Данные приходят вместе со списком (`usage` в /api/gh/keys): это записи пулов четырёх
+// NewAPI-шлюзов, сверенные по ghId и по нику/логину. Кука в профиле («засвечен») здесь
+// НЕ учитывается — на вкладке нужен факт «аккаунт израсходован», а профиль на диске
+// переживает и удаление записи, и не состоявшуюся регистрацию.
+//
+// Ярлыки и цвета — те же, что у NEWAPI_SEED_PROV, чтобы шлюз читался одинаково на всех
+// вкладках. Плашка сделана в точности как ghAgeBadge: один стиль на всю карточку.
+const GH_USE_META = {
+  ar: { short: 'AR', label: 'AgentRouter', badge: 'bg-azure/15  text-azure  border-azure/40' },
+  go: { short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
+  tb: { short: 'TB', label: 'Tabi Token',  badge: 'bg-amber/15  text-amber  border-amber/40' },
+  xp: { short: 'XP', label: 'XPeach',      badge: 'bg-rose/15   text-rose   border-rose/40' },
+};
+const ghUsageOf = id => (state.ghUsage && state.ghUsage[id]) || [];
+
+// Мёртвая запись — всё равно занятость: аккаунт израсходован, второй раз его на этот
+// шлюз не завести. Поэтому не прячем, а гасим прозрачностью.
+// Клик по любой плашке открывает модалку занятости — оттуда правится вручную.
+function ghUseBadges(id) {
+  const rows = ghUsageOf(id);
+  const idJ = JSON.stringify(id).replace(/'/g, '&#39;');
+  if (!rows.length) {
+    return `<button onclick='ghOpenUsed(${idJ})' title="записи в пуле ни одного шлюза нет — аккаунт можно заводить · клик: отметить занятость вручную"
+      class="text-[10px] px-1.5 py-0.5 rounded border bg-emerald/10 text-emerald border-emerald/40 hover:bg-emerald/20 transition">— свободен</button>`;
+  }
+  const byTag = new Map();
+  for (const r of rows) {
+    if (!byTag.has(r.tag)) byTag.set(r.tag, []);
+    byTag.get(r.tag).push(r);
+  }
+  return [...byTag.entries()].map(([tag, list]) => {
+    const m = GH_USE_META[tag] || { short: tag.toUpperCase(), label: tag, badge: 'bg-elevated text-faint border-line-soft' };
+    const alive = list.some(r => r.status === 'live');
+    const manual = list.every(r => r.source === 'manual');
+    const statuses = [...new Set(list.map(r => r.status === 'manual' ? 'вручную' : r.status))].join('/');
+    const tip = `${m.label}: ${list.map(r => `${r.name || '—'} (${r.status === 'manual' ? 'отмечен вручную' : r.status})`).join(', ')} · клик — изменить`;
+    return `<button onclick='ghOpenUsed(${idJ})' title="${esc(tip)}"
+      class="text-[10px] px-1.5 py-0.5 rounded border ${m.badge} ${alive ? '' : 'opacity-60'} ${manual ? 'border-dashed' : ''} hover:brightness-125 transition">${m.short}${list.length > 1 ? ` ×${list.length}` : ''} ${esc(statuses)}</button>`;
+  }).join('');
+}
+
+// ───── модалка «где занят» на карточке GitHub ─────
+//
+// Вторая сторона привязки: с вкладок шлюзов её ставят кнопкой 🐙 у записи, а здесь —
+// от аккаунта. Плюс единственное место, где занятость можно отметить БЕЗ записи в пуле:
+// шлюз закрыл регистрацию, аккаунт удалён на их стороне, использован вне дашборда.
+let ghUsedFor = null;   // id GitHub-аккаунта, открытого в модалке
+
+async function ghOpenUsed(id) {
+  const g = (state.github || []).find(x => x.id === id);
+  if (!g) return;
+  ghUsedFor = id;
+  $('gh-used-nick').textContent = g.nickname || g.login || '—';
+  $('gh-used-list').innerHTML = `<div class="text-xs text-faint px-1 py-3">читаю пулы шлюзов…</div>`;
+  $('gh-used-modal').classList.remove('hidden');
+  // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
+  // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
+  for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach' }[tag];
+    if (state.loaded[key]) continue;
+    try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
+  }
+  ghRenderUsed();
+}
+function closeGhUsedModal() { $('gh-used-modal').classList.add('hidden'); ghUsedFor = null; }
+
+function ghRenderUsed() {
+  if (!ghUsedFor) return;
+  const g = (state.github || []).find(x => x.id === ghUsedFor);
+  if (!g) return;
+  const gJs = JSON.stringify(g.id).replace(/'/g, '&#39;');
+  const blocks = Object.entries(GH_USE_META).map(([tag, m]) => {
+    const meta = NEWAPI_SEED_PROV[tag];
+    const rows = ghUsageOf(g.id).filter(r => r.tag === tag);
+    const pool = (meta && meta.list && meta.list()) || [];
+    const tJs = JSON.stringify(tag).replace(/'/g, '&#39;');
+    let body;
+    if (rows.length) {
+      body = rows.map(r => {
+        const rJs = JSON.stringify(r.recordId || '').replace(/'/g, '&#39;');
+        if (r.source === 'manual') {
+          return `<div class="flex items-center justify-between gap-2 text-[11px]">
+            <span class="text-muted">отмечен занятым вручную${r.name ? ' · ' + esc(r.name) : ''}</span>
+            <button onclick='ghMarkUsed(${gJs}, ${tJs}, false)' class="text-[10px] px-2 py-1 rounded border border-line-soft text-faint hover:text-ink hover:border-line transition">снять отметку</button>
+          </div>`;
+        }
+        return `<div class="flex items-center justify-between gap-2 text-[11px]">
+          <span class="text-muted truncate">запись <span class="font-mono text-ink">${esc(r.name || r.recordId || '—')}</span> · ${esc(r.status)}
+            ${r.source === 'match' ? '<span class="text-amber" title="ghId в записи не проставлен — связка держится на совпадении ника, а ник правят">⚠ по совпадению</span>' : ''}</span>
+          <span class="flex gap-1 shrink-0">
+            ${r.source === 'match' && r.recordId ? `<button onclick='ghAttachRecord(${gJs}, ${tJs}, ${rJs})' class="text-[10px] px-2 py-1 rounded border border-teal/40 text-teal hover:bg-teal/10 transition" title="дописать ghId в запись — переживёт переименование ника">закрепить</button>` : ''}
+            ${r.recordId ? `<button onclick='ghDetachRecord(${gJs}, ${tJs}, ${rJs})' class="text-[10px] px-2 py-1 rounded border border-crimson/40 text-crimson hover:bg-crimson/10 transition">отвязать</button>` : ''}
+          </span>
+        </div>`;
+      }).join('');
+    } else {
+      // Свободен на этом шлюзе: либо привязать существующую запись, либо отметить вручную.
+      const free = pool.filter(s => !s.ghId);
+      const opts = free.length
+        ? `<select id="gh-used-sel-${tag}" class="text-[11px] bg-elevated border border-line-soft rounded-md px-2 py-1 max-w-[60%] focus:outline-none focus:border-teal/60">
+             <option value="">— выбрать запись ${esc(m.label)} —</option>
+             ${free.map(s => `<option value="${esc(s.id)}">${esc(s.name || s.email || s.id)}${s.status === 'no_key' ? ' · без ключа' : ''}</option>`).join('')}
+           </select>
+           <button onclick='ghAttachSelected(${gJs}, ${tJs})' class="text-[10px] px-2 py-1 rounded border border-teal/40 text-teal hover:bg-teal/10 transition">привязать</button>`
+        : `<span class="text-[11px] text-faint">свободных записей без привязки нет</span>`;
+      body = `<div class="flex items-center justify-between gap-2 flex-wrap">
+          <span class="flex items-center gap-1.5">${opts}</span>
+          <button onclick='ghMarkUsed(${gJs}, ${tJs}, true)' class="text-[10px] px-2 py-1 rounded border border-amber/40 text-amber hover:bg-amber/10 transition"
+            title="записи в пуле нет и не будет, но аккаунт израсходован">отметить вручную</button>
+        </div>`;
+    }
+    return `<div class="rounded-lg bg-elevated/40 border border-line-soft p-3">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-[10px] px-1.5 py-0.5 rounded border ${m.badge}">${m.short}</span>
+        <span class="text-xs text-ink">${esc(m.label)}</span>
+        <span class="flex-1"></span>
+        <span class="text-[10px] ${rows.length ? 'text-crimson' : 'text-emerald'}">${rows.length ? 'занят' : 'свободен'}</span>
+      </div>
+      ${body}
+    </div>`;
+  });
+  $('gh-used-list').innerHTML = blocks.join('');
+}
+
+// Записать/снять ghId в конкретной записи пула — тем же роутом, что кнопка 🐙 на вкладке шлюза.
+async function ghSetRecordGh(tag, recordId, ghId) {
+  const res = await fetch(`/__switch/api/${tag}/set-github`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: recordId, ghId }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+  if (data.usage) state.ghUsage = data.usage;
+  const meta = NEWAPI_SEED_PROV[tag];
+  const rec = meta && meta.list ? (meta.list() || []).find(x => x.id === recordId) : null;
+  if (rec) { if (ghId === null) delete rec.ghId; else rec.ghId = ghId; }
+  if (meta && meta.render) try { meta.render(); } catch {}
+}
+
+async function ghAttachRecord(ghId, tag, recordId) {
+  try {
+    await ghSetRecordGh(tag, recordId, ghId);
+    await loadGhKeys();
+    ghRenderUsed();
+    toast('🔗 привязка закреплена в записи', 'success', 2200);
+  } catch (e) { toast('Привязка: ' + e.message, 'error'); }
+}
+async function ghDetachRecord(ghId, tag, recordId) {
+  try {
+    await ghSetRecordGh(tag, recordId, null);
+    await loadGhKeys();
+    ghRenderUsed();
+    toast('🔗 отвязано', 'success', 2200);
+  } catch (e) { toast('Привязка: ' + e.message, 'error'); }
+}
+async function ghAttachSelected(ghId, tag) {
+  const sel = $(`gh-used-sel-${tag}`);
+  const recordId = sel && sel.value;
+  if (!recordId) return toast('выбери запись', 'warn');
+  return ghAttachRecord(ghId, tag, recordId);
+}
+
+// Ручная отметка занятости — без записи в пуле (POST /api/gh/mark).
+async function ghMarkUsed(ghId, tag, on) {
+  try {
+    const res = await fetch('/__switch/api/gh/mark', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: ghId, tag, on }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    await loadGhKeys();
+    ghRenderUsed();
+    toast(on ? '🔗 отмечен занятым' : '✓ отметка снята', 'success', 2200);
+  } catch (e) { toast('Отметка: ' + e.message, 'error'); }
+}
+
+// Сверить привязки: дописать ghId там, где запись сошлась с GitHub только по нику.
+async function ghRelink() {
+  try {
+    const res = await fetch('/__switch/api/gh/relink', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    if (data.usage) state.ghUsage = data.usage;
+    await loadGhKeys();
+    const per = Object.entries(data.filled || {}).map(([t, n]) => `${t.toUpperCase()} ${n}`).join(' · ');
+    const skipped = Object.values(data.skipped || {}).reduce((a, b) => a + b, 0);
+    toast(data.total
+      ? `🔗 закреплено привязок: ${data.total}${per ? ` (${per})` : ''}${skipped ? ` · неоднозначных пропущено ${skipped}` : ''}`
+      : `все привязки уже закреплены${skipped ? ` · неоднозначных ${skipped}` : ''}`, 'success', 4000);
+  } catch (e) { toast('Сверка: ' + e.message, 'error'); }
+}
+
 function ghSetAgeFilter(v) { ghAgeFilter = v; ghRenderGrid(); }
-function ghRenderAgeFilter() {
+function ghSetUseFilter(v) { ghUseFilter = v; ghRenderGrid(); }
+function ghRenderFilters() {
   const el = $('gh-age-filter');
-  if (!el) return;
   const all = state.github || [];
-  const n = v => v === '' ? all.length : all.filter(a => (a.regAge || 'none') === v).length;
-  const chip = (v, label) => {
-    const on = ghAgeFilter === v;
-    return `<button onclick="ghSetAgeFilter('${v}')" class="text-xs px-2.5 py-2 rounded-lg border transition ${
-      on ? 'bg-teal/15 border-teal/50 text-teal' : 'bg-surface border-line-soft text-muted hover:border-line'
-    }">${label} <span class="opacity-60">${n(v)}</span></button>`;
-  };
-  el.innerHTML = chip('', 'все') + chip('month', '📅 месяц') + chip('year', '📅 год') + chip('none', 'без метки');
+  const used = all.filter(a => ghUsageOf(a.id).length);
+  if (el) {
+    const nAge = v => v === '' ? all.length : all.filter(a => (a.regAge || 'none') === v).length;
+    const nUse = v => v === '' ? all.length : v === 'used' ? used.length : all.length - used.length;
+    const chip = (fn, cur, v, label, n) => {
+      const on = cur === v;
+      return `<button onclick="${fn}('${v}')" class="text-xs px-2.5 py-2 rounded-lg border transition ${
+        on ? 'bg-teal/15 border-teal/50 text-teal' : 'bg-surface border-line-soft text-muted hover:border-line'
+      }">${label} <span class="opacity-60">${n}</span></button>`;
+    };
+    const age = v => chip('ghSetAgeFilter', ghAgeFilter, v, { '': 'все', month: '📅 месяц', year: '📅 год', none: 'без метки' }[v], nAge(v));
+    const use = v => chip('ghSetUseFilter', ghUseFilter, v, { '': 'все', free: '✅ свободные', used: '🔗 занятые' }[v], nUse(v));
+    el.innerHTML = age('') + age('month') + age('year') + age('none')
+      + '<span class="mx-1 self-center opacity-30">|</span>'
+      + use('') + use('free') + use('used');
+  }
+  const sum = $('gh-usage-summary');
+  if (sum) {
+    const perTag = Object.keys(GH_USE_META)
+      .map(t => ({ t, n: all.reduce((acc, a) => acc + ghUsageOf(a.id).filter(r => r.tag === t).length, 0) }))
+      .filter(x => x.n)
+      .map(x => `${GH_USE_META[x.t].short} ${x.n}`);
+    sum.textContent = `${all.length} аккаунтов · ${used.length} заняты · ${all.length - used.length} свободны`
+      + (perTag.length ? ` · записей в пулах: ${perTag.join(' · ')}` : '');
+  }
 }
 
 async function ghRenderGrid() {
   const query = ($('gh-search').value || '').trim().toLowerCase();
-  ghRenderAgeFilter();
+  ghRenderFilters();
   const rows = state.github.filter(a =>
     (!query || a.nickname.toLowerCase().includes(query) || a.login.toLowerCase().includes(query))
-    && (!ghAgeFilter || (a.regAge || 'none') === ghAgeFilter));
+    && (!ghAgeFilter || (a.regAge || 'none') === ghAgeFilter)
+    && (!ghUseFilter || (ghUseFilter === 'used') === !!ghUsageOf(a.id).length));
   const $grid = $('gh-grid');
   if (!state.github.length) {
     $grid.innerHTML = `<div class="col-span-full rounded-xl bg-surface border border-line-soft p-12 text-center text-faint text-xs">
@@ -9721,7 +10224,8 @@ async function ghRenderGrid() {
     return;
   }
   if (!rows.length) {
-    const what = [query ? `запросу «${esc(query)}»` : '', ghAgeFilter ? `фильтру «${ghAgeMeta(ghAgeFilter).short}»` : '']
+    const what = [query ? `запросу «${esc(query)}»` : '', ghAgeFilter ? `фильтру «${ghAgeMeta(ghAgeFilter).short}»` : '',
+      ghUseFilter ? `фильтру «${ghUseFilter === 'used' ? 'занятые' : 'свободные'}»` : '']
       .filter(Boolean).join(' + ');
     $grid.innerHTML = `<div class="col-span-full p-12 text-center text-faint text-xs">ничего не найдено по ${what}</div>`;
     return;
@@ -9810,6 +10314,7 @@ function ghCardHtml(a, code, secs) {
         <span title="Порядок добавления в дашборд (последовательность покупки)">№${seqIdx} в цепочке</span>
         <span class="whitespace-nowrap">добавлен ${esc(a.added || '—')}</span>
       </div>
+      <div class="flex flex-wrap gap-1" title="Где этот GitHub уже израсходован (записи в пулах шлюзов)">${ghUseBadges(a.id)}</div>
       <div class="flex flex-col gap-2 mt-1">
         <div class="rounded-md bg-elevated/60 border border-line-soft px-2.5 py-1.5">
           <div class="text-[10px] uppercase tracking-wide text-faint">Логин</div>
@@ -10976,12 +11481,142 @@ function renderFmGauge() {
     sub: `<span><span class="text-ink font-semibold">${st.withQ7d}</span> акк с 7d-квотой</span>`,
   });
 }
-function updateSideAuto(enabled) {
-  const sa = $('side-auto'), sas = $('side-auto-state');
-  if (!sa || !sas) return;
-  sa.classList.remove('hidden');
-  sas.textContent = enabled ? 'ВКЛ' : 'выкл';
-  sas.className = 'ml-auto font-mono font-medium ' + (enabled ? 'text-azure' : 'text-dim');
+// ── Авторотация активного провайдера: строка-тумблер в карточке ACTIVE ─────────
+// Одна строка на два механизма, потому что смысл у них один — «не умирать на
+// кончившемся аккаунте»:
+//   · денежный шлюз (AR/GoRouter/Tabi/XPeach) — подмена по отказу шлюза «нет
+//     баланса», ловит keepalive-прокси (см. rotateReason там);
+//   · FreeModel — существующая авто-подмена $0 по таймеру (fmAuto).
+// Тумблер всегда относится к провайдеру, который активен ПРЯМО СЕЙЧАС: сидим на
+// GoRouter — крутится пул GoRouter. Иначе «авторотация» была бы обещанием без
+// указания пула, а у нас их пять.
+const moneyAutoLast = {};             // p → ответ /__switch/api/<p>/auto/status
+const MONEY_AUTO_POLL_MS = 10000;
+const _moneyAutoAt = new Map();       // p → ts последнего запроса статуса
+
+function sideAutoKind() {
+  if (MONEY_PROVIDERS[state.current]) return 'money';
+  if (state.current === 'freemodel' || state.current === 'freemodel_rotator') return 'fm';
+  return null;
+}
+async function moneyAutoFetch(p, force = false) {
+  if (!MONEY_PROVIDERS[p]) return null;
+  if (!force && Date.now() - (_moneyAutoAt.get(p) || 0) < MONEY_AUTO_POLL_MS * 0.9) return moneyAutoLast[p] || null;
+  _moneyAutoAt.set(p, Date.now());
+  try {
+    const res = await fetch(`/__switch/api/${MONEY_PROVIDERS[p].p}/auto/status`);
+    if (!res.ok) return moneyAutoLast[p] || null;
+    moneyAutoLast[p] = await res.json();
+    return moneyAutoLast[p];
+  } catch (e) { return moneyAutoLast[p] || null; }
+}
+// Красим строку. enabled === null → состояние ещё не известно (статус не пришёл):
+// показываем выключенным, но без обещаний в подсказке.
+function paintSideAuto() {
+  const row = $('side-auto'), btn = $('side-auto-toggle'), knob = $('side-auto-knob'), lbl = $('side-auto-label');
+  if (!row || !btn || !knob || !lbl) return;
+  const kind = sideAutoKind();
+  if (!kind) { row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+
+  let on = false, title = '';
+  if (kind === 'money') {
+    const mp = MONEY_PROVIDERS[state.current];
+    const st = moneyAutoLast[state.current];
+    on = !!(st && st.enabled);
+    lbl.textContent = 'авторотация';
+    const ready = st && typeof st.poolReady === 'number' ? st.poolReady : null;
+    title = `${mp.label}: авторотация аккаунтов внутри этого шлюза.\n`
+      + `Шлюз отказал «нет баланса» или ключ мёртв → прокси уходит на следующий аккаунт с деньгами и повторяет запрос, `
+      + `Claude Code ошибки не видит.\n`
+      + `Порога по балансу нет — реагируем на отказ, а не на цифру в кеше (она обновляется раз в минуту и врёт).\n`
+      + `Кандидат — самый маленький баланс, которому хватает: доедаем огрызки, жирные аккаунты остаются в резерве.`
+      + (ready != null ? `\nГодных к подмене сейчас: ${ready}${st.poolBalance != null ? ` (${mp.sym || '$'}${st.poolBalance.toFixed(2)} в пуле)` : ''}.` : '')
+      + (st && st.lastSwitch ? `\nПоследняя подмена: ${fmAgo(st.lastSwitch)}.` : '');
+  } else {
+    on = !!(fmAutoLast && fmAutoLast.enabled);
+    lbl.textContent = 'авто-подмена $0';
+    title = 'FreeModel: подмена аккаунта, когда на активном кончились деньги или выжрано окно.\n'
+      + 'Настройки и журнал подмен — на вкладке FreeModel.';
+  }
+  btn.setAttribute('aria-checked', on ? 'true' : 'false');
+  btn.title = title;
+  btn.className = 'shrink-0 relative w-9 h-5 rounded-full border transition-colors disabled:opacity-50 '
+    + (on ? 'bg-azure/25 border-azure/70' : 'bg-elevated border-line-soft hover:border-azure/50');
+  knob.className = 'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full transition-all duration-200 '
+    + (on ? 'left-[19px] bg-azure' : 'left-[3px] bg-dim');
+  lbl.className = 'truncate ' + (on ? 'text-azure' : 'text-dim');
+}
+async function sideAutoToggle() {
+  const kind = sideAutoKind();
+  if (!kind) return;
+  if (kind === 'fm') return fmAutoToggle();   // у FreeModel своя ручка, дублировать нечего
+  const p = state.current;
+  const mp = MONEY_PROVIDERS[p];
+  const btn = $('side-auto-toggle');
+  const enable = !(moneyAutoLast[p] && moneyAutoLast[p].enabled);
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/__switch/api/${mp.p}/auto/${enable ? 'start' : 'stop'}`, { method: 'POST' });
+    const st = await res.json();
+    if (!res.ok) throw new Error(st.error || 'не применилось');
+    moneyAutoLast[p] = st;
+    paintSideAuto();
+    if (typeof renderMoneyRotateLog === 'function') renderMoneyRotateLog(p);
+    toast(enable
+      ? `✓ ${mp.label}: авторотация включена${st.poolReady ? ` · ${st.poolReady} аккаунтов готовы подхватить` : ''}`
+      : `${mp.label}: авторотация выключена`, enable ? 'success' : 'warn');
+  } catch (e) {
+    toast('Авторотация: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+// Совместимость с fmAutoApplyStatus: тот зовёт updateSideAuto на каждом своём тике.
+// Раньше строка показывала состояние FreeModel всегда — даже когда активен GoRouter,
+// то есть врала про чужой провайдер. Теперь решает paintSideAuto по активному.
+function updateSideAuto() {
+  try { paintSideAuto(); } catch (e) { console.warn('paintSideAuto', e); }
+}
+
+// Журнал подмен на вкладке шлюза. Одна функция на четыре вкладки; контейнер —
+// `#<p>-rotate-log`, где p это префикс эндпоинтов (ar/go/tb/xp), как и у остальных
+// id на этих вкладках. Пока подмен не было — карточки нет вовсе: пустая таблица
+// читалась бы как «сломано», хотя механизм просто не понадобился.
+const MONEY_ROTATE_REASON = {
+  'out-of-balance': '💸 нет баланса',
+  'dead': '💀 мёртвый ключ',
+  'zero-cache': '📉 ноль по чеку',
+  'manual': '🖐 вручную',
+};
+function renderMoneyRotateLog(prov) {
+  const mp = MONEY_PROVIDERS[prov];
+  if (!mp) return;
+  const box = document.getElementById(`${mp.p}-rotate-log`);
+  if (!box) return;
+  const st = moneyAutoLast[prov];
+  const rows = (st && st.recent) || [];
+  if (!rows.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  const sym = mp.sym || '$';
+  box.innerHTML = `
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold tracking-tight">🔁 Авторотация — последние подмены</h2>
+      <span class="text-[10px] font-mono ${st.enabled ? 'text-azure' : 'text-faint'}">${st.enabled ? 'включена' : 'выключена'}</span>
+    </div>
+    <div class="space-y-1 text-xs font-mono">
+      ${rows.map(r => `<div class="flex items-center gap-3 text-muted">
+        <span class="text-faint w-20 shrink-0">${fmAgo(r.ts)}</span>
+        <span class="text-dim w-40 truncate shrink-0" title="аккаунт, на котором шлюз отказал">${esc(r.from || '—')}</span>
+        <span class="text-faint shrink-0">→</span>
+        <span class="text-azure truncate flex-1">${esc(r.to || '')}</span>
+        <span class="text-emerald shrink-0">${typeof r.balance === 'number' ? sym + r.balance.toFixed(2) : ''}</span>
+        <span class="text-[10px] text-dim w-32 text-right shrink-0" title="${r.needUsd ? `шлюз требовал предоплату ${sym}${r.needUsd}` : ''}">${MONEY_ROTATE_REASON[r.reason] || esc(r.reason || '')}</span>
+      </div>`).join('')}
+    </div>
+    <div class="mt-2 text-[10px] text-faint leading-relaxed">
+      Журнал живёт в памяти дашборда (последние 20) — после рестарта :8200 он пуст, а история трат остаётся в finance-history.
+    </div>`;
 }
 // TokenRouter: ключ живёт 24ч от createdAt, потом мёртв. Считаем живыми только
 // аккаунты с ключом и возрастом ≤24ч (детерминированно, не по ненадёжному health-чеку).
@@ -11138,6 +11773,12 @@ async function sideBalanceTick() {
   _sideBalProv = prov;
   await moneySessions(prov, true);
   paintSideBalance();
+  // Состояние тумблера авторотации того же провайдера. Дёшево (чтение памяти
+  // дашборда) и нужно даже при выключенном автообновлении: ротация могла случиться
+  // сама, по отказу шлюза, и строка обязана это показать.
+  await moneyAutoFetch(prov, switched);
+  paintSideAuto();
+  if (typeof renderMoneyRotateLog === 'function') renderMoneyRotateLog(prov);
   // Пересчёт цифры — по АКТИВНОМУ провайдеру, а не по открытой вкладке. Свой троттл
   // внутри (60с на ключ), поэтому на каждом 10-секундном тике в billing не летит.
   try { nudgeActiveBalance(prov); } catch (e) { console.warn('[side] bal-nudge fail', prov, e); }
@@ -11272,7 +11913,9 @@ function fmAutoApplyStatus(st) {
     statusEl.className = 'text-sm font-mono text-faint mt-3';
   }
 
-  updateSideAuto(st.enabled);
+  // Строка в сайдбаре перекрашивается сама по активному провайдеру: состояние
+  // FreeModel там показывается только когда FreeModel и активен.
+  updateSideAuto();
   renderFmGauge();
 
   const logWrap = $('fm-auto-log');
@@ -14178,7 +14821,7 @@ function onSettingsFm() {
 // у всех (в т.ч. у тех, у кого уже сохранён конфиг), пока пользователь явно
 // не включит их глазком (тогда ключ попадает в config.shown).
 const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
-const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'tabi', 'xpeach', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
+const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'tabi', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -14957,18 +15600,33 @@ document.addEventListener('DOMContentLoaded', toggleLogPanel);
   </div>
 </div>
 
-<!-- AR GitHub bind modal -->
-<div id="ar-gh-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+<!-- Привязка GitHub-аккаунта к записи шлюза (общая для AgentRouter / GoRouter / Tabi / XPeach) -->
+<div id="gh-bind-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
   <div class="bg-surface rounded-xl border border-line-soft shadow-2xl p-5 w-[460px] max-w-[92vw] max-h-[80vh] flex flex-col">
     <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-semibold">🐙 GitHub аккаунт</h3>
-      <button onclick="closeArGhModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+      <h3 class="text-sm font-semibold">🐙 GitHub аккаунт · <span id="gh-bind-modal-provider" class="text-teal">—</span></h3>
+      <button onclick="closeGhBindModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
     </div>
-    <p class="text-xs text-muted mb-3">Выбери GitHub для <span id="ar-gh-modal-subtitle" class="font-mono text-ink">—</span> · «Личный» = твой, вне хранилища</p>
-    <div id="ar-gh-modal-list" class="space-y-1.5 overflow-y-auto mb-4 pr-1"></div>
-    <div id="ar-gh-modal-unbind" class="mb-3"></div>
+    <p class="text-xs text-muted mb-3">Выбери GitHub для <span id="gh-bind-modal-subtitle" class="font-mono text-ink">—</span> · «Личный» = твой, вне хранилища</p>
+    <div id="gh-bind-modal-list" class="space-y-1.5 overflow-y-auto mb-4 pr-1"></div>
+    <div id="gh-bind-modal-unbind" class="mb-3"></div>
     <div class="flex justify-end">
-      <button onclick="closeArGhModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
+      <button onclick="closeGhBindModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- Занятость GitHub-аккаунта по шлюзам: ручная привязка к записи пула и отметки без записи -->
+<div id="gh-used-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onclick="if(event.target===this) closeGhUsedModal()">
+  <div class="bg-surface rounded-xl border border-teal/40 shadow-2xl p-5 w-[540px] max-w-[92vw] max-h-[82vh] flex flex-col">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-sm font-semibold">🔗 Где занят · <span id="gh-used-nick" class="text-teal">—</span></h3>
+      <button onclick="closeGhUsedModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-3">Привязка живёт в записи шлюза (поле <code class="font-mono">ghId</code>). «Вручную» — для случаев, когда аккаунт израсходован, а записи у нас нет и не будет.</p>
+    <div id="gh-used-list" class="space-y-2 overflow-y-auto pr-1"></div>
+    <div class="flex justify-end mt-4">
+      <button onclick="closeGhUsedModal()" class="text-xs px-3 py-1.5 rounded-lg border border-line-soft hover:bg-elevated transition">Готово</button>
     </div>
   </div>
 </div>

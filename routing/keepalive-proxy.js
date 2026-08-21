@@ -320,6 +320,9 @@ function publicState() {
     paidHedgeLocked: PAID_HEDGE_HOST,
     cfgVersion: CFG_VERSION,
     upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt,
+    // Авторотация: включена ли и в какой пул звоним. Без этого в панели невозможно
+    // отличить «тумблер выключен» от «прокси не знает этот шлюз».
+    rotate: { on: ROTATE_ON, provider: ROTATE_PROVIDER || null, maxPerRequest: MAX_ROTATIONS },
     stats: Object.assign({}, stats),
     // Время последнего ответа — в /__state, чтобы панель показывала цифру тем же
     // поллингом, что и счётчики, не дёргая график.
@@ -332,7 +335,7 @@ function publicState() {
 // winBy — КТО принёс ответ: `первый` / `хедж` / `ретрай`. Это единственная цифра,
 // по которой можно настраивать hedgeMs не наугад: если `хедж` почти нулевой, дубли
 // только грузят шлюз (его WAF чувствителен к пачкам) и hedgeMs надо ПОДНИМАТЬ.
-const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, byStatus: {}, byModel: {}, winBy: {} };
+const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, rotations: 0, byStatus: {}, byModel: {}, winBy: {} };
 const startedAt = Date.now();
 
 // ── История времени ответа: минутные бакеты за сутки ────────────────────────
@@ -463,6 +466,95 @@ function isTransientBody(status, buf) {
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
 }
+
+// ── Отказ по деньгам и мёртвый ключ: причина сменить аккаунт, а не умереть ────
+// Один и тот же смысл шлюз говорит двумя способами, и до авторотации обе ветки
+// вели в тупик (замер 22.08 по keepalive-proxy.log):
+//   • `预扣费额度失败, 用户剩余额度: $0.309854, 需要预扣费额度: $0.800000` — предоплата
+//     под запрос не прошла. Ловилось RETRY_NO_ZH (`额度`) как постоянная ошибка и
+//     улетало в Claude Code как `403`, роняя задачу.
+//   • `Insufficient account balance` — ни один список не совпадал, fallback
+//     `status === 403` считал её ТРАНЗИЕНТНОЙ: три попытки в пустой аккаунт и `502`.
+// Поэтому проверка стоит ВЫШЕ isTransientBody и решает раньше него.
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
+// Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
+// `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
+const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
+// Числа из китайской формулировки. `需要预扣费额度` — сколько шлюз хочет придержать
+// под запрос, `用户剩余额度` — сколько реально осталось на аккаунте. Первое отбирает
+// кандидата (иначе уйдём на аккаунт, которому тоже не хватит), второе бесплатно
+// уточняет кеш баланса в дашборде — точнее, чем анкер и угадывание.
+function moneyNum(s, label) {
+  const m = new RegExp(label + '\\s*[:：]?\\s*\\$?\\s*(-?[0-9]+(?:\\.[0-9]+)?)').exec(s);
+  if (!m) return null;
+  const v = Number(m[1]);
+  return Number.isFinite(v) ? v : null;
+}
+function neededUsd(s) { return moneyNum(s, '需要预扣费额度'); }
+function leftUsd(s) { return moneyNum(s, '用户剩余额度'); }
+// Причина ротации по ответу шлюза: 'out-of-balance' | 'dead' | null.
+// Статус проверяем, чтобы фраза из чужого контекста (эхо тела в 200) не считалась
+// отказом. 402 сюда добавлен на будущее: в HTTP это и есть Payment Required.
+function rotateReason(status, buf) {
+  if (status !== 401 && status !== 402 && status !== 403) return null;
+  const s = buf.toString('utf8');
+  if (OUT_OF_BALANCE_RE.test(s)) return 'out-of-balance';
+  if (DEAD_KEY_RE.test(s)) return 'dead';
+  return null;
+}
+
+// Куда звонить за подменой аккаунта. Префикс ВЫВОДИМ из апстрима, а не получаем
+// env'ом: спавнов прокси минимум три (дашборд на провайдера, keepalive-spawn.js,
+// keepalive-restart.ps1) и env в них уже разъезжался — новая переменная просто не
+// доехала бы до части путей запуска. Хосты те же строки, что в MONEY_GW дашборда.
+const GW_BY_HOST = {
+  'agentrouter.org': 'ar',
+  'gorouter.app': 'go',
+  'tabitoken.com': 'tb',
+  'xpeach.codes': 'xp',
+};
+const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
+// ROTATE_PROVIDER — только для тестов (routing/test-rotate.js прогоняет весь путь
+// против фейкового шлюза на 127.0.0.1, которого в таблице хостов нет) и как аварийный
+// ход, если шлюз сменит домен. Основной путь остаётся выводом из апстрима: env,
+// который надо помнить в трёх местах спавна, уже разъезжался.
+const ROTATE_PROVIDER = process.env.ROTATE_PROVIDER || ROTATE_P;
+const DASH_URL = process.env.DASHBOARD_URL || `http://127.0.0.1:${process.env.SWITCHER_PORT || 8200}`;
+// Не наш шлюз (или AUTOROTATE=0) → фича спит, поведение прежнее.
+const ROTATE_ON = process.env.AUTOROTATE !== '0' && !!ROTATE_PROVIDER;
+// Потолок цепочки на ОДИН запрос. Владелец выбрал стратегию «самый маленький
+// достаточный»: на маленьком может не хватить, тогда идём дальше. Без потолка
+// единственный запрос мог бы прокрутить весь пул.
+const MAX_ROTATIONS = Number(process.env.MAX_ROTATIONS || 5);
+
+// Просьба к дашборду сменить активный ключ. Возвращает {ok, already?, email, mask}.
+// Таймаут щедрый: на той стороне живой чек баланса кандидата (~1.5с на аккаунт,
+// до трёх кандидатов). Ключ в лог не пишем — только маску (контракт прокси).
+function askRotate(payload) {
+  return new Promise((resolve) => {
+    let body;
+    try { body = Buffer.from(JSON.stringify(payload)); } catch (e) { return resolve({ ok: false, error: e.message }); }
+    const u = new URL(`${DASH_URL}/__switch/api/${ROTATE_PROVIDER}/rotate`);
+    const requester = u.protocol === 'https:' ? https.request : http.request;
+    const r = requester({
+      hostname: u.hostname, port: u.port, method: 'POST', path: u.pathname,
+      headers: { 'content-type': 'application/json', 'content-length': body.length },
+      timeout: 20000,
+    }, (resp) => {
+      const chunks = [];
+      resp.on('data', (c) => chunks.push(c));
+      resp.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
+        catch (e) { resolve({ ok: false, error: 'дашборд ответил не JSON' }); }
+      });
+      resp.on('error', (e) => resolve({ ok: false, error: e.message }));
+    });
+    r.on('timeout', () => { r.destroy(new Error('rotate timeout')); });
+    r.on('error', (e) => resolve({ ok: false, error: e.message }));
+    r.end(body);
+  });
+}
+
 
 const COUNT_TOKENS_PATH = '/v1/messages/count_tokens';
 
@@ -605,6 +697,13 @@ const server = http.createServer((req, res) => {
   let finished = false;           // исход решён (победитель или сдались)
   let launched = 0;               // сколько попыток/дублей уже запущено
   let hedgesLaunched = 0;         // из них ПАРАЛЛЕЛЬНЫХ дублей (кэп cfg.maxHedges)
+  // Ротаций аккаунта в этом запросе и подаренных за них попыток. Бюджет ОТДЕЛЬНЫЙ от
+  // cfg.maxAttempts намеренно: цепочка «самый маленький аккаунт → не хватило →
+  // следующий» иначе съела бы попытки, отложенные на транзиентную 500, и запрос
+  // умирал бы ровно там, где ротация начала работать. Потолок — MAX_ROTATIONS.
+  let rotations = 0;
+  let bonusAttempts = 0;
+  let rotating = false;           // ждём ответа дашборда — новых попыток не пускаем
   let hedgeTimer = null;          // таймер хедж-дубля
   let preTimer = null;            // таймер отложенного пре-коммита (preCommitMs)
   let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
@@ -912,13 +1011,53 @@ const server = http.createServer((req, res) => {
   const attemptDone = (r, why, delayMs) => {
     activeSet.delete(r);
     if (finished || aborted) return;
-    if (launched < cfg.maxAttempts) {
+    if (launched < cfg.maxAttempts + bonusAttempts) {
       stats.retries += 1;
       log(`${req.method} ${reqPath} -> ретрай/дубль #${launched + 1} через ${delayMs}ms (${why})`);
       setTimeout(() => { if (!aborted && !finished) makeUpstream('ретрай'); }, delayMs);
       return;
     }
     if (activeSet.size === 0) giveUp(why);
+  };
+
+  // Подмена аккаунта и повтор запроса. Зовётся только из ветки ответа шлюза, когда
+  // тот отказал по деньгам или ключу (rotateReason). Ключ, на котором прилетел
+  // отказ, передаём дашборду: по нему он и дедупит параллельные просьбы от
+  // нескольких сессий Orca, сидящих на одном аккаунте.
+  // onFail — отдать клиенту исходную ошибку: подменять нечем, врать нельзя.
+  const tryRotate = (r, reason, buf, status, key, onFail) => {
+    activeSet.delete(r);
+    rotating = true;
+    const body = buf.toString('utf8');
+    const need = neededUsd(body);
+    const left = leftUsd(body);
+    const mask = key ? '***' + key.slice(-6) : '?';
+    stats.rotations += 1;
+    log(`${req.method} ${reqPath} ${status} «${reason}» на ${mask}`
+      + `${need != null ? `, шлюз просит $${need}` : ''}${left != null ? `, осталось $${left}` : ''}`
+      + ` — прошу дашборд подменить аккаунт`);
+    askRotate({ reason, fromKey: key || null, needUsd: need, leftUsd: left }).then((rot) => {
+      rotating = false;
+      if (finished || aborted) return;
+      if (rot && rot.ok) {
+        rotations += 1;
+        bonusAttempts += 1;   // ротация не должна съедать бюджет ретраев
+        log(`${req.method} ${reqPath} ротация #${rotations}: → ${rot.email || rot.mask || '?'}`
+          + `${rot.already ? ' (ключ уже сменил параллельный запрос)' : ''} — повторяю запрос`);
+        makeUpstream('после ротации');
+        return;
+      }
+      // 'disabled' — тумблер выключен, это осознанный выбор пользователя, а не сбой.
+      // 'pool-dry' — в пуле нет живого аккаунта с деньгами; человек должен это узнать.
+      const err = (rot && rot.error) || 'нет ответа дашборда';
+      log(`${req.method} ${reqPath} ротация не состоялась (${err}) — отдаю ${status} клиенту`);
+      onFail();
+    }).catch((e) => {
+      rotating = false;
+      if (finished || aborted) return;
+      log(`${req.method} ${reqPath} ротация упала: ${e.message} — отдаю ${status} клиенту`);
+      onFail();
+    });
   };
 
   // Хедж-дубль: если через cfg.hedgeMs апстрим всё ещё молчит (нет даже заголовков),
@@ -942,7 +1081,7 @@ const server = http.createServer((req, res) => {
 
   const makeUpstream = (kind) => {
     if (finished || aborted) return;
-    if (launched >= cfg.maxAttempts) {
+    if (launched >= cfg.maxAttempts + bonusAttempts) {
       if (activeSet.size === 0) giveUp('попытки исчерпаны');
       return;
     }
@@ -962,9 +1101,14 @@ const server = http.createServer((req, res) => {
     }
     // Активный ключ agentrouter из ar-active-key.txt (смена на лету): перекрываем
     // клиентский AUTH_TOKEN-заглушку реальным ключом из файла.
+    // Он же — `fromKey` для авторотации: дашборду нужно знать, на КАКОМ аккаунте
+    // прилетел отказ. Читается на каждую попытку, поэтому попытка после ротации
+    // уезжает уже с новым ключом сама, без перезапуска прокси.
+    let sentKey = '';
     try {
       const arKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim();
       if (arKey) {
+        sentKey = arKey;
         headers.authorization = `Bearer ${arKey}`;
         headers['x-api-key'] = arKey;
       }
@@ -1030,6 +1174,22 @@ const server = http.createServer((req, res) => {
         drain(() => {
           if (finished || aborted) return;
           const buf = Buffer.concat(chunks, size);
+          // Отказ по деньгам или мёртвый ключ — это не ошибка запроса, а конец
+          // аккаунта. Ретрай тем же ключом бессмыслен (проверено: три попытки в
+          // пустой аккаунт и 502), отдать клиенту тоже нельзя, пока в пуле есть
+          // живые деньги. Просим дашборд подменить активный ключ и повторяем ТОТ ЖЕ
+          // запрос — Claude Code видит только успешный ответ.
+          const reason = ROTATE_ON ? rotateReason(status, buf) : null;
+          if (reason) {
+            // Ротация уже идёт (её начал параллельный хедж-дубль) — эта попытка
+            // просто уходит: запрос доведёт та, что стартует после подмены.
+            if (rotating) { activeSet.delete(upReq); return; }
+            if (rotations < MAX_ROTATIONS) {
+              tryRotate(upReq, reason, buf, status, sentKey, () => forwardBuffered(buf, headers));
+              return;
+            }
+            log(`${req.method} ${reqPath} ${status} «${reason}»: лимит ротаций ${MAX_ROTATIONS} на запрос исчерпан — отдаю ошибку клиенту`);
+          }
           if (isTransientBody(status, buf)) {
             attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
@@ -1161,7 +1321,13 @@ if (process.argv[2] === 'selftest') {
       null, 'без своего конвертера gpt не уводится на :20132');
     const hb = remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5', messages: [] })));
     if (isGptLike(mapHaiku || '')) {
-      assert.strictEqual(hb, null, 'gpt-цель haiku без конвертера не ремапится');
+      // Маппинг тира на gpt-цель БЕЗ конвертера: цель уважаем (тело переписано), но
+      // отдаём её своему же шлюзу — уводить на чужой :20132 нельзя. Ассерт правлен
+      // 22.08: ждал null, хотя remapHaiku эту ветку обрабатывает явно (см. там
+      // «Конвертера нет — маппинг уважаем, но модель отдаём своему же шлюзу»).
+      // Из-за расхождения весь selftest падал ДО остальных проверок.
+      assert.strictEqual(hb && hb.host, upstream.host, 'gpt-цель haiku без конвертера идёт на свой шлюз');
+      assert.ok(hb && hb.body.toString('utf8').includes(`"model":"${mapHaiku}"`), 'тело переписано на gpt-цель');
     } else if (mapHaiku) {
       // haiku замаплен на claude-цель — маппинг работает и без конвертера
       assert.strictEqual(hb && hb.host, upstream.host, 'claude-цель haiku идёт на свой шлюз');
@@ -1207,10 +1373,38 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(isTransientBody(500, Buffer.from('missing required field')), false, 'missing required = постоянная');
   assert.strictEqual(isTransientBody(500, Buffer.from('model not supported')), false, 'not supported = постоянная');
 
+  // ── авторотация: отказ по деньгам ловится в ОБЕИХ формулировках ──────────────
+  // Это те самые два текста, которые до ротации вели в разные тупики: китайский
+  // улетал клиенту как 403, английский жёг три попытки и отдавал 502.
+  const ZH_OOB = '{"error":{"message":"预扣费额度失败, 用户剩余额度: $0.309854, 需要预扣费额度: $0.800000 (request id: 2026)"}}';
+  const EN_OOB = '{"error":{"type":"bad_response_status_code","message":"Insufficient account balance (request id: 2026)"}}';
+  assert.strictEqual(rotateReason(403, Buffer.from(ZH_OOB)), 'out-of-balance', 'zh предоплата не прошла = нет баланса');
+  assert.strictEqual(rotateReason(403, Buffer.from(EN_OOB)), 'out-of-balance', 'en Insufficient balance = нет баланса');
+  assert.strictEqual(rotateReason(402, Buffer.from('余额不足')), 'out-of-balance', '402 + 余额不足 = нет баланса');
+  // Числа из китайского текста: по ним выбирается кандидат и уточняется кеш баланса.
+  assert.strictEqual(neededUsd(ZH_OOB), 0.8, 'нужно $0.80 распарсилось');
+  assert.strictEqual(leftUsd(ZH_OOB), 0.309854, 'осталось $0.31 распарсилось');
+  assert.strictEqual(neededUsd(EN_OOB), null, 'у английского текста цифр нет — это не ошибка');
+  // Мёртвый ключ — тоже причина уйти, но с другой пометкой (аккаунт → dead).
+  assert.strictEqual(rotateReason(403, Buffer.from('{"error":{"message":"User has been banned"}}')), 'dead', 'бан = мёртвый ключ');
+  assert.strictEqual(rotateReason(401, Buffer.from('无效的令牌')), 'dead', 'zh невалидный токен = мёртвый ключ');
+  // НЕ ротируем на том, что деньгами не является: нет доступа к модели, фильтр
+  // контента, транзиентная 500, WAF. Иначе подмена аккаунта ничего не лечит, а
+  // пул прокручивается зря.
+  assert.strictEqual(rotateReason(403, Buffer.from('该令牌无权访问模型 claude-haiku-4-5')), null, 'нет прав на модель ≠ нет денег');
+  assert.strictEqual(rotateReason(403, Buffer.from('unauthorized client detected')), null, 'WAF ≠ нет денег');
+  assert.strictEqual(rotateReason(500, Buffer.from(EN_OOB)), null, 'фраза при 500 не считается отказом по деньгам');
+  assert.strictEqual(rotateReason(200, Buffer.from(ZH_OOB)), null, 'эхо текста в 200 не считается отказом');
+  // Цель звонка выводится из апстрима, а не из env (спавнов прокси три, env разъезжался).
+  assert.strictEqual(GW_BY_HOST['gorouter.app'], 'go', 'gorouter.app → пул go');
+  assert.strictEqual(GW_BY_HOST['agentrouter.org'], 'ar', 'agentrouter.org → пул ar');
+  assert.strictEqual(GW_BY_HOST['api.anthropic.com'], undefined, 'чужой хост → ротации нет');
+
   // publicState отдаёт апстрим и пре-коммит, без сюрпризов
   const pub = publicState();
   assert.strictEqual(pub.upstream, UPSTREAM, 'publicState отдаёт upstream');
   assert.strictEqual(typeof pub.uptime_ms, 'number', 'publicState отдаёт uptime_ms');
+  assert.strictEqual(pub.rotate.provider, ROTATE_PROVIDER || null, 'publicState отдаёт пул ротации');
 
   // wantsStream: пре-коммит заголовков имеет смысл только для стримовых запросов
   assert.strictEqual(wantsStream('POST', '/v1/messages', {}, Buffer.from('{"model":"x","stream":true}')), true, 'stream:true = поток');

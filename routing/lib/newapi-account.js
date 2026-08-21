@@ -950,9 +950,19 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     // classic: нужен New-Api-User — берём id из подписанной сессионной куки.
     const cookies = readProfileCookies(profileDir);
     const sess = cookies.find(c => (c.host === host || c.host.endsWith('.' + host)) && c.name === 'session');
-    const uid = userId || (sess ? sessionUserId(sess.value) : null);
+    const cookieUid = sess ? sessionUserId(sess.value) : null;
+    const uid = userId || cookieUid;
     if (!uid) return { ok: false, error: 'не удалось определить New-Api-User id' };
-    const r = await apiFetch(host, '/api/user/self', { cookie, userId: uid, jar, jarK });
+    let r = await apiFetch(host, '/api/user/self', { cookie, userId: uid, jar, jarK });
+    // Переданный id мог протухнуть: в записи пула лежит id прежнего аккаунта, а куки в
+    // профиле — уже от нового. New-API на такую пару отвечает 401, и это неотличимо от
+    // мёртвой сессии: точный баланс пропадает навсегда, владелец вписывает цифру руками.
+    // Кука — источник правды про то, чей это сеанс, поэтому пробуем её id вторым заходом.
+    // Успех вернёт настоящие userId/username, и вызывающая сторона перепишет запись.
+    // Поймано живьём: gorouter WormAlien, запись 26601/impeccableso против куки 18063.
+    if ((r.status === 401 || r.status === 403) && cookieUid && Number(cookieUid) !== Number(uid)) {
+        r = await apiFetch(host, '/api/user/self', { cookie, userId: cookieUid, jar, jarK });
+    }
     if (r.status === 200 && r.json && r.json.data) return selfToBalance(r.json.data, qpu);
     if (r.waf || r.status === 429) {
         coolDownHost(host);

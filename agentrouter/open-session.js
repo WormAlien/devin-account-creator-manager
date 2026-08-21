@@ -15,14 +15,18 @@
 // как storageState (cookies + localStorage), тогда GitHub/agentrouter сразу залогинены.
 //
 // Использование:
-//   node agentrouter/open-session.js <label> [register|console|auto|checkin]
+//   node agentrouter/open-session.js <label> [register|console|auto|checkin|autocheckin]
 //     label — имя профиля (папка agentrouter/profiles/<label>/)
-//     режим — register: регистрация по рефке (у аккаунта ещё нет sk-ключа),
-//             console:  страница баланса/пополнения (ключ уже есть),
-//             checkin:  разлогин + страница входа (забрать суточные +$25),
+//     режим — register:    регистрация по рефке (у аккаунта ещё нет sk-ключа),
+//             console:     страница баланса/пополнения (ключ уже есть),
+//             checkin:     разлогин + страница входа (забрать суточные +$25 руками),
+//             autocheckin: то же, но вход через GitHub скрипт делает САМ и закрывается,
 //             auto (по умолчанию): чистый профиль = register, иначе console.
 //
-// Код возврата 0 = профиль открыт, 2 = таймаут ожидания GitHub-логина (первый вход), 1 = ошибка.
+// Коды возврата: 0 = готово (autocheckin печатает маркер AUTOCHECKIN_RESULT {...}),
+//   2 = таймаут ожидания GitHub-логина, 3 = GitHub-сессия в профиле мертва (нужен
+//   ручной вход, пароль и 2FA автоматика не вводит), 4 = не нашёл, чем начать
+//   GitHub-вход, 5 = шлюз отверг OAuth (state/код), 1 = прочая ошибка.
 
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -44,10 +48,13 @@ const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
+// Автоподарку человек не нужен: клик, редиректы GitHub-а и колбэк укладываются
+// в считанные секунды. Полторы минуты — с запасом на медленный WAF.
+const AUTO_LOGIN_TIMEOUT_MS = 90 * 1000;
 
 const labelArg = process.argv[2];
 const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
-const mode = String(process.argv[3] || 'auto'); // register | console | auto | checkin
+const mode = String(process.argv[3] || 'auto'); // register | console | auto | checkin | autocheckin
 const profileDir = path.join(PROFILES_DIR, label);
 
 // Если рядом лежит <label>.json — применяем его как storageState: cookies + localStorage.
@@ -236,6 +243,221 @@ async function waitForLogin(page, context) {
   return false;
 }
 
+// ───── Автоподарок: вход через GitHub без человека ────────────────────────
+// Разведка живой страницы (2026-08-22, Playwright + бандл assets/index-*.js):
+//
+//   async function v7(clientId, mode = "login") {          // обработчик кнопки
+//     const state = await b7(mode);                         // GET /api/oauth/state?aff=…&mode=login
+//     state && (localStorage.setItem("oauth_mode", mode),
+//       window.open(`https://github.com/login/oauth/authorize?client_id=${clientId}&state=${state}&scope=user:email`))
+//   }
+//
+// Отсюда три вывода, на которых держится вся ветка autocheckin:
+//   1. Кнопка входа — <button> с подписью «使用 GitHub 继续» (UI сайта китайский) и
+//      иконкой .semi-icon-github_logo. Селектор по тексту «Continue with GitHub»
+//      не сработал бы никогда; в подвале сидят ещё две ссылки на github.com —
+//      берём только BUTTON.
+//   2. Клик открывает ПОПАП: GitHub-вход и колбэк /oauth/github?code=… уезжают
+//      туда, исходная вкладка остаётся на /login. window.opener сайт не трогает.
+//      Поэтому ждать успех по page.url() исходной вкладки нельзя (см. ниже).
+//   3. Колбэк идёт в /api/oauth/github?code=…&state=…&mode=login, и в ответе
+//      шлюз САМ сообщает, налил ли суточный бонус: data.checked_in. Это честнее
+//      любого угадывания по росту выдачи — его и отдаём в дашборд.
+const OAUTH_API_RE = /\/api\/oauth\/github/i;
+
+// Тело ответа читаем через перехват, а не в обработчике 'response': к моменту, когда
+// resp.json() доберётся до тела, SPA уже уводит страницу на /console/token, тело
+// выбрасывается и мы молча остаёмся без checked_in (так и было в первом прогоне).
+// route.fetch() буферизует ответ у нас, fulfill отдаёт его странице — одноразовый
+// `code` при этом расходуется РОВНО один раз.
+function watchOauthResult(context) {
+  const out = { seen: false, success: null, checkedIn: null, message: '', userId: null };
+  context.route(OAUTH_API_RE, async (route) => {
+    try {
+      const resp = await route.fetch();
+      const body = await resp.text();
+      try {
+        const j = JSON.parse(body);
+        out.seen = true;
+        out.success = !!j.success;
+        out.message = String(j.message || '');
+        out.checkedIn = !!(j.data && j.data.checked_in);
+        // id пользователя нужен для заголовка New-Api-User: в localStorage его пишет
+        // колбэк-компонент, а мы к тому моменту уже закрываем попап — своя копия надёжнее.
+        out.userId = (j.data && j.data.id) || null;
+        console.log(out.success
+          ? `🔑 шлюз принял GitHub-вход${out.checkedIn ? ', суточный чек-ин зачтён' : ' — чек-ин НЕ зачтён (окно ещё не сменилось)'}`
+          : `⚠️  шлюз отверг вход: ${out.message || 'без причины'}`);
+      } catch { /* не json (заглушка WAF) — решит /api/user/self */ }
+      await route.fulfill({ response: resp, body });
+    } catch (e) {
+      // Перехват не должен ломать вход: не смогли прочитать — пропускаем как есть.
+      console.log(`⚠️  ответ колбэка прочитать не удалось (${e.message})`);
+      await route.continue().catch(() => {});
+    }
+  }).catch(() => {});
+  return out;
+}
+
+// GitHub-стена: логин, пароль, 2FA, подтверждение устройства. Сюда попадаем, когда
+// сессия в профиле мертва. `login/oauth/…` в стену НЕ входит — это нормальный шаг
+// OAuth, поэтому negative lookahead обязателен.
+const GH_AUTH_WALL_RE = /github\.com\/(login(?!\/oauth)|session\b|sessions\/)/i;
+
+// Фолбэк на случай, если кнопки на странице нет или попап не открылся: собираем тот
+// же authorize-URL руками. client_id читаем из живого /api/status (хардкодить нельзя —
+// шлюз может пересоздать OAuth-приложение), `aff` подставляем как сайт, иначе
+// регистрация нового аккаунта потеряла бы реф-кредит.
+async function buildAuthorizeUrl(page) {
+  try {
+    return await page.evaluate(async () => {
+      const get = async (u) => (await fetch(u, { credentials: 'include' })).json();
+      const st = await get('/api/status');
+      const cid = st && st.data && st.data.github_client_id;
+      if (!cid) return null;
+      let q = '/api/oauth/state?mode=login';
+      const aff = localStorage.getItem('aff');
+      if (aff) q += '&aff=' + encodeURIComponent(aff);
+      const s = await get(q);
+      const state = s && s.success && s.data;
+      if (!state) return null;
+      localStorage.setItem('oauth_mode', 'login');
+      return `https://github.com/login/oauth/authorize?client_id=${cid}&state=${state}&scope=user:email`;
+    });
+  } catch (e) {
+    console.log(`⚠️  authorize-URL собрать не удалось: ${e.message}`);
+    return null;
+  }
+}
+
+// Шлюз встречает модалкой «系统公告» (14 объявлений) поверх формы входа. Playwright
+// честно ждал, пока она уйдёт: клик по кнопке GitHub упирался в .semi-modal-wrap,
+// перебирал попытки и в итоге уходил в фолбэк (поймано на третьем прогоне 2026-08-22).
+// Гасим сами: Escape, если не помог — крестик.
+async function dismissModals(page) {
+  for (let i = 0; i < 3; i++) {
+    const wrap = page.locator('.semi-modal-wrap').first();
+    if (!(await wrap.isVisible().catch(() => false))) return;
+    if (i === 0) console.log('🪧 закрываю модалку объявлений — она перекрывает кнопку входа');
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(400).catch(() => {});
+    if (!(await wrap.isVisible().catch(() => false))) return;
+    const x = page.locator('.semi-modal-close').first();
+    if (await x.count().catch(() => 0)) await x.click({ timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(400).catch(() => {});
+  }
+}
+
+// Возвращает страницу, на которой пойдёт GitHub-часть (попап или та же вкладка),
+// либо null — значит начать вход нечем.
+async function clickGithubLogin(context, page) {
+  await dismissModals(page);
+  const byIcon = page.locator('button:has(.semi-icon-github_logo)').first();
+  const byText = page.locator('button').filter({ hasText: /github/i }).first();
+  let target = null;
+  // Ждать обязательно: reportRender возвращается, как только #root не пуст, а кнопки
+  // сторонних входов SPA дорисовывает позже — в первом прогоне их «не было».
+  for (const cand of [byIcon, byText]) {
+    const ok = await cand.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
+    if (ok) { target = cand; break; }
+  }
+
+  if (target) {
+    const popupP = context.waitForEvent('page', { timeout: 15000 }).catch(() => null);
+    await target.click({ timeout: 5000 }).catch(e => console.log(`⚠️  клик по кнопке GitHub не прошёл: ${e.message}`));
+    const popup = await popupP;
+    if (popup) {
+      console.log('🪟 попап GitHub-входа открылся');
+      await popup.waitForLoadState('domcontentloaded').catch(() => {});
+      return popup;
+    }
+    console.log('⚠️  попап не появился — собираю authorize-URL сам');
+  } else {
+    console.log('⚠️  кнопки входа через GitHub на странице нет — собираю authorize-URL сам');
+  }
+
+  const url = await buildAuthorizeUrl(page);
+  if (!url) return null;
+  console.log('↪️  иду на GitHub authorize в этой же вкладке');
+  await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  return page;
+}
+
+// Проводим попап через GitHub-часть. Возвращаем, чем всё кончилось: dead — сессия
+// мертва (дальше идти некуда), authorized — нажали согласие на доступ приложению,
+// callback — GitHub уже вернул на шлюз, closed — попап закрылся сам (это норма:
+// SPA колбэка могла успеть отработать).
+async function passGithubGate(gh) {
+  for (let i = 0; i < 25; i++) {
+    if (gh.isClosed()) return 'closed';
+    const url = gh.url();
+    if (/agentrouter\.org/i.test(url)) return 'callback';
+    if (GH_AUTH_WALL_RE.test(url)) return 'dead';
+    if (/github\.com\/login\/oauth\/authorize/i.test(url)) {
+      const btn = gh.locator('button[name="authorize"]').first();
+      const n = await btn.count().catch(() => 0);
+      if (n > 0) {
+        console.log('🔓 GitHub просит подтвердить доступ приложению — жму Authorize (один раз)');
+        await btn.click({ timeout: 5000 }).catch(e => console.log(`⚠️  Authorize не нажался: ${e.message}`));
+        return 'authorized';
+      }
+    }
+    await gh.waitForTimeout(700).catch(() => {});
+  }
+  return 'unknown';
+}
+
+// Успех входа определяем ПО ОТВЕТУ ШЛЮЗА на колбэк, а не по наличию куки. Ловушка,
+// стоившая первого прогона (2026-08-22): `/api/oauth/state` сам ставит куку с именем
+// `session` (в ней сервер держит state OAuth), она проходит по hasSessionCookie — и
+// «вход выполнен» печаталось ДО того, как GitHub вообще вернулся. Скрипт тут же уводил
+// вкладку на консоль и обрывал летящий запрос колбэка: сессия так и не создавалась,
+// точный баланс потом отвечал «сессия профиля недействительна (HTTP 401)».
+//
+// Запасной признак — прямой вопрос /api/user/self. Одной куки ему НЕ достаточно:
+// New-API требует ещё заголовок `New-Api-User` с id пользователя (тем же способом
+// ходит наш точный чек, см. newapi-account.js). id лежит в localStorage['user'],
+// который колбэк-компонент пишет после успешного входа — а localStorage у попапа и
+// исходной вкладки общий, домен один.
+async function siteSelfOk(page, userId = null) {
+  if (page.isClosed()) return null;
+  return await page.evaluate(async (uidArg) => {
+    try {
+      let uid = uidArg;
+      if (!uid) { try { uid = (JSON.parse(localStorage.getItem('user') || 'null') || {}).id; } catch {} }
+      if (!uid) return null;
+      const r = await fetch('/api/user/self', { credentials: 'include', headers: { 'New-Api-User': String(uid) } });
+      const j = await r.json();
+      if (!j || !j.success || !j.data) return null;
+      return { quota: j.data.quota, used: j.data.used_quota };
+    } catch { return null; }
+  }, userId).catch(() => null);
+}
+
+// Цифру со счёта печатаем в лог: точный чек дашборда мог быть отложен паузой WAF, а
+// глазами по логу сразу видно, налил шлюз бонус или нет. quota_per_unit = 500000.
+async function reportSelfBalance(page, userId = null) {
+  const self = await siteSelfOk(page, userId);
+  if (!self || typeof self.quota !== 'number') return;
+  console.log(`💰 на счету $${(self.quota / 500000).toFixed(2)} (потрачено $${((self.used || 0) / 500000).toFixed(2)})`);
+}
+
+async function waitForSiteSession(context, page, timeoutMs, oauth, pollMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (oauth && oauth.seen && oauth.success === false) return { ok: false, rejected: true, message: oauth.message };
+    // Ответ колбэка — самое надёжное: его нам отдал сам шлюз.
+    if (oauth && oauth.seen && oauth.success === true) return { ok: true };
+    // Дешёвый предфильтр: пока на домене нет ни одной сессионной куки, спрашивать
+    // /api/user/self незачем. Шлюз за Aliyun WAF — лишний трафик тут наказуем
+    // (залп чек-инов уже гасил точный баланс всему пулу на 10 минут).
+    const cookies = await context.cookies('https://agentrouter.org').catch(() => []);
+    if (hasSessionCookie(cookies) && await siteSelfOk(page)) return { ok: true };
+    await page.waitForTimeout(pollMs).catch(() => {});
+  }
+  return { ok: false, rejected: false };
+}
+
 // ───── Резервная копия GitHub-сессии профиля ─────────────────────────────
 // GitHub-куки — самое дорогое, что есть в профиле: вход обратно должен стоить один клик
 // «Continue with GitHub», а у авторегов пароля и 2FA под рукой может не быть вообще.
@@ -292,13 +514,18 @@ async function backupGhAfterLogin(context) {
 // это транзиентное: SPA поднялась на данных погашенной сессии. Лечится тем же, чем при
 // регистрации, — перезагрузкой. Два прохода, потом просто говорим правду.
 const CHECKIN_STALE_RE = /未登录|登录已过期|not logged in|failed to get user info/i;
+// Колбэк GitHub-а: `code` одноразовый, повторный заход по этому URL сайт встречает
+// уже потраченным кодом и отвечает «failed to fetch git token». Приём из
+// gorouter/open-session.js: с колбэка не перезагружаемся, а уходим на консоль.
+const OAUTH_CALLBACK_RE = /\/oauth\/(github|oidc)|[?&]code=/i;
 
 async function settleAfterCheckin(page) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const txt = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
     if (!CHECKIN_STALE_RE.test(txt) && !AUTH_ERROR_RE.test(txt)) return true;
     console.log(`⚠️  сайт показывает «сессия истекла» — обновляю страницу (${attempt}/2)…`);
-    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    if (OAUTH_CALLBACK_RE.test(page.url())) await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    else await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
     await page.waitForTimeout(1800);
   }
   const txt = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
@@ -407,31 +634,101 @@ async function main() {
   await disableHttpCache(context, page);
 
   // Чек-ин идёт раньше всего остального: импортированные куки и рефка тут не при чём,
-  // задача ровно одна — разлогинить и показать вход.
-  if (mode === 'checkin') {
+  // задача ровно одна — разлогинить и войти заново. `autocheckin` отличается тем, что
+  // вход жмёт скрипт, а не человек.
+  if (mode === 'checkin' || mode === 'autocheckin') {
+    const auto = mode === 'autocheckin';
+    // Подписку на ответ колбэка вешаем ДО клика и на КОНТЕКСТ, а не на страницу:
+    // колбэк уедет в попап, которого сейчас ещё нет.
+    const oauth = auto ? watchOauthResult(context) : null;
     try {
-      console.log('🎁 Чек-ин +$25: гашу сессию и открываю вход.');
+      console.log(auto
+        ? '⚡ Автоподарок: гашу сессию и вхожу через GitHub сам.'
+        : '🎁 Чек-ин +$25: гашу сессию и открываю вход.');
       await doCheckinLogout(context, page);
-      console.log('   Жми «Continue with GitHub» — GitHub-сессия в профиле осталась, пароль и 2FA не нужны.');
 
-      // Ждём, пока пользователь войдёт обратно. Дальше — САМИ закрываем браузер, и это
-      // не косметика: Chromium пишет НОВЫЕ куки в SQLite профиля лениво, а точный баланс
-      // читается именно с диска (см. newapi-account.js). Пока окно открыто, свежей куки
-      // на диске нет — и чек честно откатывался на прикидку с «в профиле нет куки».
-      // Корректное закрытие гарантирует флаш, поэтому после входа окно больше не нужно:
-      // за ним пришли ровно за одним кликом.
-      const ok = await waitForLogin(page, context);
-      if (!ok) {
-        console.error('❌ Не дождался входа (10 мин). Закрываю — бонус не забран, зайди ещё раз.');
-        await context.close().catch(() => {});
-        process.exit(2);
+      if (auto) {
+        // Живость GitHub-сессии смотрим ПО КУКАМ ПРОФИЛЯ. Сырой пробник на github.com
+        // запрещён: фейковый UA GitHub считает угоном и гасит сессию (три штуки уже
+        // так потеряли, см. routing/lib/github-session.js).
+        const gh = await context.cookies('https://github.com').catch(() => []);
+        if (!gh.some(c => c.name === 'user_session' && c.value)) {
+          console.error('❌ GitHub-сессия в профиле мертва (нет user_session).');
+          console.error('   Пароль и 2FA автоматика не вводит: возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
+          await context.close().catch(() => {});
+          process.exit(3);
+        }
+
+        const target = await clickGithubLogin(context, page);
+        if (!target) {
+          console.error('❌ Не нашёл, чем начать GitHub-вход: кнопки нет, authorize-URL не собрался.');
+          console.error('   Похоже, шлюз переделал страницу входа. Добери бонус кнопкой 🎁 — там вход жмёт человек.');
+          await context.close().catch(() => {});
+          process.exit(4);
+        }
+
+        const gate = await passGithubGate(target);
+        if (gate === 'dead') {
+          console.error('❌ GitHub попросил пароль/2FA — сессия в профиле уже не годится.');
+          console.error('   Возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
+          await context.close().catch(() => {});
+          process.exit(3);
+        }
+        console.log(`🔄 GitHub-часть: ${gate}`);
+
+        const res = await waitForSiteSession(context, page, AUTO_LOGIN_TIMEOUT_MS, oauth, 2000);
+        if (!res.ok && res.rejected) {
+          console.error(`❌ Шлюз отверг OAuth: ${res.message || 'без причины'}. Бонус не забран.`);
+          await context.close().catch(() => {});
+          process.exit(5);
+        }
+        if (!res.ok) {
+          console.error('❌ Вход не подтвердился за 90 с. Бонус не забран — попробуй ещё раз или добери кнопкой 🎁.');
+          await context.close().catch(() => {});
+          process.exit(2);
+        }
+
+        // Попап больше не нужен, а на его URL лежит одноразовый code — трогать его
+        // навигацией нельзя, только закрыть.
+        if (target !== page && !target.isClosed()) await target.close().catch(() => {});
+        await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await reportSelfBalance(page, oauth && oauth.userId);
+      } else {
+        console.log('   Жми «Continue with GitHub» — GitHub-сессия в профиле осталась, пароль и 2FA не нужны.');
+
+        // Ждём, пока пользователь войдёт обратно. Дальше — САМИ закрываем браузер, и это
+        // не косметика: Chromium пишет НОВЫЕ куки в SQLite профиля лениво, а точный баланс
+        // читается именно с диска (см. newapi-account.js). Пока окно открыто, свежей куки
+        // на диске нет — и чек честно откатывался на прикидку с «в профиле нет куки».
+        // Корректное закрытие гарантирует флаш, поэтому после входа окно больше не нужно:
+        // за ним пришли ровно за одним кликом.
+        // Ждём по куке контекста, а не по URL этой вкладки: сайт уводит GitHub-вход в
+        // попап, и вкладка так и остаётся на /login — проверка по URL давала бы ложный
+        // таймаут «не дождался входа» при фактически забранном бонусе.
+        const res = await waitForSiteSession(context, page, LOGIN_TIMEOUT_MS, null);
+        if (!res.ok) {
+          console.error('❌ Не дождался входа (10 мин). Закрываю — бонус не забран, зайди ещё раз.');
+          await context.close().catch(() => {});
+          process.exit(2);
+        }
       }
       await settleAfterCheckin(page);
       await backupGhAfterLogin(context);
       console.log('✅ Вход выполнен. Закрываю браузер, чтобы куки легли на диск —');
       console.log('   без этого точный баланс не читается и чек показал бы прикидку.');
       await context.close().catch(() => {});
-      console.log('🎁 Готово. Жми 💰 в дашборде: увидишь +$25 и колонка станет 📦.');
+      if (auto) {
+        // Маркер для дашборда: checkedIn = слово ШЛЮЗА про суточный бонус, null —
+        // ответ колбэка поймать не удалось (вход подтвердился кукой), тогда бэкенд
+        // решает по росту выдачи, как раньше.
+        console.log(`AUTOCHECKIN_RESULT ${JSON.stringify({
+          checkedIn: oauth && oauth.seen ? !!oauth.checkedIn : null,
+          message: (oauth && oauth.message) || '',
+        })}`);
+        console.log('⚡ Готово. Дашборд сам пересчитает баланс и переставит колонку 🎁.');
+      } else {
+        console.log('🎁 Готово. Жми 💰 в дашборде: увидишь +$25 и колонка станет 📦.');
+      }
       process.exit(0);
     } catch (e) {
       await context.close().catch(() => {});

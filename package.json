@@ -7,7 +7,8 @@
     "start": "node autoreger.js",
     "menu": "node menu.js",
     "dashboard": "node routing/transparent-proxy.js",
-    "tgbot": "node tgbot/bot.js"
+    "tgbot": "node tgbot/bot.js",
+    "check-deps": "node tools/check-deps-tracked.js"
   },
   "keywords": [
     "abuse-hub",

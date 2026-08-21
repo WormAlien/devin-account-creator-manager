@@ -1,0 +1,26 @@
+#!/bin/sh
+# pre-push: refuse to push code that requires files missing from the repo.
+#
+# Backstory (2026-08-21): transparent-proxy.js and keepalive-proxy.js went to master
+# with require('./latency-store.js') while that module was still untracked. Locally
+# everything worked; for the second user UPDATE.bat + restart meant MODULE_NOT_FOUND
+# on dashboard boot. `git status` does not flag this - an untracked dependency looks
+# exactly like personal scratch.
+#
+# Enable (per clone, hooks are not cloned by git):
+#   git config core.hooksPath .githooks
+#
+# Skip once, if you really must:  git push --no-verify
+
+if ! command -v node >/dev/null 2>&1; then
+    echo "pre-push: node not found, dependency check skipped" >&2
+    exit 0
+fi
+
+node "$(git rev-parse --show-toplevel)/tools/check-deps-tracked.js" || {
+    echo "" >&2
+    echo "pre-push: push aborted. Fix the paths above, or bypass with --no-verify." >&2
+    exit 1
+}
+
+exit 0

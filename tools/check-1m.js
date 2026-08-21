@@ -8,7 +8,7 @@
  *
  * Почему файл существует: у записи модели в settings.json раньше не было единой
  * точки входа — 24 прямые записи, суффикс дотягивали 4 места. Каждый агент чинил
- * свой путь, симптом возвращался (см. docs/HANDOFF-model-1m.md).
+ * свой путь, симптом возвращался (см. docs/archive/HANDOFF-model-1m.md).
  *
  * Запуск:  node tools/check-1m.js        (exit 1 = инвариант нарушен)
  * Токены не печатаем: из settings.json берём только поле model.
@@ -222,7 +222,7 @@ for (const s of ok) console.log(`  ok   ${s}`);
 for (const s of warns) console.log(`  warn ${s}`);
 for (const s of fails) console.log(`  FAIL ${s}`);
 if (fails.length) {
-    console.log(`\n[X] инвариант 1M нарушен: ${fails.length} проблем(ы). Как чинить — docs/HANDOFF-model-1m.md`);
+    console.log(`\n[X] инвариант 1M нарушен: ${fails.length} проблем(ы). Как чинить — docs/archive/HANDOFF-model-1m.md`);
     process.exit(1);
 }
 console.log('\n[OK] инвариант 1M держится');

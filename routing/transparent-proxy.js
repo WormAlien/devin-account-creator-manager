@@ -417,7 +417,7 @@ function keyHelperCmd(keyFile) {
 //
 // Чокпоинт ОДИН — writeSettings(): 15+ обработчиков активации по-прежнему пишут
 // свой base URL / apiKeyHelper, а applyFrontdoor() превращает это в состояние
-// front-door. Так новый режим не размазан по хендлерам (см. docs/HANDOFF-frontdoor.md).
+// front-door. Так новый режим не размазан по хендлерам (см. docs/frontdoor-concept.md).
 const FRONTDOOR_CONFIG_FILE = process.env.FRONTDOOR_CONFIG || path.join(__dirname, 'frontdoor.json');
 const ACTIVE_BACKEND_FILE = path.join(os.homedir(), '.claude', 'active-backend.json');
 // Ключ для удалённого шлюза, который обработчик записал литералом (единственный

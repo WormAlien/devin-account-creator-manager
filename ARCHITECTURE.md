@@ -41,7 +41,7 @@
 > `rag-idle-stop.ps1`, задача планировщика «Autoreger RAG idle-stop» и тома Chroma удалены как
 > оверинжиниринг: по 350 заметкам обычный `Grep` быстрее и точнее, а холодный старт стоил 55 с.
 > Поиск по вики = `Grep` по `D:\WORMALIENAIGIGANT\wiki`. Историческое описание стека — в git-истории
-> этого файла и `docs/RAG-ONDEMAND-HANDOFF.md`.
+> этого файла и `docs/archive/RAG-ONDEMAND-HANDOFF.md`.
 
 | Что | Где | Поведение |
 |---|---|---|
@@ -282,7 +282,7 @@ boot-спавнится дашбордом, и без дашборда у CC н�
 **Проверять руками — не по транскрипту** (`message.model` там всегда без суффикса, прокси
 режут): реальное окно последней сессии видно в `~/.claude.json` →
 `projects["<cwd>"].lastModelUsage` (ключ либо `claude-opus-5[1m]`, либо `claude-opus-5`),
-и в статуслайне (`model.id` от самого Claude Code). Подробный разбор — `docs/HANDOFF-model-1m.md`.
+и в статуслайне (`model.id` от самого Claude Code). Подробный разбор — `docs/archive/HANDOFF-model-1m.md`.
 
 ---
 

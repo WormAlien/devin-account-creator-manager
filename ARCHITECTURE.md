@@ -12,7 +12,7 @@
 
 | Порт   | Сервис                  | Файл                           | Роль |
 |--------|-------------------------|--------------------------------|------|
-| `8200` | **Backend Switcher / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |
+| `8200` | **ABUSE HUB / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |
 | `20100`| **Front Door** (фиксированный вход CC) | `routing/frontdoor-proxy.js` | Единственный адрес в `ANTHROPIC_BASE_URL` — **режим по умолчанию** (`routing/frontdoor.json`, `enabled:true`). На каждый запрос читает `~/.claude/active-backend.json` по mtime и форвардит в апстрим активного бэкенда: локальным (keepalive/конвертеры) — как есть, удалённым — с инжектом ключа из `<p>-active-key.txt` + срезом суффикса `[1m]` + `<p>-modelmap.json`. Ретраев нет (они в keepalive). Слушает только `127.0.0.1`. Самопроверка: `node routing/frontdoor-proxy.js selftest`. |
 | `20126`| **FreeModel Key Rotator** | `routing/freemodel-rotator.js` | Менеджер прямых ключей для backend `freemodel_rotator`. Пишет ключ в `settings.json`. |
 | `20130`| **FreeModel OpenAI Proxy** | `routing/freemodel-openai-proxy.js` | Anthropic→OpenAI конвертер (аналог claude-code-proxy): `/v1/messages` → `api.freemodel.dev/v1/chat/completions` (gpt-5.5, gpt-5.6-*, codex). Ключ из `fm-active-key.txt`. Маппинг моделей — `routing/fm-openai-config.json`. |
@@ -1744,11 +1744,11 @@ keepalive-spawn.js:23) + `sqlite3` + `python` + `curl.exe`/`clip.exe`.
 | `docs/STATUSLINE.md` | «внизу CC пусто» — починка в одну команду + почему ломалось (Windows и mac) |
 
 Установка одной строкой на голом маке (она же в README) — симметрично `install.ps1`:
-`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"`
+`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/hub-cc/master/install-mac.sh)"`
 
 Bootstrap-блок в начале скрипта: если рядом нет `package.json` и
 `routing/restart-dashboard.sh` — значит запущено вне репо, ставим CLT (в них git),
-`git clone` в `$PWD` (или `VCACM_DIR`), `exec bash <clone>/install-mac.sh`.
+`git clone` в `$PWD` (или `HUBCC_DIR`, старое имя `VCACM_DIR` — фолбэк), `exec bash <clone>/install-mac.sh`.
 Путь скрипта берётся из `${BASH_SOURCE[0]:-$0}`: при `bash -c` он пуст, `$0` = `bash`,
 `dirname` даёт `.` → cwd → уходим в bootstrap; при `bash install-mac.sh` — папка репо.
 

@@ -5874,15 +5874,18 @@ function setStat(id, val, kind) {
 // Дефолты прокси отдаёт сам (/__state → defaults) — дашборд их НЕ хранит, иначе это
 // была бы пятая копия обкатанных цифр, которая once again разъедется с кодом.
 const KEEPALIVE_DEFAULTS = {};   // pfx → defaults, как их назвал прокси
+const KEEPALIVE_STATE = {};     // pfx → последний /__state (flatRate, paidHedgeLocked)
 
-function keepaliveSummary(cfg, defaults) {
+function keepaliveSummary(cfg, defaults, state) {
   const sec = ms => (ms ? (ms / 1000) + 's' : 'выкл');
   // Хедж выключен и при hedgeMs=0, и при maxHedges=0 (второе — дефолт шлюзов с плоским
   // тарифом за запрос, где убитый дубль списывается целиком). Писать «хедж 20s» при
   // нуле дублей было бы враньём.
   const noHedge = !(cfg.hedgeMs > 0 && (typeof cfg.maxHedges === 'undefined' || cfg.maxHedges > 0));
+  // На плоскотарифном шлюзе объясняем ПРИЧИНУ: иначе выглядит, будто юзер сам выключил.
+  const why = state && state.paidHedgeLocked ? 'выкл — тариф плоский, дубль стоит как ответ' : 'выкл (дублей 0)';
   const hedge = noHedge
-    ? (cfg.maxHedges === 0 && cfg.hedgeMs > 0 ? 'выкл (дублей 0)' : 'выкл')
+    ? (cfg.maxHedges === 0 && cfg.hedgeMs > 0 ? why : 'выкл')
     : `${sec(cfg.hedgeMs)}${typeof cfg.maxHedges === 'undefined' ? '' : ` (дублей ≤${cfg.maxHedges})`}`;
   let s = `хедж ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
   // Расхождение с поставочными дефолтами видно сразу: у юзера мог остаться
@@ -5924,7 +5927,18 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
       if (maxhedges && typeof data.cfg.maxHedges !== 'undefined') maxhedges.value = String(data.cfg.maxHedges);
       if (precommit) precommit.value = String(Math.round((data.cfg.preCommitMs || 0) / 1000));
     }
-    if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx]);
+    KEEPALIVE_STATE[pfx] = data;
+    // Ручка дублей на плоскотарифном шлюзе не крутится: прокси всё равно зажмёт её в 0,
+    // и молча вернувшийся ноль выглядел бы как поломка панели. Лучше сразу видно почему.
+    const mh = $(pfx + '-keepalive-maxhedges');
+    if (mh) {
+      mh.disabled = !!data.paidHedgeLocked;
+      mh.title = data.paidHedgeLocked
+        ? 'У этого шлюза плоский тариф: убитый дубль списывается как полный ответ. Хедж заблокирован, включить можно только запуском прокси с ALLOW_PAID_HEDGE=1'
+        : 'Сколько параллельных дублей максимум на запрос. 0 = хедж выкл';
+      mh.classList.toggle('opacity-40', !!data.paidHedgeLocked);
+    }
+    if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx], data);
     const s = data.stats || {};
     for (const [id, key] of [[pfx + '-stat-requests','requests'],[pfx + '-stat-remaps','remaps'],[pfx + '-stat-keepalives','keepalives'],[pfx + '-stat-hedges','hedges'],[pfx + '-stat-retries','retries'],[pfx + '-stat-errors','errors']]) {
       setStat(id, s[key], key);
@@ -5951,8 +5965,16 @@ async function applyKeepaliveCard(pfx, api) {
     const data = await res.json();
     if (data && typeof data.cfg !== 'undefined') {
       if (data.defaults) KEEPALIVE_DEFAULTS[pfx] = data.defaults;
-      if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx]);
-      toast(`✓ keepalive применён: ${keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx])}`, 'success', 3500);
+      KEEPALIVE_STATE[pfx] = data;
+      if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx], data);
+      // Прокси мог зажать дубли (плоский тариф шлюза) — говорим прямо, а не показываем
+      // молча вернувшийся ноль: иначе это выглядит как «панель не сохраняет настройку».
+      const asked = Number($(pfx + '-keepalive-maxhedges')?.value);
+      if (Number.isFinite(asked) && asked > 0 && data.cfg.maxHedges === 0) {
+        toast('дубли на этом шлюзе платные — каждый стоит как полный ответ, прокси оставил 0', 'error', 6000);
+      } else {
+        toast(`✓ keepalive применён: ${keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx], data)}`, 'success', 3500);
+      }
     } else throw new Error((data && data.error) || 'keepalive не отвечает');
   } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; toast('keepalive config: ' + e.message, 'error'); }
 }

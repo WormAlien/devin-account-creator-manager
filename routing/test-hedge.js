@@ -150,6 +150,12 @@ async function waitProxy() {
 (async () => {
   await new Promise((r) => upstream.listen(UP_PORT, '127.0.0.1', r));
 
+  // Конфиг от прошлой версии дефолтов: прокси обязан его НЕ читать, а заархивировать.
+  // Цифры нарочно вредные — если они доедут до cfg, тест это увидит (проверка I).
+  fs.writeFileSync(TEST_CFG, JSON.stringify({ hedgeMs: 77000, maxAttempts: 9, preCommitMs: 99000 }));
+  const STALE_BAK = `${TEST_CFG}.v1.bak`;
+  try { fs.unlinkSync(STALE_BAK); } catch (err) { /* его могло не быть */ }
+
   const proxy = spawn(process.execPath, ['keepalive-proxy.js'], {
     cwd: path.join(__dirname),
     env: Object.assign({}, process.env, {
@@ -268,6 +274,18 @@ async function waitProxy() {
       `H: в defaults должны быть все четыре ручки, пришло ${JSON.stringify(state.defaults)}`);
     console.log(`H ok: defaults = ${JSON.stringify(state.defaults)}`);
 
+    // --- I: конфиг от прошлой версии дефолтов игнорируется и архивируется ---
+    // Иначе новая цифра не доезжает до тех, кто однажды нажал «Применить»: json
+    // приоритетнее кода, и обновление прокси им ничего не привозит.
+    assert.notStrictEqual(state.cfg.hedgeMs, 77000, 'I: устаревший конфиг НЕ должен применяться');
+    assert.strictEqual(state.cfg.hedgeMs, HEDGE_MS, `I: должен работать env/дефолт, а пришло ${state.cfg.hedgeMs}`);
+    assert.strictEqual(state.cfg.maxAttempts, 3, 'I: maxAttempts из устаревшего файла не должен доехать');
+    assert.ok(fs.existsSync(STALE_BAK), `I: прежние настройки обязаны сохраниться в ${path.basename(STALE_BAK)}`);
+    const fresh = JSON.parse(fs.readFileSync(TEST_CFG, 'utf8'));
+    assert.strictEqual(Number(fresh.v), Number(state.cfgVersion),
+      `I: файл должен быть перезаписан с версией ${state.cfgVersion}, а там v=${fresh.v}`);
+    console.log(`I ok: старый конфиг уехал в ${path.basename(STALE_BAK)}, файл переписан как v${fresh.v}`);
+
     console.log('\ntest-hedge OK');
   } catch (err) {
     console.error(`\nПРОВАЛ: ${err.message}\n--- лог прокси ---\n${plog}`);
@@ -277,5 +295,6 @@ async function waitProxy() {
     for (const res of held) res.destroy();
     upstream.close();
     try { fs.unlinkSync(TEST_CFG); } catch (err) { /* мог не создаться */ }
+    try { fs.unlinkSync(`${TEST_CFG}.v1.bak`); } catch (err) { /* появляется только в проверке I */ }
   }
 })();

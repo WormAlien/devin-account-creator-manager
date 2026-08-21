@@ -5875,6 +5875,19 @@ function setStat(id, val, kind) {
 // была бы пятая копия обкатанных цифр, которая once again разъедется с кодом.
 const KEEPALIVE_DEFAULTS = {};   // pfx → defaults, как их назвал прокси
 const KEEPALIVE_STATE = {};     // pfx → последний /__state (flatRate, paidHedgeLocked)
+const KEEPALIVE_PORTS = {};      // pfx → порт, как его назвал сервер (env'ный, не хардкод)
+
+// Поднять мёртвый keepalive тем же путём, что кнопка «🔄 перезапустить» в Health:
+// сервер убьёт держателя порта, заспавнит процесс и дождётся живого /status.
+async function keepaliveLift(port) {
+  const res = await fetch('/__switch/api/keepalive/restart', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ port }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || !data.ok) throw new Error((data && data.error) || `не удалось поднять :${port}`);
+  return data;
+}
 
 function keepaliveSummary(cfg, defaults, state) {
   const sec = ms => (ms ? (ms / 1000) + 's' : 'выкл');
@@ -5903,7 +5916,14 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
   try {
     const res = await fetch(api + '/state');
     const data = await res.json();
-    if (!data || typeof data.cfg === 'undefined') throw new Error('keepalive не отвечает');
+    if (data && data.port) KEEPALIVE_PORTS[pfx] = data.port;
+    // 502 с полем port = процесс прокси не запущен, а не «сломался конфиг». Панель
+    // обязана сказать, что делать: иначе человек читает «keepalive не отвечает» и идёт
+    // искать причину в Claude Code (поймано 21.08 у второго пользователя на :20156).
+    if (!data || typeof data.cfg === 'undefined') {
+      const p = KEEPALIVE_PORTS[pfx];
+      throw new Error(p ? `прокси :${p} не запущен — нажми «Применить», он поднимется` : 'keepalive не отвечает');
+    }
     // Прокси сам сообщает свои поставочные дефолты — держим их для плейсхолдеров и
     // кнопки «Рекомендованные». Старый прокси (до 21.08) поля не отдаёт: тогда
     // плейсхолдеры из разметки остаются как есть, а кнопка честно скажет, что нечем.
@@ -5946,7 +5966,7 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
   } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; }
 }
 
-async function applyKeepaliveCard(pfx, api) {
+async function applyKeepaliveCard(pfx, api, retried) {
   const st = $(pfx + '-keepalive-status');
   try {
     const patch = {};
@@ -5975,7 +5995,20 @@ async function applyKeepaliveCard(pfx, api) {
       } else {
         toast(`✓ keepalive применён: ${keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx], data)}`, 'success', 3500);
       }
-    } else throw new Error((data && data.error) || 'keepalive не отвечает');
+      return;
+    }
+    // Прокси не отвечает → поднимаем его сами и применяем ещё раз. Это ровно то, что
+    // раньше приходилось делать руками: сначала «перезапустить» в Health, потом
+    // «Применить» заново (иначе цифры уходили в мёртвый порт и не сохранялись).
+    // Одна попытка: если и после подъёма молчит — причина не в том, что он не запущен.
+    const port = (data && data.port) || KEEPALIVE_PORTS[pfx];
+    if (port && !retried) {
+      if (st) st.textContent = `:${port} не отвечает — поднимаю…`;
+      toast(`keepalive :${port} не запущен — поднимаю и применяю снова`, 'info', 5000);
+      await keepaliveLift(port);
+      return applyKeepaliveCard(pfx, api, true);
+    }
+    throw new Error((data && data.error) || 'keepalive не отвечает');
   } catch (e) { if (st) st.textContent = 'ошибка: ' + e.message; toast('keepalive config: ' + e.message, 'error'); }
 }
 

@@ -321,6 +321,9 @@ function publicState() {
     cfgVersion: CFG_VERSION,
     upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt,
     stats: Object.assign({}, stats),
+    // Время последнего ответа — в /__state, чтобы панель показывала цифру тем же
+    // поллингом, что и счётчики, не дёргая график.
+    latency: { last_ms: lat.lastMs, last_at: lat.lastAt },
   };
 }
 // Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
@@ -331,6 +334,71 @@ function publicState() {
 // только грузят шлюз (его WAF чувствителен к пачкам) и hedgeMs надо ПОДНИМАТЬ.
 const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, byStatus: {}, byModel: {}, winBy: {} };
 const startedAt = Date.now();
+
+// ── История времени ответа: минутные бакеты за сутки ────────────────────────
+// Одна цифра «последний ответ» ничего не объясняет: шлюз то отдаёт за 3с, то за 40с,
+// и увидеть это можно только по форме кривой. Поэтому держим агрегат ПО МИНУТАМ, а не
+// сырые замеры: 1440 бакетов = сутки при фиксированной памяти (~100КБ), и на график
+// ложится любое окно от 5 минут до 24 часов без пересчёта.
+// Замеряем время до ПЕРВЫХ БАЙТ победившей попытки (TTFB) — ровно то, чем шлюз
+// отличается медленный от быстрого. Полное время ответа зависит от длины генерации,
+// то есть от вопроса пользователя, и про шлюз не говорит ничего.
+// Формат бакетов, нарезка окна и файл — в `latency-store.js`: тот же модуль читает
+// дашборд, чтобы показывать график провайдера, чей прокси СЕЙЧАС не запущен. Держать
+// две копии этой арифметики нельзя — разъедутся, и на диске окажется формат, который
+// вторая сторона молча прочитает неправильно.
+const latStore = require('./latency-store.js');
+const LAT_BUCKET_MS = latStore.BUCKET_MS;
+const LAT_BUCKETS = latStore.BUCKETS;             // 24ч при бакете в минуту
+// Файл кейсуется по PORT — как keepalive-config-<PORT>.json: на одном скрипте живут
+// четыре прокси, и общая история слепила бы agentrouter с tabi в одну кривую.
+const LAT_FILE = process.env.LATENCY_FILE || latStore.fileFor(PORT, __dirname);
+const lat = { slots: new Array(LAT_BUCKETS).fill(null), lastMs: 0, lastAt: 0 };
+let latDirty = false;
+
+function noteLatency(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  lat.lastMs = Math.round(ms);
+  lat.lastAt = Date.now();
+  const m = Math.floor(lat.lastAt / LAT_BUCKET_MS);
+  const i = ((m % LAT_BUCKETS) + LAT_BUCKETS) % LAT_BUCKETS;
+  const b = lat.slots[i];
+  // Слот занят ЧУЖОЙ минутой = кольцо провернулось на сутки, перезаписываем.
+  if (!b || b.m !== m) lat.slots[i] = { m, n: 1, sum: lat.lastMs, min: lat.lastMs, max: lat.lastMs };
+  else {
+    b.n += 1; b.sum += lat.lastMs;
+    if (lat.lastMs < b.min) b.min = lat.lastMs;
+    if (lat.lastMs > b.max) b.max = lat.lastMs;
+  }
+  latDirty = true;
+}
+
+const latSeries = (windowSec) => latStore.series(
+  lat.slots.filter(Boolean), windowSec, { last_ms: lat.lastMs, last_at: lat.lastAt });
+
+// История переживает рестарт прокси: иначе после каждого «Применить» (а он поднимает
+// процесс заново) суточный график обнулялся бы, и смысл суточного окна пропадал.
+function latLoad() {
+  const st = latStore.readFile(LAT_FILE);
+  if (!st) return;
+  for (const b of st.buckets) {
+    lat.slots[((b.m % LAT_BUCKETS) + LAT_BUCKETS) % LAT_BUCKETS] = b;
+  }
+  if (st.last_at > 0) { lat.lastMs = st.last_ms; lat.lastAt = st.last_at; }
+}
+function latSave() {
+  if (!latDirty) return;
+  latDirty = false;
+  const buckets = lat.slots.filter(Boolean);
+  try {
+    fs.writeFileSync(LAT_FILE, JSON.stringify({ v: 1, last_ms: lat.lastMs, last_at: lat.lastAt, buckets }));
+  } catch (e) { log(`latency-история не сохранилась: ${e.message}`); }
+}
+latLoad();
+// Раз в минуту, и только если что-то менялось: сброс на диск чаще смысла не имеет —
+// бакет всё равно минутный.
+setInterval(latSave, LAT_BUCKET_MS).unref();
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { latSave(); process.exit(0); });
 // Служебные пути: статус (health-check дашборда), состояние и патч конфига.
 function handleControl(req, res, reqPath) {
   if (req.method === 'GET' && reqPath === '/__keepalive/api/status') {
@@ -341,6 +409,14 @@ function handleControl(req, res, reqPath) {
   if (req.method === 'GET' && reqPath === '/__state') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(JSON.stringify(publicState()));
+    return;
+  }
+  // GET /__latency?window=<сек> — история времени ответа для графика в панели.
+  // Отдельно от /__state: точек до 1440, таскать их на каждом тике счётчиков незачем.
+  if (req.method === 'GET' && reqPath.split('?')[0] === '/__latency') {
+    const q = reqPath.indexOf('?') >= 0 ? new URLSearchParams(reqPath.slice(reqPath.indexOf('?') + 1)) : null;
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(latSeries(q && q.get('window'))));
     return;
   }
   if (req.method === 'POST' && reqPath === '/__config') {
@@ -809,7 +885,12 @@ const server = http.createServer((req, res) => {
     // не нужны, `хедж`/`ретрай` = спасли. Агрегат — в stats.winBy (GET /__state).
     const wKind = r.__kind || 'первый';
     stats.winBy[wKind] = (stats.winBy[wKind] || 0) + 1;
-    log(`${req.method} ${reqPath} winner: ${wKind} (попытка #${r.__attempt || 1} из ${launched}) за ${Date.now() - started}ms`);
+    const took = Date.now() - started;
+    // В историю идёт только победитель: убитый дубль показал бы не скорость шлюза, а
+    // цифру хеджа, а сдохшая попытка — таймаут. Пишем здесь, а не в forward(), потому
+    // что forward для буферизованных ответов вызывается уже после дренажа тела.
+    noteLatency(took);
+    log(`${req.method} ${reqPath} winner: ${wKind} (попытка #${r.__attempt || 1} из ${launched}) за ${took}ms`);
   };
   const giveUp = (why) => {
     finished = true;

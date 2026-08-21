@@ -18,18 +18,24 @@ echo "Было:  $(git log --oneline -1 2>/dev/null || echo 'не git-репа?'
 
 # Обновление кода. Локальное состояние дашборда (маппинг тиров, активный бэкенд)
 # трекается в git, поэтому наивный pull падает «local changes would be overwritten».
-# tools/git-pull-safe.js сохраняет такие файлы, тянет код и возвращает их назад —
-# та же логика, что у кнопки обновления в дашборде.
+# tools/git-pull-safe.js сохраняет такие файлы, тянет код и возвращает их назад.
+# `--stash` добавляет второй шаг: правки в КОДЕ не блокируют обновление, а уходят
+# в git stash (обратимо, скрипт печатает, чем вернуть).
+#
+# Это ровно то же, что делает кнопка «Обновить дашборд» в UI после подтверждения:
+# одна реализация на обоих вызывающих. Раньше умный путь был только здесь, и
+# человек с правками кода застревал на кнопке, не понимая, что батник его вылечит.
 PULL_RC=0
 if command -v node >/dev/null 2>&1; then
-  node tools/git-pull-safe.js || PULL_RC=$?
+  node tools/git-pull-safe.js --stash || PULL_RC=$?
 else
   warn "node не найден — обновляюсь по-старому (через stash)"
   PULL_RC=99
 fi
 
 if [ "$PULL_RC" -ne 0 ]; then
-  [ "$PULL_RC" -eq 3 ] && warn "мешают локальные правки кода — прячу их в git stash (вернуть: git stash pop)"
+  # Сюда попадаем, если git-pull-safe не справился (нет сети, конфликт, не репо)
+  # или node вообще нет. Последнее средство: забрать master принудительно.
   if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
     git stash push -m "update.sh auto-stash $(date +%F_%T)" >/dev/null
   fi

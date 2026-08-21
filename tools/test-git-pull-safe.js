@@ -30,9 +30,9 @@ run(seed, 'add', '-A'); run(seed, 'commit', '-m', 'up'); run(seed, 'push', 'orig
 fs.writeFileSync(path.join(work, 'routing/ar-modelmap.json'), '{"opus":"USER-CHOICE"}\n');
 
 // A: CLI обновляется и сохраняет настройки
-const cli = (cwd) => {
+const cli = (cwd, ...extra) => {
   try {
-    const out = execFileSync(process.execPath, ['tools/git-pull-safe.js'], { cwd, encoding: 'utf8' });
+    const out = execFileSync(process.execPath, ['tools/git-pull-safe.js', ...extra], { cwd, encoding: 'utf8' });
     return { code: 0, out };
   } catch (e) { return { code: e.status, out: (e.stdout || '') + (e.stderr || '') }; }
 };
@@ -75,5 +75,36 @@ ok(`D: все ${tracked.length} тир-карт защищены${unprotected.le
 // И обратное: настоящий код файлом состояния не считается, иначе pull молча
 // откатывал бы правки в коде вместо того, чтобы о них сказать.
 ok('D: код не считается состоянием', real.isStateFile('routing/transparent-proxy.js') === false);
+
+// E: --stash — правки кода НЕ блокируют обновление, а прячутся и возвращаются.
+// Это режим, который жмёт кнопка в дашборде после подтверждения. До 21.08 умный
+// путь был только в update.sh, и человек с правками кода застревал на кнопке.
+fs.writeFileSync(path.join(seed, 'code.js'), 'v4\n');
+fs.writeFileSync(path.join(seed, 'routing/ar-modelmap.json'), '{"opus":"repo-v4"}\n');
+run(seed, 'add', '-A'); run(seed, 'commit', '-m', 'up4'); run(seed, 'push', 'origin', 'master');
+fs.writeFileSync(path.join(work, 'code.js'), 'LOCAL HACK 2\n');            // правка кода
+fs.writeFileSync(path.join(work, 'routing/ar-modelmap.json'), '{"opus":"USER-2"}\n'); // и настройка
+
+const e = cli(work, '--stash');
+ok('E: --stash вышел 0', e.code === 0);
+ok('E: код обновился', fs.readFileSync(path.join(work, 'code.js'), 'utf8').trim() === 'v4');
+ok('E: выбор юзера сохранён', fs.readFileSync(path.join(work, 'routing/ar-modelmap.json'), 'utf8').includes('USER-2'));
+ok('E: сказал про stash', /stash/i.test(e.out) && /code\.js/.test(e.out));
+// Правки кода не потеряны — они В СТЭШЕ. Проверяем именно наличие и содержимое, а
+// НЕ то, что `git stash pop` применится чисто: если апстрим менял тот же файл, pop
+// честно даёт конфликт (проверено здесь живьём — code.js разошёлся v2→v4). Поэтому
+// и в UI обещаем «лежит в стэше», а не «вернётся одной командой без вопросов».
+const stashList = run(work, 'stash', 'list');
+ok('E: запись в stash есть', /git-pull-safe auto-stash/.test(stashList));
+ok('E: в стэше именно правка кода', /LOCAL HACK 2/.test(run(work, 'stash', 'show', '-p', 'stash@{0}')));
+// Стэш НЕ трогаем: pop мог бы оставить дерево в конфликте и сломать проверку E-контроль.
+// И контроль, что тест не зелёный по случайности: БЕЗ --stash тот же расклад обязан
+// упереться в код выхода 3, иначе E ничего не проверяет.
+fs.writeFileSync(path.join(seed, 'code.js'), 'v5\n');
+run(seed, 'add', '-A'); run(seed, 'commit', '-m', 'up5'); run(seed, 'push', 'origin', 'master');
+fs.writeFileSync(path.join(work, 'code.js'), 'LOCAL HACK 3\n');
+const noStash = cli(work);
+ok('E: без --stash тот же расклад даёт код 3', noStash.code === 3);
+ok('E: без --stash правки на месте', fs.readFileSync(path.join(work, 'code.js'), 'utf8').includes('LOCAL HACK 3'));
 
 fs.rmSync(root, { recursive: true, force: true });

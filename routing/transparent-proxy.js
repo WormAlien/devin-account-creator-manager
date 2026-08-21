@@ -10221,24 +10221,47 @@ const server = http.createServer((req, res) => {
     // Подтянуть свежий код дашборда (git pull --ff-only). Требует ручного рестарта прокси.
     // Логика «безопасного pull» (сохранить локальное состояние → checkout → pull →
     // вписать назад) живёт в tools/git-pull-safe.js — её же зовут update.sh/fix.sh.
+    //
+    // {stash:true} в теле → правки кода не блокируют обновление, а уходят в git stash.
+    // Раньше это умел только update.sh, и кнопка в дашборде оказывалась глупее батника:
+    // отдавала сырую ошибку git и запирала человека (21.08). Второй заход делается
+    // ТОЛЬКО по подтверждению из UI: спрятать чужие правки молча — сюрприз, пусть и
+    // обратимый.
     if (req.method === 'POST' && req.url === '/__switch/api/dashboard/update-pull') {
-        try {
-            const { pullSafe } = require('../tools/git-pull-safe');
-            const r = pullSafe();
-            if (!r.ok && r.blocking.length) {
-                return jsonRes(res, 409, {
-                    error: 'Обновлению мешают локальные правки в коде:\n  ' + r.blocking.join('\n  ')
-                        + '\n\nОткати их (git checkout -- <файл>) или сохрани (git stash) и нажми обновление снова.',
-                    dirty: r.blocking,
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                let wantStash = false;
+                try { wantStash = !!(JSON.parse(body || '{}').stash); } catch { }
+                const { pullSafe } = require('../tools/git-pull-safe');
+                const r = pullSafe({ stashBlocking: wantStash });
+                if (!r.ok && r.blocking.length) {
+                    return jsonRes(res, 409, {
+                        error: 'Обновлению мешают локальные правки в коде:\n  ' + r.blocking.join('\n  '),
+                        dirty: r.blocking,
+                        can_stash: true,   // UI покажет «спрятать в stash и обновить»
+                    });
+                }
+                if (!r.ok) {
+                    if (r.stashed && r.stashed.length) {
+                        logLine(`dashboard git pull: pull не прошёл, но правки уже в stash (${r.stashed.join(', ')}) — вернуть: git stash pop`);
+                    }
+                    return jsonRes(res, 500, { error: r.error || 'git pull failed', stashed: r.stashed || [] });
+                }
+                if (r.preserved.length) logLine(`dashboard git pull: локальные настройки возвращены (${r.preserved.join(', ')})`);
+                if (r.stashed && r.stashed.length) logLine(`dashboard git pull: правки кода спрятаны в git stash (${r.stashed.join(', ')}) — вернуть: git stash pop`);
+                logLine(`dashboard git pull:\n${r.output}`);
+                return jsonRes(res, 200, {
+                    ok: true, output: r.output, preserved: r.preserved,
+                    stashed: r.stashed || [], stashRef: r.stashRef || '',
+                    restart_required: true,
                 });
+            } catch (e) {
+                return jsonRes(res, 500, { error: (e.message || 'git pull failed').toString() });
             }
-            if (!r.ok) return jsonRes(res, 500, { error: r.error || 'git pull failed' });
-            if (r.preserved.length) logLine(`dashboard git pull: локальные настройки возвращены (${r.preserved.join(', ')})`);
-            logLine(`dashboard git pull:\n${r.output}`);
-            return jsonRes(res, 200, { ok: true, output: r.output, preserved: r.preserved, restart_required: true });
-        } catch (e) {
-            return jsonRes(res, 500, { error: (e.message || 'git pull failed').toString() });
-        }
+        });
+        return;
     }
 
     if (req.method === 'POST' && req.url === '/__switch/api/switch') {

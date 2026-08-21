@@ -106,5 +106,94 @@ fs.writeFileSync(path.join(work, 'code.js'), 'LOCAL HACK 3\n');
 const noStash = cli(work);
 ok('E: без --stash тот же расклад даёт код 3', noStash.code === 3);
 ok('E: без --stash правки на месте', fs.readFileSync(path.join(work, 'code.js'), 'utf8').includes('LOCAL HACK 3'));
+run(work, 'checkout', '--', 'code.js');   // убрали помеху от E
+
+// F: апстрим завёл ФАЙЛ, которого у нас нет в git, а у человека он уже лежит.
+// `git diff --name-only HEAD` неотслеживаемое не видит вообще, поэтому раньше
+// dirty был пуст, blocking пуст, и наружу уходило сырое «The following untracked
+// working tree files would be overwritten by merge». Два подслучая:
+//   F1 — это тир-карта: настройка, её надо сберечь молча (как трекаемую);
+//   F2 — это чей-то файл: помеха, называем и прячем в stash по подтверждению.
+fs.writeFileSync(path.join(seed, 'routing/newprov-modelmap.json'), '{"opus":"repo-newprov"}\n');
+fs.writeFileSync(path.join(seed, 'extra.js'), 'upstream extra\n');
+run(seed, 'add', '-A'); run(seed, 'commit', '-m', 'up6'); run(seed, 'push', 'origin', 'master');
+fs.writeFileSync(path.join(work, 'routing/newprov-modelmap.json'), '{"opus":"USER-NEWPROV"}\n'); // F1
+fs.writeFileSync(path.join(work, 'extra.js'), 'MY OWN EXTRA\n');                                 // F2
+
+const f1 = cli(work);
+ok('F: без --stash код выхода 3', f1.code === 3);
+ok('F: назвал неотслеживаемую помеху', /extra\.js/.test(f1.out));
+ok('F: пометил, что файл новый', /новый файл/.test(f1.out));
+ok('F: не тронул чужой файл', fs.readFileSync(path.join(work, 'extra.js'), 'utf8').includes('MY OWN EXTRA'));
+ok('F: тир-карту юзера не выбросил', fs.readFileSync(path.join(work, 'routing/newprov-modelmap.json'), 'utf8').includes('USER-NEWPROV'));
+
+const f2 = cli(work, '--stash');
+ok('F: --stash вышел 0', f2.code === 0);
+ok('F: untracked тир-карта юзера сохранена',
+   fs.readFileSync(path.join(work, 'routing/newprov-modelmap.json'), 'utf8').includes('USER-NEWPROV'));
+// `git stash show -p` неотслеживаемое НЕ показывает (оно лежит в третьем родителе
+// стэш-коммита) — смотреть надо с --include-untracked, иначе проверка врёт «пусто».
+ok('F: untracked чужой файл в стэше',
+   /MY OWN EXTRA/.test(run(work, 'stash', 'show', '-p', '--include-untracked', 'stash@{0}')));
+ok('F: апстримная версия файла на месте', fs.readFileSync(path.join(work, 'extra.js'), 'utf8').includes('upstream extra'));
+
+// G: свои коммиты, разошедшиеся с master. `--ff-only` даёт «Not possible to
+// fast-forward», а regex про «local changes» его не ловил — уходил сырой текст.
+// Требуем: понятное объяснение, счёт своих коммитов, команда, и НИ ОДИН свой
+// коммит не потерян (auto-reset здесь запрещён).
+fs.writeFileSync(path.join(seed, 'code.js'), 'v6\n');
+run(seed, 'add', '-A'); run(seed, 'commit', '-m', 'up7'); run(seed, 'push', 'origin', 'master');
+fs.writeFileSync(path.join(work, 'mine.js'), 'my own commit\n');
+run(work, 'add', '-A'); run(work, 'commit', '-m', 'my local commit');
+const head = run(work, 'rev-parse', 'HEAD').trim();
+
+const g = cli(work, '--stash');   // даже в «умном» режиме не имеет права ресетить
+// Код 4, а не 1: по нему update.sh/fix.sh обязаны НЕ доезжать до
+// `reset --hard origin/master` — он выбросил бы ровно эти коммиты.
+ok('G: код выхода 4 (diverged)', g.code === 4);
+ok('G: объяснил расхождение', /История разошлась/.test(g.out));
+ok('G: посчитал свои коммиты', /у тебя 1 своих коммит/.test(g.out));
+ok('G: подсказал команду', /git pull --rebase/.test(g.out));
+ok('G: свой коммит на месте', run(work, 'rev-parse', 'HEAD').trim() === head);
+ok('G: свой файл цел', fs.existsSync(path.join(work, 'mine.js')));
+ok('G: diverged в структуре ответа', require(path.join(work, 'tools/git-pull-safe.js')).pullSafe().diverged === true);
+
+// H: батники. update.sh/fix.sh при неудачном pull имели последнее средство
+// `git fetch && git reset --hard origin/master` — на разошедшейся истории это
+// молча уничтожало незапушенные коммиты (в update.sh даже с бодрой строчкой
+// «локальные коммиты уйдут в сторону»). Проверяем на живом расхождении из G, что
+// оба скрипта коммит НЕ теряют. Гоняем только блок обновления кода: остальное
+// (kill портов, install.sh) в песочнице не нужно и небезопасно.
+const shell = fs.existsSync('/usr/bin/bash') ? '/usr/bin/bash' : 'bash';
+function updateBlock(file, upto) {
+  const src = fs.readFileSync(path.resolve(__dirname, '..', file), 'utf8');
+  const from = src.indexOf('PULL_RC=0'), cut = src.indexOf(upto);
+  if (from < 0 || cut < 0 || cut < from) {
+    throw new Error(`${file}: не нашёл блок обновления кода — тест устарел вместе со скриптом`);
+  }
+  // Шапку скриптов (cd в свою папку, цвета, kill портов) не берём: в песочнице она
+  // увела бы git не туда. Только ветка PULL_RC + заглушки логгеров и read.
+  return 'b(){ echo "$@"; }; ok(){ echo "$@"; }; warn(){ echo "$@"; }; err(){ echo "$@"; }; '
+       + 'step(){ echo "$@"; }; read(){ :; };\n' + src.slice(from, cut);
+}
+function runBlock(file, upto, stdin) {
+  const script = path.join(root, `block-${file}.sh`);
+  fs.writeFileSync(script, updateBlock(file, upto));
+  try {
+    return { code: 0, out: execFileSync(shell, [script], { cwd: work, encoding: 'utf8', input: stdin || '\n' }) };
+  } catch (e) { return { code: e.status, out: (e.stdout || '') + (e.stderr || '') }; }
+}
+// В песочнице шапка скриптов (cd в свою папку) не нужна — вырезаем всё до блока
+// обновления и подсовываем заглушки; интересует ровно ветка PULL_RC.
+const up = runBlock('update.sh', 'ok "Стало:', 'y\n');
+ok('H: update.sh не выбросил свой коммит', run(work, 'rev-parse', 'HEAD').trim() === head);
+ok('H: update.sh сказал про расхождение', /свои коммиты/.test(up.out));
+// Проверяем не «не упоминал reset» (скрипт как раз ПЕЧАТАЕТ эту команду подсказкой
+// человеку), а что грубая ветка не выполнялась.
+ok('H: update.sh не пошёл в принудительный master', !/забираю master принудительно/.test(up.out));
+const fx = runBlock('fix.sh', 'ok "стало:');
+ok('H: fix.sh не выбросил свой коммит', run(work, 'rev-parse', 'HEAD').trim() === head);
+ok('H: fix.sh сказал про расхождение', /разошлись с master/.test(fx.out));
+ok('H: mine.js цел после обоих', fs.readFileSync(path.join(work, 'mine.js'), 'utf8').includes('my own commit'));
 
 fs.rmSync(root, { recursive: true, force: true });

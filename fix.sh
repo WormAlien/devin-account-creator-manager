@@ -31,9 +31,18 @@ echo "  было: $(git log --oneline -1 2>/dev/null)"
 # tools/git-pull-safe.js (та же логика, что у кнопки обновления в дашборде).
 PULL_RC=0
 if command -v node >/dev/null 2>&1; then
-  node tools/git-pull-safe.js >/dev/null || PULL_RC=$?
+  # --stash: правки в коде не блокируют починку, а уходят в стэш (обратимо, скрипт
+  # печатает, чем вернуть). Тот же режим, что у кнопки в дашборде и у update.sh —
+  # иначе fix.sh спотыкался о код 3 и доезжал до грубого reset ниже.
+  node tools/git-pull-safe.js --stash >/dev/null || PULL_RC=$?
 else
   PULL_RC=99
+fi
+# Код 4 = свои коммиты разошлись с master. `reset --hard` ниже выбросил бы именно их,
+# а fix.sh вопросов не задаёт — значит просто не обновляемся и говорим об этом.
+if [ "$PULL_RC" -eq 4 ]; then
+  warn "код не обновлён: свои коммиты разошлись с master — разрулить: git pull --rebase"
+  PULL_RC=0
 fi
 if [ "$PULL_RC" -ne 0 ]; then
   if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
@@ -41,8 +50,15 @@ if [ "$PULL_RC" -ne 0 ]; then
     git stash push -m "fix.sh auto-stash $(date +%F_%T)" >/dev/null
   fi
   if ! git pull --ff-only >/dev/null 2>&1; then
-    warn "простой pull не прошёл — принудительно беру origin/master"
-    git fetch origin && git reset --hard origin/master >/dev/null || err "git не смог обновиться (нет интернета?)"
+    # Свои коммиты не выбрасываем даже здесь: reset --hard уничтожает незапушенное
+    # безвозвратно, а fix.sh запускают вслепую («починить всё»).
+    MINE=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
+    if [ "${MINE:-0}" -gt 0 ]; then
+      warn "pull не прошёл, у тебя $MINE своих коммит(ов) — reset их бы выбросил, не делаю (git pull --rebase)"
+    else
+      warn "простой pull не прошёл — принудительно беру origin/master"
+      git fetch origin && git reset --hard origin/master >/dev/null || err "git не смог обновиться (нет интернета?)"
+    fi
   fi
 fi
 ok "стало: $(git log --oneline -1)"

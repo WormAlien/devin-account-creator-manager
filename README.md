@@ -1,13 +1,13 @@
 <div align="center">
 
-<a href="https://t.me/xgateonline_bot?start=github"><img src="docs/xgate-banner.png" alt="XGATE VPN — чистые IP для регистраций и API. Промокод ABUSEHUB — 3 дня бесплатно"></a>
+<a href="https://t.me/xgateonline_bot?start=abusehub"><img src="docs/xgate-banner.png" alt="XGATE VPN — чистые IP для регистраций и API. Промокод ABUSEHUB — 3 дня бесплатно"></a>
 
-[![XGATE VPN](https://img.shields.io/badge/XGATE_VPN-@xgateonline__bot-000000?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/xgateonline_bot?start=github)
+[![XGATE VPN](https://img.shields.io/badge/XGATE_VPN-@xgateonline__bot-000000?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/xgateonline_bot?start=abusehub)
 [![личный кабинет](https://img.shields.io/badge/личный_кабинет-cabinet.xgate.online-000000?style=for-the-badge&logo=googlechrome&logoColor=white)](https://cabinet.xgate.online)
-[![промокод ABUSEHUB](https://img.shields.io/badge/промокод-ABUSEHUB_·_3_дня-37e29a?style=for-the-badge&labelColor=000000)](https://t.me/xgateonline_bot?start=github)
+[![промокод ABUSEHUB](https://img.shields.io/badge/промокод-ABUSEHUB_·_3_дня-37e29a?style=for-the-badge&labelColor=000000)](https://t.me/xgateonline_bot?start=abusehub)
 
 <sub>Проект бесплатный и живёт с подписок <b>XGATE</b>: свои ноды, IP без истории абуза — регистрации, капчи и API проходят. Промокод <code>ABUSEHUB</code> — 3 дня бесплатно, дальше от 150 ₽/мес.<br>
-🤖 <a href="https://t.me/xgateonline_bot?start=github"><b>Telegram-бот @xgateonline_bot</b></a> · 🔑 <a href="https://cabinet.xgate.online"><b>Личный кабинет cabinet.xgate.online</b></a> · <a href="#поддержать-проект">зачем это в репозитории</a></sub>
+🤖 <a href="https://t.me/xgateonline_bot?start=abusehub"><b>Telegram-бот @xgateonline_bot</b></a> · 🔑 <a href="https://cabinet.xgate.online"><b>Личный кабинет cabinet.xgate.online</b></a> · <a href="#поддержать-проект">зачем это в репозитории</a></sub>
 
 <br>
 
@@ -418,7 +418,7 @@ git diff --cached | grep -E "sk-[a-z]{2,}-[a-f0-9]+|auth_key_hex|fe_oa_|aero_liv
 </tr>
 <tr>
   <td>🤖 <b>Telegram-бот</b></td>
-  <td><a href="https://t.me/xgateonline_bot?start=github">@xgateonline_bot</a> — покупка, ключи, саппорт</td>
+  <td><a href="https://t.me/xgateonline_bot?start=abusehub">@xgateonline_bot</a> — покупка, ключи, саппорт</td>
 </tr>
 <tr>
   <td>🔑 <b>Личный кабинет</b></td>

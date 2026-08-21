@@ -15,3 +15,17 @@ mac-support/shims/* text eol=lf
 *.html  text
 *.json  text
 *.md    text
+
+# Файлы состояния, которые дашборд перезаписывает САМ из Node
+# (`JSON.stringify(x, null, 2) + '\n'` — то есть LF). Правило `*.json text` выше
+# вместе с `core.autocrlf=true` требует в рабочей копии CRLF, поэтому такой файл
+# становится «грязным» при полностью совпадающем содержимом: `git diff` по нему
+# ПУСТ, а `git pull` встаёт на «local changes would be overwritten». Тупик без
+# выхода — откатывать нечего, а обновиться нельзя. `eol=lf` снимает причину;
+# у кого копия уже на CRLF, переход лечит pullSafe (он такую грязь теперь видит,
+# сохраняет значение, сбрасывает, тянет код и вписывает назад).
+routing/*-modelmap.json       text eol=lf
+routing/ar-checkin.json       text eol=lf
+routing/proxy-target.json     text eol=lf
+routing/frontdoor.json        text eol=lf
+routing/fm-openai-config.json text eol=lf

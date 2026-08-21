@@ -196,4 +196,72 @@ ok('H: fix.sh не выбросил свой коммит', run(work, 'rev-parse
 ok('H: fix.sh сказал про расхождение', /разошлись с master/.test(fx.out));
 ok('H: mine.js цел после обоих', fs.readFileSync(path.join(work, 'mine.js'), 'utf8').includes('my own commit'));
 
+// ── I / J: файл, грязный ТОЛЬКО переводами строк ─────────────────────────────
+// Расклад с живого репо (Windows, core.autocrlf=true, `*.json text`): дашборд
+// перезаписывает тир-карту из Node — `JSON.stringify + '\n'`, то есть LF, — а git
+// ждёт в рабочей копии CRLF. Содержимое при этом совпадает с HEAD байт в байт после
+// нормализации, поэтому `git diff --name-only HEAD` ПУСТ, а `git pull` встаёт на
+// «local changes would be overwritten». Тупик: откатывать нечего, обновиться нельзя,
+// а починка доезжает только тем самым обновлением.
+// I — старый мир (`*.json text`): pullSafe обязан вывезти.
+// J — с `eol=lf` на файлы состояния грязь не возникает вообще.
+function sandbox(name, attributes) {
+  const o = path.join(root, `${name}.git`), s = path.join(root, `${name}-seed`), w = path.join(root, `${name}-work`);
+  execFileSync('git', ['init', '--bare', '-b', 'master', o]);
+  execFileSync('git', ['clone', o, s]);
+  run(s, 'config', 'user.email', 't@t'); run(s, 'config', 'user.name', 't');
+  fs.mkdirSync(path.join(s, 'routing')); fs.mkdirSync(path.join(s, 'tools'));
+  fs.writeFileSync(path.join(s, '.gitattributes'), attributes);
+  fs.writeFileSync(path.join(s, 'routing/ar-modelmap.json'), '{\n  "opus": "repo-default"\n}\n');
+  fs.writeFileSync(path.join(s, 'code.js'), 'v1\n');
+  fs.copyFileSync(path.join(__dirname, 'git-pull-safe.js'), path.join(s, 'tools/git-pull-safe.js'));
+  run(s, 'add', '-A'); run(s, 'commit', '-m', 'init'); run(s, 'push', 'origin', 'master');
+  // Клонируем ИМЕННО с autocrlf=true — это и есть настройка живого репо на Windows,
+  // без неё расхождение не возникает и тест ничего не проверяет.
+  execFileSync('git', ['clone', '-c', 'core.autocrlf=true', o, w]);
+  run(w, 'config', 'user.email', 't@t'); run(w, 'config', 'user.name', 't');
+  // Апстрим ушёл вперёд и тронул ТОТ ЖЕ json: без этого git на грязный по eol файл
+  // не жалуется вовсе (проверено) — pull проходит и случай не воспроизводится.
+  fs.writeFileSync(path.join(s, 'code.js'), 'v2\n');
+  fs.writeFileSync(path.join(s, 'routing/ar-modelmap.json'), '{\n  "opus": "repo-new"\n}\n');
+  run(s, 'add', '-A'); run(s, 'commit', '-m', 'up'); run(s, 'push', 'origin', 'master');
+  return { seed: s, work: w, map: path.join(w, 'routing/ar-modelmap.json') };
+}
+
+const i = sandbox('eol', '*.json text\n');
+ok('I: git отдал рабочую копию с CRLF', fs.readFileSync(i.map, 'utf8').includes('\r\n'));
+// «Дашборд» переписал файл: значение то же, переводы строк — LF.
+fs.writeFileSync(i.map, '{\n  "opus": "repo-default"\n}\n');
+// Контроль, что тест воспроизводит именно слепое пятно, а не обычную грязь: старый
+// детект файл НЕ видит, новый — видит. Уберут union из dirtyFiles() — упадёт I ниже.
+ok('I: старый детект (diff HEAD) файл НЕ видит', run(i.work, 'diff', '--name-only', 'HEAD').trim() === '');
+ok('I: diff-files его видит', /ar-modelmap\.json/.test(run(i.work, 'diff-files', '--name-only')));
+let plainPull = 0;
+try { run(i.work, 'pull', '--ff-only'); } catch (e) { plainPull = e.status; }
+ok('I: обычный git pull встаёт насмерть', plainPull !== 0);
+const iRes = cli(i.work);
+ok('I: pullSafe вывез (код 0)', iRes.code === 0);
+ok('I: код обновился', fs.readFileSync(path.join(i.work, 'code.js'), 'utf8').trim() === 'v2');
+ok('I: значение юзера сохранено', /repo-default/.test(fs.readFileSync(i.map, 'utf8')));
+ok('I: сказал про сохранённые настройки', /ar-modelmap\.json/.test(iRes.out));
+
+const j = sandbox('eollf', '*.json text\nrouting/*-modelmap.json text eol=lf\n');
+ok('J: с eol=lf рабочая копия сразу LF', !fs.readFileSync(j.map, 'utf8').includes('\r\n'));
+fs.writeFileSync(j.map, '{\n  "opus": "repo-default"\n}\n');   // тот же Node-writer
+ok('J: файл не стал грязным', run(j.work, 'status', '--porcelain').trim() === '');
+let plainPullJ = 0;
+try { run(j.work, 'pull', '--ff-only'); } catch (e) { plainPullJ = e.status; }
+ok('J: обычный git pull из консоли проходит', plainPullJ === 0);
+
+// K: правило eol=lf стоит на КАЖДОМ файле состояния настоящего репо. Проверяем
+// против самого git'а (`check-attr`), а не против текста .gitattributes: строчку
+// там забыть так же легко, как забыли `xpeach-modelmap.json` в перечислении.
+const repoRoot = path.resolve(__dirname, '..');
+const stateFiles = run(repoRoot, 'ls-files', 'routing/*.json')
+    .split('\n').map(s => s.trim()).filter(f => f && real.isStateFile(f));
+ok('K: файлы состояния в репо нашлись', stateFiles.length >= 5);
+const noLf = stateFiles.filter(f => !/eol: lf/.test(run(repoRoot, 'check-attr', 'eol', '--', f)));
+ok(`K: у всех ${stateFiles.length} стоит eol=lf${noLf.length ? ' — ДЫРКА: ' + noLf.join(', ') : ''}`,
+   noLf.length === 0);
+
 fs.rmSync(root, { recursive: true, force: true });

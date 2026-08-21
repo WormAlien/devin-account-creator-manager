@@ -75,7 +75,7 @@ fi
 
 # ── 5. Поднять дашборд заново ────────────────────────────────────────────────
 step "5. Запускаю дашборд"
-( cd routing && start "Backend Switcher" cmd //c restart-dashboard.bat ) 2>/dev/null \
+( cd routing && start "ABUSE HUB" cmd //c restart-dashboard.bat ) 2>/dev/null \
   || ./routing/restart-dashboard.bat
 ok "дашборд стартует — открой http://localhost:8200/__switch и обнови страницу"
 

@@ -4,7 +4,7 @@
 #  Запуск в git-bash:  bash share.sh      (или двойной клик по SHARE.bat)
 #
 #  Что делает: собирает твои правки в отдельную ветку и открывает PR в
-#  WormAlien/vibe-code-account-creator-manager. Ничего не удаляет и не
+#  WormAlien/hub-cc. Ничего не удаляет и не
 #  перезаписывает — только коммитит то, что ты уже наменял.
 #
 #  Секреты НЕ уезжают: берём только уже отслеживаемые git-ом файлы, новые
@@ -14,7 +14,7 @@
 set -u
 cd "$(dirname "$0")"
 
-UPSTREAM="WormAlien/vibe-code-account-creator-manager"
+UPSTREAM="WormAlien/hub-cc"
 
 b()    { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m  ✓ %s\033[0m\n' "$*"; }

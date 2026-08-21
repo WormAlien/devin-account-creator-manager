@@ -20,18 +20,19 @@ shim-скриптами, а запуск идёт через `.sh`-аналог 
 Одной строкой в Терминале на голом маке (нет ни git, ни репо):
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/hub-cc/master/install-mac.sh)"
 ```
 
 Bootstrap-блок в начале `install-mac.sh` ставит Command Line Tools (в них git),
 клонирует репо в текущую папку и через `exec` перезапускает себя изнутри клона —
-дальше идёт обычная установка. Путь клона переопределяется `VCACM_DIR`:
+дальше идёт обычная установка. Путь клона переопределяется `HUBCC_DIR`
+(прежнее имя `VCACM_DIR` ещё работает как фолбэк):
 
 ```bash
-VCACM_DIR="$HOME/Documents/VibeCode" /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+HUBCC_DIR="$HOME/Documents/AbuseHub" /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/hub-cc/master/install-mac.sh)"
 ```
 
-Заданная папка становится корнем репо (без вложенной `vibe-code-account-creator-manager`
+Заданная папка становится корнем репо (без вложенной `hub-cc`
 внутри), промежуточные каталоги создаст git. Папка должна отсутствовать или быть
 пустой — иначе `git clone` откажется. `Documents` писать латиницей, хотя Finder
 показывает «Документы».
@@ -60,8 +61,8 @@ VCACM_DIR="$HOME/Documents/VibeCode" /bin/bash -c "$(curl -fsSL https://raw.gith
 Если git уже есть и хочется вручную:
 
 ```bash
-git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git
-cd vibe-code-account-creator-manager
+git clone https://github.com/WormAlien/hub-cc.git
+cd hub-cc
 bash install-mac.sh
 ```
 

@@ -2,7 +2,7 @@
 #  Bootstrap-установщик для ГОЛОЙ Windows (запуск из PowerShell, без git/node)
 #
 #  Одной строкой в PowerShell:
-#    irm https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install.ps1 | iex
+#    irm https://raw.githubusercontent.com/WormAlien/hub-cc/master/install.ps1 | iex
 #
 #  Что делает: ставит Git + Node.js через winget → клонирует репо → запускает
 #  интерактивный install.sh в git-bash. Дальше всё спрашивает install.sh.
@@ -18,7 +18,7 @@ function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 
 Write-Host ""
 Write-Host "════════════════════════════════════════════════════════" -ForegroundColor White
-Write-Host "  Vibe-Code Account Creator Manager — bootstrap" -ForegroundColor White
+Write-Host "  ABUSE HUB — bootstrap" -ForegroundColor White
 Write-Host "════════════════════════════════════════════════════════" -ForegroundColor White
 
 # ── winget есть? ─────────────────────────────────────────────────────────────
@@ -75,11 +75,15 @@ if (-not $bash) {
 }
 
 # ── клон репо (если ещё нет) ──────────────────────────────────────────────────
-$repo = 'https://github.com/WormAlien/vibe-code-account-creator-manager.git'
-$repoName = 'vibe-code-account-creator-manager'
+$repo = 'https://github.com/WormAlien/hub-cc.git'
+$repoName = 'hub-cc'
+# Имя папки клона сменилось на hub-cc (2026-08-21). Старые установки лежат в
+# папке с прежним именем — их тоже считаем «уже внутри репо», иначе установщик
+# склонирует hub-cc внутрь них и получится двойная вложенность.
+$repoNamesLegacy = @('hub-cc', 'vibe-code-account-creator-manager')
 $cwd = (Get-Location).Path
 
-if ((Split-Path $cwd -Leaf) -eq $repoName -and (Test-Path (Join-Path $cwd '.git'))) {
+if ($repoNamesLegacy -contains (Split-Path $cwd -Leaf) -and (Test-Path (Join-Path $cwd '.git'))) {
   $dir = $cwd
   Ok "уже внутри репо → $dir"
 } else {

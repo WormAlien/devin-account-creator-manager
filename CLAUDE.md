@@ -1,7 +1,7 @@
-# Autoreger_Clean — Agent Instructions
+# ABUSE HUB (Autoreger_Clean) — Agent Instructions
 
 ## Что это
-Vibe-Code Account Creator Manager: автореги бесплатных Claude-аккаунтов + переключение LLM-бэкенда Claude Code. Каноничный код-документ проекта — `ARCHITECTURE.md`.
+ABUSE HUB (GitHub-репо `WormAlien/hub-cc`, локальная папка `Autoreger_Clean`): автореги бесплатных Claude-аккаунтов + переключение LLM-бэкенда Claude Code. Каноничный код-документ проекта — `ARCHITECTURE.md`.
 
 ## ⚠️ «Обнови вики» = ОБСИДИАН, не только ARCHITECTURE.md
 

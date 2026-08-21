@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title Vibe-Code Dashboard
+title ABUSE HUB Dashboard
 cd /d "%~dp0"
 
 echo ============================================================
-echo   Vibe-Code Account Creator Manager — запуск дашборда
+echo   ABUSE HUB — запуск дашборда
 echo ============================================================
 echo.
 

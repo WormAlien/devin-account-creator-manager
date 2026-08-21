@@ -21,20 +21,20 @@ step(){ printf '\n\033[36m── %s\033[0m\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 
 b "══════════════════════════════════════════════"
-b "  Vibe-Code Account Creator Manager"
+b "  ABUSE HUB"
 b "  Установка для macOS"
 b "══════════════════════════════════════════════"
 
 # 0. Bootstrap — установка одной строкой на голом маке, где нет ни git, ни репо:
 #
-#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/hub-cc/master/install-mac.sh)"
 #
 # Именно `bash -c "$(curl …)"`, а НЕ `curl … | bash`: при пайпе stdin занят самим
 # скриптом, и все интерактивные `read` ниже (Xcode CLT, «запустить дашборд?»)
 # читают мусор вместо ответа юзера. Через -c stdin остаётся терминалом.
 # Аналог install.ps1 для Windows: ставим git → клонируем → перезапускаем себя из клона.
-REPO_URL="https://github.com/WormAlien/vibe-code-account-creator-manager.git"
-REPO_NAME="vibe-code-account-creator-manager"
+REPO_URL="https://github.com/WormAlien/hub-cc.git"
+REPO_NAME="hub-cc"
 
 if [ ! -f "$SELF_DIR/package.json" ] || [ ! -f "$SELF_DIR/routing/restart-dashboard.sh" ]; then
   step "Bootstrap: репо рядом нет — качаю"
@@ -53,8 +53,10 @@ if [ ! -f "$SELF_DIR/package.json" ] || [ ! -f "$SELF_DIR/routing/restart-dashbo
   git --version >/dev/null 2>&1 || { err "git не работает даже после CLT. Проверь: git --version"; exit 1; }
   ok "git $(git --version 2>/dev/null | awk '{print $3}')"
 
-  # Куда клонировать: рядом с текущей папкой, как install.ps1. Переопределяется VCACM_DIR=…
-  DEST="${VCACM_DIR:-$PWD/$REPO_NAME}"
+  # Куда клонировать: рядом с текущей папкой, как install.ps1. Переопределяется HUBCC_DIR=…
+  # VCACM_DIR — прежнее имя переменной (до переименования в ABUSE HUB), держим как
+  # фолбэк, чтобы старые записанные команды установки не сломались.
+  DEST="${HUBCC_DIR:-${VCACM_DIR:-$PWD/$REPO_NAME}}"
   if [ -f "$DEST/$REPO_NAME/package.json" ]; then
     err "двойная вложенность: $DEST/$REPO_NAME — убери внешний дубль до установки."
     exit 1
@@ -275,7 +277,7 @@ $(b "── Шпаргалка ────────────────�
 
   Перенос или переименование папки: стоп → перенести → запустить из нового места.
   Больше ничего, путь нигде не прописан. Если в пути есть пробелы — в терминале
-  бери его в кавычки: cd "/путь/с пробелом/VibeCode"
+  бери его в кавычки: cd "/путь/с пробелом/ABUSE HUB"
 
   Обновление   git pull  (потом рестарт дашборда)
   Доп. deps    bash install-deps.sh   — venv для ✈ Открыть TG + Telegram.app

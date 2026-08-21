@@ -11,7 +11,7 @@
 
 <br>
 
-# Vibe-Code Account Creator Manager
+# ABUSE HUB
 
 Локальная control-plane: переключение backend'а Claude Code между провайдерами (**AgentRouter · GoRouter · Tabi Token**) одним кликом из веб-дашборда, автореги/импорт ключей, GitHub-аккаунты с 2FA, статус-лайн с балансом и контекстом. Плюс ТГ-пульт для управления с телефона.
 
@@ -95,7 +95,7 @@
 Голый Windows, где **нет ни git, ни node** — открой **PowerShell** (есть в любой Windows) и вставь одну строку. Bootstrap сам поставит Git + Node.js через winget, склонирует репо и запустит интерактивный установщик.
 
 ```powershell
-irm https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/WormAlien/hub-cc/master/install.ps1 | iex
 ```
 
 > [!NOTE]
@@ -106,13 +106,13 @@ irm https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manage
 Голый мак, где нет вообще ничего — открой **Терминал** и вставь **одну строку**. Дальше только Enter: bootstrap ставит Command Line Tools (в них git), клонирует репо и прогоняет `install-mac.sh` — Homebrew → node → `npm install` → Playwright chromium → Claude Code → конфиги из `*.example` → дашборд.
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/hub-cc/master/install-mac.sh)"
 ```
 
-Хочешь в свою папку — задай `VCACM_DIR` (сама папка станет корнем репо, промежуточные создадутся):
+Хочешь в свою папку — задай `HUBCC_DIR` (сама папка станет корнем репо, промежуточные создадутся):
 
 ```bash
-VCACM_DIR="$HOME/Documents/VibeCode" /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/vibe-code-account-creator-manager/master/install-mac.sh)"
+HUBCC_DIR="$HOME/Documents/AbuseHub" /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/WormAlien/hub-cc/master/install-mac.sh)"
 ```
 
 Проверено на чистом MacBook: одна вставка, дальше Enter — и дашборд открыт. Реагировать надо всего в трёх местах:
@@ -136,8 +136,8 @@ VCACM_DIR="$HOME/Documents/VibeCode" /bin/bash -c "$(curl -fsSL https://raw.gith
 Windows (git-bash):
 
 ```bash
-git clone https://github.com/WormAlien/vibe-code-account-creator-manager.git
-cd vibe-code-account-creator-manager
+git clone https://github.com/WormAlien/hub-cc.git
+cd hub-cc
 bash install.sh
 ```
 
@@ -158,7 +158,7 @@ macOS — то же, но `bash install-mac.sh`.
 > [!NOTE]
 > API-ключи и токены установщик **не спрашивает**: в терминале секрет остаётся в скроллбэке и в истории. Ключ бэкенда вписывается в дашборде — вкладка провайдера → ключ → **Активировать**.
 
-Установщик дополнительно ловит частую ошибку `vibe-code-account-creator-manager/vibe-code-account-creator-manager`: такую двойную вложенность надо исправить **до** создания `tools/tg-venv`, иначе venv запомнит старый путь и сломается после переноса папки.
+Установщик дополнительно ловит частую ошибку `hub-cc/hub-cc`: такую двойную вложенность надо исправить **до** создания `tools/tg-venv`, иначе venv запомнит старый путь и сломается после переноса папки.
 
 **Дашборд:** <http://localhost:8200/__switch> · откат при поломке ключа: `routing/PANIC-restore-omniroute.bat`
 

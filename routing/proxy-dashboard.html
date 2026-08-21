@@ -66,12 +66,181 @@
 
 /* Custom scrollbar */
 *::-webkit-scrollbar         { width: 9px; height: 9px; }
-*::-webkit-scrollbar-thumb   { background: oklch(0.30 0.014 245); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
-*::-webkit-scrollbar-thumb:hover { background: oklch(0.40 0.014 245); border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb   { background: var(--color-line); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--color-dim); border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-track   { background: transparent; }
 </style>
+<!-- ═══════════ ЦВЕТОВЫЕ ТЕМЫ ═══════════
+     Тема = набор оверрайдов тех же --color-* из @theme выше, навешенных инлайном
+     на <html>. Инлайн-стиль бьёт :root из таблицы, поэтому все tailwind-утилиты
+     (bg-surface, text-muted, border-line-soft…) перекрашиваются сами, без правок
+     разметки. Скрипт живёт в <head> и применяется до первой отрисовки — иначе
+     на каждой загрузке мигал бы дефолтный графит. -->
+<script>
+// surf(hue, chroma, lift) — поверхности и текст одной тёмной палитры.
+// lift сдвигает всю шкалу светлее/темнее, сохраняя контрасты между слоями.
+// Хрома текста считается отдельно и зажата: на фоне с chroma 0.09 полный накал
+// в muted/dim давал цветной текст на цветном фоне — глаза вытекали. Поверхности
+// красим смело, буквы держим почти нейтральными.
+function _surf(h, c, lift = 0) {
+  const L = v => Math.max(0.02, Math.min(0.99, v + lift)).toFixed(3);
+  const tc = Math.min(c * 0.35, 0.030).toFixed(3);
+  return {
+    '--color-bg':        `oklch(${L(0.135)} ${c} ${h})`,
+    '--color-surface':   `oklch(${L(0.175)} ${c} ${h})`,
+    '--color-elevated':  `oklch(${L(0.215)} ${c} ${h})`,
+    '--color-line':      `oklch(${L(0.300)} ${c} ${h})`,
+    '--color-line-soft': `oklch(${L(0.240)} ${c} ${h})`,
+    '--color-ink':       `oklch(${L(0.960)} ${(c * 0.12).toFixed(3)} ${h})`,
+    '--color-muted':     `oklch(${L(0.660)} ${tc} ${h})`,
+    '--color-dim':       `oklch(${L(0.480)} ${tc} ${h})`,
+    '--color-faint':     `oklch(${L(0.360)} ${tc} ${h})`,
+  };
+}
+// acc(L, chroma, hues) — шесть семантических акцентов.
+// Хроме выше ~0.25 браузер сам обрежет по гамуту sRGB — просится максимум, получается
+// самый ядрёный цвет, который монитор вообще умеет. Оттенки НЕ проворачиваю по кругу
+// целиком: emerald должен остаться зелёным, crimson — красным, иначе LIVE и DEAD
+// перестают различаться с одного взгляда. Меняются подтона (лайм ↔ бирюза) и накал.
+function _acc(L, c, h = {}) {
+  const H = { em: 155, am: 80, az: 240, vi: 295, cr: 22, ro: 12, ...h };
+  return {
+    '--color-emerald': `oklch(${L} ${c} ${H.em})`,
+    '--color-amber':   `oklch(${L} ${c} ${H.am})`,
+    '--color-azure':   `oklch(${L} ${c} ${H.az})`,
+    '--color-violet':  `oklch(${L} ${c} ${H.vi})`,
+    '--color-crimson': `oklch(${L} ${c} ${H.cr})`,
+    '--color-rose':    `oklch(${L} ${c} ${H.ro})`,
+  };
+}
+const THEMES = {
+  // ── Под рабочий стол владельца: Zen-браузер + обои Big Sur ──
+  // Цвета не придуманы, а сняты пипеткой со скриншотов: сайдбар Zen — ровно
+  // #1d3756, обои (вода) — #071927…#0e1f2f, текст сайдбара — #ccd8e8.
+  // Дашборд живёт в Zen вплотную к его сайдбару, а к сайдбару браузера примыкает
+  // <aside> дашборда, и он покрашен в `surface` — поэтому именно surface = #1d3756,
+  // а не bg. Иначе шва не убрать: совпал бы фон контента, а не боковина.
+  zen: {
+    group: 'win', label: 'Zen', hint: 'сайдбар #1d3756 — шва нет',
+    vars: {
+      '--color-bg':        'oklch(0.252 0.058 253.9)',  // #0d2340 — контент глубже боковины, иначе карточки не читаются как карточки
+      '--color-surface':   'oklch(0.332 0.064 253.9)',  // #1d3756 — пипетка с Zen
+      '--color-elevated':  'oklch(0.385 0.062 253.9)',  // #2b4564
+      '--color-line-soft': 'oklch(0.408 0.060 253.9)',  // #324b6a
+      '--color-line':      'oklch(0.495 0.052 253.9)',  // #4d647f
+      '--color-faint':     'oklch(0.575 0.034 253.9)',  // на фоне 0.33 текст ниже 0.55 уже не читается
+      '--color-dim':       'oklch(0.678 0.028 253.9)',
+      '--color-muted':     'oklch(0.792 0.022 253.9)',
+      '--color-ink':       'oklch(0.965 0.012 253.9)',  // ≈ #eef4fc, родня #ccd8e8
+      ..._acc(0.840, 0.22, { em: 158, am: 82, ro: 10 }),
+    },
+  },
+  bixby: {
+    group: 'win', label: 'Bixby', hint: 'обои Big Sur · тёмная вода',
+    vars: {
+      '--color-bg':        'oklch(0.190 0.040 244)',    // #031524
+      '--color-surface':   'oklch(0.232 0.044 244)',    // #081f30 — тон воды с обоев
+      '--color-elevated':  'oklch(0.272 0.046 244)',    // #11293c
+      '--color-line-soft': 'oklch(0.300 0.046 244)',
+      '--color-line':      'oklch(0.375 0.044 244)',
+      '--color-faint':     'oklch(0.470 0.030 244)',
+      '--color-dim':       'oklch(0.580 0.026 244)',
+      '--color-muted':     'oklch(0.730 0.022 244)',
+      '--color-ink':       'oklch(0.960 0.010 244)',
+      ..._acc(0.850, 0.20, { em: 165, am: 85, az: 235, ro: 10 }),
+    },
+  },
+
+  // ── Спокойные: акценты дефолтные, меняется только основа ──
+  midnight: { group: 'calm', label: 'Midnight', hint: 'дефолт · холодный графит', vars: _surf(245, 0.012) },
+  carbon:   { group: 'calm', label: 'Carbon',   hint: 'нейтральный, без синевы',  vars: _surf(260, 0.003) },
+  abyss:    { group: 'calm', label: 'Abyss',    hint: 'почти чёрный, для OLED',   vars: _surf(245, 0.008, -0.048) },
+  mocha:    { group: 'calm', label: 'Mocha',    hint: 'тёплый коричневый',        vars: { ..._surf(55, 0.030, 0.005), ..._acc(0.84, 0.20, { am: 72 }) } },
+
+  // ── Ядрёные: фон уводится в цвет по-настоящему (chroma 0.05–0.10 — при 0.03
+  //    на такой темноте тонировка просто не читалась), акценты выкручены до упора ──
+  neon:      { group: 'loud', label: 'Neon',      hint: 'чёрный + кислота',        vars: { ..._surf(260, 0.020, -0.030), ..._acc(0.88, 0.32, { em: 145, am: 95, az: 230, vi: 300, cr: 25, ro: 5 }) } },
+  matrix:    { group: 'loud', label: 'Matrix',    hint: 'терминал, зелень на нуле',vars: { ..._surf(148, 0.050, -0.045), ..._acc(0.88, 0.32, { em: 142, am: 108, az: 185, vi: 265, cr: 28, ro: 15 }) } },
+  cyberpunk: { group: 'loud', label: 'Cyberpunk', hint: 'циан + маджента + жёлтый',vars: { ..._surf(258, 0.062, -0.025), ..._acc(0.87, 0.32, { em: 170, am: 100, az: 215, vi: 315, cr: 20, ro: 340 }) } },
+  synthwave: { group: 'loud', label: 'Synthwave', hint: 'индиго + hot pink',       vars: { ..._surf(292, 0.100, 0.005), ..._acc(0.82, 0.32, { em: 168, am: 70, az: 250, vi: 320, cr: 18, ro: 355 }) } },
+  vapor:     { group: 'loud', label: 'Vapor',     hint: 'пурпур + бирюза',         vars: { ..._surf(322, 0.090, 0.015), ..._acc(0.85, 0.30, { em: 180, am: 90, az: 228, vi: 315, cr: 20, ro: 350 }) } },
+  toxic:     { group: 'loud', label: 'Toxic',     hint: 'олива + лайм',            vars: { ..._surf(118, 0.070, 0.000), ..._acc(0.90, 0.32, { em: 130, am: 100, az: 195, vi: 300, cr: 30, ro: 12 }) } },
+  inferno:   { group: 'loud', label: 'Inferno',   hint: 'угли + оранжевый',        vars: { ..._surf(34, 0.075, -0.020), ..._acc(0.80, 0.30, { em: 150, am: 62, az: 250, vi: 330, cr: 28, ro: 18 }) } },
+  blood:     { group: 'loud', label: 'Blood',     hint: 'чёрный + густой алый',    vars: { ..._surf(18, 0.060, -0.038), ..._acc(0.72, 0.30, { em: 150, am: 68, az: 245, vi: 310, cr: 22, ro: 8 }) } },
+  ice:       { group: 'loud', label: 'Ice',       hint: 'сталь + ледяной циан',    vars: { ..._surf(232, 0.060, 0.012), ..._acc(0.87, 0.28, { em: 178, am: 85, az: 222, vi: 278, cr: 20, ro: 10 }) } },
+  royal:     { group: 'loud', label: 'Royal',     hint: 'глубокий фиолет + золото',vars: { ..._surf(300, 0.090, -0.010), ..._acc(0.84, 0.28, { em: 158, am: 88, az: 262, vi: 305, cr: 24, ro: 358 }) } },
+  forest:    { group: 'loud', label: 'Forest',    hint: 'хвоя + сочная зелень',    vars: { ..._surf(155, 0.058), ..._acc(0.84, 0.26, { em: 148, am: 90, az: 210, vi: 300, cr: 25, ro: 12 }) } },
+  plum:      { group: 'loud', label: 'Plum',      hint: 'слива + фуксия',          vars: { ..._surf(322, 0.075), ..._acc(0.84, 0.30, { em: 160, am: 85, az: 255, vi: 310, cr: 22, ro: 355 }) } },
+  abyssal:   { group: 'loud', label: 'Abyssal',   hint: 'океан + аквамарин',       vars: { ..._surf(210, 0.070, -0.010), ..._acc(0.86, 0.28, { em: 172, am: 92, az: 218, vi: 285, cr: 22, ro: 8 }) } },
+  ember:     { group: 'loud', label: 'Ember',     hint: 'бордо + янтарь',          vars: { ..._surf(8, 0.070, -0.005), ..._acc(0.83, 0.28, { em: 152, am: 78, az: 248, vi: 318, cr: 26, ro: 12 }) } },
+
+  // ── Светлые ──
+  daylight: {
+    group: 'light', label: 'Daylight', hint: '白 · холодная, бета', light: true,
+    vars: {
+      '--color-bg':        'oklch(0.985 0.003 250)',
+      '--color-surface':   'oklch(1.000 0.000 250)',
+      '--color-elevated':  'oklch(0.960 0.005 250)',
+      '--color-line':      'oklch(0.820 0.010 250)',
+      '--color-line-soft': 'oklch(0.895 0.008 250)',
+      '--color-ink':       'oklch(0.235 0.012 250)',
+      '--color-muted':     'oklch(0.470 0.014 250)',
+      '--color-dim':       'oklch(0.580 0.014 250)',
+      '--color-faint':     'oklch(0.680 0.012 250)',
+      // на белом «неон» не читается: акценты уходят вниз по светлоте, хрома остаётся
+      ..._acc(0.550, 0.20, { am: 68 }),
+    },
+  },
+  paper: {
+    group: 'light', label: 'Paper', hint: 'крафт · тёплая, бета', light: true,
+    vars: {
+      '--color-bg':        'oklch(0.960 0.014 85)',
+      '--color-surface':   'oklch(0.985 0.010 85)',
+      '--color-elevated':  'oklch(0.930 0.016 85)',
+      '--color-line':      'oklch(0.790 0.022 85)',
+      '--color-line-soft': 'oklch(0.870 0.018 85)',
+      '--color-ink':       'oklch(0.230 0.020 60)',
+      '--color-muted':     'oklch(0.455 0.022 60)',
+      '--color-dim':       'oklch(0.565 0.022 60)',
+      '--color-faint':     'oklch(0.665 0.020 60)',
+      ..._acc(0.530, 0.21, { am: 62 }),
+    },
+  },
+};
+const THEME_GROUPS = { win: 'Под рабочий стол', calm: 'Спокойные', loud: 'Ядрёные', light: 'Светлые' };
+const THEME_KEY = 'dashboard-theme';
+// Полный список переменных, которые вообще может трогать тема: перед каждым
+// применением чистим их все, иначе акценты Daylight «прилипли» бы к тёмной теме.
+const THEME_VARS = [...new Set(Object.values(THEMES).flatMap(t => Object.keys(t.vars)))];
+// localStorage в обёртке: этот скрипт крутится в <head> ДО всей остальной страницы,
+// и если доступ к хранилищу закрыт (приватное окно, «блокировать данные сайтов»
+// в Zen/Firefox), незащищённый getItem кинул бы исключение и оборвал парсинг —
+// вместе с темой отвалилось бы то, что идёт следом.
+function _lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function _lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* нет хранилища — тема живёт до перезагрузки */ } }
+function currentTheme() {
+  const id = _lsGet(THEME_KEY);
+  return THEMES[id] ? id : 'midnight';
+}
+function applyTheme(id, persist = true) {
+  if (!THEMES[id]) id = 'midnight';
+  const t = THEMES[id], el = document.documentElement;
+  for (const k of THEME_VARS) el.style.removeProperty(k);
+  for (const [k, v] of Object.entries(t.vars)) el.style.setProperty(k, v);
+  el.style.colorScheme = t.light ? 'light' : 'dark';
+  el.dataset.theme = id;
+  if (persist) _lsSet(THEME_KEY, id);
+  try { renderThemePicker(); } catch (e) { /* вкладка настроек ещё не собрана */ }
+  if (persist && window.toast) toast('🎨 тема: ' + t.label, 'success', 1800);
+}
+try { applyTheme(currentTheme(), false); } catch (e) { console.warn('[theme] палитра не применилась:', e); }
+function randomThemeId() {
+  const ids = Object.keys(THEMES).filter(id => id !== currentTheme());
+  return ids[Math.floor(Math.random() * ids.length)];
+}
+</script>
 <style>
-  body { background: oklch(0.135 0.012 245); font-feature-settings: "cv11", "ss01", "ss03"; }
+  body { background: var(--color-bg); font-feature-settings: "cv11", "ss01", "ss03"; }
   html { color-scheme: dark; }
   html { scroll-behavior: smooth; }
   [data-tab-content] { display: none; }
@@ -396,7 +565,7 @@
       <div class="px-5 py-4 border-b border-line-soft flex items-center justify-between">
         <div>
           <div class="text-sm font-semibold text-ink">Настроить вкладки</div>
-          <div class="text-[11px] text-faint mt-0.5">Перетащи строку в нужное место · 👁 скрывает/показывает</div>
+          <div class="text-[11px] text-faint mt-0.5">Перетащи строку в нужное место · 🐵 видит / 🙈 не видит</div>
         </div>
         <button onclick="closeTabsManager()" class="text-faint hover:text-ink text-xl leading-none px-2">✕</button>
       </div>
@@ -551,6 +720,26 @@
           <p class="text-sm text-muted mt-1">Настройки OmniRoute и бэкапы <code class="font-mono text-emerald text-xs">settings.json</code>.</p>
         </header>
 
+        <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-3">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h2 class="text-sm font-semibold">🎨 Тема дашборда</h2>
+              <p class="text-xs text-muted mt-0.5">Перекрашивает только палитру интерфейса — на прокси, ключи и бэкенды не влияет. Выбор хранится в <code class="font-mono text-emerald text-xs">localStorage</code> этого браузера.</p>
+            </div>
+            <button onclick="applyTheme(randomThemeId())" title="Ткнуть случайную тему" class="shrink-0 text-[10px] px-2 py-1 rounded border border-line-soft bg-elevated text-muted hover:text-emerald hover:border-emerald/50 transition">🎲</button>
+          </div>
+          <!-- Выбранная тема закреплена: список складывается, а активная палитра
+               остаётся на виду — иначе после сворачивания непонятно, что стоит. -->
+          <div id="theme-active" class="rounded-lg border border-emerald/40 bg-emerald/5 p-2.5"></div>
+          <button onclick="toggleThemeList()" class="w-full flex items-center gap-2 py-1 text-xs text-muted hover:text-ink transition">
+            <span id="theme-list-caret" class="text-faint inline-block transition-transform">▸</span>
+            <span>Все темы</span>
+            <span id="theme-list-count" class="font-mono text-faint">—</span>
+            <span class="ml-auto text-[10px] text-faint" id="theme-list-hint">показать</span>
+          </button>
+          <div id="theme-picker" class="hidden space-y-4"></div>
+        </div>
+
         <div class="rounded-xl bg-surface border border-line-soft p-5 space-y-4">
           <div class="flex items-center justify-between gap-3">
             <div>
@@ -647,8 +836,16 @@
             </div>
             <button onclick="backupSettingsNow()" class="shrink-0 px-3 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition">💾 Создать бэкап</button>
           </div>
-          <div id="settings-backups-list" class="divide-y divide-line-soft/40">
-            <div class="text-xs text-faint py-2">—</div>
+          <div class="pt-1 border-t border-line-soft/40">
+            <button onclick="toggleBackupsList()" class="w-full flex items-center gap-2 py-1.5 text-xs text-muted hover:text-ink transition">
+              <span id="settings-backups-caret" class="text-faint transition-transform inline-block">▸</span>
+              <span>Список бэкапов</span>
+              <span id="settings-backups-count" class="font-mono text-faint">—</span>
+              <span class="ml-auto text-[10px] text-faint" id="settings-backups-hint">показать</span>
+            </button>
+            <div id="settings-backups-list" class="hidden divide-y divide-line-soft/40 max-h-96 overflow-y-auto pr-1">
+              <div class="text-xs text-faint py-2">—</div>
+            </div>
           </div>
         </div>
       </div>
@@ -5111,7 +5308,9 @@ async function customLoadModels(providerId, apiKey, force) {
     return;
   }
   state.customLoading[providerId] = true;
+  const setLabel = txt => { const l = document.getElementById('custom-models-label-' + providerId); if (l) l.textContent = txt; };
   holder.innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  setLabel('🧠 модели · загрузка…');
   try {
     const res = await fetch(`/__switch/api/custom/models?providerId=${encodeURIComponent(providerId)}&apiKey=${encodeURIComponent(apiKey)}${force ? '&force=1' : ''}`);
     const data = await res.json();
@@ -5122,12 +5321,40 @@ async function customLoadModels(providerId, apiKey, force) {
       renderCustomModels(providerId, data.cached);
     } else {
       holder.innerHTML = `<span class="text-[10px] text-faint">${esc(data.note || 'моделей нет')}</span>`;
+      // список свёрнут — иначе причина осталась бы за кулисами
+      setLabel('🧠 модели · ' + (data.note || 'моделей нет'));
     }
   } catch (e) {
     holder.innerHTML = `<span class="text-[10px] text-crimson">${esc(e.message)}</span>`;
+    setLabel('🧠 модели · ошибка: ' + e.message);
   } finally {
     state.customLoading[providerId] = false;
   }
+}
+
+// Облако моделей свёрнуто по умолчанию: у крупных релеев их 130+, и раскрытая
+// простыня чипов растягивала карточку провайдера на несколько экранов.
+// Открытые провайдеры помним в localStorage — карточки часто ре-рендерятся.
+const CUSTOM_MODELS_OPEN_KEY = 'dashboard-custom-models-open';
+function customModelsOpenSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(CUSTOM_MODELS_OPEN_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+}
+function customModelsApplyOpen(providerId) {
+  const open = customModelsOpenSet().has(String(providerId));
+  const holder = document.getElementById('custom-models-' + providerId);
+  const caret = document.getElementById('custom-models-caret-' + providerId);
+  if (holder) holder.style.display = open ? 'flex' : 'none';
+  if (caret) caret.style.transform = open ? 'rotate(90deg)' : '';
+  return open;
+}
+function customModelsToggle(providerId, forceOpen) {
+  const set = customModelsOpenSet();
+  const id = String(providerId);
+  const open = forceOpen === true ? true : !set.has(id);
+  if (open) set.add(id); else set.delete(id);
+  localStorage.setItem(CUSTOM_MODELS_OPEN_KEY, JSON.stringify([...set]));
+  customModelsApplyOpen(providerId);
 }
 
 function renderCustomModels(providerId, fromCache) {
@@ -5143,6 +5370,7 @@ function renderCustomModels(providerId, fromCache) {
       <button onclick='event.stopPropagation(); copyModelId(${JSON.stringify(m.id)})' title="Копировать id"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`).join('');
+  customModelsApplyOpen(providerId);
 }
 
 // Автозагрузка/восстановление моделей после ре-рендера карточек: из кеша —
@@ -5385,13 +5613,16 @@ function customRender() {
         </div>
         <div class="rounded-lg border border-violet/20 p-2.5 space-y-1.5">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <span id="custom-models-label-${p.id}" class="text-[11px] text-muted">🧠 модели провайдера</span>
+            <button onclick='customModelsToggle(${pId})' class="flex items-center gap-1.5 text-[11px] text-muted hover:text-ink transition">
+              <span id="custom-models-caret-${p.id}" class="text-faint inline-block transition-transform">▸</span>
+              <span id="custom-models-label-${p.id}">🧠 модели провайдера</span>
+            </button>
             <div class="flex gap-1.5">
               ${keys.length ? `<button onclick='customScan(${pId})' title="Определить тип провайдера (OpenAI/Anthropic)" class="text-[10px] px-2 py-1 rounded border border-line-soft bg-surface text-muted hover:text-emerald hover:border-emerald/50 transition">🔍 скан типа</button>` : ''}
-              ${keys.length ? `<button onclick='customLoadModels(${pId}, ${JSON.stringify(keys[0].apiKey)}, true)' title="Заново дёрнуть /models у провайдера" class="text-[10px] px-2 py-1 rounded border border-line-soft bg-surface text-muted hover:text-violet hover:border-violet/50 transition">↻ обновить</button>` : ''}
+              ${keys.length ? `<button onclick='customModelsToggle(${pId}, true); customLoadModels(${pId}, ${JSON.stringify(keys[0].apiKey)}, true)' title="Заново дёрнуть /models у провайдера" class="text-[10px] px-2 py-1 rounded border border-line-soft bg-surface text-muted hover:text-violet hover:border-violet/50 transition">↻ обновить</button>` : ''}
             </div>
           </div>
-          <div id="custom-models-${p.id}"><span class="text-[10px] text-faint">загружаю из кеша…</span></div>
+          <div id="custom-models-${p.id}" style="display:none" class="flex-wrap gap-1.5 max-h-72 overflow-y-auto pr-1"><span class="text-[10px] text-faint">загружаю из кеша…</span></div>
         </div>
       </div>
     </div>`;
@@ -5402,20 +5633,20 @@ function customRender() {
 // ═══════════════════ AGENTROUTER ═══════════════════════════════════
 function arPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
-  let sumBalance = 0, sumGrant = 0, withBalance = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
   let staleKeys = 0, errKeys = 0, inexactKeys = 0, freshestTs = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
     else if (s.status === 'dead') dead++;
-    if (typeof s.balance === 'number') {
+    if (balanceUsable(s)) {
       sumBalance += s.balance;
       // Знаменатель — ПОЛНАЯ выдача (grant+bonus+referral), т.е. ровно то, из чего
       // сервер считал balance. С одним grant шкала уезжала за 100% и залипала там
       // (у пула было 1794.80/1550 = 115% → clamp 100%, из-за чего казалось, что она мертва).
       sumGrant += balanceDenom(s, 175);
       withBalance++;
-    }
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
     // «Не проверено» — только когда провалился usage-эндпоинт, т.е. мы не знаем даже,
     // жив ли ключ. selfError сюда НЕ идёт: он значит лишь «точную цифру взять не вышло»,
     // и степень точности уже видна бейджем ⚡/✏️/~ в самой строке.
@@ -5430,7 +5661,7 @@ function arPoolStats(sessions) {
     if (!ts || Date.now() - ts > 15 * 60_000) staleKeys++;
   }
   const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
-  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct, staleKeys, errKeys, inexactKeys, freshestTs };
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct, staleKeys, errKeys, inexactKeys, freshestTs };
 }
 
 // «5с / 12м / 3ч / 2д назад» — короткий возраст цифры для шапки шкалы.
@@ -6210,6 +6441,24 @@ function balanceSourceBadge(s) {
   return `<span class="${src.cls} text-[10px] leading-none ml-1" title="${esc(tip)}">${src.icon}</span>`;
 }
 
+// Деньги на мёртвом ключе — не деньги: ключ отозван, забрать остаток нельзя. Раньше
+// они падали в «доступно», и шкала врала: у XPeach 6 ключей из 7 DEAD, а в шапке бодро
+// висело 🍑30.00. В запас идёт только то, что лежит на ЖИВЫХ ключах. `no_key` — тоже
+// мимо: аккаунт есть, ключа нет, тратить нечем. Остаток мёртвых копится в `deadBalance`
+// и в UI не выводится — по нему только решается молчать вместо «баланс не опрошен».
+function balanceUsable(s) {
+  return !!s && typeof s.balance === 'number' && s.status !== 'dead' && s.status !== 'no_key';
+}
+
+// Личный аккаунт владельца, а не одноразовый нагенеренный: 'WormAlien' в имени/почте
+// либо привязанный личный GitHub. Такой один, пачкой с ним ничего не делают — поэтому
+// в списках он уезжает вниз, чтобы не разрывать ряд рабочих аккаунтов.
+function isOwnerAccount(s) {
+  if (!s) return false;
+  if (s.ghId === 'personal') return true;
+  return /wormalien/i.test(String(s.email || s.name || ''));
+}
+
 // Знаменатель шкалы «сколько осталось от того, что было». Приоритет тот же, из
 // которого сервер считал balance, иначе шкала уезжает за 100% и залипает там:
 //   granted       — точная сумма выданного (остаток+расход) из /api/user/self
@@ -6917,19 +7166,19 @@ async function arImport() {
 // ═══════════════════ GOROUTER ═══════════════════════════════════════
 function goPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
-  let sumBalance = 0, sumGrant = 0, withBalance = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
     else if (s.status === 'dead') dead++;
-    if (typeof s.balance === 'number') {
+    if (balanceUsable(s)) {
       sumBalance += s.balance;
       sumGrant += balanceDenom(s, 70);
       withBalance++;
-    }
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
   }
   const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
-  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct };
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
 }
 
 function renderGoGauge() {
@@ -7438,19 +7687,19 @@ async function goSaveModelMap() {
 
 function tbPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
-  let sumBalance = 0, sumGrant = 0, withBalance = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
     else if (s.status === 'dead') dead++;
-    if (typeof s.balance === 'number') {
+    if (balanceUsable(s)) {
       sumBalance += s.balance;
       sumGrant += balanceDenom(s, 100);
       withBalance++;
-    }
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
   }
   const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
-  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct };
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
 }
 
 function renderTbGauge() {
@@ -7570,6 +7819,12 @@ function renderTb() {
     const sa = a.status === 'dead' ? 1 : 0;
     const sb = b.status === 'dead' ? 1 : 0;
     if (sa !== sb) return sa - sb;
+    // Личный аккаунт владельца (WormAlien) — вниз своей группы. Он один, живёт своей
+    // жизнью и пачкой с остальными не обрабатывается; в середине списка, куда его
+    // ставила сортировка по дате, он только разрывал ряд рабочих аккаунтов.
+    const oa = isOwnerAccount(a) ? 1 : 0;
+    const ob = isOwnerAccount(b) ? 1 : 0;
+    if (oa !== ob) return oa - ob;
     return (b.created || '').localeCompare(a.created || '');
   });
   if (!all.length) {
@@ -7955,19 +8210,19 @@ const XP_SYM = '🍑';   // валюта шлюза; курс к единице 
 
 function xpPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
-  let sumBalance = 0, sumGrant = 0, withBalance = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
     else if (s.status === 'dead') dead++;
-    if (typeof s.balance === 'number') {
+    if (balanceUsable(s)) {
       sumBalance += s.balance;
       sumGrant += balanceDenom(s, 10);
       withBalance++;
-    }
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
   }
   const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
-  return { live, dead, total, withBalance, sumBalance, sumGrant, remPct };
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
 }
 
 function renderXpGauge() {
@@ -10276,9 +10531,33 @@ function trLiveStats(accounts, usageMap) {
 // балансом (реальные $ по ключам): AgentRouter, GoRouter, Tabi Token, XPeach.
 // Протухшие (FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin) — не
 // считаются: их баланс не является деньгами или уже не начисляется.
+//
+// Скрытые вкладки (модалка «Настроить вкладки») в запас НЕ входят: спрятал провайдера
+// с глаз — считай, что его нет. Иначе шкала обещала деньги на шлюзе, которого в
+// сайдбаре не видно, и сойтись с ней глазами было невозможно.
+
+// Одна арифметика на все четыре шлюза: было четыре копии одного цикла.
+// base — база выдачи провайдера, нужна только чтобы не делить на ноль.
+function poolMoneyStat(accounts, base) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (accounts || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      sumGrant += balanceDenom(s, base);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  return { total, live, dead, withBalance, sumBalance, sumGrant, deadBalance };
+}
+
 async function renderGlobalGauge() {
   // Правдивые провайдеры. Добавить нового = одна запись. fetchData возвращает
   // массив аккаунтов вида { api_key, status, balance, grant }.
+  // id — он же имя вкладки в сайдбаре: по нему проверяется, не скрыта ли она.
   const truthfulProviders = [
     {
       id: 'agentrouter', label: 'AgentRouter', icon: '🧭', color: 'sky',
@@ -10289,21 +10568,7 @@ async function renderGlobalGauge() {
         if (res.ok) { state.agentrouter = data.sessions || []; return state.agentrouter; }
         return [];
       },
-      stat: (accounts) => {
-        let live = 0, dead = 0, total = 0;
-        let sumBalance = 0, sumGrant = 0, withBalance = 0;
-        for (const s of (accounts || [])) {
-          total++;
-          if (s.status === 'live') live++;
-          else if (s.status === 'dead') dead++;
-          if (typeof s.balance === 'number') {
-            sumBalance += s.balance;
-            sumGrant += balanceDenom(s, 175);
-            withBalance++;
-          }
-        }
-        return { total, live, dead, withBalance, sumBalance, sumGrant };
-      },
+      stat: (accounts) => poolMoneyStat(accounts, 175),
     },
     {
       id: 'gorouter', label: 'GoRouter', icon: '🌐', color: 'teal',
@@ -10314,21 +10579,7 @@ async function renderGlobalGauge() {
         if (res.ok) { state.gorouter = data.sessions || []; return state.gorouter; }
         return [];
       },
-      stat: (accounts) => {
-        let live = 0, dead = 0, total = 0;
-        let sumBalance = 0, sumGrant = 0, withBalance = 0;
-        for (const s of (accounts || [])) {
-          total++;
-          if (s.status === 'live') live++;
-          else if (s.status === 'dead') dead++;
-          if (typeof s.balance === 'number') {
-            sumBalance += s.balance;
-            sumGrant += balanceDenom(s, 70);
-            withBalance++;
-          }
-        }
-        return { total, live, dead, withBalance, sumBalance, sumGrant };
-      },
+      stat: (accounts) => poolMoneyStat(accounts, 70),
     },
     {
       id: 'tabi', label: 'Tabi Token', icon: '🎫', color: 'violet',
@@ -10339,21 +10590,7 @@ async function renderGlobalGauge() {
         if (res.ok) { state.tabi = data.sessions || []; return state.tabi; }
         return [];
       },
-      stat: (accounts) => {
-        let live = 0, dead = 0, total = 0;
-        let sumBalance = 0, sumGrant = 0, withBalance = 0;
-        for (const s of (accounts || [])) {
-          total++;
-          if (s.status === 'live') live++;
-          else if (s.status === 'dead') dead++;
-          if (typeof s.balance === 'number') {
-            sumBalance += s.balance;
-            sumGrant += balanceDenom(s, 100);
-            withBalance++;
-          }
-        }
-        return { total, live, dead, withBalance, sumBalance, sumGrant };
-      },
+      stat: (accounts) => poolMoneyStat(accounts, 100),
     },
     {
       // XPeach считает в 🍑, но курс к единице квоты тот же (quota/500000), поэтому
@@ -10366,27 +10603,17 @@ async function renderGlobalGauge() {
         if (res.ok) { state.xpeach = data.sessions || []; return state.xpeach; }
         return [];
       },
-      stat: (accounts) => {
-        let live = 0, dead = 0, total = 0;
-        let sumBalance = 0, sumGrant = 0, withBalance = 0;
-        for (const s of (accounts || [])) {
-          total++;
-          if (s.status === 'live') live++;
-          else if (s.status === 'dead') dead++;
-          if (typeof s.balance === 'number') {
-            sumBalance += s.balance;
-            sumGrant += balanceDenom(s, 10);
-            withBalance++;
-          }
-        }
-        return { total, live, dead, withBalance, sumBalance, sumGrant };
-      },
+      stat: (accounts) => poolMoneyStat(accounts, 10),
     },
   ];
 
-  let sumBalance = 0, sumGrant = 0, accounts = 0, providers = 0;
+  const hiddenTabs = effectiveHiddenSet();
+  let sumBalance = 0, sumGrant = 0, accounts = 0, providers = 0, hiddenCount = 0;
   let extra = '';
   for (const p of truthfulProviders) {
+    // Вкладка скрыта → провайдера нет ни в сумме, ни в списке под шкалой.
+    // Данные при этом даже не запрашиваем: скрытое не должно стоить трафика.
+    if (hiddenTabs.has(p.id)) { hiddenCount++; continue; }
     let acc;
     try { acc = await p.fetchData(); } catch { acc = []; }
     const st = p.stat(acc);
@@ -10395,30 +10622,41 @@ async function renderGlobalGauge() {
     accounts += st.withBalance;
     sumBalance += st.sumBalance;
     sumGrant += st.sumGrant;
+    // Мёртвый пул: денег нет — строка про баланс просто молчит. «Баланс не опрошен»
+    // тут было бы враньём (опрошен), а сумму на мёртвых ключах показывать незачем:
+    // забрать её нельзя, а глаз она отвлекает.
+    const money = st.withBalance
+      ? `<span class="text-emerald">${p.sym || '$'}${st.sumBalance.toFixed(2)} доступно</span>`
+      : st.deadBalance > 0 ? '' : '<span class="text-faint">баланс не опрошен</span>';
     extra += `<div class="mt-2 pt-2 border-t border-line-soft/50 flex items-center gap-x-4 gap-y-1 text-xs font-mono flex-wrap">
       <span class="text-${p.color}">${p.icon} ${p.label}</span>
       <span><span class="text-ink font-semibold">${st.total}</span> ключей</span>
       ${st.live > 0 ? `<span class="text-emerald">${st.live} 🟢 LIVE</span>` : ''}
       ${st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : ''}
-      ${st.withBalance ? `<span class="text-emerald">${p.sym || '$'}${st.sumBalance.toFixed(2)} доступно</span>` : '<span class="text-faint">баланс не опрошен</span>'}
+      ${money}
     </div>`;
   }
 
   const pct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : 0;
+  const hiddenNote = hiddenCount > 0
+    ? `<span class="text-faint" title="вкладка скрыта в «Настроить вкладки» — провайдер не считается">${hiddenCount} скрыто</span>`
+    : '';
   const sub = providers > 0
     ? [
         `<span><span class="text-ink font-semibold">${accounts}</span> акк</span>`,
         `<span>${providers} ${providers === 1 ? 'провайдер' : 'провайдера'}</span>`,
         sumBalance > 0 ? `<span class="text-emerald">$${sumBalance.toFixed(2)} доступно из $${sumGrant.toFixed(0)}</span>` : '',
+        hiddenNote,
       ].filter(Boolean).join('')
-    : '<span class="text-faint">правдивых провайдеров нет</span>';
+    : (hiddenCount > 0
+        ? `<span class="text-faint">все правдивые провайдеры скрыты (${hiddenCount})</span>`
+        : '<span class="text-faint">правдивых провайдеров нет</span>');
 
   renderEnergyGauge($('global-energy'), {
     title: 'Общий запас free-tier',
     pct,
     sub,
     extra,
-    note: 'В запас входят провайдеры с реальным балансом: AgentRouter, GoRouter, Tabi Token, XPeach (🍑 пеггед 1:1 к единице квоты, поэтому складывается с остальными). FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin — протухли, не считаются.',
   });
 }
 
@@ -13142,6 +13380,21 @@ async function saveSettingsJson() {
   } catch (e) { st.textContent = '✗ ' + e.message; st.className = 'shrink-0 text-xs text-crimson'; toast('Сохранение: ' + e.message, 'error'); }
 }
 
+// Список бэкапов свёрнут по умолчанию: их десятки, и раскрытый список выдавливал
+// остальные настройки за экран. Состояние переживает F5.
+const BACKUPS_OPEN_KEY = 'dashboard-backups-open';
+function setBackupsListOpen(open) {
+  const list = $('settings-backups-list');
+  if (!list) return;
+  list.classList.toggle('hidden', !open);
+  const caret = $('settings-backups-caret'); if (caret) caret.style.transform = open ? 'rotate(90deg)' : '';
+  const hint = $('settings-backups-hint');   if (hint) hint.textContent = open ? 'скрыть' : 'показать';
+  localStorage.setItem(BACKUPS_OPEN_KEY, open ? '1' : '0');
+}
+function toggleBackupsList() {
+  setBackupsListOpen($('settings-backups-list')?.classList.contains('hidden'));
+}
+
 async function loadSettingsBackups() {
   try {
     const res = await fetch('/__switch/api/settings/backups');
@@ -13149,6 +13402,9 @@ async function loadSettingsBackups() {
     if (!res.ok) throw new Error(d.error || 'fail');
     const list = $('settings-backups-list');
     const items = d.backups || [];
+    const cnt = $('settings-backups-count');
+    if (cnt) cnt.textContent = '· ' + items.length;
+    setBackupsListOpen(localStorage.getItem(BACKUPS_OPEN_KEY) === '1');
     if (!items.length) { list.innerHTML = '<div class="text-xs text-faint py-2">пока нет бэкапов</div>'; return; }
     list.innerHTML = items.map(b => {
       const dt = new Date(b.mtime).toLocaleString();
@@ -13172,6 +13428,7 @@ async function backupSettingsNow() {
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || 'fail');
     toast('💾 бэкап создан: ' + d.name, 'success');
+    setBackupsListOpen(true);   // только что созданный бэкап должен быть виден
     loadSettingsBackups();
   } catch (e) { toast('бэкап: ' + e.message, 'error'); }
 }
@@ -13421,7 +13678,7 @@ function renderTabsManagerList() {
       <span class="text-base w-6 text-center">${it.icon}</span>
       <span class="flex-1 text-sm text-ink">${it.label}</span>
       <button onclick="toggleTabHidden('${it.name}')" class="text-lg leading-none px-2 py-1 rounded hover:bg-bg" title="${it.hidden ? 'Показать' : 'Скрыть'}">
-        ${it.hidden ? '🚫' : '👁'}
+        ${it.hidden ? '🙈' : '🐵'}
       </button>
     </li>
   `).join('');
@@ -13447,7 +13704,7 @@ function wireTabsReorder(list) {
   list._wired = true;
   // SortableJS — если CDN (cdn.jsdelivr.net) недоступен, откатываемся на
   // нативный HTML5 drag&drop ниже. Тащим за всю строку (не только за ≡),
-  // кнопка 👁 исключена фильтром.
+  // кнопка 🐵/🙈 исключена фильтром.
   if (window.Sortable) {
     list._sortable = Sortable.create(list, {
       animation: 150,
@@ -13503,6 +13760,10 @@ function toggleTabHidden(name) {
   }
   applyTabsConfig();
   renderTabsManagerList();
+  // Общий запас считается только по видимым вкладкам, а данные скрытых мы не тянем —
+  // значит после переключения глазка их надо подтянуть (или выкинуть) сразу,
+  // не дожидаясь тика и уж тем более F5.
+  refreshNavCounts(true);
 }
 function openTabsManager() {
   const el = document.getElementById('tabs-manager');
@@ -13520,6 +13781,7 @@ function resetTabsConfig() {
   localStorage.removeItem(TABS_CONFIG_KEY);
   applyTabsConfig();
   renderTabsManagerList();
+  refreshNavCounts(true);
 }
 
 // ═══════════════════ Универсальный auto-refresh ══════════════════════
@@ -13648,23 +13910,48 @@ setInterval(loadStatus, 5000);
 // и без loadXxModels — те бьют по шлюзу и попали бы под рейт-лимит WAF на каждом
 // открытии дашборда). `state.loaded.*` намеренно НЕ трогаем: первый заход на
 // вкладку по-прежнему делает полную загрузку со списком моделей.
-async function bootNavCounts() {
-  const jobs = [
-    ['agentrouter', loadArSessionsLight],
-    ['gorouter',    loadGoSessionsLight],
-    ['tabi',        loadTbSessionsLight],
-    ['xpeach',      loadXpSessionsLight],
-    ['github',      loadGhKeys],
-    ['telegram',    loadTgPool],
-    ['custom',      loadCustomProviders],
-    ['plugins',     loadPlugins],
-  ];
+const NAV_COUNT_JOBS = [
+  ['agentrouter', () => loadArSessionsLight()],
+  ['gorouter',    () => loadGoSessionsLight()],
+  ['tabi',        () => loadTbSessionsLight()],
+  ['xpeach',      () => loadXpSessionsLight()],
+  ['github',      () => loadGhKeys()],
+  ['telegram',    () => loadTgPool()],
+  ['custom',      () => loadCustomProviders()],
+  ['plugins',     () => loadPlugins()],
+];
+
+// Счётчики и общий запас жили ровно до первого F5: заполнялись один раз на boot, а
+// дальше обновлялась только ОТКРЫТАЯ вкладка (autoRefreshTick). Итог: сидишь на Tabi,
+// а цифры AgentRouter в сайдбаре и деньги в шапке — те, что были при загрузке страницы.
+// Теперь тот же дешёвый набор прокручивается по кругу для ВСЕХ видимых вкладок.
+//
+// Что тик НЕ делает:
+//   · не лезет в скрытые вкладки — их счётчик не виден и в запас не идёт;
+//   · не трогает активную вкладку — её ведёт autoRefreshTick, который слушается
+//     тумблера «Автообновление» (иначе выключенный тумблер всё равно перерисовывал бы
+//     таблицу под курсором);
+//   · не ходит в апстрим: всё это локальный JSON, без ?probe=1 / ?balance=1.
+const NAV_COUNT_POLL_MS = 20000;
+
+async function refreshNavCounts(boot) {
+  const hidden = effectiveHiddenSet();
+  const active = localStorage.getItem('opencode_active_tab') || 'claude';
+  const jobs = NAV_COUNT_JOBS.filter(([tab]) => !hidden.has(tab) && (boot || tab !== active));
   await Promise.all(jobs.map(async ([name, fn]) => {
-    try { await fn(); } catch (e) { console.warn('[boot] счётчик', name, 'не заполнился:', e.message); }
+    try { await fn(); } catch (e) { console.warn('[counts] счётчик', name, 'не заполнился:', e.message); }
   }));
+  // Шапка считается из того же кеша, что и счётчики, — пересчитываем сразу за ними.
+  try { await renderGlobalGauge(); } catch (e) { console.warn('[counts] global gauge fail', e); }
 }
+
+async function bootNavCounts() { return refreshNavCounts(true); }
 bootNavCounts();
 loadHealth();   // бейдж N✓ / N↓ — пробы только по локальным портам, один раз
+
+// Живые счётчики: пока браузерная вкладка на экране. document.hidden — чтобы в фоне
+// не жечь CPU; при возврате тик дёргается сразу (обработчик visibilitychange ниже).
+setInterval(() => { if (!document.hidden) refreshNavCounts(false); }, NAV_COUNT_POLL_MS);
 
 // Health — опрос только когда вкладка открыта (проба всех портов дороже)
 setInterval(() => {
@@ -13690,6 +13977,7 @@ function scheduleAutoRefresh() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { clearTimeout(_autoRefTimer); return; }
   autoRefreshTick();        // сразу после возврата в браузер
+  refreshNavCounts(false);  // и счётчики: пока браузер был свёрнут, тик не шёл
   scheduleAutoRefresh();
 });
 scheduleAutoRefresh();
@@ -13967,6 +14255,66 @@ async function loadVyceaiModels(force) {
 
 $('vyceai-filter')?.addEventListener('input', () => renderVyceaiKeys());
 $('vyceai-sort')?.addEventListener('change', () => renderVyceaiKeys());
+
+// ── Палитра: карточки выбора темы во вкладке «Настройки» ──
+// Сами темы и applyTheme() живут в <head> (нужны до первой отрисовки),
+// здесь только UI поверх них. Список из 22 палитр свёрнут, активная закреплена
+// сверху и видна всегда. Карточки показывают не только фон, но и акценты —
+// по ним и выбирают.
+const THEME_LIST_OPEN_KEY = 'dashboard-theme-list-open';
+function setThemeListOpen(open) {
+  const box = document.getElementById('theme-picker');
+  if (!box) return;
+  box.classList.toggle('hidden', !open);
+  const caret = document.getElementById('theme-list-caret'); if (caret) caret.style.transform = open ? 'rotate(90deg)' : '';
+  const hint = document.getElementById('theme-list-hint');   if (hint) hint.textContent = open ? 'скрыть' : 'показать';
+  localStorage.setItem(THEME_LIST_OPEN_KEY, open ? '1' : '0');
+}
+function toggleThemeList() {
+  setThemeListOpen(document.getElementById('theme-picker')?.classList.contains('hidden'));
+}
+
+const _THEME_DEF_ACC = { '--color-emerald': 'oklch(0.78 0.17 155)', '--color-amber': 'oklch(0.82 0.17 80)',
+                         '--color-azure': 'oklch(0.72 0.16 240)', '--color-violet': 'oklch(0.74 0.17 295)',
+                         '--color-crimson': 'oklch(0.70 0.20 22)' };
+function themeSwatch(t) {
+  const v = { ..._THEME_DEF_ACC, ...t.vars };
+  const sq = c => `<span style="background:${c}" class="w-3.5 h-3.5 rounded-sm border border-black/25"></span>`;
+  const dot = c => `<span style="background:${c}" class="w-3 h-3 rounded-full"></span>`;
+  return `${sq(v['--color-bg'])}${sq(v['--color-surface'])}${sq(v['--color-elevated'])}<span class="w-1"></span>` +
+    `${dot(v['--color-emerald'])}${dot(v['--color-amber'])}${dot(v['--color-azure'])}${dot(v['--color-violet'])}${dot(v['--color-crimson'])}`;
+}
+function renderThemePicker() {
+  const cur = currentTheme(), t = THEMES[cur];
+  const act = document.getElementById('theme-active');
+  if (act) act.innerHTML =
+    `<div class="flex items-center gap-1 mb-1.5">${themeSwatch(t)}<span class="ml-auto text-[10px] text-emerald">✓ активна</span></div>
+     <div class="text-xs font-medium">${esc(t.label)}</div>
+     <div class="text-[10px] text-faint leading-tight">${esc(t.hint)} · группа: ${esc(THEME_GROUPS[t.group || 'calm'])}</div>`;
+  const cnt = document.getElementById('theme-list-count');
+  if (cnt) cnt.textContent = '· ' + Object.keys(THEMES).length;
+  const box = document.getElementById('theme-picker');
+  if (!box) return;
+  const card = ([id, th]) => {
+    const on = id === cur;
+    return `<button onclick="applyTheme('${id}')" title="${esc(th.label)} — ${esc(th.hint)}"
+      class="text-left rounded-lg border p-2.5 transition ${on ? 'border-emerald bg-emerald/10' : 'border-line-soft bg-elevated hover:border-emerald/40'}">
+      <div class="flex items-center gap-1 mb-1.5">${themeSwatch(th)}${on ? '<span class="ml-auto text-[10px] text-emerald">✓</span>' : ''}</div>
+      <div class="text-xs font-medium">${esc(th.label)}</div>
+      <div class="text-[10px] text-faint leading-tight">${esc(th.hint)}</div>
+    </button>`;
+  };
+  box.innerHTML = Object.entries(THEME_GROUPS).map(([g, title]) => {
+    const items = Object.entries(THEMES).filter(([, th]) => (th.group || 'calm') === g);
+    if (!items.length) return '';
+    return `<div class="space-y-2">
+      <div class="text-[10px] uppercase tracking-wider text-faint">${esc(title)} · ${items.length}</div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">${items.map(card).join('')}</div>
+    </div>`;
+  }).join('');
+}
+renderThemePicker();
+setThemeListOpen(localStorage.getItem(THEME_LIST_OPEN_KEY) === '1');
 
 applyTabsConfig();
 // switcher больше нет — старое сохранённое значение мигрируем на claude

@@ -328,7 +328,7 @@ boot-спавнится дашбордом, и без дашборда у CC н�
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |
 | **Плагины / MCP** | активна | слева плагины Claude Code (тоггл `enabledPlugins`, ★ рекомендованные), справа MCP-серверы из `~/.claude.json` | `/api/plugins/list`, `/api/settings/apply`, `/api/mcp/list`, `/api/mcp/toggle` |
-| **Настройки** | активна   | обновление дашборда, OmniRoute env, JSON-редактор `settings.json` + бэкапы, **тоггл статус-бара CC** и **автокомпакта** | `/api/settings/*`, `/api/env`, `/api/statusline/default`, `/api/dashboard/update-*` |
+| **Настройки** | активна   | **выбор цветовой темы** (22 палитры: 2 под рабочий стол владельца / 4 спокойные / 14 ядрёные / 2 светлые; список свёрнут, активная закреплена; `localStorage: dashboard-theme`), обновление дашборда, OmniRoute env, JSON-редактор `settings.json` + бэкапы (список свёрнут, счётчик в заголовке), **тоггл статус-бара CC** и **автокомпакта** | `/api/settings/*`, `/api/env`, `/api/statusline/default`, `/api/dashboard/update-*` |
 | **TokenRouter** | архив («Чтим память») | аккаунты, usage, health   | `/api/tokenrouter/*` |
 | **Devin**     | архив     | сессии + квоты (daily/weekly %)     | `/api/session/*` |
 | **Notion**    | архив     | сессии + карты                      | `/api/notion/*` |

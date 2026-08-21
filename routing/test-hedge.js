@@ -250,6 +250,24 @@ async function waitProxy() {
     assert.strictEqual(seen, 2, `G: при maxHedges=1 шлюз должен увидеть 2 копии, увидел ${seen}`);
     console.log(`G ok: за ${HEDGE_MS * 4}ms копий у шлюза ${seen} (кэп дублей работает)`);
 
+    // --- H: /__state отдаёт поставочные дефолты ---
+    // Дашборд рисует по ним плейсхолдеры и кнопку «Рекомендованные» и своей копии цифр
+    // не держит. Если поле пропадёт — кнопка молча перестанет работать, поэтому контракт
+    // проверяем тестом. Значения тут не сверяем: тест запущен с env-оверрайдами.
+    const state = await new Promise((resolve, reject) => {
+      const r = http.get({ port: PX_PORT, path: '/__state' }, (res) => {
+        let b = '';
+        res.on('data', (c) => { b += c; });
+        res.on('end', () => { try { resolve(JSON.parse(b)); } catch (err) { reject(err); } });
+      });
+      r.on('error', reject);
+    });
+    assert.ok(state.defaults, 'H: /__state должен отдавать defaults');
+    assert.deepStrictEqual(Object.keys(state.defaults).sort(),
+      ['hedgeMs', 'maxAttempts', 'maxHedges', 'preCommitMs'].sort(),
+      `H: в defaults должны быть все четыре ручки, пришло ${JSON.stringify(state.defaults)}`);
+    console.log(`H ok: defaults = ${JSON.stringify(state.defaults)}`);
+
     console.log('\ntest-hedge OK');
   } catch (err) {
     console.error(`\nПРОВАЛ: ${err.message}\n--- лог прокси ---\n${plog}`);

@@ -193,15 +193,33 @@ function log(msg) {
 // (:20133 agentrouter, :20155 tabi, :20156 gorouter, :20157 xpeach).
 const CONFIG_FILE = process.env.CONFIG_FILE
   || path.join(__dirname, `keepalive-config-${Number(process.env.PORT || 8787)}.json`);
+// ЕДИНСТВЕННОЕ место, где живут обкатанные цифры. Дашборд не хранит их копию, а
+// читает отсюда через /__state → `defaults`: плейсхолдеры инпутов и кнопка
+// «Рекомендованные» берутся из этого объекта. Раньше цифры были и в коде, и в
+// плейсхолдерах, и в keepalive-restart.ps1, и в спавне дашборда — и разъезжались.
+// Замерено на agentrouter (см. routing/KEEPALIVE-TUNING.md):
+//   hedgeMs 20000    — 75-й перцентиль ответа ≈20с, то есть дубль летит только в
+//                      худшую четверть запросов; на 20с побеждают 67% дублей
+//                      против 47% на 12с
+//   maxHedges 1      — второй параллельный дубль скорости не добавлял, только полосы
+//   maxAttempts 3    — 1 запрос + 1 хедж + 1 ретрай на транзиентную 500 (无可用渠道)
+//   preCommitMs 10000 — шлюз молчит >10с на 46% запросов, а клиент при нуле байт
+//                      сдаётся сам на ~18-20с; 10с оставляют запас на пинги
+const DEFAULT_CFG = {
+  hedgeMs: 20000,
+  maxAttempts: 3,
+  maxHedges: 1,
+  preCommitMs: 10000,
+};
 const cfg = {
-  hedgeMs: Number(process.env.HEDGE_MS || 20000),
-  maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || 3),
+  hedgeMs: Number(process.env.HEDGE_MS || DEFAULT_CFG.hedgeMs),
+  maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || DEFAULT_CFG.maxAttempts),
   // Сколько ПАРАЛЛЕЛЬНЫХ дублей максимум на один запрос. Раньше ограничения не было:
   // scheduleHedge перевзводил себя, и при maxAttempts=3 на молчащем шлюзе в воздухе
   // оказывалось три копии, а бюджет попыток был выеден хеджами — на транзиентную 500
   // ретрая не оставалось. Счётчик отдельный именно поэтому. 0 = хедж выкл.
-  maxHedges: Number(process.env.MAX_HEDGES || 1),
-  preCommitMs: Number(process.env.PRE_COMMIT_MS || 10000),
+  maxHedges: Number(process.env.MAX_HEDGES || DEFAULT_CFG.maxHedges),
+  preCommitMs: Number(process.env.PRE_COMMIT_MS || DEFAULT_CFG.preCommitMs),
 };
 
 // Числовая ручка из патча: мусор игнорируем, дурь зажимаем (иначе опечатка
@@ -250,7 +268,7 @@ function applyPatch(p) {
   log(`config updated: хедж ${cfg.hedgeMs ? `${cfg.hedgeMs}ms` : 'off'}, дублей максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
 }
 function publicState() {
-  return { cfg: Object.assign({}, cfg), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt, stats: Object.assign({}, stats) };
+  return { cfg: Object.assign({}, cfg), defaults: Object.assign({}, DEFAULT_CFG), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt, stats: Object.assign({}, stats) };
 }
 // Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
 // AgentRouter в том же блоке, что и крутилки хеджа. retries — всего повторов,

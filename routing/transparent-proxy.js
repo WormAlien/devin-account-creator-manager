@@ -827,7 +827,9 @@ function makeKeepaliveHandlers(port) {
     // GET .../keepalive/state → { cfg, upstream, port, idle_ms, stats }.
     async function handleState(req, res) {
         const r = await keepaliveFetch('GET', '/__state', null, port);
-        if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает' });
+        // port в ошибке — не украшение: по нему панель предлагает поднять мёртвый
+        // прокси, не зашивая номера портов в разметку (они настраиваются env'ом).
+        if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает', port });
         return jsonRes(res, 200, r.data);
     }
 
@@ -842,7 +844,7 @@ function makeKeepaliveHandlers(port) {
                 if (!KNOBS.some(k => k in patch))
                     return jsonRes(res, 400, { error: 'ожидался { ' + KNOBS.join('?, ') + '? }' });
                 const r = await keepaliveFetch('POST', '/__config', patch, port);
-                if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает' });
+                if (!r.ok || !r.data) return jsonRes(res, 502, { error: 'keepalive :' + port + ' не отвечает', port });
                 logLine(`keepalive config :${port} -> ${JSON.stringify(patch)}`);
                 return jsonRes(res, 200, r.data);
             } catch (e) { return jsonRes(res, 400, { error: e.message }); }
@@ -6161,6 +6163,15 @@ async function arProxySpawn() {
 // Front-door :20100 — единый вход Claude Code. Спавним на boot ВСЕГДА, даже с
 // выключенным тумблером: включение режима не должно требовать рестарта дашборда,
 // а лежащий прокси = мгновенная потеря всех сессий CC после флипа.
+// Смерть detached-ребёнка со `stdio: 'ignore'` бесследна: в логе оставался бодрый
+// «spawn: :20156 (pid N)», а порт был пустой, и причину искать было негде. Обработчик
+// ловит и мгновенную смерть (EADDRINUSE, исключение при старте), и позднюю — вторая
+// объясняет «прокси работал, а потом Claude Code начал ловить 502 на каждый запрос».
+function watchChildExit(child, label, port) {
+    child.on('exit', (code, sig) => logLine(
+        `${label} :${port} pid ${child.pid} завершился (code ${code === null ? '—' : code}, sig ${sig || '—'})`));
+}
+
 const FRONTDOOR_PROXY_FILE = 'frontdoor-proxy.js';
 async function frontdoorSpawn() {
     const port = frontdoorPort();
@@ -6180,6 +6191,7 @@ async function frontdoorSpawn() {
                 LOG_FILE: path.join(__dirname, 'frontdoor-proxy.log'),
             },
         });
+        watchChildExit(child, 'front-door', port);
         child.unref();
         logLine(`front-door spawn: :${port} (pid ${child.pid})`);
         return { ok: true, pid: child.pid };
@@ -6209,6 +6221,7 @@ async function arKeepaliveSpawn() {
                 ...(process.env.AR_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.AR_PRE_COMMIT_MS } : {}),
             },
         });
+        watchChildExit(child, 'keepalive AgentRouter', AR_KEEPALIVE_PORT);
         child.unref();
         logLine(`keepalive proxy spawn: :${AR_KEEPALIVE_PORT} (pid ${child.pid})`);
         return { ok: true, pid: child.pid };
@@ -7563,7 +7576,8 @@ function arSettingsModel(model) {
 // туда же уходят haiku-вызовы сабагентов (дефолт haiku → gpt-5.6-sol), т.е. он
 // требуется даже когда основная модель claude-*. Спавн идемпотентен: занятый порт → no-op.
 async function arSpawnBoth() {
-    await arKeepaliveSpawn();
+    const ka = await keepaliveBring(AR_KEEPALIVE_PORT, { waitMs: 8000 });
+    if (!ka.ok) logLine(`agentrouter activate: keepalive :${AR_KEEPALIVE_PORT} НЕ поднялся — ${ka.error || '?'}`);
     await arProxySpawn();
 }
 
@@ -7897,6 +7911,7 @@ async function goKeepaliveSpawn() {
                 ...(process.env.GO_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.GO_PRE_COMMIT_MS } : {}),
             },
         });
+        watchChildExit(child, 'keepalive GoRouter', GO_KEEPALIVE_PORT);
         child.unref();
         logLine(`gorouter keepalive proxy spawn: :${GO_KEEPALIVE_PORT} (pid ${child.pid})`);
         return { ok: true, pid: child.pid };
@@ -8323,9 +8338,17 @@ async function handleGoActivate(req, res) {
         } catch (e) {
             logLine(`gorouter activate: settings.json FAILED: ${e.message}`);
         }
-        await goKeepaliveSpawn();
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20156, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const goKa = await keepaliveBring(GO_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!goKa.ok) logLine(`gorouter activate: keepalive :${GO_KEEPALIVE_PORT} НЕ поднялся — ${goKa.error || '?'}`);
         logLine(`gorouter activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${GO_KEEPALIVE_URL})`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true });
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: goKa.ok, port: GO_KEEPALIVE_PORT, error: goKa.ok ? null : (goKa.error || null) },
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -8392,9 +8415,10 @@ async function handleGoSetModel(req, res) {
         } catch (e) {
             logLine(`gorouter set-model: settings.json FAILED: ${e.message}`);
         }
-        await goKeepaliveSpawn();
+        const goKaM = await keepaliveBring(GO_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!goKaM.ok) logLine(`gorouter set-model: keepalive :${GO_KEEPALIVE_PORT} НЕ поднялся — ${goKaM.error || '?'}`);
         logLine(`gorouter set-model: ${m} (base ${GO_KEEPALIVE_URL})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: GO_ACTIVE_MODEL_FILE, base: GO_KEEPALIVE_URL, needRestart: true });
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: GO_ACTIVE_MODEL_FILE, base: GO_KEEPALIVE_URL, needRestart: true, keepalive: { up: goKaM.ok, port: GO_KEEPALIVE_PORT, error: goKaM.ok ? null : (goKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -8505,6 +8529,7 @@ async function tbKeepaliveSpawn() {
                 ...(process.env.TB_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.TB_PRE_COMMIT_MS } : {}),
             },
         });
+        watchChildExit(child, 'keepalive Tabi', TB_KEEPALIVE_PORT);
         child.unref();
         logLine(`tabi keepalive proxy spawn: :${TB_KEEPALIVE_PORT} (pid ${child.pid})`);
         return { ok: true, pid: child.pid };
@@ -8569,13 +8594,13 @@ function healStatuslinePath() {
     }
 }
 
-// ───── Рестарт keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter / :20157 XPeach) ─────
-// Все три xxKeepaliveSpawn() поднимают процесс ТОЛЬКО если порт свободен, а
-// автоперезапуска нет — после правки keepalive-proxy.js новый код подхватывается
-// лишь пересозданием процесса. Раньше это делали таскиллом руками: порт оставался
-// пустым, и все сессии CC/happy получали ConnectionRefused (settings.json смотрит
-// ровно в один из этих портов). Поэтому убийство и подъём — одной операцией,
-// с ожиданием освобождения порта и живого /__keepalive/api/status.
+// ───── Подъём keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter / :20157 XPeach) ─────
+// xxKeepaliveSpawn() поднимают процесс ТОЛЬКО если порт свободен, автоперезапуска нет
+// (после правки keepalive-proxy.js новый код подхватывается лишь пересозданием
+// процесса), и «занято» они читают как «уже работает». Раньше пересоздавали таскиллом
+// руками: порт оставался пустым, и все сессии CC/happy получали ConnectionRefused —
+// settings.json смотрит ровно в один из этих портов. Поэтому вся работа с портом идёт
+// через keepaliveBring() ниже: HTTP-проба живости, снятие зомби, ожидание /status.
 function killPortListeners(port) {
     let killed = 0;
     try {
@@ -8613,35 +8638,89 @@ function keepaliveInstances() {
     };
 }
 
-async function keepaliveRestart(port) {
+// Живой ли кто-то на порту — спрашиваем ПО HTTP, а не по bind. Разница
+// принципиальная: bind отвечает лишь «занято», а занять порт может и зомби —
+// повисший или недобитый прошлый процесс. Возвращает тело /status или null.
+async function probeStatus(port, statusPath) {
+    try {
+        const r = await fetch(`http://127.0.0.1:${port}${statusPath}`, { signal: AbortSignal.timeout(1500) });
+        if (!r.ok) return null;
+        return await r.json().catch(() => ({}));
+    } catch { return null; }
+}
+
+// Три попытки, а не одна: различить «мёртв» и «занят делом» по одному
+// 1.5-секундному таймауту нельзя, а цена ошибки — убийство живого прокси под
+// нагрузкой, то есть обрыв всех сессий Claude Code.
+async function portAnswers(port, statusPath, tries = 3) {
+    for (let i = 0; i < tries; i += 1) {
+        const s = await probeStatus(port, statusPath);
+        if (s) return s;
+        if (i + 1 < tries) await napMs(300);
+    }
+    return null;
+}
+
+// ЕДИНСТВЕННАЯ дверь для «подними keepalive и убедись, что он живой».
+//
+// Почему одна: xxKeepaliveSpawn() спавнит только при свободном порте и возвращает
+// ok сразу после spawn(), не дожидаясь, что порт ожил. По отдельности оба свойства
+// разумны, вместе — дыра в два шага:
+//   1. порт, занятый зомби, читается как `already: true` («уже работает»),
+//   2. ребёнок, умерший на старте, — как успех со свежим pid в логе.
+// Поймано 21.08 у второго пользователя: после обновления и добавления аккаунта
+// GoRouter :20156 не отвечал, а и активация, и boot дашборда считали, что подняли.
+// Помогла только кнопка «перезапустить» в Health — единственный путь, который
+// СНАЧАЛА убивал держателя порта и потом ждал живого /status. Теперь так делают все.
+//
+// force = кнопка в Health: убить безусловно, даже живого. Нужно, чтобы подхватился
+// новый код keepalive-proxy.js после обновления — сам он не перезагружается.
+async function keepaliveBring(port, opts = {}) {
     const instances = keepaliveInstances();
     const inst = instances[port];
     if (!inst) {
         return { ok: false, error: `:${port} — не keepalive-инстанс (можно ${Object.keys(instances).join(', ')})` };
     }
     const statusPath = inst.statusPath || '/__keepalive/api/status';
-    const killed = killPortListeners(port);
+    const waitMs = Number.isFinite(Number(opts.waitMs)) ? Number(opts.waitMs) : 10000;
+    let killed = 0;
+
+    if (opts.force) {
+        killed = killPortListeners(port);
+    } else {
+        const alive = await portAnswers(port, statusPath);
+        if (alive) return { ok: true, already: true, name: inst.name, port, status: alive };
+        if (!(await portIsFree(port))) {
+            // Порт занят, но /status молчит — это зомби, а не рабочий прокси.
+            killed = killPortListeners(port);
+            logLine(`keepalive ${inst.name} :${port}: порт занят, но /status молчит — снят зомби (убито ${killed})`);
+        }
+    }
     // Порт освобождается не мгновенно — иначе spawn увидит занятый порт и молча выйдет.
-    for (let i = 0; i < 20; i += 1) {
+    for (let i = 0; i < 20 && killed; i += 1) {
         if (await portIsFree(port)) break;
         await napMs(100);
     }
     const sp = await inst.spawn();
-    if (!sp.ok) return { ok: false, error: sp.error || 'spawn failed', killed };
-    for (let i = 0; i < 40; i += 1) {
-        try {
-            const r = await fetch(`http://127.0.0.1:${port}${statusPath}`, { signal: AbortSignal.timeout(700) });
-            if (r.ok) {
-                const status = await r.json().catch(() => null);
-                logLine(`keepalive restart: ${inst.name} :${port} поднят (убито ${killed}, pid ${sp.pid || '?'})`);
-                return { ok: true, name: inst.name, port, killed, pid: sp.pid || null, status };
-            }
-        } catch { }
+    if (!sp.ok) return { ok: false, error: sp.error || 'spawn failed', killed, name: inst.name, port };
+
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+        const status = await portAnswers(port, statusPath, 1);
+        if (status) {
+            logLine(`keepalive ${inst.name} :${port} поднят (убито ${killed}, pid ${sp.pid || '?'})`);
+            return { ok: true, name: inst.name, port, killed, pid: sp.pid || null, status };
+        }
+        if (Date.now() >= deadline) break;
         await napMs(250);
     }
-    logLine(`keepalive restart: ${inst.name} :${port} НЕ ответил после спавна`);
-    return { ok: false, error: `спавн прошёл, но :${port} не ответил за 10с`, killed, pid: sp.pid || null };
+    const secs = Math.round(waitMs / 1000);
+    logLine(`keepalive ${inst.name} :${port} НЕ ответил за ${secs}с после спавна`);
+    return { ok: false, error: `спавн прошёл, но :${port} не ответил за ${secs}с`, killed, pid: sp.pid || null, name: inst.name, port };
 }
+
+// Кнопка «🔄 перезапустить» в Health: пересоздать процесс безусловно.
+const keepaliveRestart = (port) => keepaliveBring(port, { force: true });
 
 // Boot-респавн keepalive АКТИВНОГО бэкенда.
 //
@@ -8673,7 +8752,9 @@ async function bootSpawnActiveBackend() {
     if (port === frontdoorPort()) return;             // его спавнит frontdoorSpawn()
     const inst = keepaliveInstances()[port];
     if (!inst) return;                                // конвертеры/omniroute живут своей жизнью
-    const r = await inst.spawn();
+    // keepaliveBring, а не inst.spawn(): мёртвый порт, занятый зомби, спавн читал как
+    // «уже поднято» и молча уходил — ровно так :20156 переживал рестарт дашборда.
+    const r = await keepaliveBring(port);
     if (!r.ok) logLine(`boot: keepalive активного бэкенда ${inst.name} :${port} НЕ поднялся: ${r.error || '?'}`);
     else if (r.already) logLine(`boot: keepalive активного бэкенда ${inst.name} :${port} уже слушает`);
     else logLine(`boot: поднял keepalive активного бэкенда ${inst.name} :${port} (pid ${r.pid || '?'})`);
@@ -8911,9 +8992,10 @@ async function handleTbActivate(req, res) {
         } catch (e) {
             logLine(`tabi activate: settings.json FAILED: ${e.message}`);
         }
-        await tbKeepaliveSpawn();
+        const tbKa = await keepaliveBring(TB_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!tbKa.ok) logLine(`tabi activate: keepalive :${TB_KEEPALIVE_PORT} НЕ поднялся — ${tbKa.error || '?'}`);
         logLine(`tabi activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${TB_KEEPALIVE_URL})`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, keepalive: { up: tbKa.ok, port: TB_KEEPALIVE_PORT, error: tbKa.ok ? null : (tbKa.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -8981,9 +9063,10 @@ async function handleTbSetModel(req, res) {
         } catch (e) {
             logLine(`tabi set-model: settings.json FAILED: ${e.message}`);
         }
-        await tbKeepaliveSpawn();
+        const tbKaM = await keepaliveBring(TB_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!tbKaM.ok) logLine(`tabi set-model: keepalive :${TB_KEEPALIVE_PORT} НЕ поднялся — ${tbKaM.error || '?'}`);
         logLine(`tabi set-model: ${m} (base ${TB_KEEPALIVE_URL})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: TB_ACTIVE_MODEL_FILE, base: TB_KEEPALIVE_URL, needRestart: true });
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: TB_ACTIVE_MODEL_FILE, base: TB_KEEPALIVE_URL, needRestart: true, keepalive: { up: tbKaM.ok, port: TB_KEEPALIVE_PORT, error: tbKaM.ok ? null : (tbKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -9279,6 +9362,7 @@ async function xpKeepaliveSpawn() {
                 ...(process.env.XP_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.XP_PRE_COMMIT_MS } : {}),
             },
         });
+        watchChildExit(child, 'keepalive XPeach', XP_KEEPALIVE_PORT);
         child.unref();
         logLine(`xpeach keepalive proxy spawn: :${XP_KEEPALIVE_PORT} (pid ${child.pid})`);
         return { ok: true, pid: child.pid };
@@ -9519,9 +9603,10 @@ async function handleXpActivate(req, res) {
         } catch (e) {
             logLine(`xpeach activate: settings.json FAILED: ${e.message}`);
         }
-        await xpKeepaliveSpawn();
+        const xpKa = await keepaliveBring(XP_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!xpKa.ok) logLine(`xpeach activate: keepalive :${XP_KEEPALIVE_PORT} НЕ поднялся — ${xpKa.error || '?'}`);
         logLine(`xpeach activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${XP_KEEPALIVE_URL})`);
-        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, keepalive: { up: xpKa.ok, port: XP_KEEPALIVE_PORT, error: xpKa.ok ? null : (xpKa.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -9589,9 +9674,10 @@ async function handleXpSetModel(req, res) {
         } catch (e) {
             logLine(`xpeach set-model: settings.json FAILED: ${e.message}`);
         }
-        await xpKeepaliveSpawn();
+        const xpKaM = await keepaliveBring(XP_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!xpKaM.ok) logLine(`xpeach set-model: keepalive :${XP_KEEPALIVE_PORT} НЕ поднялся — ${xpKaM.error || '?'}`);
         logLine(`xpeach set-model: ${m} (base ${XP_KEEPALIVE_URL})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: XP_ACTIVE_MODEL_FILE, base: XP_KEEPALIVE_URL, needRestart: true });
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: XP_ACTIVE_MODEL_FILE, base: XP_KEEPALIVE_URL, needRestart: true, keepalive: { up: xpKaM.ok, port: XP_KEEPALIVE_PORT, error: xpKaM.ok ? null : (xpKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -10008,7 +10094,12 @@ async function handleFrontdoorToggle(req, res) {
         doc.port = port;
         fs.writeFileSync(FRONTDOOR_CONFIG_FILE, JSON.stringify(doc, null, 2) + '\n', 'utf8');
         FD_CFG_CACHE.mtime = 0;                     // перечитать конфиг немедленно
-        if (enabled) await frontdoorSpawn();        // включили — прокси обязан быть живым
+        if (enabled) {
+            // Не голый спавн: занятый зомби-порт он считал живым прокси, а включённый
+            // тумблер с мёртвым :20100 = Claude Code вообще без бэкенда.
+            const fd = await keepaliveBring(frontdoorPort(), { waitMs: 8000 });
+            if (!fd.ok) logLine(`front-door: тумблер ON, но :${port} НЕ поднялся — ${fd.error || '?'}`);
+        }
         logLine(`front-door: тумблер ${enabled ? 'ON' : 'OFF'} (порт ${port})`);
         return jsonRes(res, 200, { ok: true, enabled, port, current: currentTarget() });
     } catch (e) { return jsonRes(res, 500, { error: e.message }); }
@@ -11478,26 +11569,36 @@ server.listen(LISTEN_PORT, () => {
         if (!r.ok) console.log('  ar proxy spawn error:', r.error || '?');
         else if (!r.already) console.log('  ar proxy spawned');
     }).catch(e => console.log('  ar proxy spawn error:', e.message));
-    arKeepaliveSpawn().then(r => {
-        if (!r.ok) console.log('  keepalive proxy spawn error:', r.error || '?');
-        else if (!r.already) console.log('  keepalive proxy spawned');
-    }).catch(e => console.log('  keepalive proxy spawn error:', e.message));
+    // Keepalive AR :20133, затем keepalive АКТИВНОГО бэкенда — строго последовательно.
+    // Параллельно нельзя: если активен сам AgentRouter, обе ветки увидели бы мёртвый
+    // порт свободным и спавнили дубль, второй процесс падал бы с EADDRINUSE.
+    // Активный бэкенд поднимаем отдельно потому, что он тоже умер вместе с прошлым
+    // дашбордом, а раньше на boot вставал только AR — и активный gorouter/tabi/xpeach
+    // оставлял CC без апстрима с непрозрачным 502 на каждый запрос.
+    //
+    // SWITCHER_NO_BOOT_KEEPALIVE=1 — для песочниц (tools/check-frontdoor.js). Порты
+    // keepalive захардкожены, своих у песочницы нет, а keepaliveBring теперь умеет
+    // УБИВАТЬ не отвечающего держателя порта — то есть боевой keepalive владельца.
+    if (process.env.SWITCHER_NO_BOOT_KEEPALIVE === '1') {
+        console.log('  keepalive boot: пропущен (SWITCHER_NO_BOOT_KEEPALIVE=1)');
+    } else {
+        keepaliveBring(AR_KEEPALIVE_PORT).then(r => {
+            if (!r.ok) console.log('  keepalive proxy spawn error:', r.error || '?');
+            else if (!r.already) console.log('  keepalive proxy spawned');
+            return bootSpawnActiveBackend();
+        }).then(r => {
+            if (r && !r.ok) console.log('  active backend keepalive spawn error:', r.error || '?');
+            else if (r && !r.already) console.log('  active backend keepalive spawned');
+        }).catch(e => console.log('  keepalive boot error:', e.message));
+    }
 
     // Front-door (:20100) — единый вход Claude Code. Поднимаем всегда: с включённым
     // тумблером это единственный бэкенд CC, а с выключенным просто ждёт наготове,
     // чтобы включение не требовало рестарта дашборда.
-    frontdoorSpawn().then(r => {
+    keepaliveBring(frontdoorPort()).then(r => {
         if (!r.ok) console.log('  front-door spawn error:', r.error || '?');
         else if (!r.already) console.log(`  front-door spawned on :${frontdoorPort()}`);
         if (frontdoorConfig().enabled) console.log(`  front-door: ВКЛЮЧЁН, активный бэкенд ${currentTarget()}`);
     }).catch(e => console.log('  front-door spawn error:', e.message));
-
-    // Keepalive активного бэкенда: он тоже умер вместе с прошлым дашбордом, а на boot
-    // поднимался только agentrouter — активный gorouter/tabi/xpeach оставлял CC без
-    // апстрима и с непрозрачным 502 на каждый запрос.
-    bootSpawnActiveBackend().then(r => {
-        if (r && !r.ok) console.log('  active backend keepalive spawn error:', r.error || '?');
-        else if (r && !r.already) console.log('  active backend keepalive spawned');
-    }).catch(e => console.log('  active backend keepalive spawn error:', e.message));
 });
 

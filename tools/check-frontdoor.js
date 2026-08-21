@@ -76,6 +76,10 @@ async function main() {
             FRONTDOOR_CONFIG: FD_CFG,
             LOG_FILE: path.join(SANDBOX, 'frontdoor.log'),        // не пишем в боевой лог прокси
             PROXY_LOG_INGEST_URL: 'http://127.0.0.1:1/none',   // не шумим в живой дашборд
+            // Порты keepalive (:20133/:20155/:20156/:20157) захардкожены, своих у
+            // песочницы нет, а boot-подъём теперь УБИВАЕТ не отвечающего держателя
+            // порта — без этого флага тест мог снести боевой keepalive владельца.
+            SWITCHER_NO_BOOT_KEEPALIVE: '1',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
     });

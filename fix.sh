@@ -48,10 +48,13 @@ fi
 ok "стало: $(git log --oneline -1)"
 
 # ── 3. Доустановить всё недостающее (авто-режим, без вопросов) ───────────────
+# Установщик свой на каждую ОС — почему именно так, см. развилку в update.sh.
 step "3. Установка недостающего (AUTO)"
-AUTO=1 bash install.sh
+INSTALLER=install.sh
+[ "$(uname -s)" = "Darwin" ] && INSTALLER=install-mac.sh
+AUTO=1 bash "$INSTALLER"
 RC=$?
-[ $RC -eq 0 ] && ok "install.sh прошёл" || err "install.sh упал с кодом $RC — скрин этого окна!"
+[ $RC -eq 0 ] && ok "$INSTALLER прошёл" || err "$INSTALLER упал с кодом $RC — скрин этого окна!"
 
 # ── 4. Контрольные проверки ──────────────────────────────────────────────────
 step "4. Итоговая проверка"

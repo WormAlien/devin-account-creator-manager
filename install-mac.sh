@@ -20,6 +20,15 @@ err() { printf '\033[31m  ✗ %s\033[0m\n' "$*"; }
 step(){ printf '\n\033[36m── %s\033[0m\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 
+# Авто-режим. Контракт тот же, что у install.sh и install-lib.sh: AUTO=1 значит
+# «ничего не спрашивать, брать дефолт» — так скрипт зовут update.sh и fix.sh.
+# До сих пор неинтерактивность определялась ТОЛЬКО отсутствием tty (`! -t 0`),
+# поэтому из апдейтера с живым терминалом скрипт всё равно вставал на вопросах.
+# Свой ask() из install-lib.sh тут не берём: при bootstrap-запуске одной строкой
+# репо на диске ещё нет, а первый вопрос задаётся до клонирования.
+AUTO=${AUTO:-0}
+noask(){ [ "$AUTO" = "1" ] || [ ! -t 0 ]; }
+
 b "══════════════════════════════════════════════"
 b "  ABUSE HUB"
 b "  Установка для macOS"
@@ -46,6 +55,10 @@ if [ ! -f "$SELF_DIR/package.json" ] || [ ! -f "$SELF_DIR/routing/restart-dashbo
   if ! xcode-select -p >/dev/null 2>&1; then
     warn "Command Line Tools не стоят (в них git) — ставлю. Откроется окно, дождись конца."
     xcode-select --install >/dev/null 2>&1 || true
+    if noask; then
+      err "CLT подтверждаются в GUI, а в авто-режиме ждать некому. Доставь их (xcode-select --install) и запусти снова."
+      exit 1
+    fi
     echo "  Когда установка закончится — нажми Enter..."
     read -r _
     xcode-select -p >/dev/null 2>&1 || { err "CLT не установились. Поставь вручную (xcode-select --install) и запусти снова."; exit 1; }
@@ -90,6 +103,10 @@ if [ "$(uname)" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then
   step "Xcode Command Line Tools"
   warn "Ставим Command Line Tools. Откроется окно — дождись завершения установки."
   xcode-select --install >/dev/null 2>&1 || true
+  if noask; then
+    err "CLT подтверждаются в GUI, а в авто-режиме ждать некому. Доставь их (xcode-select --install) и запусти снова."
+    exit 1
+  fi
   echo "  Когда установка закончится — нажми Enter..."
   read -r _
   xcode-select -p >/dev/null 2>&1 || { err "CLT не установились. Прервано."; exit 1; }
@@ -242,7 +259,7 @@ xattr -cr . 2>/dev/null && ok "карантин снят"
 step "Доп. зависимости (✈ Открыть TG)"
 if [ ! -f install-deps.sh ]; then
   warn "нет install-deps.sh — код приехал не целиком, поправь: git pull"
-elif [ ! -t 0 ]; then
+elif noask; then
   bash install-deps.sh
 else
   read -r -p "Поставить зависимости ТГ-менеджера сейчас? [Y/n] " ans
@@ -255,14 +272,14 @@ fi
 # 10. Запуск
 step "Запуск дашборда"
 b "  Дашборд: http://localhost:8200/__switch"
-if [ -t 0 ]; then
+if noask; then
+  bash routing/restart-dashboard.sh
+else
   read -r -p "Запустить дашборд сейчас? [Y/n] " ans
   case "${ans:-Y}" in
     y|Y|д|Д|yes|да) bash routing/restart-dashboard.sh ;;
     *) echo "  Запусти позже: bash routing/restart-dashboard.sh (или двойной клик на DASHBOARD.command)" ;;
   esac
-else
-  bash routing/restart-dashboard.sh
 fi
 
 # 11. Памятка. Печатаем в конце, потому что выше уже прокрутилось много вывода, а

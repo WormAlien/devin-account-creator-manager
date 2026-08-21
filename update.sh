@@ -47,14 +47,21 @@ fi
 ok "Стало: $(git log --oneline -1)"
 
 echo
-b "── Запускаю install.sh в авто-режиме (без вопросов) ──"
-AUTO=1 bash install.sh
+# Установщики НЕ взаимозаменяемы: install.sh — Windows/git-bash (правит user-PATH,
+# ищет Git\usr\bin с cat.exe, рассчитывает на Git Credential Manager),
+# install-mac.sh — macOS (Xcode CLT, Homebrew, brew shellenv). Без развилки
+# обновление на маке тянуло код и разваливалось в чужом установщике: код уже новый,
+# а человек видит ошибку про Git for Windows и решает, что обновление не прошло.
+INSTALLER=install.sh
+[ "$(uname -s)" = "Darwin" ] && INSTALLER=install-mac.sh
+b "── Запускаю $INSTALLER в авто-режиме (без вопросов) ──"
+AUTO=1 bash "$INSTALLER"
 RC=$?
 
 echo
 if [ $RC -eq 0 ]; then
   b "══ Обновление завершено ══"
 else
-  err "install.sh вышел с ошибкой ($RC) — пришли скрин этого окна"
+  err "$INSTALLER вышел с ошибкой ($RC) — пришли скрин этого окна"
 fi
 read -r -p "Enter для выхода..." _

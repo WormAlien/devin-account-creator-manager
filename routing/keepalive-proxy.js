@@ -211,6 +211,19 @@ const DEFAULT_CFG = {
   maxHedges: 1,
   preCommitMs: 10000,
 };
+// Шлюзы с ПЛОСКИМ тарифом за запрос — там хедж выключен из коробки.
+// Замер 21.08: tabitoken списывает 50¢, gorouter 20¢ — одинаково за полный ответ на
+// 2000 токенов, за крошечный на 16 токенов И за дубль, который мы порвали на 20-й
+// секунде. То есть на них страховка от висяка покупается по полной цене запроса, а не
+// за 0.3% как на agentrouter (тот считает по токенам и убитую генерацию не берёт).
+// При 0.25 дубля на запрос это +25% к счёту за то, что ускорения не даёт.
+// Пре-коммит и пинги остаются: они не стоят ничего и именно они держат клиента.
+// xpeach здесь по аналогии (тот же форк New-API) — замерить не удалось, все три ключа
+// отдают 403 «User has been banned». Заработает — замер повторить и решить по цифрам.
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes']);
+if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
+// Хедж считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
+const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
 const cfg = {
   hedgeMs: Number(process.env.HEDGE_MS || DEFAULT_CFG.hedgeMs),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || DEFAULT_CFG.maxAttempts),
@@ -265,7 +278,7 @@ function applyPatch(p) {
     if (pc !== null) cfg.preCommitMs = pc;
   }
   saveConfig();
-  log(`config updated: хедж ${cfg.hedgeMs ? `${cfg.hedgeMs}ms` : 'off'}, дублей максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
+  log(`config updated: хедж ${hedgeOff(cfg) ? 'off' : `${cfg.hedgeMs}ms`}, дублей максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
 }
 function publicState() {
   return { cfg: Object.assign({}, cfg), defaults: Object.assign({}, DEFAULT_CFG), upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt, stats: Object.assign({}, stats) };
@@ -1124,6 +1137,6 @@ server.on('clientError', (err, socket) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, хедж ${cfg.hedgeMs ? cfg.hedgeMs + 'ms' : 'off'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
+  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, хедж ${hedgeOff(cfg) ? 'off' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
   log(`gpt-конвертер: ${GPT_PROXY_ENABLED ? HAIKU_GPT_PROXY : 'off (чужой шлюз — gpt остаётся на ' + upstream.host + ')'}`);
 });

@@ -5877,9 +5877,13 @@ const KEEPALIVE_DEFAULTS = {};   // pfx → defaults, как их назвал �
 
 function keepaliveSummary(cfg, defaults) {
   const sec = ms => (ms ? (ms / 1000) + 's' : 'выкл');
-  const hedge = cfg.hedgeMs
-    ? `${sec(cfg.hedgeMs)}${typeof cfg.maxHedges === 'undefined' ? '' : ` (дублей ≤${cfg.maxHedges})`}`
-    : 'выкл';
+  // Хедж выключен и при hedgeMs=0, и при maxHedges=0 (второе — дефолт шлюзов с плоским
+  // тарифом за запрос, где убитый дубль списывается целиком). Писать «хедж 20s» при
+  // нуле дублей было бы враньём.
+  const noHedge = !(cfg.hedgeMs > 0 && (typeof cfg.maxHedges === 'undefined' || cfg.maxHedges > 0));
+  const hedge = noHedge
+    ? (cfg.maxHedges === 0 && cfg.hedgeMs > 0 ? 'выкл (дублей 0)' : 'выкл')
+    : `${sec(cfg.hedgeMs)}${typeof cfg.maxHedges === 'undefined' ? '' : ` (дублей ≤${cfg.maxHedges})`}`;
   let s = `хедж ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
   // Расхождение с поставочными дефолтами видно сразу: у юзера мог остаться
   // keepalive-config-<PORT>.json с прошлых экспериментов, а он приоритетнее кода.

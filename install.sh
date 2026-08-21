@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-#  Установщик Vibe-Code Account Creator Manager для Windows (git-bash).
+#  Установщик ABUSE HUB для Windows (git-bash).
 #  Аналог install-mac.sh для мака: один линейный проход, минимум вопросов.
 #
 #  Запуск:  bash install.sh              (спросит 3 вещи)
@@ -26,15 +26,19 @@ for _f in install-lib.sh install-deps.sh; do
 done
 . ./install-lib.sh
 
-if [ -d "vibe-code-account-creator-manager/.git" ]; then
-  err "похоже, репо склонировано внутрь самого себя: $(pwd)/vibe-code-account-creator-manager"
-  warn "Остановись и перенеси/удали внешний дубль до создания venv, иначе Python запомнит старые пути."
-  exit 1
-fi
+# Имя папки клона сменилось на hub-cc (2026-08-21), но у старых установок
+# вложенный дубль называется по-прежнему — проверяем оба имени.
+for _nested in hub-cc vibe-code-account-creator-manager; do
+  if [ -d "$_nested/.git" ]; then
+    err "похоже, репо склонировано внутрь самого себя: $(pwd)/$_nested"
+    warn "Остановись и перенеси/удали внешний дубль до создания venv, иначе Python запомнит старые пути."
+    exit 1
+  fi
+done
 
 [ "$AUTO" = "1" ] || clear
 b "════════════════════════════════════════════════════════"
-b "  Vibe-Code Account Creator Manager"
+b "  ABUSE HUB"
 b "  Установка для Windows (git-bash)"
 b "════════════════════════════════════════════════════════"
 
@@ -216,7 +220,7 @@ fi
 step "Готово ✓"
 b "Дашборд:  http://localhost:8200/__switch"
 if ask "Запустить дашборд сейчас (rotator :20126 + switcher :8200)?" Y; then
-  ( cd routing && start "Backend Switcher" cmd //c restart-dashboard.bat ) 2>/dev/null \
+  ( cd routing && start "ABUSE HUB" cmd //c restart-dashboard.bat ) 2>/dev/null \
     || ./routing/restart-dashboard.bat
   ok "дашборд поднимается — UI откроется в браузере"
 fi

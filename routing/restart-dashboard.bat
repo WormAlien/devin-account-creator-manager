@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
-REM Restart Backend Switcher dashboard on :8200.
+REM Restart ABUSE HUB dashboard on :8200.
 REM Kills any existing instance, starts fresh, opens UI in default browser.
 REM
 REM Hardened 2026-08-13:
@@ -34,8 +34,11 @@ call :KILLPORT 20132 "agentrouter proxy"
 call :KILLPORT 20133 "keepalive proxy"
 REM Front-door :20100 — единый вход Claude Code. Убивать безопасно только потому,
 REM что transparent-proxy.js спавнит его обратно на boot. Порты :20155-20157
-REM (keepalive провайдеров) здесь НЕ трогаем: автоспавна у них нет, а settings.json
-REM может смотреть ровно в один из них — снесём и все сессии CC получат ConnectionRefused.
+REM (keepalive провайдеров) здесь НЕ трогаем: на boot дашборд поднимает keepalive
+REM только АКТИВНОГО бэкенда, а settings.json может смотреть ровно в один из них —
+REM снесём неактивный, и его порт останется пустым до активации. Мёртвый порт при
+REM этом больше не выглядит живым: keepaliveBring() проверяет /status по HTTP и
+REM снимает зомби, а не считает «занято» за «работает».
 call :KILLPORT 20100 "front-door"
 if "%FAILED%"=="1" goto FAILED
 
@@ -69,7 +72,7 @@ ping 127.0.0.1 -n 2 >nul
 
 echo Starting transparent-proxy.js (switcher + dashboard) on :8200 ...
 call :STARTGUARD 8200 || goto FAILED
-start "Backend Switcher" /MIN node transparent-proxy.js
+start "ABUSE HUB" /MIN node transparent-proxy.js
 
 REM Wait for the server to come up (poll status endpoint up to 6s)
 set RETRY=0

@@ -1,5 +1,5 @@
 @echo off
-REM Backend Switcher — starts transparent-proxy.js (UI on :8200/__switch)
+REM ABUSE HUB — starts transparent-proxy.js (UI on :8200/__switch)
 REM This is NOT a request proxy — it only edits ~/.claude/settings.json
 REM and tells you to restart Claude Code.
 
@@ -50,8 +50,8 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20100 " ^| findstr LISTENIN
     taskkill /F /PID %%P >nul 2>&1
 )
 
-echo Starting Backend Switcher on :8200 ...
-start "Backend Switcher" node transparent-proxy.js
+echo Starting ABUSE HUB on :8200 ...
+start "ABUSE HUB" node transparent-proxy.js
 timeout /t 2 /nobreak >nul
 
 echo Opening switch panel...
@@ -63,6 +63,8 @@ echo Status API:    http://localhost:8200/__switch/api/status
 echo.
 echo Window will stay open. Close it (or press a key) to stop the switcher.
 pause >nul
+taskkill /FI "WINDOWTITLE eq ABUSE HUB*" /F >nul 2>&1
+REM Старый заголовок окна — для окон, поднятых версией до переименования.
 taskkill /FI "WINDOWTITLE eq Backend Switcher*" /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq FM Rotator*" /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq FM OpenAI Proxy*" /F >nul 2>&1

@@ -1,7 +1,7 @@
 {
-  "name": "vibe-code-account-creator-manager",
+  "name": "hub-cc",
   "version": "2.0.0",
-  "description": "Vibe-Code Account Creator Manager — Devin · Notion · FreeModel autoregs + Claude Code backend router",
+  "description": "ABUSE HUB — Devin · Notion · FreeModel autoregs + Claude Code backend router",
   "main": "autoreger.js",
   "scripts": {
     "start": "node autoreger.js",
@@ -10,7 +10,7 @@
     "tgbot": "node tgbot/bot.js"
   },
   "keywords": [
-    "vibe-code",
+    "abuse-hub",
     "claude-code",
     "devin",
     "notion",

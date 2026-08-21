@@ -20,7 +20,7 @@ echo "status:"; git status --short 2>&1 | head -15
 echo "remote: $(git remote get-url origin 2>&1)"
 echo
 echo "--- 3. Дубли репы на дисках (двойная вложенность?) ---"
-ls -d vibe-code-account-creator-manager 2>/dev/null && echo "!!! ВЛОЖЕННАЯ КОПИЯ РЕПЫ ВНУТРИ РЕПЫ !!!"
+ls -d hub-cc vibe-code-account-creator-manager 2>/dev/null && echo "!!! ВЛОЖЕННАЯ КОПИЯ РЕПЫ ВНУТРИ РЕПЫ !!!"
 for d in /c /d; do
   find "$d" -maxdepth 3 -name "transparent-proxy.js" -path "*routing*" 2>/dev/null | head -5
 done

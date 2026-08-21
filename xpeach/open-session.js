@@ -100,8 +100,23 @@ function isFreshProfile() {
   } catch { return true; }
 }
 
+// Кука ЛК СВОЕГО домена = мы действительно внутри. Раньше проверялась любая кука
+// контекста, и это давало ложный позитив: после заселения GitHub-сессии в профиле
+// сразу лежит `user_session` от github.com — waitForLogin возвращал true мгновенно и
+// печатал «Вход выполнен», хотя на сайт мы не вошли. Поймано 2026-08-21 на tabitoken:
+// скрипт отрапортовал успех, а в профиле от сайта осел только `cf_clearance`.
+// Cloudflare-куки в зачёт не идут — они появляются до всякого входа. И отдельно:
+// `new_api_refresh` (jwt-инстансы tabi/xpeach) под старый regexp не подходил ВООБЩЕ,
+// то есть у половины провайдеров проверка держалась на чужих куках целиком.
+const SITE_HOST = new URL(ROOT_URL).hostname.toLowerCase();
+const CF_COOKIE_RE = /^(cf_clearance|__cf_bm|_cfuvid|cf_chl)/i;
+const SITE_SESSION_RE = /session|token|access|auth|refresh|new_api/i;
 function hasSessionCookie(cookies) {
-  return cookies.some(c => /session|token|access|auth/i.test(c.name) && c.value);
+  return cookies.some(c => {
+    const d = String(c.domain || c.host || '').replace(/^\./, '').toLowerCase();
+    if (d !== SITE_HOST && !d.endsWith('.' + SITE_HOST)) return false;
+    return !CF_COOKIE_RE.test(c.name) && SITE_SESSION_RE.test(c.name) && !!c.value;
+  });
 }
 
 // Chromium кеширует и 404-ответы. Если на бандл SPA (`/static/js/index.<hash>.js`)
@@ -292,8 +307,14 @@ async function main() {
     // и только потом идём на кошелёк: аккаунт есть — код просто не пригодится, аккаунта
     // нет — регистрация зачтётся по рефке. Если сайт сам увёл на GitHub-вход,
     // CONSOLE_URL не перебиваем: это порвало бы OAuth-state.
+    // Условие не «свежий профиль», а «сессии ЛК нет». Разница поймана в тот же день:
+    // у записи без ключа профиль после первого неудачного захода уже НЕ свежий, а
+    // аккаунта у провайдера по-прежнему нет — второй клик снова уводил на кошелёк без
+    // реф-кода, и рефка терялась ровно так же. Живому аккаунту (кука ЛК на месте) лишний
+    // заход по реф-ссылке не делаем.
+    const siteCookies = await context.cookies().catch(() => []);
     let loggedInEarly = false;
-    if (fresh) {
+    if (fresh || !hasSessionCookie(siteCookies)) {
       await openRegisterViaRef(page);
       if (/github\.com/i.test(page.url())) {
         console.log('↪️  сайт сам ушёл на GitHub-вход — жди входа, реф-код уже в профиле');

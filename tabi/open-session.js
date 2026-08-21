@@ -282,7 +282,27 @@ async function main() {
       return;
     }
 
-    await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+    // Вход, а не регистрация. Но у СВЕЖЕГО/заселённого профиля аккаунта у провайдера
+    // может ещё не быть — тогда сайт создаст его прямо на GitHub-входе, и БЕЗ реф-кода.
+    // Ровно так у друга ушёл наш реф-кредит на tabitoken (2026-08-21): кнопка «вход»
+    // повела на кошелёк, сайт зарегистрировал с нуля, `aff` в localStorage не было.
+    // Поэтому сначала сажаем реф-код (он живёт в localStorage и переживает переходы),
+    // и только потом идём на кошелёк: аккаунт есть — код просто не пригодится, аккаунта
+    // нет — регистрация зачтётся по рефке. Если сайт сам увёл на GitHub-вход,
+    // CONSOLE_URL не перебиваем: это порвало бы OAuth-state.
+    let loggedInEarly = false;
+    if (fresh) {
+      await openRegisterViaRef(page);
+      if (/github\.com/i.test(page.url())) {
+        console.log('↪️  сайт сам ушёл на GitHub-вход — жди входа, реф-код уже в профиле');
+        const okRef = await waitForLogin(page, context);
+        if (!okRef) { console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.'); process.exit(2); }
+        loggedInEarly = true;
+      }
+    }
+    if (!/github\.com/i.test(page.url())) {
+      await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+    }
 
     if (!fresh) {
       await reportRender(page);
@@ -292,8 +312,8 @@ async function main() {
       return;
     }
 
-    console.log('⚠️  Первый вход. Залогинься в GitHub (кнопка «Продолжить с GitHub»),');
-    console.log('   затем возьми ключ в консоли tabitoken и вставь его кнопкой 🔑 в дашборде.');
+    if (!loggedInEarly) console.log('⚠️  Первый вход. Залогинься в GitHub (кнопка «Продолжить с GitHub»),');
+    if (!loggedInEarly) console.log('   затем возьми ключ в консоли tabitoken и вставь его кнопкой 🔑 в дашборде.');
 
     const ok = await waitForLogin(page, context);
     if (!ok) {

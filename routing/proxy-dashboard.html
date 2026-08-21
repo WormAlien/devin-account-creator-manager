@@ -13531,6 +13531,45 @@ const TAB_POLL_MS = 15000;
 const TG_POLL_MS = 15000;
 let _lastTgPoll = 0;
 
+// ── Живой баланс: дашборд пинает пересчёт сам ───────────────────────────────
+// Единственный писатель цифры баланса — GET /api/{p}/balance. До 21.08 его дёргал
+// ТОЛЬКО статус-бар CC (см. gauge_from_balance_cache в statusline-autoreger.sh):
+// он пинает пересчёт активного ключа, когда цифра старше 90с. Дашборд же лишь
+// ЧИТАЛ кеш через /api/{p}/sessions. Следствия, обе пойманы живьём 21.08:
+//   · CC молчит → пересчёта нет вовсе, цифра стоит до F5;
+//   · неактивные аккаунты не обновляет никто (в gorouter-sessions.json нашлись
+//     записи с balanceCheckedAt 2-3 дня назад).
+// Теперь тик пинает сам. Нагрузки это НЕ добавляет: сервер дедупит по ключу и
+// держит паузу BALANCE_MIN_GAP_MS = 60с на ключ, а nudge=1 отвечает мгновенно и
+// считает в своём процессе. Пинаем только АКТИВНЫЙ ключ: он же тратится, а
+// обход всех аккаунтов означал бы пачку запросов в billing шлюза каждую минуту.
+const BAL_TABS = {
+  agentrouter: { p: 'ar', key: 'agentrouter', reload: () => loadArSessionsLight() },
+  gorouter:    { p: 'go', key: 'gorouter',    reload: () => loadGoSessionsLight() },
+  tabi:        { p: 'tb', key: 'tabi',        reload: () => loadTbSessionsLight() },
+  xpeach:      { p: 'xp', key: 'xpeach',      reload: () => loadXpSessionsLight() },
+};
+const BAL_NUDGE_MS = 60000;      // = серверный BALANCE_MIN_GAP_MS, чаще бессмысленно
+const _balNudgedAt = new Map();  // api_key → ts последнего пинка (клиентский троттл)
+
+async function nudgeActiveBalance(tab) {
+  const cfg = BAL_TABS[tab];
+  if (!cfg) return;
+  const acct = (state[cfg.key] || []).find(s => s && s.active);
+  if (!acct || !acct.api_key) return;
+  if (Date.now() - (_balNudgedAt.get(acct.api_key) || 0) < BAL_NUDGE_MS) return;
+  _balNudgedAt.set(acct.api_key, Date.now());
+  try {
+    const res = await fetch(`/__switch/api/${cfg.p}/balance`
+      + `?api_key=${encodeURIComponent(acct.api_key)}&nudge=1`);
+    const d = await res.json().catch(() => null);
+    // queued=true → сервер реально пошёл в billing. Ответ мгновенный, новая цифра
+    // ляжет в JSON через пару секунд — перечитываем, не дожидаясь следующего тика
+    // (иначе свежее значение показалось бы только через TAB_POLL_MS).
+    if (d && d.queued) setTimeout(() => { try { cfg.reload(); } catch (e) {} }, 4000);
+  } catch (e) { /* молча: следующий тик повторит */ }
+}
+
 const AUTOREF_KEY = 'dashboard-auto-refresh-enabled';
 function autoRefreshEnabled() {
   // По умолчанию ВКЛ: баланс на вкладках AR/Go/Tabi живёт в кеше, который периодически
@@ -13588,6 +13627,10 @@ function autoRefreshTick() {
       // tokenrouter/devin/notion — deprecated, не трогаем
     }
   } catch (e) { console.warn('[auto] tab-refresh fail', tab, e); }
+
+  // Пересчёт баланса активного ключа — после перечитки: список уже в state,
+  // значит active-ключ известен даже на первом тике после открытия вкладки.
+  try { nudgeActiveBalance(tab); } catch (e) { console.warn('[auto] bal-nudge fail', tab, e); }
 }
 
 // ═══════════════════ INIT ════════════════════════════════════════════

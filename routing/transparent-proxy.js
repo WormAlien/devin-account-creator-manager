@@ -5164,8 +5164,11 @@ function ghSanitize(acc) {
     return acc;
 }
 
+// Плашки «где уже используется» едут вместе со списком аккаунтов, отдельного роута нет:
+// один запрос = карточки и плашки физически не могут разойтись. ghUsageMap читает четыре
+// маленьких JSON-пула, сети и профилей браузера не касается (см. ghUsageMap ниже).
 async function handleGhKeys(req, res) {
-    try { jsonRes(res, 200, { keys: ghLoad() }); }
+    try { jsonRes(res, 200, { keys: ghLoad(), usage: ghUsageMap() }); }
     catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -5484,15 +5487,198 @@ function ghSessionUsage(host) {
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
 const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad() };
+// Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
+// и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach' };
+// Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
+// (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
+// Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
+function ghPoolMatch(s, nick, ghId) {
+    const low = String(nick || '').toLowerCase();
+    return !!((ghId && s.ghId === ghId)
+        || (low && String(s.email || '').toLowerCase() === low)
+        || (low && String(s.name || '').toLowerCase() === low));
+}
 function ghPoolEntryFor(tag, nick, ghId) {
     const load = GH_POOL_LOADERS[tag];
     if (!load) return null;
-    const low = String(nick || '').toLowerCase();
     try {
-        return load().find(s => (ghId && s.ghId === ghId)
-            || String(s.email || '').toLowerCase() === low
-            || String(s.name || '').toLowerCase() === low) || null;
+        return load().find(s => ghPoolMatch(s, nick, ghId)) || null;
     } catch { return null; }
+}
+
+// Найти GitHub-аккаунт под уже введённые email/ник. Тем же правилом, что ghPoolMatch,
+// только с другой стороны: там запись пула ищут по нику GitHub, здесь GitHub — по записи.
+// Нужно авто-привязке в /{ar,go,tb,xp}/add: владелец создаёт запись, вбивая email или ник
+// из менеджера GitHub'ов, и связка обязана появиться сама, без отдельного действия.
+function ghFindByIdentity(email, name) {
+    const cands = [email, name].map(v => String(v || '').trim().toLowerCase()).filter(Boolean);
+    if (!cands.length) return null;
+    return ghLoad().find(g => {
+        const nick = String(g.nickname || '').toLowerCase();
+        const login = String(g.login || '').toLowerCase();
+        return cands.some(c => c === nick || c === login);
+    }) || null;
+}
+
+// Привязка GitHub к НОВОЙ записи пула. Две дороги, обе кончаются полем `ghId`:
+//   1. `ghId` пришёл в теле — владелец выбрал аккаунт кнопкой «🐙 из менеджера»;
+//   2. `ghId` не пришёл — ищем по введённым email/нику.
+// Вторая и есть привычный путь: логин или email копируется из менеджера GitHub'ов в форму
+// шлюза, и раньше на этом связка терялась — запись жила без `ghId`, плашка занятости не
+// зажигалась, и тот же аккаунт уходил под второй заход. Возвращаем ещё и `how` — строкой
+// в лог, чтобы было видно, привязка явная или досчитанная.
+function ghLinkForNew(body, email, name) {
+    const explicit = String((body && body.ghId) || '').trim();
+    if (explicit === 'personal') return { ghId: 'personal', how: 'GitHub: личный (выбран)' };
+    if (explicit) {
+        const g = ghLoad().find(x => x.id === explicit);
+        return g ? { ghId: g.id, how: `GitHub: ${g.nickname || g.login} (выбран)` } : { ghId: null, how: null };
+    }
+    const found = ghFindByIdentity(email, name);
+    return found ? { ghId: found.id, how: `GitHub: ${found.nickname || found.login} (сам, по совпадению)` } : { ghId: null, how: null };
+}
+
+// Где каждый GitHub-аккаунт уже израсходован: { <ghId>: [{ tag, status, name, recordId }] }.
+//
+// Только записи пулов четырёх NewAPI-шлюзов — по замеру 2026-08-22 логины и ники из
+// github-accounts.json совпадают больше нигде (freemodel/tokenrouter/notion/anymodel/
+// conduit — ноль совпадений), так что обходить их каталоги незачем.
+//
+// Куку в профиле («засвечен») здесь НЕ учитываем сознательно: на вкладке нужен факт
+// «аккаунт израсходован», а профиль на диске переживает и удаление записи, и не
+// состоявшуюся регистрацию. Это косвенный признак, его место — модалка заселения.
+//
+// Каждый пул грузим ровно раз и каждый — в своём try: битый или отсутствующий файл
+// не должен обнулять плашки остальных шлюзов.
+//
+// Ручные отметки (`usedManual` в самом github-accounts.json) подмешиваются сюда же с
+// `source:'manual'`: аккаунт бывает израсходован там, где записи в пуле нет и не будет.
+function ghUsageMapFresh() {
+    const accounts = ghLoad();
+    const usage = {};
+    const push = (id, row) => { (usage[id] = usage[id] || []).push(row); };
+    for (const [tag, load] of Object.entries(GH_POOL_LOADERS)) {
+        let pool;
+        try { pool = load(); } catch { continue; }
+        if (!Array.isArray(pool)) continue;
+        for (const g of accounts) {
+            const nick = String(g.nickname || g.login || '').trim();
+            for (const s of pool) {
+                if (!ghPoolMatch(s, nick, g.id)) continue;
+                push(g.id, {
+                    tag,
+                    status: s.status || 'unknown',
+                    name: s.name || s.email || '',
+                    recordId: s.id || null,
+                    source: s.ghId === g.id ? 'link' : 'match',   // link = ghId проставлен, match = сошлись по нику
+                });
+            }
+        }
+    }
+    for (const g of accounts) {
+        for (const m of (Array.isArray(g.usedManual) ? g.usedManual : [])) {
+            const tag = typeof m === 'string' ? m : (m && m.tag);
+            if (!GH_POOL_LOADERS[tag]) continue;
+            // Ручная отметка на шлюзе, где запись уже нашлась, — не дубль плашки, а шум.
+            if ((usage[g.id] || []).some(r => r.tag === tag)) continue;
+            push(g.id, {
+                tag, status: 'manual', name: (m && m.note) || '', recordId: null, source: 'manual',
+            });
+        }
+    }
+    return usage;
+}
+
+// Кеш: карта пересчитывается только когда изменился хоть один из пяти файлов.
+// Считается она быстро, но зовут её на каждый /api/gh/keys, а вкладка перечитывает
+// список после любого действия — незачем гонять 36×82 сверки на каждый чих.
+let ghUsageCache = { map: null, stamp: '' };
+function ghUsageStamp() {
+    const parts = [GH_ACCOUNTS_FILE, ...Object.values(GH_POOL_FILES).map(f => f())];
+    return parts.map(p => {
+        try { const st = fs.statSync(p); return `${st.mtimeMs}:${st.size}`; } catch { return '-'; }
+    }).join('|');
+}
+function ghUsageMap() {
+    const stamp = ghUsageStamp();
+    if (ghUsageCache.map && ghUsageCache.stamp === stamp) return ghUsageCache.map;
+    ghUsageCache = { map: ghUsageMapFresh(), stamp };
+    return ghUsageCache.map;
+}
+
+// POST /__switch/api/gh/relink → дописать ghId в записи пулов, которые сошлись с GitHub
+// только по нику/email.
+//
+// Зачем вообще: `ghId` пишет заселение и ручная привязка, а созданные руками записи его
+// не имеют — связка держится на совпадении строк. Это работает, пока ник не поправили
+// (а его правят: у покупок из 3 полей ник берётся из email и часто не совпадает с
+// настоящим юзернеймом GitHub). Проставленный `ghId` переживает переименование.
+//
+// Перед первой записью файл пула копируется в `<имя>.relink.bak` — операция трогает
+// живые пулы, и откат должен быть в один `copy`.
+function ghBackfillPoolLinks() {
+    const accounts = ghLoad();
+    const filled = {}, skipped = {};
+    for (const [tag, load] of Object.entries(GH_POOL_LOADERS)) {
+        let pool;
+        try { pool = load(); } catch { continue; }
+        if (!Array.isArray(pool) || !pool.length) continue;
+        let touched = 0, ambiguous = 0;
+        for (const s of pool) {
+            if (s.ghId) continue;                 // 'personal' и уже привязанные не трогаем
+            const hits = accounts.filter(g => ghPoolMatch(s, String(g.nickname || g.login || '').trim(), null));
+            // Два GitHub-аккаунта на одну запись — угадывать нельзя, это работа владельца.
+            if (hits.length !== 1) { if (hits.length > 1) ambiguous++; continue; }
+            s.ghId = hits[0].id;
+            touched++;
+        }
+        if (touched) {
+            const file = GH_POOL_FILES[tag]();
+            try { fs.copyFileSync(file, file + '.relink.bak'); } catch (e) { logLine(`gh relink: бэкап ${tag} не удался — ${e.message}`); }
+            GH_POOL_SAVERS[tag](pool);
+        }
+        if (touched) filled[tag] = touched;
+        if (ambiguous) skipped[tag] = ambiguous;
+    }
+    const total = Object.values(filled).reduce((a, b) => a + b, 0);
+    logLine(`gh relink: дописано ghId ${total || 'нет'}${total ? ` (${Object.entries(filled).map(([t, n]) => t + ':' + n).join(', ')})` : ''}`
+        + (Object.keys(skipped).length ? ` · неоднозначных пропущено ${Object.entries(skipped).map(([t, n]) => t + ':' + n).join(', ')}` : ''));
+    return { filled, skipped, total };
+}
+
+async function handleGhRelink(req, res) {
+    try {
+        const r = ghBackfillPoolLinks();
+        ghUsageCache = { map: null, stamp: '' };   // пулы переписаны — карта устарела
+        jsonRes(res, 200, { ok: true, ...r, usage: ghUsageMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/gh/mark { id, tag, on, note? } → ручная отметка занятости без записи
+// в пуле. Нужна там, где аккаунт израсходован, а записи у нас нет и не появится: шлюз
+// закрыл регистрацию, аккаунт удалён на их стороне, использован вне дашборда.
+async function handleGhMark(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const tag = String(body.tag || '').trim();
+        const on = !!body.on;
+        if (!id || !GH_POOL_LOADERS[tag]) return jsonRes(res, 400, { error: 'нужны id и известный шлюз' });
+        const arr = ghLoad();
+        const g = arr.find(x => x.id === id);
+        if (!g) return jsonRes(res, 404, { error: 'GitHub-аккаунт не найден' });
+        const cur = (Array.isArray(g.usedManual) ? g.usedManual : [])
+            .map(m => (typeof m === 'string' ? { tag: m } : m))
+            .filter(m => m && m.tag && m.tag !== tag);
+        if (on) cur.push({ tag, note: String(body.note || '').trim(), at: new Date().toISOString().slice(0, 10) });
+        if (cur.length) g.usedManual = cur; else delete g.usedManual;
+        ghSave(arr);
+        logLine(`gh mark: ${g.nickname || g.login} ${on ? '→ занят на ' : '→ свободен на '}${GH_POOL_LABELS[tag]} (вручную)`);
+        jsonRes(res, 200, { ok: true, usage: ghUsageMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 // GET /__switch/api/gh/available?host=<host>
@@ -6431,6 +6617,51 @@ function newapiResolveProfile(host, target) {
     return dir ? { dir, label: byId, viaId: true } : { dir: null, label: null };
 }
 
+// Расшифровать AES-ключи ВСЕХ профилей одним процессом PowerShell.
+//
+// Зачем это здесь, а не «когда понадобится». profileAesKey (lib/newapi-account.js)
+// зовёт PowerShell СИНХРОННО — замер на этой машине: 0.8–1.3 с на профиль, — и делает
+// это внутри HTTP-обработчика чека баланса. Кеш ключей живёт в памяти процесса, значит
+// после каждого рестарта дашборда он пуст. Итог, поймано живьём 21.08: рестарт в
+// 21:10:59, «Балансы всех» сразу после — событийный цикл заблокирован по секунде на
+// каждый профиль, а уже улетевшие fetch'и висят со своим AbortSignal.timeout(15000) и
+// в 21:11:52 отваливаются с «The operation was aborted due to timeout». Снаружи это
+// читается как «checker сломался, хотя сайт открывается»: точная цифра деградирует
+// в прикидку, потому что self не успел ответить до аборта.
+//
+// Батч расшифровывает всё одним процессом: 40 профилей — 982 мс против 40×966 мс
+// по одному. Блокировка остаётся одна и короткая, и только на холодном кеше.
+//
+// Профили БЕЗ `Local State` пропускаем намеренно: warmAesKeys закеширует им null
+// навсегда, а такая папка — это ЛК, который ещё ни разу не открывали; Chromium создаст
+// файл позже, и ключ должен подобраться тогда, а не остаться мёртвым до рестарта.
+let NEWAPI_KEYS_SCAN_AT = 0;
+const NEWAPI_KEYS_SCAN_GAP_MS = 30_000;
+function newapiWarmProfileKeys(reason, force = false) {
+    const lib = newapiLib();
+    if (!lib || !lib.warmAesKeys) return null;
+    if (!force && Date.now() - NEWAPI_KEYS_SCAN_AT < NEWAPI_KEYS_SCAN_GAP_MS) return null;
+    NEWAPI_KEYS_SCAN_AT = Date.now();
+    const dirs = [];
+    for (const base of Object.values(NEWAPI_PROFILE_DIRS)) {
+        let names = [];
+        try { names = fs.readdirSync(base); } catch { continue; }
+        for (const n of names) {
+            const dir = path.join(base, n);
+            try { if (fs.existsSync(path.join(dir, 'Local State'))) dirs.push(dir); } catch {}
+        }
+    }
+    if (!dirs.length) return null;
+    const t = Date.now();
+    const r = lib.warmAesKeys(dirs) || {};
+    // Молчим, когда всё уже было в кеше: иначе лог засоряет каждый чек баланса.
+    if (r.warmed || r.failed) {
+        logLine(`newapi ключи профилей [${reason}]: ${r.warmed} расшифровано, ${r.failed} мимо, ${Date.now() - t}мс`
+            + (r.error ? ` (батч упал: ${r.error})` : ''));
+    }
+    return r;
+}
+
 // Когда ЛК профиля последний раз открывали. Нужно кешу точного баланса: чек-ин и
 // пополнение поднимают `quota`, НЕ меняя `used_quota`, поэтому «расход не сдвинулся»
 // перестало быть признаком «остаток тот же». Поймано живьём на agentrouter: после
@@ -6558,6 +6789,11 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     // проверки кеш 20 минут врал на величину бонуса (ловил $175 против живых $200).
     // Явный клик по цифре приходит с force — он всегда спрашивает сервер.
     const SELF_REUSE_MS = 20 * 60_000;
+    // Ключи профилей — ДО первого сетевого запроса self. Здесь блокировка событийного
+    // цикла безопасна (в воздухе ничего нет), а внутри accountSelf она обрывала бы
+    // соседние fetch'и пачки по таймауту. Холодный кеш — один процесс на все профили,
+    // тёплый — выход по гейту 30с, то есть бесплатно (см. newapiWarmProfileKeys).
+    newapiWarmProfileKeys('чек баланса');
     const prof = newapiResolveProfile(host, target);
     const selfAt = target.selfCheckedAt ? new Date(target.selfCheckedAt).getTime() : 0;
     // Кеш точной цифры лежит в ОТДЕЛЬНОМ поле selfBalance, а не в target.balance: у
@@ -6864,6 +7100,11 @@ function newapiApplyBalance(target, bal, opts) {
         // Цифры оставляем прошлые (лучше устаревшие, чем нули), но помечаем причину.
         target.balanceError = bal.error || bal.status;
     }
+    // Свежая цифра по активному ключу пришла нулевой — подменяем аккаунт сразу, не
+    // дожидаясь, пока на нём споткнётся живой запрос Claude Code. Своих опросов
+    // биллинга это не заводит: чек уже сделан, мы только смотрим на результат.
+    // Гвард на выключенный тумблер и на неактивную запись — внутри moneyKickOnZero.
+    if (opts && opts.provider) moneyKickOnZero(opts.provider, target);
     return bal;
 }
 
@@ -7288,29 +7529,55 @@ function handleXpMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'xpeach', host: 'xpeach.codes', load: xpLoad, save: xpSave });
 }
 
-// POST /__switch/api/ar/set-github { api_key, ghId } → привязать/сменить/отвязать GitHub-аккаунт
-// (метка-организация, никакой автоматики). ghId может быть:
+// POST /__switch/api/{ar,go,tb,xp}/set-github { api_key, ghId } → привязать/сменить/отвязать
+// GitHub-аккаунт (метка-организация, никакой автоматики). ghId может быть:
 //   'personal' — личный GitHub владельца (вне хранилища github-accounts.json);
 //   'gh_<…>'   — id из хранилища (валидируем по ghLoad());
 //   null/''    — снять метку.
-async function handleArSetGithub(req, res) {
+//
+// Метка не декоративная: `ghPoolMatch` сверяет занятость и по ней, поэтому плашки
+// «где уже используется» на вкладке GitHub загораются по всем четырём шлюзам. До
+// 22.08 ручка была только у AgentRouter, и на go/tb/xp занятость определялась лишь
+// совпадением ника с email/name записи — то есть у аккаунтов, названных иначе, не
+// определялась вовсе.
+// Ищем запись по `id`, но принимаем и `api_key`: кнопка 🐙 в таблицах шлюзов исторически
+// передаёт ключ, а модалка «Где занят» на карточке GitHub знает только id записи (ключа
+// у записи без ключа вообще нет — там заглушка `no-key-…`).
+//
+// `ghId: null` именно УДАЛЯЕТ поле, а не пишет null: `ghPoolMatch` проверяет `s.ghId`
+// на истинность, но в JSON пустое поле — мусор, который потом читается как «привязка была».
+async function newapiSetGithub(req, res, { tag, load, save }) {
     try {
         const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
         const key = String(body.api_key || '').trim();
-        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        if (!id && !key) return jsonRes(res, 400, { error: 'нужен id записи или api_key' });
         const ghId = (body.ghId === null || body.ghId === undefined || body.ghId === '') ? null : String(body.ghId).trim();
-        const sessions = arLoad();
-        const target = sessions.find(s => s.api_key === key);
-        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        const sessions = load();
+        const target = sessions.find(s => (id && s.id === id) || (key && s.api_key === key));
+        if (!target) return jsonRes(res, 404, { error: 'запись не найдена' });
         if (ghId && ghId !== 'personal') {
             const exists = ghLoad().some(g => g.id === ghId);
             if (!exists) return jsonRes(res, 400, { error: 'gh-аккаунт не найден в хранилище' });
         }
-        target.ghId = ghId;
-        arSave(sessions);
-        logLine(`agentrouter set-github: ***${key.slice(-6)} → ${ghId === null ? 'отвязан' : ghId === 'personal' ? 'личный' : 'gh:' + ghId}`);
-        jsonRes(res, 200, { ok: true, ghId: target.ghId });
+        if (ghId === null) delete target.ghId; else target.ghId = ghId;
+        save(sessions);
+        logLine(`${tag} set-github: ${target.name || target.email || target.id} → ${ghId === null ? 'отвязан' : ghId === 'personal' ? 'личный' : 'gh:' + ghId}`);
+        jsonRes(res, 200, { ok: true, ghId: target.ghId || null, usage: ghUsageMap() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleArSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'agentrouter', load: arLoad, save: arSave });
+}
+function handleGoSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'gorouter', load: goLoad, save: goSave });
+}
+function handleTbSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'tabi', load: tbLoad, save: tbSave });
+}
+function handleXpSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'xpeach', load: xpLoad, save: xpSave });
 }
 
 // POST /__switch/api/ar/session/open { id } → открыть консоль agentrouter под GitHub-сессией
@@ -7321,6 +7588,96 @@ const arLkPids = new Map(); // label → pid последнего живого o
 function arPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// ───── Автоподарок: состояние прогона для фронта ──────────────────────────
+// POST отвечает сразу после спавна, а работа идёт 20–60 с (разлогин, GitHub-вход в
+// попапе, закрытие браузера, точный баланс). Очередей и SSE в проекте нет — прогресс
+// везде поллится, поэтому просто держим состояние в памяти процесса, как arLkPids.
+const AR_AUTO_CHECKIN = new Map(); // label → { id, name, state, message, checkedIn, balance, checkinAt, checkinFrom, startedAt, finishedAt }
+const AR_AUTO_CHECKIN_TTL_MS = 10 * 60 * 1000;
+// Что означает код возврата agentrouter/open-session.js (см. его заголовок).
+const AR_AUTO_CHECKIN_FAIL = {
+    2: 'вход не подтвердился за 90 с — бонус не забран, попробуй ещё раз или добери кнопкой 🎁',
+    3: 'GitHub-сессия аккаунта мертва: пароль и 2FA автоматика не вводит — возьми 🐙 «готовый GitHub» заново',
+    4: 'шлюз переделал страницу входа: кнопку GitHub найти не удалось — добери бонус кнопкой 🎁',
+    5: 'шлюз отверг OAuth (код/state) — бонус не забран',
+};
+
+// Разбираем маркер, который скрипт печатает последней строкой: AUTOCHECKIN_RESULT {...}.
+// `checkedIn` — слово САМОГО шлюза (data.checked_in в ответе /api/oauth/github), это
+// честнее, чем ловить рост выдачи между двумя чеками.
+function arParseAutoCheckinMarker(out) {
+    const m = /AUTOCHECKIN_RESULT\s+(\{[^\n]*\})/.exec(String(out || ''));
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+// Хвост автоподарка: браузер закрылся → куки уже на диске → считаем точный баланс и
+// ставим отметку 🎁/📦. Исключения гасим здесь же: это обработчик 'exit', падение в
+// нём уронило бы дашборд.
+async function arAutoCheckinFinish(id, label, code, marker) {
+    const st = AR_AUTO_CHECKIN.get(label) || { id, label };
+    st.finishedAt = new Date().toISOString();
+    try {
+        if (code !== 0) {
+            st.state = 'error';
+            st.message = AR_AUTO_CHECKIN_FAIL[code] || `скрипт завершился с кодом ${code}`;
+            logLine(`agentrouter автоподарок [${label}]: ${st.message}`);
+            return;
+        }
+        // Chromium флашит куки в SQLite на закрытии, но запись в файл асинхронна:
+        // без паузы точный баланс читал бы профиль на полсекунды раньше времени.
+        await new Promise(r => setTimeout(r, 2000));
+        const sessions = arLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) { st.state = 'error'; st.message = 'аккаунт исчез из пула'; return; }
+
+        newapiLkVisited(label);                       // визит в ЛК → сохранённая цифра больше не годится
+        const bal = await arBalanceOnce(target.api_key, true).catch(e => ({ error: e.message }));
+
+        // Отметку ставим по слову шлюза. checkedIn === false → бонуса не было (окно не
+        // сменилось) — врать «забрано» нельзя. null (маркер не поймали) → оставляем
+        // как есть: детект по росту выдачи в arApplyBalance мог поставить её сам.
+        const checkedIn = marker && typeof marker.checkedIn === 'boolean' ? marker.checkedIn : null;
+        if (checkedIn === true) {
+            const fresh = arLoad();
+            const t2 = fresh.find(s => s.id === id);
+            if (t2) {
+                t2.checkinAt = new Date().toISOString();
+                t2.checkinFrom = 'auto';
+                arSaveMerge(t2);
+            }
+        }
+        st.state = 'done';
+        st.checkedIn = checkedIn;
+        st.balance = bal && typeof bal.balance === 'number' ? bal.balance : null;
+        const after = arLoad().find(s => s.id === id) || {};
+        st.checkinAt = after.checkinAt || null;
+        st.checkinFrom = after.checkinFrom || null;
+        st.message = checkedIn === true ? `чек-ин зачтён, на счету $${(st.balance ?? 0).toFixed(2)}`
+            : checkedIn === false ? 'вошёл, но чек-ин не зачтён — суточное окно ещё не сменилось'
+            : 'вошёл; ответ шлюза не поймали — отметку поставит проверка баланса';
+        logLine(`agentrouter автоподарок [${label}]: ${st.message}`);
+    } catch (e) {
+        st.state = 'error';
+        st.message = e.message;
+        logLine(`agentrouter автоподарок [${label}] ERR: ${e.message}`);
+    } finally {
+        AR_AUTO_CHECKIN.set(label, st);
+    }
+}
+
+// GET /__switch/api/ar/checkin-status → прогоны автоподарка моложе 10 минут.
+function handleArCheckinStatus(req, res) {
+    const now = Date.now();
+    const runs = [];
+    for (const [label, st] of AR_AUTO_CHECKIN) {
+        const born = Date.parse(st.finishedAt || st.startedAt || 0) || 0;
+        if (born && now - born > AR_AUTO_CHECKIN_TTL_MS) { AR_AUTO_CHECKIN.delete(label); continue; }
+        runs.push({ label, ...st });
+    }
+    jsonRes(res, 200, { runs });
 }
 async function handleArSessionOpen(req, res) {
     try {
@@ -7345,8 +7702,10 @@ async function handleArSessionOpen(req, res) {
 
         const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
         // Режим приходит с фронта: 🎁 «забрать» просит checkin (браузер разлогинится
-        // сам, встанет на странице входа и закроется после входа). Остальное — по ключу.
-        const wantCheckin = String(body.mode || '') === 'checkin' && isRealKey(target.api_key);
+        // сам, встанет на странице входа и закроется после входа), ⚡ «автоподарок» —
+        // autocheckin (там же скрипт сам жмёт вход через GitHub). Остальное — по ключу.
+        const wantAuto = String(body.mode || '') === 'autocheckin' && isRealKey(target.api_key);
+        const wantCheckin = wantAuto || (String(body.mode || '') === 'checkin' && isRealKey(target.api_key));
         // Предохранитель от залпа. Пользователь нажал 🎁 на всех 11 аккаунтах разом:
         // одиннадцать браузеров плюс одиннадцать чеков баланса — и Aliyun WAF у
         // agentrouter включил защиту, из-за чего ТОЧНЫЙ баланс всего пула на 10 минут
@@ -7366,17 +7725,35 @@ async function handleArSessionOpen(req, res) {
         // удалит, бессмысленно.
         if (!wantCheckin) newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
-        const mode = wantCheckin ? 'checkin' : isRealKey(target.api_key) ? 'console' : 'register';
+        const mode = wantAuto ? 'autocheckin' : wantCheckin ? 'checkin' : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
-        proc.stdout.on('data', d => logLine(`agentrouter session/open [${label}]: ${String(d).trim()}`));
+        // Автоподарку stdout нужен не только для логов: в последней строке приезжает
+        // маркер AUTOCHECKIN_RESULT со словом шлюза про суточный бонус.
+        let outTail = '';
+        proc.stdout.on('data', d => {
+            const s = String(d);
+            if (wantAuto) outTail = (outTail + s).slice(-4000);
+            logLine(`agentrouter session/open [${label}]: ${s.trim()}`);
+        });
         proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
-        proc.on('exit', (code, sig) => { arLkPids.delete(label); logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.on('exit', (code, sig) => {
+            arLkPids.delete(label);
+            logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            if (wantAuto) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail));
+        });
         proc.unref();
         arLkPids.set(label, proc.pid);
+        if (wantAuto) {
+            AR_AUTO_CHECKIN.set(label, {
+                id, label, name: dispName, state: 'running', message: 'разлогин и вход через GitHub…',
+                startedAt: new Date().toISOString(), finishedAt: null,
+            });
+        }
         const failed = await sessionOpenEarlyFailure(proc);
         if (failed) {
             arLkPids.delete(label);
+            if (wantAuto) AR_AUTO_CHECKIN.set(label, { id, label, name: dispName, state: 'error', message: failed, finishedAt: new Date().toISOString() });
             logLine(`agentrouter session/open FAIL [${label}]: ${failed}`);
             return jsonRes(res, 502, { error: failed });
         }
@@ -7390,7 +7767,8 @@ async function handleArSessionOpen(req, res) {
 
 async function handleArAdd(req, res) {
     try {
-        const { email, api_key, name } = await readJsonBody(req);
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
         const mail = String(email || '').trim();
         if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
         // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
@@ -7400,18 +7778,22 @@ async function handleArAdd(req, res) {
         const sessions = arLoad();
         if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
         const id = 'ar_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
         sessions.push({
             id,
             email: mail,
-            name: String(name || '').trim() || mail.split('@')[0],
+            name: nick,
             api_key: key,
             active: false,
             status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
         });
         arSave(sessions);
-        logLine(`agentrouter add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true, id, noKey });
+        logLine(`agentrouter add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -8358,7 +8740,8 @@ async function handleGoImport(req, res) {
 
 async function handleGoAdd(req, res) {
     try {
-        const { email, api_key, name } = await readJsonBody(req);
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
         const mail = String(email || '').trim();
         if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
         // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
@@ -8367,18 +8750,22 @@ async function handleGoAdd(req, res) {
         const sessions = goLoad();
         if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
         const id = 'go_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
         sessions.push({
             id,
             email: mail,
-            name: String(name || '').trim() || mail.split('@')[0],
+            name: nick,
             api_key: key,
             active: false,
             status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
         });
         goSave(sessions);
-        logLine(`gorouter add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true, id, noKey });
+        logLine(`gorouter add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -9132,7 +9519,8 @@ async function handleTbSessionOpen(req, res) {
 
 async function handleTbAdd(req, res) {
     try {
-        const { email, api_key, name } = await readJsonBody(req);
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
         const mail = String(email || '').trim();
         if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
         // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
@@ -9141,18 +9529,22 @@ async function handleTbAdd(req, res) {
         const sessions = tbLoad();
         if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
         const id = 'tb_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
         sessions.push({
             id,
             email: mail,
-            name: String(name || '').trim() || mail.split('@')[0],
+            name: nick,
             api_key: key,
             active: false,
             status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
         });
         tbSave(sessions);
-        logLine(`tabi add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true, id, noKey });
+        logLine(`tabi add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -9743,7 +10135,8 @@ async function handleXpSessionOpen(req, res) {
 
 async function handleXpAdd(req, res) {
     try {
-        const { email, api_key, name } = await readJsonBody(req);
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
         const mail = String(email || '').trim();
         if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
         // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
@@ -9752,18 +10145,22 @@ async function handleXpAdd(req, res) {
         const sessions = xpLoad();
         if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
         const id = 'xp_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
         sessions.push({
             id,
             email: mail,
-            name: String(name || '').trim() || mail.split('@')[0],
+            name: nick,
             api_key: key,
             active: false,
             status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
         });
         xpSave(sessions);
-        logLine(`xpeach add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
-        jsonRes(res, 200, { ok: true, id, noKey });
+        logLine(`xpeach add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -10102,6 +10499,243 @@ async function handleXpImport(req, res) {
             balance: typeof rec.balance === 'number' ? rec.balance : null,
             grant: typeof rec.grant === 'number' ? rec.grant : null,
         });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Авторотация денежных шлюзов: «нет баланса» → следующий аккаунт ─────
+//
+// Проблема. Шлюз отказывает по деньгам ПОСРЕДИ работы: `403 Insufficient account
+// balance` или его китайский вариант `预扣费额度失败, 用户剩余额度: $0.309854,
+// 需要预扣费额度: $0.800000` (New-API берёт предоплату под запрос). До этой ротации
+// оба текста доезжали до Claude Code и роняли задачу — при том, что в пуле лежали
+// живые деньги (замер 22.08: активный gorouter-аккаунт −$0.16, пул $2006 на 25 ключах).
+//
+// Решение. Активный ключ живёт в файле (`~/.claude/<prov>-active-key.txt`), и
+// keepalive-proxy перечитывает его НА КАЖДУЮ попытку. Значит подмена аккаунта — это
+// перезапись одного файла: ни прокси, ни Claude Code, ни терминалы Orca не
+// перезапускаются. Ловит отказ сам прокси (он единственный видит тело ошибки) и
+// зовёт сюда `POST /__switch/api/<p>/rotate`, после чего повторяет запрос.
+//
+// Почему решение здесь, а не в прокси: пулами, балансами и файлами активного ключа
+// владеет дашборд. Второй писатель `<prov>-sessions.json` означал бы гонку с
+// балансовыми батчами (ровно та, из-за которой появился `arSaveMerge`).
+//
+// Порога по балансу СОЗНАТЕЛЬНО нет (решение владельца 22.08): цифра в кеше
+// обновляется раз в минуту-две и врёт чаще, чем помогает. Правда — это отказ шлюза.
+
+// Один реестр на четыре шлюза. Добавление пятого = одна строка здесь; клиентский
+// MONEY_PROVIDERS (proxy-dashboard.html) — зеркало по префиксу. Держать две
+// разъезжающиеся карты уже пробовали, см. комментарий к MONEY_PROVIDERS.
+// host — тем же значением keepalive-прокси узнаёт, в какой префикс ему звонить
+// (GW_BY_HOST в keepalive-proxy.js), поэтому строки обязаны совпадать буквально.
+const MONEY_GW = {
+    ar: { tag: 'agentrouter', label: 'AgentRouter', host: 'agentrouter.org', keyFile: AR_ACTIVE_KEY_FILE, load: arLoad, save: arSave, balanceFn: arBalance, applyFn: arApplyBalance },
+    go: { tag: 'gorouter',    label: 'GoRouter',    host: 'gorouter.app',   keyFile: GO_ACTIVE_KEY_FILE, load: goLoad, save: goSave, balanceFn: goBalance, applyFn: goApplyBalance },
+    tb: { tag: 'tabi',        label: 'Tabi Token',  host: 'tabitoken.com',  keyFile: TB_ACTIVE_KEY_FILE, load: tbLoad, save: tbSave, balanceFn: tbBalance, applyFn: tbApplyBalance },
+    xp: { tag: 'xpeach',      label: 'XPeach',      host: 'xpeach.codes',   keyFile: XP_ACTIVE_KEY_FILE, load: xpLoad, save: xpSave, balanceFn: xpBalance, applyFn: xpApplyBalance },
+};
+
+const MONEY_AUTO_FILE = path.join(__dirname, '..', 'logs', '.money_autorotate.json');
+// Минимум, ниже которого аккаунт бесполезен даже как «самый маленький»: у New-API
+// предоплата под запрос — в пойманной ошибке $0.80, у длинного запроса больше.
+// Кандидат дешевле этого не берётся, пока в тексте отказа не сказано точное «нужно».
+const MONEY_MIN_BAL = 1.0;
+// Сколько кандидатов проверяем живым чеком за одну ротацию. Чек ~1.5с, а на другом
+// конце ждёт запрос Claude Code — обход всего пула превратился бы в таймаут.
+const MONEY_MAX_PROBES = 3;
+// Окно дедупа: Orca держит несколько сессий на одном ключе, и пять параллельных
+// запросов ловят один и тот же отказ. Ротация от второго-пятого не нужна — им
+// достаточно узнать, что ключ уже сменился.
+const MONEY_DEDUP_MS = 10_000;
+
+const moneyAuto = {};   // p → { enabled, rotating (Promise|null), lastAt, lastKey, recent[] }
+function moneyState(p) {
+    if (!moneyAuto[p]) moneyAuto[p] = { enabled: false, rotating: null, lastAt: 0, lastKey: null, recent: [] };
+    return moneyAuto[p];
+}
+function moneySavePersist() {
+    try {
+        const dir = path.dirname(MONEY_AUTO_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const out = {};
+        for (const p of Object.keys(MONEY_GW)) out[p] = { enabled: !!moneyState(p).enabled };
+        fs.writeFileSync(MONEY_AUTO_FILE, JSON.stringify(out, null, 2) + '\n', 'utf-8');
+    } catch (e) { logLine(`money auto persist: ${e.message}`); }
+}
+function moneyLoadPersist() {
+    try {
+        if (!fs.existsSync(MONEY_AUTO_FILE)) return;
+        const j = JSON.parse(fs.readFileSync(MONEY_AUTO_FILE, 'utf-8'));
+        for (const p of Object.keys(MONEY_GW)) {
+            if (j && j[p] && j[p].enabled) moneyState(p).enabled = true;
+        }
+        const on = Object.keys(MONEY_GW).filter(p => moneyState(p).enabled);
+        if (on.length) logLine(`money auto: восстановлено включённым — ${on.join(', ')}`);
+    } catch (e) { logLine(`money auto restore: ${e.message}`); }
+}
+
+// Деньги на мёртвом/безключевом аккаунте — не деньги: забрать нельзя (тот же
+// предикат, что balanceUsable во фронте). Кандидат обязан иметь настоящий ключ.
+function moneyUsable(s) {
+    return !!s && isRealKey(s.api_key) && typeof s.balance === 'number'
+        && s.status !== 'dead' && s.status !== 'no_key' && !s.banned;
+}
+// Порядок кандидатов: сначала «самый маленький, которому хватает» (доедаем огрызки,
+// жирные аккаунты держим в резерве — решение владельца), потом остальные по
+// убыванию как последний шанс. need — сколько шлюз запросил предоплатой.
+function moneyRank(list, need) {
+    const bar = Math.max(MONEY_MIN_BAL, Number(need) || 0);
+    const enough = list.filter(s => s.balance >= bar).sort((a, b) => a.balance - b.balance);
+    const rest = list.filter(s => s.balance < bar).sort((a, b) => b.balance - a.balance);
+    return enough.concat(rest);
+}
+
+// Переключение активного аккаунта = ровно два действия, как в handleGoActivate:
+// файл активного ключа + флаг active в пуле. settings.json / active-backend.json /
+// модель / keepalive НЕ трогаем: шлюз тот же, база уже смотрит на его прокси, а
+// <prov>-active-model.txt один на шлюз. Лишняя правка settings.json здесь означала
+// бы бэкап и запись на каждый отказ по балансу.
+function moneySwitchKey(p, sessions, key) {
+    const gw = MONEY_GW[p];
+    fs.writeFileSync(gw.keyFile, key, { encoding: 'utf-8', flag: 'w' });
+    sessions.forEach(s => { s.active = s.api_key === key; });
+    gw.save(sessions);
+}
+
+// Ротация. reason: 'out-of-balance' | 'dead' | 'zero-cache' | 'manual'.
+// fromKey — ключ, на котором звонивший получил отказ (нужен для дедупа).
+// needUsd — «需要预扣费额度» из текста ошибки, если шлюз его назвал.
+// leftUsd — «用户剩余额度» оттуда же: бесплатное уточнение кеша баланса, точнее
+// анкера и угадывания, и достаётся без запроса в биллинг.
+async function moneyRotate(p, opts = {}) {
+    const gw = MONEY_GW[p];
+    if (!gw) return { ok: false, error: `unknown provider ${p}` };
+    const st = moneyState(p);
+    // Ротация уже идёт — ждём её и отвечаем её результатом. Иначе пять параллельных
+    // отказов Orca прокрутят пять аккаунтов подряд и высадят пул за секунду.
+    if (st.rotating) {
+        try { return await st.rotating; } catch (e) { return { ok: false, error: e.message }; }
+    }
+    const cur = (() => { try { return fs.readFileSync(gw.keyFile, 'utf8').trim(); } catch { return ''; } })();
+    // Только что ротировали, и ключ уже НЕ тот, на котором звонивший получил отказ:
+    // ему достаточно повторить запрос.
+    if (opts.fromKey && cur && cur !== opts.fromKey && Date.now() - st.lastAt < MONEY_DEDUP_MS) {
+        return { ok: true, already: true, mask: '***' + cur.slice(-6) };
+    }
+    const run = (async () => {
+        const sessions = gw.load();
+        const from = sessions.find(s => s.api_key === (opts.fromKey || cur));
+        // Метим ушедший аккаунт ДО поиска замены: иначе он же попадёт в кандидаты.
+        if (from) {
+            if (opts.reason === 'dead') from.status = 'dead';
+            const left = Number(opts.leftUsd);
+            if (Number.isFinite(left)) { from.balance = round2(left); from.balanceSource = 'gateway'; from.balanceCheckedAt = new Date().toISOString(); }
+            else if (opts.reason === 'out-of-balance' && typeof from.balance === 'number' && from.balance > 0) from.balance = 0;
+        }
+        const need = Number(opts.needUsd) || 0;
+        const queue = moneyRank(sessions.filter(s => moneyUsable(s) && s.api_key !== cur && s.api_key !== opts.fromKey), need);
+        if (!queue.length) {
+            gw.save(sessions);
+            logLine(`money auto ${p}: замены нет — в пуле ни одного живого аккаунта с балансом`);
+            return { ok: false, error: 'pool-dry' };
+        }
+        let probes = 0;
+        for (const cand of queue) {
+            // Кеш баланса бывает двухдневным (обновляется только активный ключ),
+            // поэтому выбранного кандидата подтверждаем живой цифрой. Как fmAuto.
+            if (probes < MONEY_MAX_PROBES) {
+                probes++;
+                try {
+                    const bal = await gw.balanceFn(cand, { force: true });
+                    gw.applyFn(cand, bal);
+                } catch (e) { logLine(`money auto ${p}: чек ${cand.email || cand.name} не прошёл (${e.message}) — беру по кешу`); }
+                if (!moneyUsable(cand) || cand.balance < Math.max(MONEY_MIN_BAL, need)) {
+                    logLine(`money auto ${p}: ${cand.email || cand.name} на самом деле $${typeof cand.balance === 'number' ? cand.balance.toFixed(2) : '—'}${need ? ` (нужно $${need.toFixed(2)})` : ''} — следующий`);
+                    continue;
+                }
+            }
+            moneySwitchKey(p, sessions, cand.api_key);
+            st.lastAt = Date.now();
+            st.lastKey = cand.api_key;
+            st.recent.unshift({
+                ts: Date.now(), reason: opts.reason || 'manual',
+                from: from ? (from.email || from.name || '') : '',
+                to: cand.email || cand.name || '', balance: cand.balance,
+                needUsd: need || null,
+            });
+            st.recent = st.recent.slice(0, 20);
+            logLine(`money auto ${p}: ${opts.reason || 'manual'} → ${cand.email || cand.name} ($${cand.balance.toFixed(2)}, ***${cand.api_key.slice(-6)})${need ? `, шлюз просил $${need.toFixed(2)}` : ''}`);
+            return { ok: true, email: cand.email || cand.name, mask: '***' + cand.api_key.slice(-6), balance: cand.balance };
+        }
+        gw.save(sessions);
+        logLine(`money auto ${p}: проверено ${probes} кандидатов, ни у кого нет ${need ? `$${need.toFixed(2)}` : `$${MONEY_MIN_BAL.toFixed(2)}`}`);
+        return { ok: false, error: 'pool-dry' };
+    })();
+    st.rotating = run;
+    try { return await run; }
+    finally { if (st.rotating === run) st.rotating = null; }
+}
+
+// Внеочередной кик по свежей цифре баланса. Зовётся из newapiApplyBalance: чек
+// активного ключа и так идёт раз в минуту (nudge из дашборда и статусбар), поэтому
+// новых запросов в биллинг это не добавляет — только реагирует на уже полученный
+// ноль, не дожидаясь, пока на нём споткнётся живой запрос.
+function moneyKickOnZero(providerTag, target) {
+    try {
+        const p = Object.keys(MONEY_GW).find(k => MONEY_GW[k].tag === providerTag);
+        if (!p || !target || !target.active || !moneyState(p).enabled) return;
+        if (!(typeof target.balance === 'number') || target.balance > 0) return;
+        if (!isRealKey(target.api_key)) return;
+        logLine(`money auto ${p}: у активного ${target.email || target.name} $${target.balance.toFixed(2)} по свежему чеку — подменяю не дожидаясь отказа`);
+        moneyRotate(p, { reason: 'zero-cache', fromKey: target.api_key })
+            .catch(e => logLine(`money auto ${p} kick: ${e.message}`));
+    } catch (e) { logLine(`money auto kick: ${e.message}`); }
+}
+
+function moneyAutoStatus(p) {
+    const st = moneyState(p);
+    const gw = MONEY_GW[p];
+    let active = null;
+    try {
+        const key = fs.readFileSync(gw.keyFile, 'utf8').trim();
+        const rec = key ? gw.load().find(s => s.api_key === key) : null;
+        if (rec) active = { email: rec.email || rec.name || '', balance: typeof rec.balance === 'number' ? rec.balance : null };
+    } catch {}
+    const pool = gw.load().filter(moneyUsable);
+    return {
+        provider: p, label: gw.label, enabled: st.enabled,
+        lastSwitch: st.lastAt, rotating: !!st.rotating,
+        active, minBal: MONEY_MIN_BAL,
+        poolReady: pool.filter(s => s.balance >= MONEY_MIN_BAL).length,
+        poolBalance: round2(pool.reduce((a, s) => a + Math.max(0, s.balance), 0)),
+        recent: st.recent,
+    };
+}
+
+// POST /__switch/api/<p>/rotate — звонок keepalive-прокси, поймавшего отказ.
+// Тумблер выключен → ротации нет, и звонивший обязан отдать ошибку клиенту:
+// «нет баланса» иногда решается человеком (пополнить), а не подменой.
+async function handleMoneyRotate(req, res, p) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const reason = String(body.reason || 'manual');
+        if (reason !== 'manual' && !moneyState(p).enabled) {
+            return jsonRes(res, 200, { ok: false, error: 'disabled' });
+        }
+        const r = await moneyRotate(p, {
+            reason,
+            fromKey: String(body.fromKey || '').trim() || null,
+            needUsd: body.needUsd,
+            leftUsd: body.leftUsd,
+        });
+        jsonRes(res, 200, r);
+    } catch (e) { jsonRes(res, 500, { ok: false, error: e.message }); }
+}
+async function handleMoneyAuto(req, res, p, action) {
+    try {
+        if (action === 'start') { moneyState(p).enabled = true; moneySavePersist(); logLine(`money auto ${p}: ВКЛ`); }
+        if (action === 'stop')  { moneyState(p).enabled = false; moneySavePersist(); logLine(`money auto ${p}: выкл`); }
+        jsonRes(res, 200, moneyAutoStatus(p));
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -10907,6 +11541,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-balance') return handleArSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/map-profiles') return handleArMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/tb/set-github') return handleTbSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xp/set-github') return handleXpSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
@@ -10917,6 +11554,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-mark')   return handleArCheckinMark(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ar/checkin-status') return handleArCheckinStatus(req, res);
 
     // История финансов для вкладки «Финансы»: расход и наливка по бакетам.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/finance/history')) return handleFinanceHistory(req, res);
@@ -11023,6 +11661,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/gh/delete')          return handleGhDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/update')          return handleGhUpdate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/open')            return handleGhOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/relink')          return handleGhRelink(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/mark')            return handleGhMark(req, res);
     // Заселение готовой GitHub-сессии в новый аккаунт New-API-вкладок (ar/go/tb/xp).
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/gh/available')) return handleGhAvailable(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
@@ -11092,6 +11732,27 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     }
     if (req.method === 'GET' && req.url === '/__switch/api/freemodel/auto/status') {
         return jsonRes(res, 200, fmAutoStatus());
+    }
+
+    // ---- Авторотация денежных шлюзов (ar/go/tb/xp): один набор роутов на все четыре ----
+    // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
+    // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
+    {
+        const m = /^\/__switch\/api\/(ar|go|tb|xp)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        if (m) {
+            const [, p, what] = m;
+            if (what === 'rotate') {
+                if (req.method !== 'POST') return jsonRes(res, 405, { error: 'POST only' });
+                handleMoneyRotate(req, res, p);
+                return;
+            }
+            const action = what.slice(5);   // 'status' | 'start' | 'stop'
+            if (action === 'status' ? req.method !== 'GET' : req.method !== 'POST') {
+                return jsonRes(res, 405, { error: action === 'status' ? 'GET only' : 'POST only' });
+            }
+            handleMoneyAuto(req, res, p, action);
+            return;
+        }
     }
 
     if (req.method === 'GET' && req.url === '/__switch/api/freemodel/active-key') {
@@ -11795,6 +12456,13 @@ server.listen(LISTEN_PORT, () => {
     // GitHub» не платила за первый скан (см. ghWarmIndexOnBoot).
     ghWarmIndexOnBoot();
 
+    // AES-ключи профилей — тем же одним процессом, пока никто ничего не просил.
+    // Первый чек баланса после рестарта иначе платит секунду на профиль ВНУТРИ
+    // обработчика и роняет собственные запросы по таймауту (см. newapiWarmProfileKeys).
+    setTimeout(() => {
+        try { newapiWarmProfileKeys('старт', true); } catch (e) { logLine(`newapi ключи профилей: ${e.message}`); }
+    }, 2500);
+
     // Папку репо могли перенести — статуслайн в settings.json прописан абсолютным
     // путём, поправляем ссылку на свою копию скрипта (см. healStatuslinePath).
     {
@@ -11820,6 +12488,14 @@ server.listen(LISTEN_PORT, () => {
     if (fmAutoLoadPersist()) {
         console.log('  FreeModel auto-failover ($0): resuming (was enabled)');
         fmAutoStart();
+    }
+
+    // Тумблеры авторотации денежных шлюзов. Таймера тут нет — ротация реактивная, по
+    // отказу шлюза, поэтому «возобновить» = просто вспомнить, где тумблер был включён.
+    moneyLoadPersist();
+    {
+        const on = Object.keys(MONEY_GW).filter(p => moneyState(p).enabled);
+        if (on.length) console.log(`  money auto-rotate: on for ${on.join(', ')}`);
     }
 
     // Автостарт Grok launcher — чтобы UI-вкладка «Grok Cookie Sessions» работала

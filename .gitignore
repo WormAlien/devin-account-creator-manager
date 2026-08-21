@@ -327,3 +327,7 @@ github/profiles/
 github/sessions/
 # Суточная история финансов (пишется чеком баланса, у каждого своя)
 routing/finance-history.jsonl
+
+# Бэкапы пулов от «🔗 Сверить привязки» (POST /api/gh/relink): копия пула ПЕРЕД
+# дописыванием ghId. Внутри живые api_key — в репо им не место, как и самим пулам.
+*.relink.bak

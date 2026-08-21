@@ -790,7 +790,13 @@ function launchBatFile(batName) {
     const batPath = path.join(PROJECT_ROOT, 'routing', batName);
     if (!fs.existsSync(batPath)) throw new Error(`bat not found: ${batName}`);
     if (process.platform === 'win32') {
-        spawn('cmd.exe', ['/c', 'start', `"${batName.replace(/\.bat$/i, '')}"`, 'cmd.exe', '/k', batPath], {
+        // `/c`, а НЕ `/k`. С `/k` cmd оставалась жить после скрипта: бат при нехватке
+        // прав поднимает элевированную копию и делает `exit /b` — тот завершает
+        // скрипт, но не консоль, и окно-запускалка висело в промпте навсегда. По
+        // одному на каждый клик «перезапустить» — они копились десятками.
+        // Держать окно открытым — дело самого бата (у restart-dashboard.bat для этого
+        // свои `choice`/`pause` в конце), а не ключа запуска.
+        spawn('cmd.exe', ['/c', 'start', `"${batName.replace(/\.bat$/i, '')}"`, 'cmd.exe', '/c', batPath], {
             cwd: PROJECT_ROOT,
             detached: true,
             stdio: 'ignore',

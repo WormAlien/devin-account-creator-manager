@@ -97,6 +97,12 @@ const MASK = {
     '#gh-grid .select-all',
     // Всплывающее окно кредов над строкой пула, если открыто.
     '#gh-cred-pop',
+    // Формы «➕ Добавить» и «📥 Импорт» — по умолчанию hidden, поэтому в кадр не
+    // попадали ни разу. Но в них живут поля пароля, 2FA-секрета и recovery, а в
+    // placeholder'ах когда-то стояла настоящая строка покупки — если кто-то снимет
+    // кадр с раскрытой формой, значения и подсказки не должны утечь.
+    '#gh-add-form input', '#gh-add-form textarea',
+    '#gh-import-form input', '#gh-import-form textarea', '#gh-import-preview',
   ],
   patterns: [
     { re: '\\$\\s*-?\\d', why: 'деньги' },

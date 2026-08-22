@@ -76,7 +76,8 @@
      на <html>. Инлайн-стиль бьёт :root из таблицы, поэтому все tailwind-утилиты
      (bg-surface, text-muted, border-line-soft…) перекрашиваются сами, без правок
      разметки. Скрипт живёт в <head> и применяется до первой отрисовки — иначе
-     на каждой загрузке мигал бы дефолтный графит. -->
+     на каждой загрузке мигала бы дефолтная тема. Дефолт — zen (2026-08-22): в него же
+     сняты скриншоты README, чтобы репозиторий и свежая установка выглядели одинаково. -->
 <script>
 // surf(hue, chroma, lift) — поверхности и текст одной тёмной палитры.
 // lift сдвигает всю шкалу светлее/темнее, сохраняя контрасты между слоями.
@@ -122,7 +123,7 @@ const THEMES = {
   // <aside> дашборда, и он покрашен в `surface` — поэтому именно surface = #1d3756,
   // а не bg. Иначе шва не убрать: совпал бы фон контента, а не боковина.
   zen: {
-    group: 'win', label: 'Zen', hint: 'сайдбар #1d3756 — шва нет',
+    group: 'win', label: 'Zen', hint: 'дефолт · сайдбар #1d3756, шва нет',
     vars: {
       '--color-bg':        'oklch(0.252 0.058 253.9)',  // #0d2340 — контент глубже боковины, иначе карточки не читаются как карточки
       '--color-surface':   'oklch(0.332 0.064 253.9)',  // #1d3756 — пипетка с Zen
@@ -153,7 +154,7 @@ const THEMES = {
   },
 
   // ── Спокойные: акценты дефолтные, меняется только основа ──
-  midnight: { group: 'calm', label: 'Midnight', hint: 'дефолт · холодный графит', vars: _surf(245, 0.012) },
+  midnight: { group: 'calm', label: 'Midnight', hint: 'холодный графит',           vars: _surf(245, 0.012) },
   carbon:   { group: 'calm', label: 'Carbon',   hint: 'нейтральный, без синевы',  vars: _surf(260, 0.003) },
   abyss:    { group: 'calm', label: 'Abyss',    hint: 'почти чёрный, для OLED',   vars: _surf(245, 0.008, -0.048) },
   mocha:    { group: 'calm', label: 'Mocha',    hint: 'тёплый коричневый',        vars: { ..._surf(55, 0.030, 0.005), ..._acc(0.84, 0.20, { am: 72 }) } },
@@ -221,10 +222,10 @@ function _lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return 
 function _lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* нет хранилища — тема живёт до перезагрузки */ } }
 function currentTheme() {
   const id = _lsGet(THEME_KEY);
-  return THEMES[id] ? id : 'midnight';
+  return THEMES[id] ? id : 'zen';
 }
 function applyTheme(id, persist = true) {
-  if (!THEMES[id]) id = 'midnight';
+  if (!THEMES[id]) id = 'zen';
   const t = THEMES[id], el = document.documentElement;
   for (const k of THEME_VARS) el.style.removeProperty(k);
   for (const [k, v] of Object.entries(t.vars)) el.style.setProperty(k, v);
@@ -401,7 +402,7 @@ function randomThemeId() {
       </div>
       <div id="side-url" class="text-[10px] text-faint font-mono mt-1 truncate">…</div>
       <!-- Баланс активного аккаунта + запас пула. Видно только у провайдеров с
-           правдивым денежным балансом (AR/GoRouter/Tabi/XPeach), у остальных
+           правдивым денежным балансом (AR/GoRouter/JustWoker/Tabi/XPeach), у остальных
            блок остаётся hidden. Заполняет paintSideBalance(). -->
       <div id="side-balance" class="hidden mt-1.5 pt-1.5 border-t border-line-soft/60">
         <div class="flex items-baseline gap-1.5 text-[11px] font-mono">
@@ -414,7 +415,7 @@ function randomThemeId() {
         </div>
       </div>
       <!-- Авторотация активного провайдера. Одна строка на два механизма: у денежных
-           шлюзов (AR/GoRouter/Tabi/XPeach) это подмена аккаунта по отказу шлюза «нет
+           шлюзов (AR/GoRouter/JustWoker/Tabi/XPeach) это подмена аккаунта по отказу шлюза «нет
            баланса», у FreeModel — существующая авто-подмена $0 (fmAuto). Тумблер
            относится к тому провайдеру, который активен ПРЯМО СЕЙЧАС: сидим на
            GoRouter — крутится пул GoRouter. Заполняет paintSideAuto(). -->
@@ -493,6 +494,11 @@ function randomThemeId() {
         <span class="w-5 text-center text-[14px]">🌐</span>
         <span class="flex-1">GoRouter</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-gorouter">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="justwoker">
+        <span class="w-5 text-center text-[14px]">👷</span>
+        <span class="flex-1">JustWoker</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-justwoker">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="tabi">
         <span class="w-5 text-center text-[14px]">🎫</span>
@@ -1862,11 +1868,12 @@ function randomThemeId() {
           <button onclick="arMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
           <button onclick="arShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
           <button onclick="arShowImport()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
-          <!-- Фильтр и порядок строк. Мёртвые ключи внизу в любом режиме, кроме
-               «email A→Z» — см. newapiSortList. Порядок запоминается в localStorage,
-               фильтр намеренно НЕ запоминается. Заголовки колонок — та же ручка. -->
+          <!-- Фильтр и порядок строк. Аккаунты без API-ключа закреплены сверху при любом
+               режиме, мёртвые ключи внизу везде, кроме «email A→Z» — см. newapiSortList.
+               Порядок запоминается в localStorage, фильтр намеренно НЕ запоминается.
+               Заголовки колонок — та же ручка. -->
           <input id="ar-filter" oninput="newapiFilterChange('ar')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу (в том числе по полному ключу из буфера)" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-sky/60">
-          <select id="ar-sort" onchange="newapiSortChange('ar')" title="Порядок строк в таблице · запоминается между перезагрузками" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-sky/60">
+          <select id="ar-sort" onchange="newapiSortChange('ar')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-sky/60">
             <option value="date-desc">📅 дата ↓ (новые)</option>
             <option value="date-asc">📅 дата ↑ (старые)</option>
             <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
@@ -2023,7 +2030,7 @@ function randomThemeId() {
           <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
                здесь нет: колонка чек-ина есть только у AgentRouter. -->
           <input id="go-filter" oninput="newapiFilterChange('go')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-teal/60">
-          <select id="go-sort" onchange="newapiSortChange('go')" title="Порядок строк в таблице · запоминается между перезагрузками" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-teal/60">
+          <select id="go-sort" onchange="newapiSortChange('go')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-teal/60">
             <option value="date-desc">📅 дата ↓ (новые)</option>
             <option value="date-asc">📅 дата ↑ (старые)</option>
             <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
@@ -2076,6 +2083,164 @@ function randomThemeId() {
           <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
           <a href="https://gorouter.app/sign-up?aff=dzj0" target="_blank" class="text-teal hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: JUSTWOKER ════════ -->
+    <div data-tab-content="justwoker">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-amber">👷</span> <a href="https://api.justwoker.icu/sign-up?aff=IFYf" target="_blank" rel="noopener" title="регистрация по реф-ссылке · GitHub-аккаунт должен быть СТАРШЕ 365 дней (github_minimum_account_age_days: 365) — свежий из менеджера панель отвергнет" class="text-ink underline underline-offset-4 hover:text-amber">JustWoker</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-amber text-xs">api.justwoker.icu</code> · клик по ключу = активный (через keepalive <code class="font-mono text-amber text-xs">:20158</code>) · base для CC — <b>корень БЕЗ <code class="font-mono text-amber text-xs">/v1</code></b> (иначе <code class="font-mono text-xs">/v1/v1/messages</code> → 404) · GitHub-вход в консоль, но аккаунт нужен <b>старше 365 дней</b> — свежие из менеджера панель отвергает</p>
+          </div>
+        </header>
+
+        <div id="jw-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <!-- Журнал авторотации. Скрыт, пока подмен не было: пустая карточка сообщала бы
+             «ничего не работает», хотя механизм просто не понадобился. Заполняет
+             renderMoneyRotateLog(). -->
+        <div id="jw-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <!-- Model map (настраиваемый, как в Custom) -->
+        <div id="jw-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации</h2>
+            <button onclick="loadJwModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="jw-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20158) -->
+        <div id="jw-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20158 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="jwLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="jw-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <input id="jw-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="jw-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <input id="jw-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="jw-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="jwApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="jwResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="jw-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="jw-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="jw-lat-chart" class="w-full"></div>
+              <div id="jw-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="jw-lat-windows"></div>
+          </div>
+          <div id="jw-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="jw-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="jw-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="jw-stat-keepalives" class="text-ink">—</b></span>
+            <span>хеджей: <b id="jw-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="jw-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="jw-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="jw-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="jw-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadJwModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="jw-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadJwSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadJwSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="jwCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="jwMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="jwShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          <button onclick="jwShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Кнопки чек-ина здесь
+               нет намеренно: панель его разрешает, но начисляет СЛУЧАЙНУЮ сумму, поэтому
+               «+$N» на кнопке был бы враньём (у GoRouter её тоже нет). Баланс правится
+               вручную — ✏️ у цифры (set-balance). -->
+          <input id="jw-filter" oninput="newapiFilterChange('jw')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-amber/60">
+          <select id="jw-sort" onchange="newapiSortChange('jw')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-amber/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="jw-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="jw-add-email" oninput="newapiAddGhHint('jw')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="jw-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="jwAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('jw')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🐙 из менеджера</button>
+            <button onclick="jwShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="jw-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="jw-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="jwShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/justwoker уже залогинены).</p>
+          <textarea id="jw-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="jw-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="jwImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="jwShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="jw-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20158</code> keepalive → <code class="text-ink">api.justwoker.icu</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://api.justwoker.icu/sign-up?aff=IFYf" target="_blank" class="text-amber hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -2176,7 +2341,7 @@ function randomThemeId() {
           <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Личный аккаунт
                владельца уезжает вниз только в датных режимах (renderTb → ownerLast). -->
           <input id="tb-filter" oninput="newapiFilterChange('tb')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-violet/60">
-          <select id="tb-sort" onchange="newapiSortChange('tb')" title="Порядок строк в таблице · запоминается между перезагрузками" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-violet/60">
+          <select id="tb-sort" onchange="newapiSortChange('tb')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-violet/60">
             <option value="date-desc">📅 дата ↓ (новые)</option>
             <option value="date-asc">📅 дата ↑ (старые)</option>
             <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
@@ -2450,7 +2615,7 @@ function randomThemeId() {
         <div id="gh-import-form" class="hidden rounded-xl bg-surface border border-sky/40 p-4">
           <div class="flex flex-col gap-2">
             <span class="text-[10px] text-faint">вставь строки, по одной на аккаунт. Форматы:<br><code class="font-mono">Логин:Пароль:2FA-секрет:Recovery codes:Ник</code><br><code class="font-mono">Username:Password:2FA-секрет:DateSignup:ApiKey:Email</code><br><code class="font-mono">Логин:Пароль:2FA-секрет</code> (без recovery-кодов)</span>
-            <textarea id="gh-import-text" rows="6" placeholder="baker51607553@gmail.com:пароль:X6JAFHSZN7UYPC7X:26a52-37ce0,170cb-98522:cyclopswormnight" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60"></textarea>
+            <textarea id="gh-import-text" rows="6" placeholder="user@example.com:пароль:JBSWY3DPEHPK3PXP:aaaaa-bbbbb,ccccc-ddddd:nickname" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60"></textarea>
             <div class="flex items-center gap-2 flex-wrap">
               <span class="text-[10px] text-faint">📅 возраст от рега (на все строки):</span>
               <span id="gh-import-age" class="flex gap-1"></span>
@@ -3084,7 +3249,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -3108,6 +3273,10 @@ const state = {
   goModels: [],
   goActiveModel: '',
   goModelMap: {},
+  justwoker: [],
+  jwModels: [],
+  jwActiveModel: '',
+  jwModelMap: {},
   tabi: [],
   tbModels: [],
   tbActiveModel: '',
@@ -3277,6 +3446,7 @@ function showTab(name) {
   if (name === 'conduit') { loadTgPool(); loadCdtActiveModel(); loadCdtModels(false); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } arLoadKeepalive(); }
   if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } goLoadKeepalive(); }
+  if (name === 'justwoker') { if (!state.loaded.justwoker) { state.loaded.justwoker = true; loadJwSessions(false); } jwLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'xpeach') { if (!state.loaded.xpeach) { state.loaded.xpeach = true; loadXpSessions(false); } xpLoadKeepalive(); }
   if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
@@ -3312,8 +3482,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -3391,7 +3561,7 @@ function renderHealth() {
   if (!d) return;
   const svc = d.services || [];
 
-  // Keepalive-инстансы (:20155 Tabi / :20156 GoRouter / :20157 XPeach) спавнятся
+  // Keepalive-инстансы (:20155 Tabi / :20156 GoRouter / :20157 XPeach / :20158 JustWoker) спавнятся
   // ТОЛЬКО при активации своего провайдера, автоспавна у них нет. Поэтому лежащий
   // keepalive — норма, а не авария, и красное «упал» на нём было ложной тревогой
   // (три красных строки в Health при полностью здоровой системе). Красным остаётся
@@ -6634,6 +6804,7 @@ async function resetKeepaliveCard(pfx, api) {
 const KEEPALIVE_API = {
   ar: '/__switch/api/keepalive', tb: '/__switch/api/tb/keepalive',
   go: '/__switch/api/go/keepalive', xp: '/__switch/api/xp/keepalive',
+  jw: '/__switch/api/jw/keepalive',
 };
 const LAT_WINDOWS = [[15, '15м'], [60, '1ч'], [360, '6ч'], [1440, '24ч']];
 const LAT_MIN = {};    // pfx → выбранное окно в минутах (помним в localStorage)
@@ -6974,16 +7145,20 @@ const tbLoadKeepalive   = () => loadKeepaliveCard('tb', KEEPALIVE_API.tb);
 const tbApplyKeepalive  = () => applyKeepaliveCard('tb', KEEPALIVE_API.tb);
 const xpLoadKeepalive   = () => loadKeepaliveCard('xp', KEEPALIVE_API.xp);
 const xpApplyKeepalive  = () => applyKeepaliveCard('xp', KEEPALIVE_API.xp);
+const jwLoadKeepalive   = () => loadKeepaliveCard('jw', KEEPALIVE_API.jw);
+const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const arResetKeepalive  = () => resetKeepaliveCard('ar', KEEPALIVE_API.ar);
 const goResetKeepalive  = () => resetKeepaliveCard('go', KEEPALIVE_API.go);
 const tbResetKeepalive  = () => resetKeepaliveCard('tb', KEEPALIVE_API.tb);
 const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
+const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.
 const KEEPALIVE_POLL_TABS = {
   agentrouter: ['ar', '/__switch/api/keepalive'],
   gorouter: ['go', '/__switch/api/go/keepalive'],
+  justwoker: ['jw', '/__switch/api/jw/keepalive'],
   tabi: ['tb', '/__switch/api/tb/keepalive'],
   xpeach: ['xp', '/__switch/api/xp/keepalive'],
 };
@@ -7013,11 +7188,28 @@ let latPollTick = 0;
 // Зашитый вариант остался дефолтом, остальные выбираются селектом над таблицей.
 //
 // XPeach сознательно без селекта — вкладка легаси (все ключи 403 banned).
+//
+// Поверх любого режима действует один закреп: аккаунты БЕЗ API-ключа всегда сверху
+// (newapiPinTop). Селектом он не выключается — это не порядок, а «что заводим сейчас».
 const NEWAPI_SORT_LS = (prov) => 'dash-sort-' + prov;
 
 // Ключа нет — тратить нечем, но аккаунт жив: между live и «статус не опрошен».
+// В видимом порядке ранг 3 больше не встречается — записи без ключа закреплены сверху
+// (newapiPinTop), — но сам ранг оставлен: он описывает статус, а не позицию строки.
 const newapiStatusRank = (s) =>
   s.status === 'dead' ? 4 : !isRealKey(s.api_key) ? 3 : s.status === 'live' ? 1 : 2;
+
+// ЗАКРЕП СВЕРХУ: аккаунт без ключа стоит первым при ЛЮБОМ выбранном порядке, включая
+// «email A→Z» (просьба владельца 22.08). Это не режим сортировки и не пункт селекта —
+// пока ключа нет, строка не аккаунт, а незакрытая регистрация, и заводят её прямо
+// сейчас. Иначе свежая запись падает в середину списка на 21–32 строки: по дате её
+// закрывают чужие `created`, в «баланс ↓/↑» — отсутствие цифры (не опрошен = в конец),
+// в алфавите — почта. Найти её глазами стоило дороже, чем весь оставшийся шаг работы.
+// Мёртвые из закрепа исключены намеренно: `no_key` + `dead` — забаненная запись без
+// ключа, регистрировать там нечего, а обещание «мёртвые внизу» ломать нельзя.
+// Порядок ВНУТРИ закрепа даёт активный режим (у всех без ключа баланс не опрошен, так
+// что на деле это `cmpNewapiNewest` — последняя созданная сверху).
+const newapiPinTop = (s) => !isRealKey(s.api_key) && s.status !== 'dead';
 
 // Баланс числом или null. null — это «не опрошен», а НЕ «ноль»: строку без цифры нельзя
 // ставить в начало «баланса ↑», иначе сверху окажутся те, о ком мы вообще ничего не
@@ -7049,6 +7241,7 @@ const NEWAPI_SORT_FNS = {
 // «email A→Z» обещает алфавит и обязан его дать: мёртвые вниз не уезжают, иначе это не
 // A→Z, а поиск глазами по алфавиту ломается. Остальные режимы рабочие, там мёртвый ключ
 // всегда внизу — деньги на нём не деньги (та же логика, что в balanceUsable).
+// Закреп «без ключа сверху» плоскости НЕ подчиняется: он выше всех режимов, включая этот.
 const NEWAPI_SORT_FLAT = new Set(['email']);
 
 // Пары «то же поле, другое направление» — по ним заголовок колонки решает, рисовать
@@ -7075,6 +7268,10 @@ function newapiSortList(list, prov, opts = {}) {
   const flat = NEWAPI_SORT_FLAT.has(mode);
   const dateMode = mode === 'date-desc' || mode === 'date-asc';
   return (list || []).slice().sort((a, b) => {
+    // Закреп «без ключа сверху» стоит ПЕРВЫМ и работает даже в плоском режиме: он не
+    // часть порядка, а обход его — см. newapiPinTop.
+    const pin = (newapiPinTop(a) ? 0 : 1) - (newapiPinTop(b) ? 0 : 1);
+    if (pin) return pin;
     if (!flat) {
       const d = (a.status === 'dead' ? 1 : 0) - (b.status === 'dead' ? 1 : 0);
       if (d) return d;
@@ -7089,7 +7286,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -7176,7 +7373,7 @@ function newapiFooter(list, total, prov, q) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb']) {
+for (const p of ['ar', 'go', 'tb', 'jw']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -7834,7 +8031,7 @@ const ghRowPickBlock = a => ghRowBlock(a)
   || (a.hasSession && a.allSourcesBusy ? 'профиль с этой сессией открыт в браузере — закрой его, тогда заселю' : null);
 
 // Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
-const ghAddPick = { ar: null, go: null, tb: null, xp: null };
+const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null };
 
 function newapiAddGhReset(prov) {
   ghAddPick[prov] = null;
@@ -8118,6 +8315,7 @@ async function newapiAddInstant(prov, ghId) {
 const NEWAPI_SEED_PROV = {
   ar: { label: 'AgentRouter', host: 'agentrouter.org', color: 'azure',   reload: () => loadArSessions(), list: () => state.agentrouter, render: () => renderAr(), setKey: id => arSetKey(id), open: id => arOpenLk(id) },
   go: { label: 'GoRouter',    host: 'gorouter.app',    color: 'violet',  reload: () => loadGoSessions(), list: () => state.gorouter,    render: () => renderGo(), setKey: id => goSetKey(id), open: id => goOpenLk(id) },
+  jw: { label: 'JustWoker',   host: 'api.justwoker.icu', color: 'amber', reload: () => loadJwSessions(), list: () => state.justwoker,  render: () => renderJw(), setKey: id => jwSetKey(id), open: id => jwOpenLk(id) },
   tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions(), list: () => state.tabi,        render: () => renderTb(), setKey: id => tbSetKey(id), open: id => tbOpenLk(id) },
   xp: { label: 'XPeach',      host: 'xpeach.codes',    color: 'rose',    reload: () => loadXpSessions(), list: () => state.xpeach,      render: () => renderXp(), setKey: id => xpSetKey(id), open: id => xpOpenLk(id) },
 };
@@ -8969,6 +9167,544 @@ async function goSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.goModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+
+// ═══════════════════ JUSTWOKER ══════════════════════════════════════
+// Провайдер api.justwoker.icu (тот же форк New-API, что gorouter/tabi). Пятый шлюз и
+// структурная копия вкладки GoRouter: пул ключей + балансы + keepalive-активация через
+// прокси :20158 + share/import. Аккаунт идентифицируется id (не api_key).
+//
+// Чем отличается от остальных четырёх:
+//   · base для Claude Code — КОРЕНЬ, без /v1: с /v1 запрос уходит в /v1/v1/messages → 404;
+//   · регистрация требует GitHub-аккаунт СТАРШЕ 365 дней
+//     (github_minimum_account_age_days: 365) — свежий из менеджера панель отвергнет;
+//   · чек-ин панель разрешает, но начисляет случайную сумму — кнопки «+$N» здесь нет,
+//     баланс правится вручную (✏️ → set-balance), как у GoRouter.
+//
+// База выдачи 10 = JW_DEFAULT_GRANT в transparent-proxy.js: реальная выдача НЕ измерена
+// (её отдаёт только /api/user/self куками профиля), а занижать безопаснее — на
+// завышенном балансе авторотация выбрала бы пустой аккаунт.
+function jwPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      sumGrant += balanceDenom(s, 10);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+
+function renderJwGauge() {
+  moneyAutoFetch('justwoker').then(() => renderMoneyRotateLog('justwoker')).catch(() => {});
+  const st = jwPoolStats(state.justwoker);
+  renderEnergyGauge($('jw-energy'), {
+    title: 'JustWoker · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20158 → api.justwoker.icu (корень, БЕЗ /v1). Пинг и баланс идут с CC-заголовками (WAF пропускает только Claude Code).',
+  });
+}
+
+async function loadJwSessions(probe) {
+  if (probe) $('jw-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/jw/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.justwoker = data.sessions || [];
+    if ($('nav-count-justwoker')) $('nav-count-justwoker').textContent = state.justwoker.length;
+    await newapiEnsureGhNames(state.justwoker);
+    renderJw();
+    renderJwGauge();
+    loadJwModels();
+    loadJwModelMap();
+    if (probe) toast('✓ JustWoker: статусы обновлены', 'success');
+  } catch (e) {
+    $('jw-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadJwSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/jw/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.justwoker = data.sessions || [];
+    if ($('nav-count-justwoker')) $('nav-count-justwoker').textContent = state.justwoker.length;
+    renderJw();
+    renderJwGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+
+async function loadJwModels(force) {
+  const keys = state.justwoker
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('jw-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('jw-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/jw/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderJwModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('jw-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderJwModels(models) {
+  if (models) state.jwModels = models;
+  const list = state.jwModels || [];
+  let active = state.jwActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/jw/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.jwActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('jw-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-emerald/15 border border-emerald/50 text-emerald' : 'bg-amber/10 border border-amber/30 text-amber'}"
+      onclick='jwSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + justwoker-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderJwModelMap();
+}
+
+async function jwSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/jw/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.jwModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.jwActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderJwModels(state.jwModels);
+  } catch (e) { toast('jwSelectModel: ' + e.message, 'error'); }
+}
+
+function renderJw() {
+  const { list: all, total, q } = newapiRows(state.justwoker, 'jw');
+  if (!all.length) {
+    $('jw-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-emerald text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
+    const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = jwBalanceCell(s, kJ);
+    const keyCell = noKey ? noKeyCell(`jwSetKey(${idJ})`) : `<button onclick='jwActivate(${kJ})' title="Сделать активным (keepalive :20158 → api.justwoker.icu)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-amber hover:border-amber/50'} transition">${esc(keyMask)}</button>`;
+    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'jw')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`jwCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`jwShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`jwSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`jwRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`jwActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`jwPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'jw', idJ)}
+        ${actBtn(`jwOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс justwoker)', '🌐', 'violet')}
+        ${actBtn(`jwDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('jw-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'jw', q),
+    { sortProv: 'jw', accent: 'amber' }
+  );
+}
+
+function jwBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'jw'); }
+
+function jwShowAdd(show = true) {
+  $('jw-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('jw');
+  if (show) { $('jw-add-email').value = ''; $('jw-add-key').value = ''; $('jw-add-email').focus(); }
+}
+
+async function jwAdd() {
+  const email = $('jw-add-email').value.trim();
+  const api_key = $('jw-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/jw/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.jw }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      jwShowAdd(false);
+      loadJwSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) jwOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function jwDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/jw/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadJwSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function jwShare(id) {
+  const cur = state.justwoker.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/jw/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'JustWoker',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function jwShowImport(show = true) {
+  $('jw-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('jw-import-text').value = '';
+    $('jw-import-preview').innerHTML = '';
+    $('jw-import-text').focus();
+  }
+}
+
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function jwImport() {
+  const share = $('jw-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('jw-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/jw/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('jw-import-preview').innerHTML = '';
+    jwShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadJwSessions(false);
+  } catch (e) {
+    $('jw-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли justwoker).
+async function jwSetKey(id) {
+  const cur = state.justwoker.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли justwoker после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/jw/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadJwSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (jwSetKey).
+async function jwRename(id) {
+  const cur = state.justwoker.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/jw/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadJwSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function jwActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/jw/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'justwoker';
+      state.urls.justwoker = 'http://localhost:20158';
+      paintStatus();
+      loadJwSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+async function jwPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/jw/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.justwoker.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.justwoker[idx].status = data.status;
+    renderJw();
+    renderJwGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function jwCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/jw/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.justwoker.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderJw();
+    renderJwGauge();
+    if (data.status === 'live') {
+      const lbl = (BAL_SRC[data.balanceSource] || {}).label || '?';
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+
+async function jwCheckAllBalances() {
+  $('jw-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/jw/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.justwoker = data.sessions || [];
+    renderJw();
+    renderJwGauge();
+    balanceBatchToast(state.justwoker);
+  } catch (e) {
+    $('jw-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function jwSetBalance(api_key) {
+  return newapiSetBalanceUI('jw', api_key, () => state.justwoker, () => { renderJw(); renderJwGauge(); });
+}
+
+function jwMapProfiles() {
+  return newapiMapProfilesUI('jw', () => loadJwSessions(false));
+}
+
+async function jwOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/jw/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function jwCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+// Настраиваемый маппинг opus/sonnet/haiku → justwoker-модели (как в Custom).
+async function loadJwModelMap() {
+  try {
+    const res = await fetch('/__switch/api/jw/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.jwModelMap = data.modelMap || {};
+    renderJwModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderJwModelMap() {
+  const mm = state.jwModelMap || {};
+  const models = (state.jwModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /go/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя justwoker-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="jw-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('jw-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='jwSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function jwSaveModelMap() {
+  const mm = {
+    opus: $('jw-mm-opus')?.value || '',
+    sonnet: $('jw-mm-sonnet')?.value || '',
+    haiku: $('jw-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/jw/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.jwModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -10552,6 +11288,60 @@ async function ghOpenSession(id) {
   } catch (e) { toast('Open: ' + e.message, 'error'); }
 }
 
+// ───── ⭐ Звезда на hub-cc: сессия аккаунта прямо на странице репозитория ─────
+//
+// Бэкенд сам достаёт куки-сессию (кеш снимков github/sessions/<ghId>.json, иначе харвест
+// из профиля-источника) и открывает браузер уже залогиненным. Адрес репозитория он держит
+// СВОЕЙ константой, и фронт его не передаёт осознанно: :8200 слушает 0.0.0.0 без
+// аутентификации, принимать URL из тела значило бы «открой что угодно в залогиненном
+// GitHub владельца». Здесь адрес нужен только для подписи кнопки и тостов.
+const GH_STAR_REPO = 'github.com/WormAlien/hub-cc';
+
+// Харвест — запуск Chromium, до минуты молчания в сокете. Повторный клик за это время
+// запустил бы второй харвест того же аккаунта поверх первого (оба пишут один и тот же
+// снимок), поэтому кнопка на время занята.
+async function ghStarRepo(id) {
+  state.ghStarBusy = state.ghStarBusy || {};
+  if (state.ghStarBusy[id]) return toast('⭐ уже открываю — снимок сессии занимает до минуты', 'info');
+  const a = ghAccount(id);
+  const who = a ? (a.nickname || a.login || id) : id;
+  state.ghStarBusy[id] = true;
+  ghRenderGrid();
+  toast(`⭐ ${who}: беру куки-сессию, открываю ${GH_STAR_REPO}…`, 'info', 5000);
+  try {
+    const res = await fetch('/__switch/api/gh/star', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    // 404 бывает двух РАЗНЫХ смыслов, и путать их нельзя. Промах роута = дашборд :8200
+    // работает на старом коде (правку бэкенда он без рестарта не подхватывает) и отдаёт
+    // text/plain. А сам хендлер отвечает 404 «аккаунт не найден» — это JSON, и совет
+    // «перезапусти дашборд» на него был бы ложью: перезапуск ничего не изменит, а
+    // настоящая причина потеряется.
+    if (res.status === 404 && !String(res.headers.get('content-type') || '').includes('json')) {
+      return toast('⭐ ручка /api/gh/star не найдена: :8200 со старым кодом, перезапусти дашборд (routing/restart-dashboard.bat)', 'warn', 10000);
+    }
+    const data = await res.json().catch(() => ({ error: 'ответ дашборда не разобрался' }));
+    // Заголовки могли уйти до тела (keepalive длинного харвеста) — тогда код ответа всегда
+    // 200, а ошибку несёт поле error. Проверяем оба.
+    if (!res.ok || data.error) return toast('⭐ ' + (data.error || 'ошибка'), 'error', 10000);
+    if (data.already) {
+      // «Передал вкладку» — это правда про handoff (chrome вышел с кодом 0, значит вкладку
+      // принял живой инстанс), но НЕ про вход: open-session.js в этой ветке не запускается,
+      // так что ни whoAmI, ни состояние звезды никто не проверял. Обещать «залогинен» тут
+      // было бы ложью, поэтому просим взглянуть.
+      return data.navigated
+        ? toast(`⭐ ${who}: браузер этого аккаунта уже был открыт — вкладка с репозиторием добавлена в него (проверь, что окно залогинено)`, 'success', 7000)
+        : toast(`⭐ ${who}: браузер уже открыт, но вкладку передать не удалось (${data.handoffError || 'причина неизвестна'}) — открой ${GH_STAR_REPO} в нём сам`, 'warn', 10000);
+    }
+    toast(`⭐ ${who}: открыл ${GH_STAR_REPO} · сессия ${data.from || '—'}${data.cookieCount ? ` (${data.cookieCount} кук)` : ''} — осталось нажать Star`, 'success', 8000);
+  } catch (e) { toast('⭐ ' + e.message, 'error', 10000); }
+  finally {
+    state.ghStarBusy[id] = false;
+    ghRenderGrid();
+  }
+}
+
 function ghRefreshCodes() {
   state.ghTotpCache = {};
   ghRenderGrid();
@@ -10665,6 +11455,7 @@ let ghUseFilter = '';
 const GH_USE_META = {
   ar: { icon: '🧭', short: 'AR', label: 'AgentRouter', badge: 'bg-azure/15  text-azure  border-azure/40' },
   go: { icon: '🌐', short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
+  jw: { icon: '👷', short: 'JW', label: 'JustWoker',   badge: 'bg-amber/15  text-amber  border-amber/40' },
   tb: { icon: '🎫', short: 'TB', label: 'Tabi Token',  badge: 'bg-amber/15  text-amber  border-amber/40' },
   xp: { icon: '🍑', short: 'XP', label: 'XPeach',      badge: 'bg-rose/15   text-rose   border-rose/40' },
 };
@@ -10715,7 +11506,7 @@ async function ghOpenUsed(id) {
   // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
   // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
   for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
-    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach' }[tag];
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker' }[tag];
     if (state.loaded[key]) continue;
     try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
   }
@@ -10925,6 +11716,8 @@ function ghCardHtml(a, code, secs) {
   const secretShown = rev.secret;
   const recShown = ghRecShown(a);
   const tokenShown = rev.token;
+  // ⭐ занята, пока бэкенд достаёт снимок сессии (в худшем случае харвест до минуты).
+  const starBusy = !!(state.ghStarBusy || {})[a.id];
   const cd = ghCountdownMeta(secs);
   // Секрета нет вообще — это не ошибка, а аккаунт без TOTP: вход по recovery-коду.
   // «Ошибка 2FA» красным оставлена только для битого секрета, который не считается.
@@ -11030,7 +11823,8 @@ function ghCardHtml(a, code, secs) {
       <div class="mt-0.5">${recBlock}</div>
       <div class="flex-1"></div>
       <div class="flex gap-2">
-        <button onclick="ghOpenGitHub('${idJ}')" class="flex-1 text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Открыть GitHub ↗</button>
+        <button onclick="ghOpenGitHub('${idJ}')" title="Открыть браузер с профилем этого аккаунта на странице входа GitHub" class="flex-1 text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium whitespace-nowrap">Открыть ↗</button>
+        <button onclick="ghStarRepo('${idJ}')" ${starBusy ? 'disabled' : ''} title="Открыть браузер с готовой куки-сессией этого аккаунта на github.com/WormAlien/hub-cc — останется нажать Star" class="w-9 text-xs px-2 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 flex items-center justify-center${starBusy ? ' opacity-60 cursor-wait' : ''}">${starBusy ? '⏳' : '⭐'}</button>
         <button onclick="ghToggleMenu('${idJ}')" title="Действия (recovery/секрет/статус/удалить)" class="w-9 text-xs px-2 py-2 bg-surface border border-line-soft rounded-lg hover:border-line hover:bg-elevated flex items-center justify-center">⋯</button>
       </div>
     </div>
@@ -12487,7 +13281,7 @@ function paintSideAuto() {
     title = `${mp.label}: авторотация аккаунтов внутри этого шлюза.\n`
       + `Шлюз отказал «нет баланса» или ключ мёртв → прокси уходит на следующий аккаунт с деньгами и повторяет запрос, `
       + `Claude Code ошибки не видит.\n`
-      + `Тумблер ОДИН на все денежные шлюзы: включил здесь — работает и на AgentRouter, GoRouter, Tabi, XPeach. Смена провайдера его не выключает.\n`
+      + `Тумблер ОДИН на все денежные шлюзы: включил здесь — работает и на AgentRouter, GoRouter, JustWoker, Tabi, XPeach. Смена провайдера его не выключает.\n`
       + `Порога по балансу нет — реагируем на отказ, а не на цифру в кеше (она обновляется раз в минуту и врёт).\n`
       + `Кандидат — самый маленький баланс, которому хватает: доедаем огрызки, жирные аккаунты остаются в резерве.`
       + (ready != null ? `\nГодных к подмене сейчас у ${mp.label}: ${ready}${st.poolBalance != null ? ` (${mp.sym || '$'}${st.poolBalance.toFixed(2)} в пуле)` : ''}.` : '')
@@ -12621,7 +13415,7 @@ function trLiveStats(accounts, usageMap) {
 }
 
 // Главный счётчик. В «Общий запас» входят ТОЛЬКО провайдеры с правдиво считаемым
-// балансом (реальные $ по ключам): AgentRouter, GoRouter, Tabi Token, XPeach.
+// балансом (реальные $ по ключам): AgentRouter, GoRouter, JustWoker, Tabi Token, XPeach.
 // Протухшие (FreeModel, Ourtoken, TokenRouter, Conduit, VyceAI, Notion/Devin) — не
 // считаются: их баланс не является деньгами или уже не начисляется.
 //
@@ -12646,6 +13440,7 @@ function trLiveStats(accounts, usageMap) {
 const MONEY_PROVIDERS = {
   agentrouter: { id: 'agentrouter', p: 'ar', stateKey: 'agentrouter', base: 175, sym: '$',  label: 'AgentRouter', icon: '🧭', color: 'sky',    reload: () => loadArSessionsLight() },
   gorouter:    { id: 'gorouter',    p: 'go', stateKey: 'gorouter',    base: 70,  sym: '$',  label: 'GoRouter',    icon: '🌐', color: 'teal',   reload: () => loadGoSessionsLight() },
+  justwoker:   { id: 'justwoker',   p: 'jw', stateKey: 'justwoker',   base: 10,  sym: '$',  label: 'JustWoker',   icon: '👷', color: 'amber',  reload: () => loadJwSessionsLight() },
   tabi:        { id: 'tabi',        p: 'tb', stateKey: 'tabi',        base: 100, sym: '$',  label: 'Tabi Token',  icon: '🎫', color: 'violet', reload: () => loadTbSessionsLight() },
   xpeach:      { id: 'xpeach',      p: 'xp', stateKey: 'xpeach',      base: 10,  sym: '🍑', label: 'XPeach',      icon: '🍑', color: 'rose',   reload: () => loadXpSessionsLight() },
 };
@@ -15838,7 +16633,7 @@ function onSettingsFm() {
 // у всех (в т.ч. у тех, у кого уже сохранён конфиг), пока пользователь явно
 // не включит их глазком (тогда ключ попадает в config.shown).
 const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
-const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'tabi', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
+const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'justwoker', 'tabi', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -16146,6 +16941,7 @@ function autoRefreshTick() {
       case 'conduit':       loadConduitSessions(false); loadCdtActiveModel(); loadCdtModels(false); break;
       case 'agentrouter':   loadArSessionsLight(); break;
       case 'gorouter':      loadGoSessionsLight(); break;
+      case 'justwoker':     loadJwSessionsLight(); break;
       case 'tabi':          loadTbSessionsLight(); break;
       case 'xpeach':        loadXpSessionsLight(); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
@@ -16188,6 +16984,7 @@ setInterval(sideBalanceTick, SIDE_BAL_POLL_MS);
 const NAV_COUNT_JOBS = [
   ['agentrouter', () => loadArSessionsLight()],
   ['gorouter',    () => loadGoSessionsLight()],
+  ['justwoker',   () => loadJwSessionsLight()],
   ['tabi',        () => loadTbSessionsLight()],
   ['xpeach',      () => loadXpSessionsLight()],
   ['github',      () => loadGhKeys()],

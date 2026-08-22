@@ -189,8 +189,8 @@ function log(msg) {
 // Менять — в дашборде (POST /__config, без рестарта), файл
 // keepalive-config-<PORT>.json переживает рестарт и имеет приоритет над этими
 // дефолтами. 0 = выключить.
-// CONFIG_FILE кейсуется по PORT — у нас 4 экземпляра прокси на одном скрипте
-// (:20133 agentrouter, :20155 tabi, :20156 gorouter, :20157 xpeach).
+// CONFIG_FILE кейсуется по PORT — у нас 5 экземпляров прокси на одном скрипте
+// (:20133 agentrouter, :20155 tabi, :20156 gorouter, :20157 xpeach, :20158 justwoker).
 const CONFIG_FILE = process.env.CONFIG_FILE
   || path.join(__dirname, `keepalive-config-${Number(process.env.PORT || 8787)}.json`);
 // ЕДИНСТВЕННОЕ место, где живут обкатанные цифры. Дашборд не хранит их копию, а
@@ -220,7 +220,11 @@ const DEFAULT_CFG = {
 // Пре-коммит и пинги остаются: они не стоят ничего и именно они держат клиента.
 // xpeach здесь по аналогии (тот же форк New-API) — замерить не удалось, все три ключа
 // отдают 403 «User has been banned». Заработает — замер повторить и решить по цифрам.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes']);
+// justwoker (22.08) — тоже по аналогии и тоже не замерен: тот же форк New-API, у него
+// вообще только opus-модели. 🪤 Ошибка тут не симметрична: не внести хост = дубли по
+// полной цене запроса молча, внести зря = потеря страховки от висяка. Поэтому вносим
+// до замера, а не после.
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Хедж считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -354,7 +358,7 @@ const latStore = require('./latency-store.js');
 const LAT_BUCKET_MS = latStore.BUCKET_MS;
 const LAT_BUCKETS = latStore.BUCKETS;             // 24ч при бакете в минуту
 // Файл кейсуется по PORT — как keepalive-config-<PORT>.json: на одном скрипте живут
-// четыре прокси, и общая история слепила бы agentrouter с tabi в одну кривую.
+// пять прокси, и общая история слепила бы agentrouter с tabi в одну кривую.
 const LAT_FILE = process.env.LATENCY_FILE || latStore.fileFor(PORT, __dirname);
 const lat = { slots: new Array(LAT_BUCKETS).fill(null), lastMs: 0, lastAt: 0 };
 let latDirty = false;
@@ -525,6 +529,10 @@ const GW_BY_HOST = {
   'gorouter.app': 'go',
   'tabitoken.com': 'tb',
   'xpeach.codes': 'xp',
+  // 🪤 У JustWoker панель и API на одном хосте, поэтому ключ здесь с поддоменом —
+  // `api.justwoker.icu` буквально как в MONEY_GW дашборда. `justwoker.icu` не резолвится,
+  // и опечатка в этой строке выглядит не ошибкой, а молча выключенной авторотацией.
+  'api.justwoker.icu': 'jw',
 };
 const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
 // ROTATE_PROVIDER — только для тестов (routing/test-rotate.js прогоняет весь путь
@@ -1424,6 +1432,7 @@ if (process.argv[2] === 'selftest') {
   // Цель звонка выводится из апстрима, а не из env (спавнов прокси три, env разъезжался).
   assert.strictEqual(GW_BY_HOST['gorouter.app'], 'go', 'gorouter.app → пул go');
   assert.strictEqual(GW_BY_HOST['agentrouter.org'], 'ar', 'agentrouter.org → пул ar');
+  assert.strictEqual(GW_BY_HOST['api.justwoker.icu'], 'jw', 'api.justwoker.icu (с поддоменом!) → пул jw');
   assert.strictEqual(GW_BY_HOST['api.anthropic.com'], undefined, 'чужой хост → ротации нет');
 
   // publicState отдаёт апстрим и пре-коммит, без сюрпризов

@@ -1,7 +1,7 @@
 // routing/lib/newapi-account.js
 //
 // Точный баланс аккаунта New-API: agentrouter.org, gorouter.app, tabitoken.com,
-// xpeach.codes.
+// xpeach.codes, api.justwoker.icu.
 //
 // Зачем: по API-ключу сервис отдаёт только потраченное (/dashboard/billing/usage,
 // причём это расход ТОКЕНА, а не аккаунта). Остаток приходилось угадывать от
@@ -18,7 +18,7 @@
 //     id лежит В САМОЙ куке: gorilla/sessions её подписывает, но не шифрует
 //     (см. sessionUserId).
 //
-//   jwt (tabitoken.com rc.23, xpeach.codes)
+//   jwt (tabitoken.com rc.23, xpeach.codes, api.justwoker.icu)
 //     POST /api/user/auth/refresh с Cookie: new_api_refresh=… → { access_token }
 //     дальше Authorization: Bearer <access_token>
 //     У xpeach.codes ответ refresh сразу несёт user{quota,used_quota} — отдельный
@@ -102,6 +102,16 @@ const HOST_AUTH = {
     // xpeach.codes — та же ветка New-API, что tabitoken: кука new_api_refresh на
     // пути /api/user/auth, обмен на JWT. Проверено живым refresh 2026-08-18.
     'xpeach.codes': 'jwt',
+    // api.justwoker.icu — ключ С ПОДДОМЕНОМ: панель и API там на одном хосте.
+    // jwt, а не classic: `POST /api/user/auth/refresh` без кук отвечает 401
+    // `{"code":"AUTH_UNAUTHORIZED",...}` — байт в байт как у xpeach (замер 22.08),
+    // сборка свежая (`version: init-20260820-…`). Залогиненного аккаунта на момент
+    // замера ещё не было, так что проверена ФОРМА маршрута, а не полный обмен.
+    // 🪤 Промах в эту сторону дорог не деньгами, а тишиной: на classic-ветке код
+    // ищет куку `session`, её у jwt-сборки нет, и точный баланс молча падает в
+    // «угадать грант». Появится живой аккаунт — проверить, что цифра идёт из
+    // /api/user/self, а не из guessGrant.
+    'api.justwoker.icu': 'jwt',
 };
 
 function authKind(host) {

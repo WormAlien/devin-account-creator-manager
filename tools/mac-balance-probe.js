@@ -8,7 +8,7 @@
 // ли куки, есть ли среди них сессионная, что ответил сервер.
 //
 // Секреты не печатаются: у куки только имя и длина.
-// Запуск:  node tools/mac-balance-probe.js  [ar|go|tb|xp]
+// Запуск:  node tools/mac-balance-probe.js  [ar|go|tb|xp|jw]
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -19,6 +19,13 @@ const MAP = {
     go: { host: 'gorouter.app', pool: 'routing/gorouter-sessions.json', profiles: 'gorouter/profiles' },
     tb: { host: 'tabitoken.com', pool: 'routing/tabi-sessions.json', profiles: 'tabi/profiles' },
     xp: { host: 'xpeach.codes', pool: 'routing/xpeach-sessions.json', profiles: 'xpeach/profiles' },
+    // 🪤 У JustWoker панель и API живут на ОДНОМ хосте с поддоменом: `api.justwoker.icu`.
+    // Голый `justwoker.icu` не резолвится, поэтому здесь он обязателен — иначе куки
+    // профиля не найдутся и точный баланс молча деградирует в «~ прикидку».
+    // `token` — по какому куску имени искать куки в профиле. Для остальных четырёх это
+    // первая метка хоста, но у этого она `api`: фильтр по ней притянул бы куки любого
+    // домена со словом «api» и наврал бы в обе стороны.
+    jw: { host: 'api.justwoker.icu', token: 'justwoker', pool: 'routing/justwoker-sessions.json', profiles: 'justwoker/profiles' },
 };
 const which = (process.argv[2] || 'ar').toLowerCase();
 const cfg = MAP[which];
@@ -81,7 +88,8 @@ function resolveProfile(target) {
         ok(`ключ куки: ${key.length} байт`);
 
         const cookies = lib.readProfileCookies(prof.dir);
-        const mine = cookies.filter(c => String(c.host || '').includes(cfg.host.split('.')[0]));
+        const token = cfg.token || cfg.host.split('.')[0];
+        const mine = cookies.filter(c => String(c.host || '').includes(token));
         if (!mine.length) { no(`куки для ${cfg.host} не прочитались (всего в профиле: ${cookies.length}) · ${lib.cookieFailReason(prof.dir, cfg.host)}`); continue; }
         ok(`куки: ${mine.map(c => `${c.name}(${String(c.value || '').length})`).join(', ')}`);
 

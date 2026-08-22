@@ -5,6 +5,11 @@
 // «Добавлен», фильтр и подвал со счётом.
 //
 // Ловим ровно то, что легко сломать невнимательной правкой:
+//   • аккаунт БЕЗ API-ключа закреплён сверху при ЛЮБОМ режиме, включая «email A→Z», и
+//     этот закреп выше правила «мёртвые вниз» и выше ownerLast (просьба владельца 22.08:
+//     новую запись заводят прямо сейчас, искать её в середине списка нельзя);
+//   • закреп НЕ поднимает мёртвую запись без ключа — иначе обещание «мёртвые внизу»
+//     перестало бы держаться, а регистрировать на забаненной записи всё равно нечего;
 //   • дефолт обязан повторять зашитый до 22.08 порядок — мёртвые вниз, внутри новые
 //     сверху, личный аккаунт владельца вниз своей группы (иначе «ничего не менялось»
 //     на глаз, а список поехал);
@@ -43,7 +48,8 @@ function eq(got, want, msg) {
 }
 
 // Набор специально злой: мёртвый аккаунт САМЫЙ богатый и САМЫЙ свежий, у одного живого
-// баланс не опрошен, один без ключа, один — личный аккаунт владельца.
+// баланс не опрошен, один без ключа, один — личный аккаунт владельца. Аккаунт без ключа
+// (a5) при этом НЕ самый свежий: закреп сверху обязан работать сам, а не совпадать с датой.
 const ACCOUNTS = [
     { id: 'a1', email: 'bravo@x.io',     api_key: 'sk-aaaa1111', status: 'live', created: '2026-08-20T10:00:00Z', balance: 20 },
     { id: 'a2', email: 'alpha@x.io',     api_key: 'sk-bbbb2222', status: 'live', created: '2026-08-01T10:00:00Z', balance: 5 },
@@ -53,8 +59,19 @@ const ACCOUNTS = [
     { id: 'a6', email: 'WormAlien@x.io', api_key: 'sk-ffff6666', status: 'live', created: '2026-08-12T10:00:00Z', balance: 300 },
 ];
 
+// Второй набор — только под закреп: несколько записей без ключа сразу (так выглядит пул
+// после пачки регистраций), заглушка ровно в формате бэкенда (makeNoKeyStub → `no-key-…`),
+// пустая строка как наследие старых записей и мёртвая запись без ключа.
+const PIN_ACCOUNTS = [
+    ...ACCOUNTS,
+    { id: 'n1', email: 'zulu@x.io',      api_key: 'no-key-l8f3a2xk', status: 'no_key', created: '2026-08-22T09:00:00Z' },
+    { id: 'n2', email: 'aaa@x.io',       api_key: '',                status: 'no_key', created: '2026-08-22T11:00:00Z' },
+    { id: 'n3', email: 'dead-nokey@x.io', api_key: 'no-key-zzzz9999', status: 'dead',  created: '2026-08-22T12:00:00Z' },
+];
+
 // «кто где» читаем по коротким именам, а не по email — так падение читается глазами
 const NAME = { a1: 'live20', a2: 'live5', a3: 'noBal', a4: 'DEAD99', a5: 'noKey', a6: 'owner' };
+const PIN_NAME = { ...NAME, n1: 'stub09', n2: 'empty11', n3: 'deadNoKey' };
 
 async function main() {
     const html = fs.readFileSync(DASH, 'utf8');
@@ -83,13 +100,18 @@ async function main() {
             const el = document.getElementById(id);
             return el ? [...el.options].map((o) => o.value) : null;
         };
-        return { ar: get('ar-sort'), go: get('go-sort'), tb: get('tb-sort'), xp: get('xp-sort') };
+        return { ar: get('ar-sort'), go: get('go-sort'), tb: get('tb-sort'), xp: get('xp-sort'), jw: get('jw-sort') };
     });
     const BASE = ['date-desc', 'date-asc', 'bal-desc', 'bal-asc', 'status', 'email'];
     eq(JSON.stringify(opts.ar), JSON.stringify([...BASE, 'gift']), 'AgentRouter: 6 режимов + 🎁 подарок');
     eq(JSON.stringify(opts.go), JSON.stringify(BASE), 'GoRouter: 6 режимов, без 🎁 (колонки чек-ина нет)');
     eq(JSON.stringify(opts.tb), JSON.stringify(BASE), 'Tabi: 6 режимов, без 🎁');
     ok(opts.xp === null, 'XPeach без селекта — вкладка легаси, сортировать нечего');
+    // JustWoker — структурная копия GoRouter, значит и селект тот же. 🎁 у него нет
+    // намеренно: `checkin_enabled: true`, но бонус случайный (мин/макс квота), поэтому
+    // колонки «+N» на вкладке нет и сортировать по ней нечего.
+    eq(JSON.stringify(opts.jw), JSON.stringify(BASE), 'JustWoker: 6 режимов, без 🎁 (бонус чек-ина случайный)');
+
 
     // --- 2. порядок по режимам -------------------------------------------------------
     const order = (mode, prov, ownerLast) => page.evaluate(
@@ -104,22 +126,93 @@ async function main() {
         [mode, prov, !!ownerLast, ACCOUNTS, NAME],
     );
 
-    eq(await order('date-desc', 'tb', true), 'live20 noKey noBal live5 owner DEAD99',
-        'дата ↓ повторяет зашитый до 22.08 порядок (новые сверху, owner и DEAD внизу)');
-    eq(await order('date-asc', 'tb', true), 'live5 noBal noKey live20 owner DEAD99',
+    eq(await order('date-desc', 'tb', true), 'noKey live20 noBal live5 owner DEAD99',
+        'дата ↓ повторяет зашитый до 22.08 порядок (новые сверху, owner и DEAD внизу), плюс закреп без ключа');
+    eq(await order('date-asc', 'tb', true), 'noKey live5 noBal live20 owner DEAD99',
         'дата ↑ — старые сверху, инварианты те же');
-    eq(await order('bal-desc', 'tb', true), 'owner live20 live5 noKey noBal DEAD99',
+    eq(await order('bal-desc', 'tb', true), 'noKey owner live20 live5 noBal DEAD99',
         'баланс ↓ — owner НЕ прячется вниз, мёртвый богач всё равно внизу');
-    eq(await order('bal-asc', 'tb', true), 'live5 live20 owner noKey noBal DEAD99',
+    eq(await order('bal-asc', 'tb', true), 'noKey live5 live20 owner noBal DEAD99',
         'баланс ↑ — сверху нулевые, «не опрошен» в конце при обоих направлениях');
-    eq(await order('status', 'tb', true), 'live20 owner noBal live5 noKey DEAD99',
-        'статус — live, затем без ключа, затем мёртвые');
-    eq(await order('email', 'tb', true), 'live5 live20 noBal DEAD99 noKey owner',
-        'email A→Z — плоский алфавит, мёртвые вниз не уезжают');
-    eq(await order('gift', 'ar'), 'live20 owner noBal live5 noKey DEAD99',
+    eq(await order('status', 'tb', true), 'noKey live20 owner noBal live5 DEAD99',
+        'статус — сначала без ключа (закреп), затем live, затем мёртвые');
+    eq(await order('email', 'tb', true), 'noKey live5 live20 noBal DEAD99 owner',
+        'email A→Z — плоский алфавит (мёртвые вниз не уезжают), но закреп сильнее плоскости');
+    eq(await order('gift', 'ar'), 'noKey live20 owner noBal live5 DEAD99',
         '🎁 подарок — готовые к чек-ину сверху');
-    eq(await order('несуществующий-режим', 'tb', true), 'live20 noKey noBal live5 owner DEAD99',
+    eq(await order('несуществующий-режим', 'tb', true), 'noKey live20 noBal live5 owner DEAD99',
         'неизвестный режим (переименовали option) откатывается на дату ↓, а не падает');
+    eq(await order('date-desc', 'jw', true), 'noKey live20 noBal live5 owner DEAD99',
+        'пятая вкладка (JustWoker) сортируется тем же движком, а не своей копией');
+
+    // --- 2b. закреп «без ключа сверху» --------------------------------------------------
+    // Просьба владельца 22.08: запись без API-ключа — это незакрытая регистрация, её
+    // заводят сейчас, поэтому она первая при любом выбранном порядке. Проверяем не один
+    // режим, а ВСЕ пункты селекта: закреп задумывался как «независимо от сортировки».
+    ok(await page.evaluate(() => typeof newapiPinTop === 'function'),
+        'предикат закрепа newapiPinTop есть в странице (закреп не размазан по рендерам)');
+
+    const pinOrder = (mode, prov, ownerLast) => page.evaluate(
+        ([mode, prov, ownerLast, accounts, name]) => {
+            localStorage.setItem('dash-sort-' + prov, mode);
+            const el = document.getElementById(prov + '-sort');
+            if (el) el.value = mode;
+            return newapiSortList(accounts, prov, { ownerLast }).map((s) => name[s.id]).join(' ');
+        },
+        [mode, prov, !!ownerLast, PIN_ACCOUNTS, PIN_NAME],
+    );
+
+    const modes = await page.evaluate(() => [...document.getElementById('ar-sort').options].map((o) => o.value));
+    for (const mode of modes) {
+        const got = await pinOrder(mode, 'ar');
+        const head = got.split(' ').slice(0, 3).sort().join(' ');
+        eq(head, 'empty11 noKey stub09', `режим «${mode}»: все три записи без ключа сверху, ниже — только с ключом`);
+    }
+
+    eq(await pinOrder('date-desc', 'tb', true), 'empty11 stub09 noKey live20 noBal live5 owner deadNoKey DEAD99',
+        'внутри закрепа порядок даёт активный режим: последняя созданная — самая верхняя строка');
+    eq(await pinOrder('email', 'tb', true), 'empty11 noKey stub09 live5 live20 noBal deadNoKey DEAD99 owner',
+        'в «email A→Z» закреп на месте, а внутри него — алфавит (aaa → echo → zulu)');
+    eq(await pinOrder('bal-asc', 'tb', true), 'empty11 stub09 noKey live5 live20 owner noBal DEAD99 deadNoKey',
+        'в «баланс ↑» закреп выше нулевых: у записи без ключа баланса нет вообще, а искать её надо первой (внутри мёртвых «не опрошен» тоже последний)');
+
+    ok(!(await pinOrder('date-desc', 'tb', true)).startsWith('deadNoKey'),
+        'мёртвая запись без ключа НЕ поднимается закрепом — она остаётся внизу, у остальных dead');
+    eq((await pinOrder('date-desc', 'tb', true)).split(' ').slice(-2).join(' '), 'deadNoKey DEAD99',
+        'мёртвые по-прежнему двумя последними строками, внутри группы новые сверху');
+
+    // Формат заглушки задаёт бэкенд (makeNoKeyStub → `no-key-<base36>`), а решает фронт по
+    // isRealKey. Если кто-то поменяет заглушку на что-то с `sk-`, закреп молча умрёт.
+    const pinPredicate = await page.evaluate(() => ({
+        stub: newapiPinTop({ api_key: 'no-key-l8f3a2xk', status: 'no_key' }),
+        empty: newapiPinTop({ api_key: '', status: 'no_key' }),
+        missing: newapiPinTop({ status: 'no_key' }),
+        real: newapiPinTop({ api_key: 'sk-aaaa1111', status: 'unknown' }),
+        deadNoKey: newapiPinTop({ api_key: 'no-key-l8f3a2xk', status: 'dead' }),
+    }));
+    ok(pinPredicate.stub, 'заглушка бэкенда `no-key-…` считается «без ключа»');
+    ok(pinPredicate.empty && pinPredicate.missing, 'пустой и отсутствующий api_key — тоже «без ключа» (старые записи)');
+    ok(!pinPredicate.real, 'настоящий `sk-` ключ в закреп не попадает');
+    ok(!pinPredicate.deadNoKey, 'мёртвая запись без ключа в закреп не попадает');
+
+    // Сквозной путь до DOM: закреп должен быть виден в таблице, а не только в функции.
+    const pinRendered = await page.evaluate((accounts) => {
+        state.agentrouter = accounts;
+        document.getElementById('ar-filter').value = '';
+        const el = document.getElementById('ar-sort');
+        el.value = 'email';                          // самый недружелюбный к закрепу режим
+        el.dispatchEvent(new Event('change'));
+        return [...document.querySelectorAll('#ar-list tbody tr')]
+            .map((tr) => tr.querySelector('td').textContent.trim().replace(/^🌟\s*/, ''));
+    }, PIN_ACCOUNTS);
+    eq(pinRendered.slice(0, 3).join(' '), 'aaa@x.io echo@x.io zulu@x.io',
+        'в таблице (не только в сортировщике) три записи без ключа стоят первыми даже в «email A→Z»');
+    await page.evaluate(() => {
+        state.agentrouter = [];
+        const el = document.getElementById('ar-sort');
+        el.value = 'date-desc';
+        el.dispatchEvent(new Event('change'));
+    });
 
     // --- 3. сквозной путь: селект → рендер таблицы ------------------------------------
     const rendered = await page.evaluate((accounts) => {
@@ -134,8 +227,8 @@ async function main() {
         };
     }, ACCOUNTS);
     eq(rendered.saved, 'bal-desc', 'выбор записан в localStorage');
-    eq(rendered.rows.join(' '), 'WormAlien@x.io bravo@x.io alpha@x.io echo@x.io charlie@x.io delta@x.io',
-        'таблица перерисовалась в выбранном порядке (без запроса к серверу)');
+    eq(rendered.rows.join(' '), 'echo@x.io WormAlien@x.io bravo@x.io alpha@x.io charlie@x.io delta@x.io',
+        'таблица перерисовалась в выбранном порядке (без запроса к серверу), запись без ключа закреплена сверху');
 
     // --- 4. выбор переживает F5 -------------------------------------------------------
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -164,7 +257,7 @@ async function main() {
         return { heads, idx, text: cell && cell.textContent.trim(), tip: cell && cell.querySelector('span')?.title };
     }, ACCOUNTS);
     ok(dateCol.idx >= 0, `колонка «Добавлен» есть (${dateCol.heads.length} колонок: ${dateCol.heads.join(' | ')})`);
-    eq(dateCol.text, '20.08', 'дата этого года — без года, чтобы колонка была узкой');
+    eq(dateCol.text, '15.08', 'дата этого года — без года, чтобы колонка была узкой (первая строка — закреплённая без ключа)');
     ok(/^Добавлен .*· \d+[сдмч] назад$/.test(dateCol.tip || ''), `тултип с полной датой и возрастом: «${dateCol.tip}»`);
 
     // --- 6. заголовок колонки — та же ручка, что селект ---------------------------------

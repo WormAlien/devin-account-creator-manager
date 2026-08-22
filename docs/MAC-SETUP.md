@@ -93,7 +93,7 @@ Terminal недостаточно, `:8200` продолжит отвечать (
 
 ## Что работает
 
-- добавление аккаунтов в пулы (AgentRouter / GoRouter / Tabi Token / GitHub …),
+- добавление аккаунтов в пулы (AgentRouter / GoRouter / Tabi Token / JustWoker / GitHub …),
 - активация ключа → настройка `~/.claude/settings.json` одним кликом,
 - **точный баланс** — куками профиля Chromium. Схема шифрования на macOS своя:
   БД в `Default/Cookies` (а не `Default/Network/Cookies`), ключ —
@@ -111,7 +111,7 @@ Terminal недостаточно, `:8200` продолжит отвечать (
 
 | Команда | Что покажет |
 | --- | --- |
-| `node tools/mac-balance-probe.js ar` | весь путь точного баланса по шагам: профиль → ключ → куки → ответ сервера (`go`/`tb`/`xp` — другие провайдеры) |
+| `node tools/mac-balance-probe.js ar` | весь путь точного баланса по шагам: профиль → ключ → куки → ответ сервера (`go`/`tb`/`xp`/`jw` — другие провайдеры) |
 | `node tools/mac-cookie-probe.js` | подбор ключа куки: перебирает пароли × итерации × шифры и печатает форму данных |
 | `node tools/enable-statusline.js` | включает статус-лайн в `~/.claude/settings.json` (с бэкапом) |
 

@@ -76,7 +76,7 @@ async function main() {
             FRONTDOOR_CONFIG: FD_CFG,
             LOG_FILE: path.join(SANDBOX, 'frontdoor.log'),        // не пишем в боевой лог прокси
             PROXY_LOG_INGEST_URL: 'http://127.0.0.1:1/none',   // не шумим в живой дашборд
-            // Порты keepalive (:20133/:20155/:20156/:20157) захардкожены, своих у
+            // Порты keepalive (:20133/:20155/:20156/:20157/:20158) захардкожены, своих у
             // песочницы нет, а boot-подъём теперь УБИВАЕТ не отвечающего держателя
             // порта — без этого флага тест мог снести боевой keepalive владельца.
             SWITCHER_NO_BOOT_KEEPALIVE: '1',
@@ -115,6 +115,15 @@ async function main() {
         check(st && st.backend === 'gorouter', `локальный: backend = gorouter (было ${st && st.backend})`);
         check(st && st.upstream === 'http://localhost:20156', 'локальный: upstream = порт keepalive');
         check(st && st.keyFile === null, 'локальный: keyFile null — ключ ставит keepalive');
+
+        // 3b. Пятый шлюз (:20158, JustWoker). Детект локального апстрима идёт по таблице
+        //     BACKENDS, поэтому забытая там запись даёт не ошибку, а `backend: unknown` —
+        //     front-door принимает запрос и не знает, куда его вести: 502 на каждый вызов CC.
+        await apply({ env: { ANTHROPIC_BASE_URL: 'http://localhost:20158', ANTHROPIC_AUTH_TOKEN: 'dummy' } });
+        st = readJson(STATE);
+        check(st && st.backend === 'justwoker', `локальный :20158: backend = justwoker (было ${st && st.backend})`);
+        check(st && st.upstream === 'http://localhost:20158', 'локальный :20158: upstream = порт keepalive JustWoker');
+        check(st && st.keyFile === null, 'локальный :20158: keyFile null — ключ инжектит keepalive из justwoker-active-key.txt');
 
         // 4. Удалённый шлюз с ключом литералом (freemodel_rotator): литерал уходит в файл.
         await apply({ apiKeyHelper: null, env: { ANTHROPIC_BASE_URL: 'https://cc.freemodel.dev', ANTHROPIC_API_KEY: 'sk-test-literal-key' } });

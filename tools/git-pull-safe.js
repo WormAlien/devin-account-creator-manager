@@ -44,6 +44,7 @@ const LOCAL_STATE_FILES = [
     'routing/gorouter-modelmap.json',
     'routing/tabi-modelmap.json',
     'routing/xpeach-modelmap.json',
+    'routing/justwoker-modelmap.json',
     'routing/proxy-target.json',
     'routing/fm-openai-config.json',
     // Время сброса чек-ина AR и размер бонуса. Дашборд пишет файл сам

@@ -256,7 +256,7 @@ New API:
 
 ```js
 // Шлюзы с ПЛОСКИМ тарифом за запрос: убитый дубль списывается целиком.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 ```
 
@@ -317,6 +317,11 @@ if (clampPaidHedge('старт')) saveConfig();   // и ещё раз в кон�
 стоит столько же, сколько полный ответ opus — ремапить туда haiku бессмысленно.
 
 `xpeach.codes` замерить не удалось — все ключи отдают `403 User has been banned`.
+`api.justwoker.icu` (пятый инстанс, `:20158`, добавлен 22.08) тоже не замерен и попал в
+список по аналогии. Там же — та самая грабля с базой: `POST /v1/messages` отдаёт 200,
+`POST /v1/v1/messages` — 404, поэтому в `UPSTREAM` идёт корень `https://api.justwoker.icu`.
+И отдельная причина не хеджить: шлюз подмешивает свой системный промпт, тривиальный
+запрос уже стоит `input_tokens: 7166`.
 
 ### 2.2 `winBy` — кто принёс ответ
 

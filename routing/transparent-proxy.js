@@ -194,6 +194,17 @@ const BACKENDS = {
         // ключ живёт в xpeach-active-key.txt и инжектится прокси на каждый запрос.
         // claude-* ходят нативно: в каталоге они помечены anthropic+openai.
     },
+    justwoker: {
+        label: 'JustWoker',
+        base_url: 'http://localhost:20158',
+        api_key: 'dummy',           // real key keepalive reads from justwoker-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20158) → api.justwoker.icu (БЕЗ /v1).
+        // Активация через handleJwActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в justwoker-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Корень без /v1 обязателен: `/v1/v1/messages` отдаёт 404 (замер 22.08).
+    },
 };
 
 const LOG_BUFFER = [];
@@ -258,6 +269,7 @@ const CC_MODEL_PREFIX = {
     gorouter: 'gorouter',
     tabi: 'tabi',
     xpeach: 'xpeach',
+    justwoker: 'justwoker',
     ourtoken: 'ot',
     cun: 'cun',
     conduit: 'cdt',
@@ -813,10 +825,10 @@ function jsonKeepalive(res) {
     return stop;
 }
 
-// ---- Keepalive-мост (хедж-конфиг :20133/:20155/:20156) ---------------------
+// ---- Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157/:20158) -------
 // Дашборд ходит только через /__switch/api/... — кидаем запрос в keepalive-прокси
 // (GET /__state, POST /__config). Порт передаём параметром — один мост
-// обслуживает все keepalive-инстансы (AgentRouter, Tabi, GoRouter).
+// обслуживает все keepalive-инстансы (AgentRouter, Tabi, GoRouter, XPeach, JustWoker).
 function keepaliveFetch(method, path, body, port) {
     return new Promise((resolve) => {
         const p = Number(port);
@@ -918,11 +930,13 @@ function makeKeepaliveHandlers(port) {
     return { state: handleState, config: handleConfig, latency: handleLatency };
 }
 
-// Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156, XPeach :20157.
+// Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156, XPeach :20157,
+// JustWoker :20158.
 const keepaliveAr = makeKeepaliveHandlers(Number(process.env.AR_KEEPALIVE_PORT || 20133));
 const keepaliveTb = makeKeepaliveHandlers(Number(process.env.TB_KEEPALIVE_PORT || 20155));
 const keepaliveGo = makeKeepaliveHandlers(Number(process.env.GO_KEEPALIVE_PORT || 20156));
 const keepaliveXp = makeKeepaliveHandlers(Number(process.env.XP_KEEPALIVE_PORT || 20157));
+const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT || 20158));
 
 
 // ---- /__switch/api/whoami --------------------------------------------------
@@ -3811,6 +3825,7 @@ async function handleHealth(res) {
         { name: 'Keepalive GoRouter', port: Number(process.env.GO_KEEPALIVE_PORT || 20156), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Tabi',     port: Number(process.env.TB_KEEPALIVE_PORT || 20155), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive XPeach',   port: Number(process.env.XP_KEEPALIVE_PORT || 20157), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive JustWoker', port: Number(process.env.JW_KEEPALIVE_PORT || 20158), path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -5165,8 +5180,8 @@ function ghSanitize(acc) {
 }
 
 // Плашки «где уже используется» едут вместе со списком аккаунтов, отдельного роута нет:
-// один запрос = карточки и плашки физически не могут разойтись. ghUsageMap читает четыре
-// маленьких JSON-пула, сети и профилей браузера не касается (см. ghUsageMap ниже).
+// один запрос = карточки и плашки физически не могут разойтись. ghUsageMap читает пять
+// маленьких JSON-пулов, сети и профилей браузера не касается (см. ghUsageMap ниже).
 async function handleGhKeys(req, res) {
     try { jsonRes(res, 200, { keys: ghLoad(), usage: ghUsageMap() }); }
     catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -5278,7 +5293,7 @@ async function handleGhUpdate(req, res) {
 
 // ───── Честный ответ ручек session/open ────────────────────────────────────
 //
-// Все пять ручек (github, ar, go, tb, xp) спавнят видимый Chromium detached-процессом
+// Все шесть ручек (github, ar, go, tb, xp, jw) спавнят видимый Chromium detached-процессом
 // и отвечают `ok` сразу же. Если процесс умирал на старте — нет бинаря браузера под
 // установленную версию playwright, профиль занят, пропал скрипт — дашборд всё равно
 // рисовал зелёный тост «браузер аккаунта открыт», а окно не появлялось. Причина
@@ -5373,9 +5388,239 @@ async function handleGhOpen(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ───── ⭐ Кнопка звезды в менеджере: браузер под ГОТОВОЙ куки-сессией аккаунта ─────
+//
+// Что делает: открывает окно, уже залогиненное этим GitHub, прямо на странице
+// репозитория владельца — остаётся нажать Star.
+//
+// Почему это НЕ «handleGhOpen с другим URL». Персональных профилей в github/profiles на
+// диске ОДИН на 36 аккаунтов менеджера, то есть «чистый профиль → страница логина» здесь
+// обычный случай, а не исключение. Живые куки при этом есть: 32 из 36 аккаунтов лежат
+// снимком storageState в github/sessions/<ghId>.json (харвест снял их из профилей шлюзов).
+// Поэтому здесь тот же каскад, что у заселения: кеш → харвест из свободного
+// профиля-источника, а вливает снимок open-session.js через addCookies.
+// Замер 2026-08-22 на трёх снимках (1.1 / 15.0 / 82.9 ч): снимок в чистом профиле даёт
+// HTTP 200 без редиректа на /login, meta[name="user-login"] совпадает с ghLogin, кнопка
+// Star на месте — механизм состоятелен.
+//
+// URL — КОНСТАНТА НА СЕРВЕРЕ и из тела запроса не принимается осознанно: :8200 слушает
+// 0.0.0.0 без аутентификации, и «открой произвольную страницу в залогиненном GitHub
+// владельца» — это чужая команда из локальной сети, а не гибкость.
+const GH_STAR_REPO_URL = 'https://github.com/WormAlien/hub-cc';
+
+function ghProfileDir(label) {
+    return path.join(__dirname, '..', 'github', 'profiles', label);
+}
+
+// Нужен ли этому профилю снимок сессии.
+//
+// 🪤 Признак «профиль пустой» (нет `Default/Preferences`) для этого НЕ годится, хотя
+// напрашивается: Chromium создаёт Preferences при ПЕРВОМ ЖЕ запуске — залогинились в нём
+// или нет. На таком признаке ⭐ деградировала навсегда: стоило один раз открыть аккаунт
+// кнопкой «Открыть GitHub» и не довести вход (2FA не прошла, окно закрыли) — и снимок
+// больше не вливался никогда, а тост при этом уверял «сессия: профиль уже залогинен».
+// Найдено ревью 2026-08-22 на живом `acct_gh_1786643427100_ecjje`: Preferences есть,
+// а в индексе у него `login=null, hasUserSession=false`, то есть сессии нет.
+//
+// Поэтому спрашиваем то, что нужно на самом деле: есть ли в профиле ЖИВАЯ GitHub-сессия.
+// Ответ уже собран индексом профилей — тем же, на котором стоит пикер «🐙 из менеджера».
+// Индекса про профиль нет → считаем, что сессии нет: лишний раз влить снимок безопаснее,
+// чем открыть анонимное окно и соврать в тосте.
+function ghProfileNeedsSession(gsl, label) {
+    const dir = ghProfileDir(label);
+    if (!fs.existsSync(dir)) return true;
+    try {
+        const rec = gsl.profilesFromIndex().find(p => String(p.dir).toLowerCase() === dir.toLowerCase());
+        return !rec || !rec.hasUserSession;
+    } catch { return true; }
+}
+
+// Отдать URL УЖЕ ОТКРЫТОМУ браузеру этого профиля через ProcessSingleton: второй запуск
+// того же бинаря с тем же --user-data-dir не поднимает второе окно, а передаёт вкладку
+// живому инстансу и выходит. Замер 2026-08-22: код 0 за 146 мс, ctx.pages() 1→2, окно
+// одно. Ждать процесс синхронно тут правильно: штатный выход 0 — норма, не падение.
+//
+// 🪤 Работает только пока профиль держит ГОЛОВНОЙ chrome.exe — а он у нас головной и есть
+// (open-session.js запускается headless:false). С headless-хостом playwright поднимает
+// другой бинарь (chrome-headless-shell.exe), ProcessSingleton у него нет, и такой спавн
+// сажает на профиль ВТОРОЙ инстанс с видимым окном (замерено: 9 процессов). Поэтому этот
+// путь применяется только здесь и только при живом pid.
+function ghHandoffUrl(profileDir, url) {
+    return new Promise(resolve => {
+        let exe;
+        try { exe = require('playwright').chromium.executablePath(); }
+        catch (e) { return resolve({ ok: false, error: `playwright недоступен: ${e.message}` }); }
+        const proc = spawn(exe, [`--user-data-dir=${profileDir}`, '--no-first-run', url],
+            { detached: false, stdio: 'ignore' });
+        const timer = setTimeout(() => {
+            try { proc.kill(); } catch {}
+            resolve({ ok: false, error: 'передача вкладки не завершилась за 8 с' });
+        }, 8000);
+        proc.on('error', e => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+        proc.on('exit', code => {
+            clearTimeout(timer);
+            resolve(code === 0 ? { ok: true } : { ok: false, error: `chrome вышел с кодом ${code}` });
+        });
+    });
+}
+
+// Один аккаунт — один харвест за раз. И ⭐, и пикер «🐙 из менеджера» зовут ghHarvest, а он
+// пишет github/sessions/<ghId>.json обычным writeFileSync: два писателя одного файла дают
+// порванный снимок. state.ghStarBusy на фронте от этого не спасает — он живёт в одной вкладке.
+const ghHarvestInFlight = new Set();
+
+// Общий бюджет на перебор источников. У популярных ников их до семи, каждый ghHarvest
+// ограничен своими 60 с — без общего лимита один клик висел бы до семи минут, и всё это
+// время кнопка в ⏳, а у fetch на фронте таймаута нет вообще.
+const GH_STAR_HARVEST_BUDGET_MS = 120_000;
+
+// Снимок сессии для аккаунта: кеш, иначе харвест из самого свежего СВОБОДНОГО профиля.
+// Это тот же каскад, что в newapiAddGithub (там он вплетён в проверки пула и force,
+// поэтому не выношу общим куском — риск сломать заселение шлюзов выше выгоды).
+async function ghStarSnapshot(acct) {
+    const gsl = ghSessionLib();
+    if (!gsl) return { error: 'модуль github-session недоступен' };
+    const nick = String(acct.nickname || acct.login || '').trim();
+    if (!nick) return { error: 'у аккаунта нет ни ника, ни логина' };
+
+    let snap = gsl.readCache(acct.id);
+    if (snap && gsl.cacheStale(snap)) snap = null;           // старше TTL — перечитать
+    if (snap) return { snap, path: gsl.cachePath(acct.id), from: 'кеш' };
+
+    const entry = gsl.indexByLogin().get(nick.toLowerCase());
+    const sources = (entry ? entry.sources : []).filter(s => s.hasUserSession);
+    if (!sources.length) {
+        // 🪤 Прежде чем сказать «сессии нет», проверь, есть ли вообще индекс профилей: его
+        // собирает отдельный процесс, и на холодном :8200 (или после dropIndex) он пуст.
+        // Совет «залогинься руками» на пустом индексе вреден дважды — он неверен, и он
+        // создаёт профиль без сессии, которому потом нужен тот же самый снимок.
+        const info = gsl.indexInfo();
+        if (!info.exists) {
+            ghRebuildIndex('нет индекса (⭐)');
+            return { error: 'индекс профилей ещё не собран — он строится в фоне, повтори через пару секунд' };
+        }
+        if (ghIndexBuilding()) {
+            return { error: 'индекс профилей перестраивается — повтори через пару секунд' };
+        }
+        return { error: `живой GitHub-сессии для ${nick} на диске нет — открой его один раз кнопкой «Открыть» и залогинься` };
+    }
+    const free = sources.filter(s => !ghProfileBusy(s));
+    if (!free.length) {
+        return { error: `все профили с сессией ${nick} заняты открытым браузером — закрой его и повтори` };
+    }
+    if (ghHarvestInFlight.has(acct.id)) {
+        return { error: `снимок сессии ${nick} уже снимается другим запросом — подожди, это до минуты` };
+    }
+    // Пробуем по очереди: сессия в конкретном профиле может быть мёртвой, а у того же
+    // аккаунта рядом лежит живая (профили логинились раздельно).
+    const tried = [];
+    ghHarvestInFlight.add(acct.id);
+    try {
+        const deadline = Date.now() + GH_STAR_HARVEST_BUDGET_MS;
+        for (const src of free) {
+            if (Date.now() > deadline) {
+                tried.push(`дальше не пробовал: вышел бюджет ${Math.round(GH_STAR_HARVEST_BUDGET_MS / 1000)} с`);
+                break;
+            }
+            const r = await ghHarvest(gsl, acct.id, src);
+            if (r.code === 0) {
+                const got = gsl.readCache(acct.id);
+                if (got) return { snap: got, path: gsl.cachePath(acct.id), from: `${src.tag}/${src.label}` };
+            }
+            tried.push(`${src.tag}/${src.label}: ${r.code === 3 ? 'сессия мертва' : r.code === 2 ? 'профиль занят' : (r.err || 'ошибка').trim().slice(0, 120)}`);
+        }
+    } finally {
+        ghHarvestInFlight.delete(acct.id);
+    }
+    return { error: `сессия ${nick} не годится: ${tried.join('; ')}. Залогинься заново кнопкой «Открыть».` };
+}
+
+// POST /__switch/api/gh/star { id } → окно с сессией аккаунта на странице репозитория.
+async function handleGhStar(req, res) {
+    // Харвест — это запуск Chromium, десятки секунд молчания в сокете.
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const { id } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const acct = ghLoad().find(k => k.id === id);
+        if (!acct) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const nick = String(acct.nickname || acct.login || '').trim() || id;
+        const label = 'acct_' + id;
+        // Помеченный dead — это аккаунт, под которым уже нечего делать: то же условие
+        // стоит в заселении (newapiAddGithub), и молчать про него здесь нечестно.
+        if (acct.status === 'dead') {
+            return jsonRes(res, 400, { error: `${nick} помечен как dead — сессии под ним нет, звезду ставить нечем` });
+        }
+        const gsl = ghSessionLib();
+        if (!gsl) return jsonRes(res, 500, { error: 'модуль github-session недоступен' });
+
+        // Браузер этого аккаунта уже поднят: второй Chromium на том же --user-data-dir —
+        // это порча профиля (оба пишут Cookies и Preferences), поэтому open-session.js
+        // заново не спавним, а отдаём вкладку живому окну.
+        const prevPid = ghLkPids.get(label);
+        if (ghPidAlive(prevPid)) {
+            const h = await ghHandoffUrl(ghProfileDir(label), GH_STAR_REPO_URL);
+            logLine(`gh star: ${nick} — браузер уже открыт (pid ${prevPid}), вкладка ${h.ok ? 'передана' : 'НЕ передана: ' + h.error}`);
+            return jsonRes(res, 200, {
+                ok: true, label, already: true, navigated: !!h.ok,
+                url: GH_STAR_REPO_URL, ghLogin: nick,
+                handoffError: h.ok ? undefined : h.error,
+            });
+        }
+
+        // Снимок нужен профилю БЕЗ живой GitHub-сессии; в профиле, где она есть, своя
+        // свежее кеша, и вливать поверх нельзя (`_gh_sess` ротируется, снимок живёт до
+        // 7 суток) — объяснение и гейт в github/open-session.js.
+        let seedPath = '';
+        let from = 'сессия уже в профиле';
+        let cookieCount = 0;
+        if (ghProfileNeedsSession(gsl, label)) {
+            const s = await ghStarSnapshot(acct);
+            if (s.error) {
+                logLine(`gh star: ${nick} — снимок не получен: ${s.error}`);
+                return jsonRes(res, 409, { error: s.error });
+            }
+            seedPath = s.path;
+            from = s.from;
+            cookieCount = (s.snap.cookies || []).length;
+        }
+
+        // 🪤 Профиль может держать ОСИРОТЕВШЕЕ окно: браузеры спавнятся detached+unref и
+        // переживают рестарт :8200, а карта ghLkPids живёт в памяти и после рестарта пуста.
+        // Спавн на занятый профиль не падает за отведённые пробе 2 с (playwright ждёт
+        // DevTools около 30 с), поэтому владелец получил бы «готово» без всякого окна.
+        // Chromium на живом профиле держит в его каталоге `lockfile` — у закрытых профилей
+        // его нет (проверено на acct_* и на профилях шлюзов), так что признак надёжный.
+        if (fs.existsSync(path.join(ghProfileDir(label), 'lockfile'))) {
+            logLine(`gh star: ${nick} — профиль занят (lockfile), pid в карте нет`);
+            return jsonRes(res, 409, {
+                error: `профиль ${nick} держит открытое окно браузера (скорее всего осталось от прошлого запуска дашборда) — закрой его и повтори`,
+            });
+        }
+
+        const script = path.join(__dirname, '..', 'github', 'open-session.js');
+        const proc = spawn(process.execPath, [script, label, GH_STAR_REPO_URL, seedPath], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`gh star [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`gh star ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`gh star spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => { ghLkPids.delete(label); logLine(`gh star: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.unref();
+        ghLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            ghLkPids.delete(label);
+            logLine(`gh star FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        logLine(`gh star: ${nick} → ${GH_STAR_REPO_URL} (сессия: ${from}${cookieCount ? `, кук ${cookieCount}` : ''}, pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, url: GH_STAR_REPO_URL, ghLogin: nick, from, cookieCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
 // ───── Заселение готовой GitHub-сессии в новый аккаунт New-API ─────
 //
-// Проблема: у каждого аккаунта вкладок ar/go/tb/xp свой персистентный профиль Chromium, и
+// Проблема: у каждого аккаунта вкладок ar/go/tb/xp/jw свой персистентный профиль Chromium, и
 // GitHub в свежем профиле логинится с нуля — логин + пароль + 2FA. При этом ровно эта
 // GitHub-сессия обычно уже лежит в профиле другого провайдера: профили куками не делятся.
 // Замер на 2026-08-19: 41 профиль с GitHub-сессией на 14 уникальных аккаунтов.
@@ -5397,7 +5642,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -5486,12 +5731,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -5543,7 +5788,7 @@ function ghLinkForNew(body, email, name) {
 
 // Где каждый GitHub-аккаунт уже израсходован: { <ghId>: [{ tag, status, name, recordId }] }.
 //
-// Только записи пулов четырёх NewAPI-шлюзов — по замеру 2026-08-22 логины и ники из
+// Только записи пулов пяти NewAPI-шлюзов — по замеру 2026-08-22 логины и ники из
 // github-accounts.json совпадают больше нигде (freemodel/tokenrouter/notion/anymodel/
 // conduit — ноль совпадений), так что обходить их каталоги незачем.
 //
@@ -5894,6 +6139,9 @@ function handleTbAddGithub(req, res) {
 }
 function handleXpAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'xpeach', host: 'xpeach.codes', prefix: 'xp_', load: xpLoad, save: xpSave, sessionsDir: XP_SESSIONS_DIR });
+}
+function handleJwAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'justwoker', host: 'api.justwoker.icu', prefix: 'jw_', load: jwLoad, save: jwSave, sessionsDir: JW_SESSIONS_DIR });
 }
 
 // ───── Svrtr — пул ТГ-аккаунтов, активация через API Helper ─────
@@ -6602,6 +6850,9 @@ const NEWAPI_PROFILE_DIRS = {
     'gorouter.app':    path.join(__dirname, '..', 'gorouter', 'profiles'),
     'tabitoken.com':   path.join(__dirname, '..', 'tabi', 'profiles'),
     'xpeach.codes':    path.join(__dirname, '..', 'xpeach', 'profiles'),
+    // 🪤 Ключ — ХОСТ ПАНЕЛИ, а не домен: у JustWoker панель и API живут на одном
+    // `api.justwoker.icu`, поэтому поддомен здесь обязателен (justwoker.icu не резолвится).
+    'api.justwoker.icu': path.join(__dirname, '..', 'justwoker', 'profiles'),
 };
 
 function newapiLib() {
@@ -6699,7 +6950,7 @@ function newapiLkOpenedAt(label) {
 function newapiLkBusy(profileLabel) {
     const label = String(profileLabel || '');
     if (!label) return false;
-    for (const [pids, alive] of [[arLkPids, arPidAlive], [goLkPids, goPidAlive], [tbLkPids, tbPidAlive]]) {
+    for (const [pids, alive] of [[arLkPids, arPidAlive], [goLkPids, goPidAlive], [tbLkPids, tbPidAlive], [jwLkPids, jwPidAlive]]) {
         try { if (alive(pids.get(label))) return true; } catch {}
     }
     return false;
@@ -7176,13 +7427,16 @@ function newapiApplyBalance(target, bal, opts) {
 }
 
 // Детект чек-ина включён только здесь: у GoRouter чек-ина нет вообще, у XPeach
-// шлюз сам отдаёт checkin_enabled: false.
+// шлюз сам отдаёт checkin_enabled: false. У JustWoker чек-ин ЕСТЬ
+// (checkin_enabled: true), но выдаёт случайную сумму — «+N» на дельте баланса
+// приняло бы за наливку любой возврат неизрасходованной квоты, поэтому детект там
+// сознательно не включён (jwApplyBalance идёт без checkin).
 function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { checkin: true, provider: 'agentrouter' }); }
 
 // GET /__switch/api/finance/history?range=day|week|month
 // Отдаёт бакеты для графика: расход (прирост spent) и наливка (прирост granted).
 // Бакет — час для «дня», сутки для остальных. Плюс текущий снимок пулов, чтобы
-// вкладка не дёргала четыре ручки сессий ради двух сумм.
+// вкладка не дёргала пять ручек сессий ради двух сумм.
 async function handleFinanceHistory(req, res) {
     try {
         // CORS нужен только пока вкладку смотрят из черновика по file:// — внутри
@@ -7225,6 +7479,7 @@ async function handleFinanceHistory(req, res) {
         try { const a = goLoad(); pools.gorouter    = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = tbLoad(); pools.tabitoken   = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = xpLoad(); pools.xpeach      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = jwLoad(); pools.justwoker   = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         const totals = Object.values(pools).reduce((a, p) => ({
             spent: a.spent + p.spent, balance: a.balance + p.balance, keys: a.keys + p.keys,
         }), { spent: 0, balance: 0, keys: 0 });
@@ -7315,8 +7570,8 @@ setInterval(() => {
     arBalanceMaybe(key);
 }, AR_BALANCE_TICK_MS).unref?.();
 
-// Гвард для nudge-режима остальных провайдеров (GoRouter/Tabi): один пересчёт
-// на ключ в полёте. У AgentRouter своя, более полная машинерия выше
+// Гвард для nudge-режима остальных провайдеров (GoRouter/Tabi/XPeach/JustWoker):
+// один пересчёт на ключ в полёте. У AgentRouter своя, более полная машинерия выше
 // (AR_BALANCE_INFLIGHT + троттлинг + автотик) — это лёгкий аналог для тех,
 // у кого автотика нет.
 const BALANCE_NUDGE_INFLIGHT = new Set();
@@ -7597,6 +7852,9 @@ function handleTbMapProfiles(req, res) {
 function handleXpMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'xpeach', host: 'xpeach.codes', load: xpLoad, save: xpSave });
 }
+function handleJwMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'justwoker', host: 'api.justwoker.icu', load: jwLoad, save: jwSave });
+}
 
 // POST /__switch/api/{ar,go,tb,xp}/set-github { api_key, ghId } → привязать/сменить/отвязать
 // GitHub-аккаунт (метка-организация, никакой автоматики). ghId может быть:
@@ -7647,6 +7905,9 @@ function handleTbSetGithub(req, res) {
 }
 function handleXpSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'xpeach', load: xpLoad, save: xpSave });
+}
+function handleJwSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'justwoker', load: jwLoad, save: jwSave });
 }
 
 // POST /__switch/api/ar/session/open { id } → открыть консоль agentrouter под GitHub-сессией
@@ -9073,6 +9334,652 @@ function goReadModelMap() {
     } catch { return {}; }
 }
 
+// ───── JustWoker — автономная вкладка (NewAPI, GitHub-вход) ─────────────
+// Пятый шлюз, структурная копия вкладки GoRouter: `api.justwoker.icu` — тот же
+// New API (проверено 2026-08-22: `x-oneapi-request-id`, `<title>New API</title>`,
+// `system_name: "JustDoWork"`). Свой пул (justwoker-sessions.json), свой активный
+// ключ/модель, свой keepalive :20158.
+//
+// Активация ЧЕРЕЗ keepalive :20158 (как у go/tb/xp), а не прямым baseUrl: шлюз
+// Anthropic-совместим нативно (`POST /v1/messages` → 200, модели помечены
+// `supported_endpoint_types: ["anthropic","openai"]`), но thinking-модели дают
+// длинные SSE-паузы, и без keepalive watchdog Claude Code рвёт поток.
+// 🪤 База для CC — корень БЕЗ /v1: `/v1/v1/messages` отдаёт 404 (замер 22.08).
+// `/v1` нужен только листингу моделей — это и есть JW_BASE_URL.
+//
+// GitHub-вход: justwoker/open-session.js, реф-ссылка `?aff=IFYf` захардкожена там.
+// 🪤 Регистрация жёстче остальных четырёх: панель отдаёт
+// `github_minimum_account_age_days: 365` — GitHub-аккаунту должен быть год, свежие
+// из менеджера сайт отвергнет. Чек-ин у панели включён (`checkin_enabled: true`),
+// но он даёт СЛУЧАЙНУЮ сумму, поэтому кнопки «+N» тут нет — только ✏️ и точная
+// цифра из `/api/user/self` куками профиля.
+const JW_SESSIONS_FILE = path.join(__dirname, 'justwoker-sessions.json');
+const JW_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'justwoker-active-key.txt');
+const JW_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'justwoker-active-model.txt');
+const JW_BASE_URL = 'https://api.justwoker.icu/v1';
+// SSE keepalive proxy для justwoker (как у tabi :20155): форвардит напрямую в
+// api.justwoker.icu, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const JW_UPSTREAM = 'https://api.justwoker.icu';
+const JW_KEEPALIVE_PORT = 20158;
+const JW_KEEPALIVE_URL = `http://localhost:${JW_KEEPALIVE_PORT}`;
+const JW_MODELMAP_FILE = path.join(__dirname, 'justwoker-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance): выдача JustWoker НЕ ИЗМЕРЕНА — цифру
+// отдаёт только `/api/user/self` куками профиля, а API-ключ туда не пускает (401).
+// Поэтому база консервативная, как у XPeach: занизить безопаснее, чем завысить —
+// на завышенном балансе авторотация выберет пустой аккаунт. Реальную цифру ставит
+// либо ✏️ руками, либо первый заход в 🌐 ЛК (тогда balanceSource = 'self').
+const JW_GRANT_STEP = 5;
+const JW_DEFAULT_GRANT = 10;
+const JW_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const JW_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function jwLoad() {
+    try {
+        const raw = fs.readFileSync(JW_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'jw_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { jwSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function jwSave(arr) {
+    fs.writeFileSync(JW_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function jwReadActiveModel() {
+    try { return fs.readFileSync(JW_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function jwReadActiveKey() {
+    try { return fs.readFileSync(JW_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для justwoker: второй экземпляр keepalive-proxy.js на :20158.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с agentrouter
+// :20133 и tabi :20155. UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages.
+async function jwKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(JW_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(JW_KEEPALIVE_PORT),
+                UPSTREAM: JW_UPSTREAM,
+                KEY_FILE: JW_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: JW_MODELMAP_FILE,
+                ...(process.env.JW_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.JW_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive JustWoker', JW_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`justwoker keepalive proxy spawn: :${JW_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`justwoker keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+async function jwProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${JW_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...JW_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс: usage endpoint на КОРНЕ api.justwoker.icu (не /v1). Точный остаток — из
+// /api/user/self куками профиля; резервы (анкер, угадывание) см. newapiBalance.
+async function jwBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'api.justwoker.icu',
+        ccHeaders: JW_CC_HEADERS,
+        usageUrl: 'https://api.justwoker.icu/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(JW_DEFAULT_GRANT, Math.ceil(spent / JW_GRANT_STEP) * JW_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+
+function jwApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'justwoker' }); }
+
+async function handleJwSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = jwLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await jwProbe(s.api_key); }));
+            }
+            jwSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => jwApplyBalance(s, await jwBalance(s))));
+            }
+            jwSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: jwReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleJwPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await jwProbe(api_key);
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; jwSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleJwBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = jwLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await jwBalance(target || { api_key }, { force });
+            if (target) { jwApplyBalance(target, bal); jwSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('jw:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleJwSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'justwoker', load: jwLoad, save: jwSave, balanceFn: jwBalance, applyFn: jwApplyBalance });
+}
+
+const jwLkPids = new Map();
+function jwPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleJwSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = jwLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = jwLkPids.get(label);
+        if (jwPidAlive(prevPid)) {
+            logLine(`justwoker session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'justwoker', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('api.justwoker.icu', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`justwoker session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`justwoker session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`justwoker session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => { jwLkPids.delete(label); logLine(`justwoker session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.unref();
+        jwLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            jwLkPids.delete(label);
+            logLine(`justwoker session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`justwoker session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── JustWoker: share/import (передать аккаунт другу и принять чужой) ────────
+// Формат: base64url(JSON { v:1, provider:'justwoker', email, name, api_key,
+// meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// «Живая» часть (GitHub + justwoker) — storageState
+// из justwoker/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
+
+const JW_SHARE_SCRIPT = path.join(__dirname, '..', 'justwoker', 'share-session.js');
+const JW_SESSIONS_DIR = path.join(__dirname, '..', 'justwoker', 'sessions');
+
+function jwB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function jwB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/go/share { id } → снять storageState профиля и собрать строку.
+async function handleJwShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = jwLkPids.get(label);
+        if (jwPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(JW_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [JW_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`justwoker share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'justwoker',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = jwB64UrlEncode(JSON.stringify(payload));
+        logLine(`justwoker share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/go/import { share } → разобрать строку и добавить аккаунт.
+async function handleJwImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(jwB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'justwoker' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не justwoker-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = jwLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'jw_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        jwSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(JW_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(JW_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`justwoker import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`justwoker import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleJwAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = jwLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'jw_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        jwSave(sessions);
+        logLine(`justwoker add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
+// в консоли justwoker). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
+async function handleJwSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(JW_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        jwSave(sessions);
+        logLine(`justwoker set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переименовать аккаунт (подпись) — меняем name и/или email. id и профиль браузера
+// не трогаем, поэтому привязка профиля/сессии сохраняется.
+async function handleJwRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        jwSave(sessions);
+        logLine(`justwoker rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleJwDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.id === idKey);
+        jwSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === jwReadActiveKey()) {
+            try { fs.rmSync(JW_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(JW_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`justwoker delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ЧЕРЕЗ keepalive :20158 (не прямым baseUrl): в settings.json уезжает
+// JW_KEEPALIVE_URL, а реальный ключ прокси подставляет сам из justwoker-active-key.txt.
+async function handleJwActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в justwoker-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(JW_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        jwSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-justwoker');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = JW_KEEPALIVE_URL;   // keepalive :20158 → api.justwoker.icu напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — justwoker-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const jwCurModel = jwReadActiveModel() || '';
+            if (jwCurModel) settings.model = jwCurModel;
+            else { delete settings.model; logLine('justwoker activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из justwoker-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`justwoker activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20158, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const jwKa = await keepaliveBring(JW_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!jwKa.ok) logLine(`justwoker activate: keepalive :${JW_KEEPALIVE_PORT} НЕ поднялся — ${jwKa.error || '?'}`);
+        logLine(`justwoker activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${JW_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: jwKa.ok, port: JW_KEEPALIVE_PORT, error: jwKa.ok ? null : (jwKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleJwModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (JW_MODELS_CACHE.data && Date.now() - JW_MODELS_CACHE.ts < JW_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: JW_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${JW_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...JW_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        JW_MODELS_CACHE.data = models;
+        JW_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (JW_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: JW_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет justwoker-active-model.txt + settings.model (+ env модели).
+async function handleJwSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(JW_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-justwoker-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = JW_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`justwoker set-model: settings.json FAILED: ${e.message}`);
+        }
+        const jwKaM = await keepaliveBring(JW_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!jwKaM.ok) logLine(`justwoker set-model: keepalive :${JW_KEEPALIVE_PORT} НЕ поднялся — ${jwKaM.error || '?'}`);
+        logLine(`justwoker set-model: ${m} (base ${JW_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: JW_ACTIVE_MODEL_FILE, base: JW_KEEPALIVE_URL, needRestart: true, keepalive: { up: jwKaM.ok, port: JW_KEEPALIVE_PORT, error: jwKaM.ok ? null : (jwKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Настраиваемый маппинг claude-тиров → justwoker-модели (как в Custom). Живёт в сессиях.
+async function handleJwModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = {
+            opus: String(body.opus || '').trim() || null,
+            sonnet: String(body.sonnet || '').trim() || null,
+            haiku: String(body.haiku || '').trim() || null,
+        };
+        fs.writeFileSync(JW_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        logLine(`justwoker modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function jwReadModelMap() {
+    try {
+        const raw = fs.readFileSync(JW_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
 // ───── Tabi (tb) — автономная вкладка (NewAPI, GitHub-вход) ────────────
 // tabitoken.com: Anthropic-совместимый шлюз (прямой /v1/messages жив), но модели
 // -thinking → длинные паузы → watchdog CC рвёт поток. Поэтому активация как у
@@ -9223,7 +10130,7 @@ function healStatuslinePath() {
     }
 }
 
-// ───── Подъём keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter / :20157 XPeach) ─────
+// ───── Подъём keepalive-инстанса (:20133 AR / :20155 Tabi / :20156 GoRouter / :20157 XPeach / :20158 JustWoker) ─────
 // xxKeepaliveSpawn() поднимают процесс ТОЛЬКО если порт свободен, автоперезапуска нет
 // (после правки keepalive-proxy.js новый код подхватывается лишь пересозданием
 // процесса), и «занято» они читают как «уже работает». Раньше пересоздавали таскиллом
@@ -9261,6 +10168,7 @@ function keepaliveInstances() {
         [TB_KEEPALIVE_PORT]: { name: 'Tabi', spawn: tbKeepaliveSpawn },
         [GO_KEEPALIVE_PORT]: { name: 'GoRouter', spawn: goKeepaliveSpawn },
         [XP_KEEPALIVE_PORT]: { name: 'XPeach', spawn: xpKeepaliveSpawn },
+        [JW_KEEPALIVE_PORT]: { name: 'JustWoker', spawn: jwKeepaliveSpawn },
         // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
         [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
@@ -10611,7 +11519,7 @@ async function handleXpImport(req, res) {
 // Порога по балансу СОЗНАТЕЛЬНО нет (решение владельца 22.08): цифра в кеше
 // обновляется раз в минуту-две и врёт чаще, чем помогает. Правда — это отказ шлюза.
 
-// Один реестр на четыре шлюза. Добавление пятого = одна строка здесь; клиентский
+// Один реестр на пять шлюзов. Добавление шестого = одна строка здесь; клиентский
 // MONEY_PROVIDERS (proxy-dashboard.html) — зеркало по префиксу. Держать две
 // разъезжающиеся карты уже пробовали, см. комментарий к MONEY_PROVIDERS.
 // host — тем же значением keepalive-прокси узнаёт, в какой префикс ему звонить
@@ -10621,6 +11529,9 @@ const MONEY_GW = {
     go: { tag: 'gorouter',    label: 'GoRouter',    host: 'gorouter.app',   keyFile: GO_ACTIVE_KEY_FILE, load: goLoad, save: goSave, balanceFn: goBalance, applyFn: goApplyBalance },
     tb: { tag: 'tabi',        label: 'Tabi Token',  host: 'tabitoken.com',  keyFile: TB_ACTIVE_KEY_FILE, load: tbLoad, save: tbSave, balanceFn: tbBalance, applyFn: tbApplyBalance },
     xp: { tag: 'xpeach',      label: 'XPeach',      host: 'xpeach.codes',   keyFile: XP_ACTIVE_KEY_FILE, load: xpLoad, save: xpSave, balanceFn: xpBalance, applyFn: xpApplyBalance },
+    // 🪤 host здесь — `api.justwoker.icu` целиком: у JustWoker API и панель на одном
+    // поддомене, и ровно эту строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима.
+    jw: { tag: 'justwoker',   label: 'JustWoker',   host: 'api.justwoker.icu', keyFile: JW_ACTIVE_KEY_FILE, load: jwLoad, save: jwSave, balanceFn: jwBalance, applyFn: jwApplyBalance },
 };
 
 const MONEY_AUTO_FILE = path.join(__dirname, '..', 'logs', '.money_autorotate.json');
@@ -10637,7 +11548,7 @@ const MONEY_MAX_PROBES = 3;
 const MONEY_DEDUP_MS = 10_000;
 
 const moneyAuto = {};   // p → { rotating (Promise|null), lastAt, lastKey, recent[] }
-// Тумблер авторотации — ОДИН на все четыре шлюза (2026-08-22, по замечанию владельца).
+// Тумблер авторотации — ОДИН на все пять шлюзов (2026-08-22, по замечанию владельца).
 // Был по шлюзу, и смена провайдера читалась как «авторотация выключилась»: сидел на
 // GoRouter с включённым тумблером, перешёл на Tabi — у того свой флаг, по умолчанию
 // выключённый, и следующий отказ по деньгам снова прилетал в лицо. Смысл у настройки
@@ -11173,8 +12084,8 @@ const server = http.createServer((req, res) => {
     }
 
     // POST /__switch/api/keepalive/restart {port} — пересоздать keepalive-инстанс
-    // (:20133/:20155/:20156) одной операцией: kill по порту → spawn с env этого
-    // инстанса → ждём /__keepalive/api/status. Так подхватывается новый код прокси.
+    // (:20133/:20155/:20156/:20157/:20158) одной операцией: kill по порту → spawn с env
+    // этого инстанса → ждём /__keepalive/api/status. Так подхватывается новый код прокси.
     if (req.method === 'POST' && req.url === '/__switch/api/keepalive/restart') {
         let body = '';
         req.on('data', c => body += c);
@@ -11659,6 +12570,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/set-github') return handleTbSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/set-github') return handleXpSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/set-github') return handleJwSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
@@ -11674,7 +12586,7 @@ const server = http.createServer((req, res) => {
     // История финансов для вкладки «Финансы»: расход и наливка по бакетам.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/finance/history')) return handleFinanceHistory(req, res);
 
-    // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157) — реальное время без рестарта.
+    // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157/:20158) — реальное время без рестарта.
     if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/keepalive/config') return keepaliveAr.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/tb/keepalive/state')  return keepaliveTb.state(req, res);
@@ -11683,11 +12595,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/xp/keepalive/state')  return keepaliveXp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/keepalive/config') return keepaliveXp.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/jw/keepalive/state')  return keepaliveJw.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/keepalive/config') return keepaliveJw.config(req, res);
     // История времени ответа (график) — startsWith: у запроса есть ?window=<сек>.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/keepalive/latency'))    return keepaliveAr.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/keepalive/latency')) return keepaliveXp.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/keepalive/latency')) return keepaliveJw.latency(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
@@ -11749,6 +12664,26 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/xp/share')    return handleXpShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/import')   return handleXpImport(req, res);
 
+    // ---- JustWoker (jw) — автономная вкладка, keepalive :20158 → api.justwoker.icu ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/sessions')) return handleJwSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/ping'))     return handleJwPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/balance'))  return handleJwBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/models'))   return handleJwModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/jw/active-model') return jsonRes(res, 200, { model: jwReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/jw/modelmap') return jsonRes(res, 200, { ok: true, modelMap: jwReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/add')       return handleJwAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/key')       return handleJwSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/rename')    return handleJwRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/delete')    return handleJwDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/activate')  return handleJwActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/set-model') return handleJwSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/set-balance') return handleJwSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/map-profiles') return handleJwMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/modelmap')  return handleJwModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/session/open') return handleJwSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/share')    return handleJwShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/import')   return handleJwImport(req, res);
+
     // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/om/add')       return handleOmAdd(req, res);
@@ -11776,14 +12711,16 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/gh/delete')          return handleGhDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/update')          return handleGhUpdate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/open')            return handleGhOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/gh/star')            return handleGhStar(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/relink')          return handleGhRelink(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/mark')            return handleGhMark(req, res);
-    // Заселение готовой GitHub-сессии в новый аккаунт New-API-вкладок (ar/go/tb/xp).
+    // Заселение готовой GitHub-сессии в новый аккаунт New-API-вкладок (ar/go/tb/xp/jw).
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/gh/available')) return handleGhAvailable(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/add-github')       return handleTbAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/add-github')       return handleXpAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/add-github')       return handleJwAddGithub(req, res);
 
     // ---- Svrtr — пул ТГ-аккаунтов, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/svrtr/sessions'))    return handleSvrtrSessions(req, res);
@@ -11849,11 +12786,11 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
         return jsonRes(res, 200, fmAutoStatus());
     }
 
-    // ---- Авторотация денежных шлюзов (ar/go/tb/xp): один набор роутов на все четыре ----
+    // ---- Авторотация денежных шлюзов (ar/go/tb/xp/jw): один набор роутов на все пять ----
     // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
     // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {
@@ -12605,7 +13542,7 @@ server.listen(LISTEN_PORT, () => {
         fmAutoStart();
     }
 
-    // Тумблер авторотации денежных шлюзов — один на все четыре. Таймера тут нет —
+    // Тумблер авторотации денежных шлюзов — один на все пять. Таймера тут нет —
     // ротация реактивная, по отказу шлюза, поэтому «возобновить» = вспомнить флаг.
     moneyLoadPersist();
     if (moneyAutoShared.enabled) console.log(`  money auto-rotate: on (все шлюзы: ${Object.keys(MONEY_GW).join(', ')})`);

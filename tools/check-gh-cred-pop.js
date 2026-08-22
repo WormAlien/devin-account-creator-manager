@@ -79,16 +79,21 @@ function hasNot(name, needle, why) {
     else if (!bad) ok.push(`инлайн-скриптов ${n}, все парсятся`);
 }
 
-// ---- 2. Якорь строки в трёх пулах ------------------------------------------
-// XPeach сознательно не в счёте: вкладка легаси, догонять её не требуется.
+// ---- 2. Якорь строки в четырёх пулах ---------------------------------------
+// XPeach сознательно не в счёте: вкладка легаси, догонять её не требуется. Остальные
+// четыре обязаны быть все: список тегов перечислением, потому что число «≥3» пропустило
+// бы пятый шлюз (jw, 22.08) молча — проверка осталась бы зелёной, ничего не проверив.
+const CRED_TAGS = ['ar', 'go', 'tb', 'jw'];
 {
     const anchors = (html.match(/<tr data-acct-id="\$\{esc\(s\.id \|\| ''\)\}"/g) || []).length;
-    if (anchors < 3) fails.push(`строк с data-acct-id только ${anchors}, нужно ≥3 (ar/go/tb) — окну кредов не к чему клеиться`);
+    if (anchors < CRED_TAGS.length) fails.push(`строк с data-acct-id только ${anchors}, нужно ≥${CRED_TAGS.length} (${CRED_TAGS.join('/')}) — окну кредов не к чему клеиться`);
     else ok.push(`якорь data-acct-id в ${anchors} рендерах пула`);
-    const btns = (html.match(/\$\{ghCredBtn\(s, '(ar|go|tb)', idJ\)\}/g) || []).length;
-    if (btns < 3) fails.push(`кнопка ghCredBtn стоит в ${btns} таблицах, нужно 3 — окно нельзя вызвать повторно`);
-    else ok.push(`кнопка «🐙 креды» в ${btns} таблицах`);
+    const seen = new Set(Array.from(html.matchAll(/\$\{ghCredBtn\(s, '([a-z]{2})', idJ\)\}/g), m => m[1]));
+    const missing = CRED_TAGS.filter(t => !seen.has(t));
+    if (missing.length) fails.push(`кнопки ghCredBtn нет на вкладках: ${missing.join(', ')} — там окно кредов не вызвать повторно`);
+    else ok.push(`кнопка «🐙 креды» в ${seen.size} таблицах (${[...seen].join(', ')})`);
 }
+
 
 // ---- 3. Тикер добивает до окна ---------------------------------------------
 has('ghRenderCountdowns', 'ghCredPopSync()', 'окно не переклеится после перерисовки таблицы');

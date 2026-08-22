@@ -23,6 +23,7 @@
 | `20155`| **Tabi Token keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для tabitoken.com. `PORT=20155`, `KEY_FILE=tabi-active-key.txt`, `MODELMAP_FILE=tabi-modelmap.json`. gpt-модели остаются на своём шлюзе: конвертер `:20132` — агентроутеровский (см. `GPT_PROXY_ENABLED`). |
 | `20156`| **GoRouter keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для gorouter.app. `PORT=20156`, `KEY_FILE=gorouter-active-key.txt`, `MODELMAP_FILE=gorouter-modelmap.json`. gpt — там же, на своём шлюзе. |
 | `20157`| **XPeach keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для xpeach.codes. `PORT=20157`, `KEY_FILE=xpeach-active-key.txt`, `MODELMAP_FILE=xpeach-modelmap.json`. claude-модели каталога помечены `anthropic+openai` → форвардятся нативно, конвертер не нужен. |
+| `20158`| **JustWoker keepalive** | `routing/keepalive-proxy.js` | SSE keepalive для `api.justwoker.icu`. `PORT=20158`, `KEY_FILE=justwoker-active-key.txt`, `MODELMAP_FILE=justwoker-modelmap.json`. 🪤 Апстрим — **корень без `/v1`**: `POST /v1/messages` отдаёт 200, `POST /v1/v1/messages` — 404 (замер 22.08). `/v1` нужен только листингу моделей. |
 | `20128`| **OmniRoute**           | внешний docker-контейнер       | Главный backend (`/v1`), модель `ComboWombo`. БД `~/.omniroute/storage.sqlite`. |
 | `8190` | **Notion manager** (архив) | `notion/`                   | Дешёвый backend. Сейчас в архиве. |
 | —      | **Telegram-пульт**      | `tgbot/bot.js`                 | Не слушает порт. Long-poll к Telegram. Управляет дашбордом :8200 по HTTP + живая claude-сессия. |
@@ -32,7 +33,7 @@
 ТГ-бот: `npm run tgbot` (нужен `tgbot/.env`, см. `tgbot/README.md`).
 
 > `:20132`, `:20133` и `:20100` boot-спавнит сам `transparent-proxy.js`, поэтому bat-скрипты
-> их убивают перед стартом. `:20155`–`:20157` (keepalive провайдеров) **не убивают никогда**:
+> их убивают перед стартом. `:20155`–`:20158` (keepalive провайдеров) **не убивают никогда**:
 > автоспавна у них нет, а `settings.json` может смотреть ровно в один из них.
 
 ## Свипер зомби-браузеров
@@ -105,6 +106,12 @@
   форвард в xpeach.codes), в `ANTHROPIC_AUTH_TOKEN` — `dummy`, ключ из `xpeach-active-key.txt`,
   модель из `~/.claude/xpeach-active-model.txt` + `xpeach-modelmap.json`. Пул:
   `routing/xpeach-sessions.json`. Валюта шлюза — 🍑 (курс к единице квоты как у $).
+- **justwoker** (прямой режим) — `ANTHROPIC_BASE_URL=http://localhost:20158` (SSE keepalive,
+  форвард в `https://api.justwoker.icu` — **корень, без `/v1`**), в `ANTHROPIC_AUTH_TOKEN` —
+  `dummy`, ключ из `justwoker-active-key.txt`, модель из `~/.claude/justwoker-active-model.txt`
+  + `justwoker-modelmap.json`. Пул: `routing/justwoker-sessions.json`. В каталоге шлюза
+  **только opus** (`claude-opus-5`, `claude-opus-5-thinking`, `claude-opus-4-8`,
+  `claude-opus-4-8-thinking`), апстрим — Amazon Kiro (`usage.kiro_credits` в ответе).
 - **helpcoder** (виртуальный режим) — `apiKeyHelper` читает `~/.claude/hc-active-key.txt`,
   `ANTHROPIC_BASE_URL=https://helpcoder.cc`, TTL=0. OpenAI-совместимый New-API инстанс
   (ключи `sk-`), понимает и Anthropic-формат `/v1/messages`. Все модели `gpt-*`
@@ -197,7 +204,7 @@ boot-спавнится дашбордом, и без дашборда у CC н�
   бата (`choice` + `pause` в конце), а не ключа запуска;
 - **рестарт дашборда = рестарт всего стека** (21.08). Раньше на boot всё поднималось «мягко»:
   живой порт читался как «уже работает», и дети ПРОШЛОГО запуска доживали на **старом коде** —
-  `restart-dashboard.bat` их даже не гасит (`:20155`/`:20156`/`:20157` в его KILLPORT нет
+  `restart-dashboard.bat` их даже не гасит (`:20155`–`:20158` в его KILLPORT нет
   намеренно). Снаружи это «нажимаю перезагрузить, а перезагружается не всё, потом добиваю
   руками»: обновление приезжало в `:8200`, а keepalive провайдера оставался прежним — именно так
   график времени ответа не появлялся на GoRouter, хотя запросы шли. Теперь на boot:
@@ -239,10 +246,12 @@ boot-спавнится дашбордом, и без дашборда у CC н�
 
 **Регресс-тесты:** `node routing/frontdoor-proxy.js selftest` (логика прокси),
 `node tools/check-keepalive-bring.js` (подъём keepalive: живой не трогаем, медленный не убиваем,
-зомби снимаем, мёртвый ребёнок = честный провал, `force` перезапускает даже живого) и
-`node tools/check-frontdoor.js` — поднимает изолированную копию дашборда (свой `USERPROFILE`,
-свой порт, свой `frontdoor.json`) и проверяет чокпоинт на всех формах записи: helper-режим,
-локальный апстрим, литеральный ключ, официальный Claude, повторная запись, выключенный тумблер.
+зомби снимаем, мёртвый ребёнок = честный провал, `force` перезапускает даже живого, карта
+порт→спавн знает все пять инстансов) и `node tools/check-frontdoor.js` — поднимает
+изолированную копию дашборда (свой `USERPROFILE`, свой порт, свой `frontdoor.json`) и
+проверяет чокпоинт на всех формах записи: helper-режим, локальный апстрим keepalive
+(в том числе `:20158`), литеральный ключ, официальный Claude, повторная запись,
+выключенный тумблер.
 
 ### Запушенный код не должен требовать файлов вне репо
 
@@ -293,7 +302,7 @@ git config core.hooksPath .githooks
 
 | Провайдер | Источник модели при активации |
 |---|---|
-| agentrouter / gorouter / tabi / xpeach / conduit | `<p>-active-model.txt` → в `settings.model` (суффикс дотянет `writeSettings`) |
+| agentrouter / gorouter / tabi / xpeach / justwoker / conduit | `<p>-active-model.txt` → в `settings.model` (суффикс дотянет `writeSettings`) |
 | freemodel | своя модель, иначе явный дефолт `claude-opus-5[1m]` |
 
 Остальные (aerolink, evomap, ourtoken, custom, svrtr, helpcoder, vyceai, omniroute) шлют
@@ -368,7 +377,8 @@ git config core.hooksPath .githooks
 | **GoRouter** | активна   | ручной пул ключей gorouter.app, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, чек-ин «+5» шагом $5), маппинг моделей, **активация через SSE keepalive :20156** (keepalive-proxy.js → gorouter.app, срез `[1m]`, count_tokens fallback) | `/api/go/{sessions,ping,balance,set-grant,add-bonus,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **Tabi Token** | активна  | ручной пул ключей tabitoken.com, GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, дефолт $100, реф-бонус $20), маппинг моделей, **активация через SSE keepalive :20155** (keepalive-proxy.js → tabitoken.com, срез `[1m]`, count_tokens fallback) | `/api/tb/{sessions,ping,balance,set-grant,session/open,add,set-key,rename,delete,activate,set-model,modelmap,models}` |
 | **XPeach** | архив («Чтим память», 2026-08-22) | ручной пул ключей xpeach.codes («🍑 Code», New-API ветки tabitoken → `HOST_AUTH='jwt'`), GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=0lre`, есть → `/console/topup`), **аккаунт без ключа** (`status: no_key`), **точный баланс** из `/api/user/auth/refresh` (валюта 🍑, курс к единице квоты как у $), маппинг моделей, **активация через SSE keepalive :20157**. Каталог 32 модели: 8 claude `anthropic+openai` (ходят нативно) + grok/gpt-5.x/картинки/видео — они `openai`-only и помечены бейджем. Чек-ина нет (`checkin_enabled=false`). **Похоронен, потому что все ключи `403 banned` и регистрация не проходит**; код, пул и прокси не тронуты | `/api/xp/{sessions,ping,balance,set-balance,map-profiles,session/open,add,key,rename,delete,activate,set-model,modelmap,models,share,import,set-github}` |
-| **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную, **плашки «где уже используется»** по четырём шлюзам + ручные отметки занятости | `/api/gh/{keys,add,import,delete,update,open,relink,mark}` |
+| **JustWoker** | активна (с 2026-08-22) | ручной пул ключей `api.justwoker.icu` (New-API, `system_name: "JustDoWork"`, за Cloudflare) — **структурная копия вкладки GoRouter**. GitHub-вход в консоль, **🌐 ЛК** (нет ключа → рефка `?aff=IFYf`, есть → `/wallet`), **аккаунт без ключа** (`status: no_key`), баланс (`grant + bonus − spent`, `spent` из `/dashboard/billing/usage` как у GoRouter), маппинг моделей, **активация через SSE keepalive :20158**. Каталог — **только opus** (4 модели). Кнопки «+N» нет: `checkin_enabled: true`, но бонус **случайный** (мин/макс квота), обещать цифру нечем. 🪤 Регистрация только через GitHub (`password_register_enabled: false`) и только аккаунтом **старше 365 дней** (`github_minimum_account_age_days`) | `/api/jw/{sessions,ping,balance,set-balance,map-profiles,session/open,add,key,rename,delete,activate,set-model,active-model,modelmap,models,share,import,set-github,add-github,keepalive/*}` |
+| **GitHub аккаунты** | активна | хранилище купленных аккаунтов (логин/пароль/2FA-секрет/recovery/ник), **TOTP считается локально в браузере** (base32+HMAC-SHA1, RFC 6238, 30с+countdown), карточки-сетка, профиль браузера на аккаунт (сохраняет GitHub-сессию), статусы live/cooldown/dead вручную, **плашки «где уже используется»** по пяти шлюзам + ручные отметки занятости. ⚠️ Для JustWoker годятся только гитхабы **старше 365 дней** — шлюз проверяет возраст аккаунта | `/api/gh/{keys,add,import,delete,update,open,relink,mark}` |
 | **Telegram аккаунты** | активна | менеджер общего ТГ-пула `freemodel/tg_pool.json`: **вся таблица целиком** (в отличие от блока «Telegram pool», свёрнутого до 3 строк), поиск (номер/ключ/кем занят), фильтры (статус, health, «свободен для сервиса»), сортировка, открытие в портативном Telegram Desktop, **переименование плейсхолдеров** `tg_xxxx` (роут `rename` до этого был без UI), **health-чек фоновый** (scope `unchecked`/`all` + прогресс, вместо блокирующего запроса на десятки минут), **колонки годности по сервисам** FM/CDT/SR/AM | `/api/tg/{list,add-bulk,add-session,delete,mark-free,rename,open,health-check,health-progress}` |
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
@@ -388,11 +398,11 @@ git config core.hooksPath .githooks
 
 Лечится `bootNavCounts()` в блоке INIT (`proxy-dashboard.html`) — один проход на boot:
 `loadArSessionsLight` / `loadGoSessionsLight` / `loadTbSessionsLight` /
-`loadXpSessionsLight` / `loadGhKeys` / `loadTgPool` / `loadCustomProviders` /
-`loadPlugins`, каждый в своём `try` (падение одного не глотает остальные), плюс
-`loadHealth()`.
+`loadXpSessionsLight` / `loadJwSessionsLight` / `loadGhKeys` / `loadTgPool` /
+`loadCustomProviders` / `loadPlugins`, каждый в своём `try` (падение одного не глотает
+остальные), плюс `loadHealth()`.
 
-⚠️ Здесь можно вызывать **только то, что читает локальный JSON**. У ar/go/tb/xp взяты
+⚠️ Здесь можно вызывать **только то, что читает локальный JSON**. У ar/go/tb/xp/jw взяты
 именно `*SessionsLight`: полные `loadXxSessions()` тянут ещё `loadXxModels()`, а это
 запрос к шлюзу — он попал бы под рейт-лимит WAF на **каждом** открытии дашборда.
 `?probe=1` / `?balance=1` по той же причине не передаются. `state.loaded.*`
@@ -400,7 +410,7 @@ git config core.hooksPath .githooks
 
 ### Health: «не запущен» ≠ «упал»
 
-Keepalive-инстансы `:20155` / `:20156` / `:20157` спавнятся **только при активации
+Keepalive-инстансы `:20155` / `:20156` / `:20157` / `:20158` спавнятся **только при активации
 своего провайдера** (boot-спавнится один `:20133`). Лежащий keepalive — нормальное
 состояние покоя, поэтому красное «упал» на нём было ложной тревогой: при полностью
 здоровой системе Health показывал три красные строки и бейдж `5↓`.
@@ -430,11 +440,11 @@ BluesMinds с pid из позапрошлой загрузки). Теперь `h
 
 ### Хедж / ретраи keepalive — дефолты из коробки
 
-Одинаковы для **всех четырёх** вкладок (AgentRouter / GoRouter / Tabi / XPeach), потому
-что все четыре — экземпляры одного `keepalive-proxy.js`. **Кроме одной ручки:** хедж
-включён только у agentrouter, а у `tabitoken.com` / `gorouter.app` / `xpeach.codes`
-`maxHedges` дефолтно `0` (список `FLAT_RATE_HOSTS` в коде). Причина в биллинге, замер
-21.08:
+Одинаковы для **всех пяти** вкладок (AgentRouter / GoRouter / Tabi / XPeach / JustWoker),
+потому что все пять — экземпляры одного `keepalive-proxy.js`. **Кроме одной ручки:** хедж
+включён только у agentrouter, а у `tabitoken.com` / `gorouter.app` / `xpeach.codes` /
+`api.justwoker.icu` `maxHedges` дефолтно `0` (список `FLAT_RATE_HOSTS` в коде). Причина в
+биллинге, замер 21.08:
 
 | шлюз | полный ответ | крошечный запрос | **убитый дубль** |
 |---|---|---|---|
@@ -447,6 +457,9 @@ BluesMinds с pid из позапрошлой загрузки). Теперь `h
 запроса (+25% к счёту при 0.25 дубля на запрос) и не даёт ускорения — поэтому выключен.
 Пре-коммит и пинги остаются: они бесплатны и именно они держат клиента. `xpeach` в списке
 по аналогии, замерить не удалось — все ключи отдают `403 User has been banned`.
+`api.justwoker.icu` — тоже по аналогии (тот же New-API), и там есть вторая причина:
+шлюз подмешивает свой системный промпт, на тривиальном запросе `input_tokens: 7166`
+(замер 22.08), то есть дубль дорог даже при токенном тарифе.
 
 Побочный вывод того же замера: `count_tokens`-fallback на плоских шлюзах экономит деньги,
 а не только чинит `/model` — иначе каждый `/model` стоил бы 20–50¢. И гнать туда
@@ -769,7 +782,7 @@ node -e "console.log(require('./freemodel/lib/tg-pool').stats().usable)"     # =
   чипу модели маппинг **не трогает** — это ручная настройка.
 - **Конвертер `:20132` — только для agentrouter-инстанса** (`GPT_PROXY_ENABLED` в
   `keepalive-proxy.js`): он ходит на `agentrouter.org` ключом из `ar-active-key.txt`,
-  поэтому уводить туда gpt с инстанса `:20155`/`:20156` нельзя — это молча жгло бы баланс
+  поэтому уводить туда gpt с инстанса `:20155`/`:20156`/`:20157`/`:20158` нельзя — это молча жгло бы баланс
   AgentRouter чужим ключом и ловило его content-filter, пока в UI выбран другой шлюз.
   Гейт смотрит на `UPSTREAM` своего инстанса; перебить — `GPT_PROXY_FORCE=1`. Под гейтом
   же fallback `haiku→HAIKU_TO_MODEL` и gpt-цель тир-маппинга: без конвертера модель уходит
@@ -788,7 +801,7 @@ node -e "console.log(require('./freemodel/lib/tg-pool').stats().usable)"     # =
 client detected` (проверено 2026-08-16, при прочих равных заголовках). `agentrouter-proxy.js`
 собирает `CC_HEADERS` с нуля, `keepalive-proxy.js` форвардит клиентские и добивает
 отсутствующие из `CC_FALLBACK_HEADERS` (`user-agent`/`anthropic-version`/`x-app`;
-`anthropic-beta` намеренно НЕ ставим — инстансы `:20155`/`:20156` ходят на другие шлюзы).
+`anthropic-beta` намеренно НЕ ставим — инстансы `:20155`–`:20158` ходят на другие шлюзы).
 
 **2. Content-filter — смотрит на текст.** На OpenAI-эндпоинте `/v1/chat/completions`
 шлюз режет **точные подстроки** из своего блок-листа. Замеры (2026-08-16, дополнено
@@ -892,8 +905,8 @@ client detected` (проверено 2026-08-16, при прочих равны�
 ### Баланс ключа (продажа на FunPay)
 
 Точный остаток берётся из **аккаунтного** эндпоинта New-API, а не выводится из ключа.
-Общий модуль на все четыре вкладки (ar/go/tb/xp) — `routing/lib/newapi-account.js`, общий
-расчёт — `newapiBalance()` в `transparent-proxy.js` (одна реализация вместо четырёх копий).
+Общий модуль на все пять вкладок (ar/go/tb/xp/jw) — `routing/lib/newapi-account.js`, общий
+расчёт — `newapiBalance()` в `transparent-proxy.js` (одна реализация вместо пяти копий).
 
 **Три источника** (поле `balanceSource` в записи). `usage` и `self` спрашиваются всегда,
 анкер решает только то, какую цифру ПОКАЗАТЬ:
@@ -942,8 +955,10 @@ client detected` (проверено 2026-08-16, при прочих равны�
 - **Авторизация аккаунтная, не ключевая**, и различается по версиям New-API:
   `agentrouter.org` / `gorouter.app` (classic) — cookie `session` + заголовок `New-Api-User: <id>`,
   причём **id читается локально из самой куки** (gorilla/sessions подписывает, но не шифрует);
-  `tabitoken.com` (rc.23) и `xpeach.codes` — `POST /api/user/auth/refresh` с кукой
-  `new_api_refresh` → JWT. Схема на хост — `HOST_AUTH` в `newapi-account.js`.
+  `tabitoken.com` (rc.23), `xpeach.codes` и `api.justwoker.icu` — `POST /api/user/auth/refresh`
+  с кукой `new_api_refresh` → JWT. Схема на хост — `HOST_AUTH` в `newapi-account.js`.
+  🪤 У JustWoker ключ в этой таблице **с поддоменом** (`api.justwoker.icu`): панель и API
+  живут на одном хосте, а `justwoker.icu` не резолвится.
 - **Куки берутся прямо из профилей Chromium** (`<provider>/profiles/<label>`), без запуска
   браузера: схема `v10`, ключ в `Local State` под DPAPI (раскрывается через PowerShell
   `ProtectedData.Unprotect`), сама БД читается копией через `better-sqlite3`.
@@ -1032,7 +1047,7 @@ client detected` (проверено 2026-08-16, при прочих равны�
   пробелы легальны в JSON, разбор на фронте не меняется). Капаем **лениво**, чтобы ранние отказы
   сохранили честный код 500; поздняя ошибка уходит с кодом 200 и полем `error` — поэтому в
   дашборде обязателен guard `if (!res.ok || data.error)`. `jsonRes` терпит уже начатый ответ.
-- Кеш — прямо в `{agentrouter,gorouter,tabi}-sessions.json`: `spent/balance/balanceSource/granted/
+- Кеш — прямо в `{agentrouter,gorouter,tabi,xpeach,justwoker}-sessions.json`: `spent/balance/balanceSource/granted/
   balanceAnchor/anchorSpent/anchorGrantedSelf/selfBalance/selfCheckedAt/balanceCheckedAt`,
   у AgentRouter плюс `checkinAt`/`checkinFrom` и `grantedSelf` (база сравнения для детекта
   чек-ина). `selfBalance` держит точный остаток отдельно от `balance`: у анкерной записи в
@@ -1128,7 +1143,9 @@ client detected` (проверено 2026-08-16, при прочих равны�
   - Реф-бонус +$100 и реальное пополнение тоже отметятся как чек-ин: ошибка в **безопасную**
     сторону (таймер скажет «ждать», а не «иди зря»), и в тот заход владелец всё равно был в ЛК.
   - Детект включён **только у AgentRouter** (`arApplyBalance`, `handleArSetBalance`): у
-    GoRouter чек-ина нет, у XPeach шлюз сам отдаёт `checkin_enabled: false`.
+    GoRouter чек-ина нет, у XPeach шлюз сам отдаёт `checkin_enabled: false`, а у JustWoker
+    `checkin_enabled: true`, но бонус **случайный** (шлюз отдаёт мин/макс квоты) — цифру
+    в колонке обещать нечем, поэтому колонки и кнопки «+N» на вкладке нет вовсе.
   - Открытие браузера отметку **не** ставит: это не доказательство, что вход состоялся
     (ср. `newapiLkVisited` — та метка про инвалидацию кеша, а не журнал чек-инов).
 - **Кнопка 🎁 в строке** → `POST /api/ar/session/open {id, mode:'checkin'}` → новая ветка
@@ -1234,18 +1251,19 @@ client detected` (проверено 2026-08-16, при прочих равны�
 
 ### Кнопка «🌐 ЛК» — рефка для новых, баланс для рабочих (общее для ar/go/tb)
 
-- `POST /api/{ar,go,tb}/session/open {id}` → `handle{Ar,Go,Tb}SessionOpen`: спавнит
+- `POST /api/{ar,go,tb,jw}/session/open {id}` → `handle{Ar,Go,Tb,Jw}SessionOpen`: спавнит
   `<provider>/open-session.js <label> <mode>` detached + `unref()`, видимый Chromium
   с **персональным профилем** `<provider>/profiles/<label>/` (`label = acct_<id>` —
   стабильный, смена ключа и переименование не рвут профиль).
   `launchPersistentContext` сам пишет куки+localStorage+GitHub-OAuth на диск.
 - **`mode` считает сервер по ключу аккаунта** (`isRealKey()` — настоящий ключ у всех
-  трёх NewAPI-провайдеров это `sk-` + 48):
+  NewAPI-провайдеров это `sk-` + 48):
   - ключа нет (заглушка `no-key-…`) → `register` → **реф-ссылка владельца**:
     `agentrouter.org/register?aff=oUm3`, `gorouter.app/sign-up?aff=dzj0`,
-    `tabitoken.com/sign-up?aff=cUG3`;
+    `tabitoken.com/sign-up?aff=cUG3`, `api.justwoker.icu/sign-up?aff=IFYf`;
   - ключ есть → `console` → страница баланса: `agentrouter.org/console/topup`
-    (там же чек-ин +$25), `gorouter.app/wallet`, `tabitoken.com/wallet`.
+    (там же чек-ин +$25), `gorouter.app/wallet`, `tabitoken.com/wallet`,
+    `api.justwoker.icu/wallet`.
   - **AgentRouter, `mode=checkin`** приходит с фронта (кнопка 🎁) и перебивает расчёт по
     ключу: разлогин + страница входа, чтобы забрать суточные +$25 — см. подраздел выше.
   - `mode` уходит в ответ (`{mode}`) и в `logLine` — дашборд по нему выбирает тост,
@@ -1428,11 +1446,75 @@ count_tokens fallback, держит SSE-паузы thinking-моделей). К�
   поэтому мёртвый канал ретраится `maxAttempts` раз — ~3.5 с пустой молотилки на запрос.
 - **Share / import** — как у tabi/gorouter (`provider: 'xpeach'` в payload).
 - ⚠️ **`:20157` НЕ в списке KILLPORT** у `start-switcher.bat` / `restart-dashboard.bat` —
-  ровно как `:20155`/`:20156`. Автоспавна у них нет (boot-спавнится только `:20133`),
+  ровно как `:20155`/`:20156`/`:20158`. Автоспавна у них нет (boot-спавнится только `:20133`),
   поэтому убийство порта оставило бы активный бэкенд без слушателя. Рестарт — кнопкой
   в Health или `keepalive-restart.ps1 -Port 20157`.
 - ⚠️ **В статуслайне правило `:20157` стоит ДО catch-all Custom-конвертеров**
   (`*localhost:2015[0-9]*` → `custom`), иначе xpeach определялся бы как Custom.
+
+---
+
+## JustWoker (jw) — New-API «JustDoWork», SSE keepalive :20158
+
+Пул в `routing/justwoker-sessions.json`. Активация/работа — через **SSE keepalive `:20158`**
+(пятый экземпляр `keepalive-proxy.js`). Ключ литералом в `ANTHROPIC_AUTH_TOKEN`, модель из
+`~/.claude/justwoker-active-model.txt`. Вкладка сделана **структурной копией GoRouter**:
+та же панель New-API, тот же механизм `spent` из `/dashboard/billing/usage`, тот же
+GitHub-вход, те же кнопки. Отличаются адреса, реф-код и три вещи ниже.
+
+Разведка живыми пробами 2026-08-22 (`/api/status`, `/v1/models`, `/v1/messages`,
+`/dashboard/billing/usage`, `/api/user/self`):
+
+| Свойство | Значение | Следствие |
+|---|---|---|
+| Панель | New API (QuantumNous), `system_name: "JustDoWork"`, за Cloudflare | вся механика New-API применима без правок |
+| Anthropic-эндпоинт | `POST /v1/messages` → **200** с живым ответом Claude | keepalive форвардит claude-* нативно, конвертер не нужен |
+| Двойной `/v1` | `POST /v1/v1/messages` → **404** | 🪤 апстрим keepalive = **корень** `https://api.justwoker.icu` |
+| Каталог | **только opus**: `claude-opus-5`, `claude-opus-5-thinking`, `claude-opus-4-8`, `claude-opus-4-8-thinking` | тир-карта обязана уметь `opus`, иначе пина модели нет и CC стартует на 200k |
+| Расход | `GET /dashboard/billing/usage` → `{"object":"list","total_usage":0}` | `spent` считается как у GoRouter |
+| Точный баланс | `GET /api/user/self` по Bearer → **401** | нужны куки профиля, как у остальных четырёх |
+| Регистрация | `github_oauth: true`, `password_register_enabled: false` | только GitHub, email/пароля нет вообще |
+| Возраст гитхаба | `github_minimum_account_age_days: 365` | ⚠️ свежие аккаунты из менеджера сайт **отвергает** |
+| Чек-ин | `checkin_enabled: true`, бонус **случайный** (мин/макс квота) | колонки и кнопки «+N» нет, как у GoRouter |
+| Апстрим шлюза | в ответе `usage.kiro_credits` | под капотом Amazon Kiro |
+
+- 🪤 **База для Claude Code — БЕЗ `/v1`.** `JW_UPSTREAM = 'https://api.justwoker.icu'`, а
+  `/v1` живёт отдельной константой `JW_BASE_URL` и используется **только листингом моделей**
+  (`GET /v1/models`). Перепутать легко, а симптом непрозрачный: keepalive сам добавляет
+  `/v1/messages`, и с базой `…/v1` получается `/v1/v1/messages` → 404 на каждый запрос CC.
+- ⚠️ **GitHub-аккаунту нужен год.** Единственный шлюз с таким требованием: панель отдаёт
+  `github_minimum_account_age_days: 365`, то есть купленные в менеджере свежие гитхабы тут
+  не проходят, и это **ответ сайта, а не баг** `open-session.js`. Скрипт распознаёт такой
+  отказ (`SITE_ERRORS`, код `gh_age`) и печатает объяснение, но **не** считает его
+  терминальным: точная формулировка бэкенда по исходнику new-api не сверена, а ложное
+  срабатывание не должно рубить живую регистрацию.
+- **GitHub-вход в консоль** — `justwoker/open-session.js` (профиль
+  `justwoker/profiles/<label>/`). Ключа нет → регистрация по рефке
+  `api.justwoker.icu/sign-up?aff=IFYf`, есть → `api.justwoker.icu/wallet` (роут проверен по
+  бандлу панели, это алиас `/console/topup`).
+- **Хост с поддоменом обязателен везде** — `api.justwoker.icu`, потому что голый
+  `justwoker.icu` не резолвится. Это касается `NEWAPI_PROFILE_DIRS`, `MONEY_GW`,
+  `GW_BY_HOST` в `keepalive-proxy.js` и `FLAT_RATE_HOSTS`. Отдельная ловушка для
+  диагностик (`tools/mac-*-probe.js`): искать куки профиля по первой метке хоста нельзя —
+  она `api`, поэтому у записи есть отдельный `token: 'justwoker'`.
+- **Баланс** — `balance = grant + bonus − spent`. База выдачи `JW_DEFAULT_GRANT = 10`,
+  шаг `JW_GRANT_STEP = 5`, ручная выдача `grantManual` (✏️). Кеш — в
+  `justwoker-sessions.json` (`jwBalance()` / `jwApplyBalance()`).
+- **Маппинг claude-тиров** — `routing/justwoker-modelmap.json`, применяется keepalive по
+  mtime. В каталоге только opus, поэтому пустым его оставлять нельзя: без `opus` в карте
+  `resolveCcModel()` не пинит модель и Claude Code уезжает на 200k (это ловит
+  `node tools/check-1m.js`).
+- **Share / import** — как у gorouter (`provider: 'justwoker'` в payload).
+- ⚠️ **`:20158` НЕ в списке KILLPORT** у `start-switcher.bat` / `restart-dashboard.bat` —
+  ровно как `:20155`–`:20157`. Рестарт — кнопкой в Health или
+  `keepalive-restart.ps1 -Port 20158`.
+- ⚠️ **В статуслайне правило `:20158` стоит ДО catch-all Custom-конвертеров**
+  (`*localhost:2015[0-9]*` → `custom`), иначе JustWoker определялся бы как Custom.
+- **Регресс на полноту копии** — `node tools/check-justwoker.js`: статически (без сети и без
+  запущенного дашборда) сверяет множества констант, хендлеров, роутов, id элементов и всех
+  реестров с эталоном `go`. Проверка «на каждый `/__switch/api/go/…` есть парный
+  `/__switch/api/jw/…`» — ключевая: забытый роут выглядит как кнопка, которая молча ничего
+  не делает.
 
 ---
 
@@ -1482,12 +1564,12 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
   (`apiKey`) → блок в `.freemodel_quota_cache.json`. Метрика — 5h окно:
   `pct = (1 − h5/h5max)·100`, `$ = h5max − h5` (остаток до reset).
 - **Квота для `ourtoken`** — `live/total` из `ourtoken-sessions.json`.
-- **Квота для `agentrouter` / `tabi` / `gorouter`** — одна функция
+- **Квота для `agentrouter` / `tabi` / `gorouter` / `xpeach` / `justwoker`** — одна функция
   `gauge_from_balance_cache()` в скрипте: читает блок активного ключа
-  (`~/.claude/{ar,tabi,gorouter}-active-key.txt`) из
-  `{agentrouter,tabi,gorouter}-sessions.json`, `$ = balance` (дашборд уже посчитал
+  (`~/.claude/{ar,tabi,gorouter,xpeach,justwoker}-active-key.txt`) из
+  `{agentrouter,tabi,gorouter,xpeach,justwoker}-sessions.json`, `$ = balance` (дашборд уже посчитал
   grant+bonus−spent). Lazy-refresh при протухании >90с: fire-and-forget
-  `GET /__switch/api/{ar,tb,go}/balance?api_key=…`.
+  `GET /__switch/api/{ar,tb,go,xp,jw}/balance?api_key=…`.
 - **Денежный блок** — доcтупная cумма активного аккаунта. `~` означает уcтаревший
   кеш; `⏳` c оcтавшимcя временем означает cooldown FreeModel.
 - **Контекcтное окно** (`⧉ 139k/1M`) — из stdin-payload Claude Code
@@ -1589,10 +1671,10 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
     `email`/`name` == ник (`nickname || login`). Тем же предикатом живёт
     `ghPoolEntryFor`, то есть модалка заселения и плашки не могут разъехаться —
     иначе вкладка показывала бы «свободен» там, где заселение отвечает 409.
-  - **Охват — только четыре пула ar/go/tb/xp.** Замер 2026-08-22: логины и ники из
+  - **Охват — пять пулов ar/go/tb/xp/jw.** Замер 2026-08-22: логины и ники из
     `github-accounts.json` совпадают больше нигде — `freemodel/keys.txt` (248 строк),
     `routing/tokenrouter/accounts.json`, notion, anymodel, conduit, ourtoken/cun/al/evomap
-    дают ноль совпадений. Поэтому обхода каталогов нет, только чтение четырёх маленьких
+    дают ноль совпадений. Поэтому обхода каталогов нет, только чтение пяти маленьких
     JSON, каждый в своём `try` (битый или отсутствующий пул не обнуляет остальные).
   - **Куку в профиле («засвечен») плашки НЕ учитывают** — сознательно. На вкладке нужен
     факт «аккаунт израсходован», а профиль на диске переживает и удаление записи, и не
@@ -1601,7 +1683,7 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
   - Мёртвая запись (`dead`/`no_key`) гасится `opacity-60`, но остаётся плашкой: аккаунт
     израсходован, второй раз на этот шлюз его не завести.
   - Карта кешируется в памяти (`ghUsageCache`) и пересчитывается только при изменении
-    mtime/size любого из пяти файлов: четыре пула + `github-accounts.json`.
+    mtime/size любого из шести файлов: пять пулов + `github-accounts.json`.
 
 ### Как связка вообще ставится (3 дороги + сверка, 2026-08-22)
 
@@ -1646,10 +1728,70 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 `github-accounts.json`). Ручная отметка — для случаев, когда записи в пуле нет и не будет:
 шлюз закрыл регистрацию, аккаунт удалён на их стороне, использован вне дашборда. На
 карточке такие плашки отличаются пунктирной рамкой и статусом «вручную».
-- **Профиль браузера на аккаунт:** «Открыть GitHub» → `POST /api/gh/open {id}` спавнит
+- **Профиль браузера на аккаунт:** «Открыть» → `POST /api/gh/open {id}` спавнит
   `github/open-session.js <label>` (`label = acct_<id>`, стабильный — переименование не
   рвёт сессию), персистентный профиль `github/profiles/acct_<id>/`. Dedup по pid
   (`ghLkPids`), второй клик при живом браузере → `{already:true}`. Профили gitignored.
+- **⭐ Звезда на `hub-cc`:** `POST /api/gh/star {id}` — окно, уже залогиненное этим
+  аккаунтом, прямо на странице репозитория владельца. Разбор ниже.
+
+### ⭐ Кнопка звезды: сессия аккаунта на github.com/WormAlien/hub-cc (2026-08-22)
+
+Кнопка `⭐` в подвале карточки. Один клик — окно под готовой куки-сессией аккаунта на
+странице репозитория, остаётся нажать Star.
+
+**Почему это не «`/api/gh/open` с другим URL».** Персональных профилей в
+`github/profiles/` на диске **один на 36** аккаунтов менеджера, то есть «чистый профиль →
+страница логина» здесь обычный случай. Живые куки при этом есть: **32 из 36** аккаунтов
+лежат снимком `storageState` в `github/sessions/<ghId>.json` (9–14 github.com-кук, снял
+харвест из профилей шлюзов), а индекс профилей знает 121 профиль / 109 с GitHub-логином /
+36 уникальных ников. Поэтому ⭐ переиспользует каскад заселения, а не поднимает пустой
+профиль.
+
+Путь запроса:
+
+1. `handleGhStar` — `id` из тела, `dead` отбивается, `jsonKeepalive` на всё долгое.
+2. Живой pid в `ghLkPids` → **handoff**: `ghHandoffUrl` запускает тот же бинарь Chromium с
+   тем же `--user-data-dir` и URL, ProcessSingleton отдаёт вкладку живому окну (замер: код
+   0 за 146 мс, `ctx.pages()` 1→2). Второй Chromium на одном профиле не поднимается — это
+   порча профиля.
+3. `lockfile` в каталоге профиля при пустой карте pid → 409 «профиль держит открытое окно»:
+   браузеры спавнятся `detached+unref` и переживают рестарт `:8200`, а карта живёт в памяти.
+4. `ghProfileNeedsSession` → снимок нужен: `ghStarSnapshot` = кеш (`readCache`, TTL 7 суток)
+   → иначе `indexByLogin` → `hasUserSession` → `!ghProfileBusy` → `ghHarvest` по очереди
+   (коды 2 «профиль занят» / 3 «сессия мертва» разведены), общий бюджет 120 с, повторный
+   харвест одного аккаунта заблокирован (`ghHarvestInFlight`).
+5. Спавн `github/open-session.js <label> <url> <seedFile>`; скрипт вливает снимок
+   `context.addCookies` **до** первой навигации, затем идёт на репозиторий и печатает в
+   stdout, кем залогинен и стоит ли уже звезда (в Server Logs).
+
+**URL — константа на сервере** (`GH_STAR_REPO_URL`), из тела запроса не принимается: `:8200`
+слушает `0.0.0.0` без аутентификации, и параметр URL означал бы «любой в локальной сети
+открывает произвольную страницу в залогиненном GitHub владельца». В самом скрипте цель
+дополнительно проверяется (`validTarget`: https + `hostname === 'github.com'` + запрет
+ведущего `-`), потому что его зовут и руками.
+
+🪤 **Признак «профилю нужна сессия» — не `Default/Preferences`.** Этот файл Chromium создаёт
+при первом же запуске, залогинились в нём или нет: на таком признаке ⭐ деградировала
+навсегда — достаточно было один раз открыть аккаунт кнопкой «Открыть» и не довести вход.
+Спрашиваем индекс профилей (`profilesFromIndex → hasUserSession`), индекс не знает профиль →
+считаем, что сессии нет.
+
+🪤 **`addCookies` — «всё или ничего».** Одна кука без `domain/path` роняет весь вызов, и в
+контексте не остаётся ни одной; успех кук и успех `localStorage` считаются раздельно, иначе
+скрипт печатает «влил 12 кук» там, где не влил ни одной.
+
+🪤 **Состояние звезды нельзя читать на `domcontentloaded`** — кнопка приезжает
+react-партиалом на 168–305 мс позже, до этого в DOM нет ни формы `/star`, ни кнопки. Только
+`waitForSelector('[data-testid="star-button"]')`, состояние — из `aria-label`
+(`Star …` / `Unstar …`). И залогиненность определяется по **непустому**
+`meta[name="user-login"]`: у анонимной страницы этот тег тоже есть, но с пустым `content`.
+
+⚠️ Массовое проставление звёзд 36 фермовыми аккаунтами с одного домашнего IP (прокси в
+профилях шлюзов нет) — типовой триггер антиспама GitHub. Ставить вразбивку.
+
+Регресс закрыт `tools/check-gh-star.js` (92 инварианта, статический разбор без сети и
+браузера).
 
 ### Регистрация из менеджера в один клик + окно кредов на строке (2026-08-22)
 
@@ -1695,8 +1837,10 @@ Bearer `sk-…`), при этом понимает и Anthropic-формат `/v
 - `newapiAddGithub` возвращает `true/false`: `hasSession` — факт с диска, не проверка
   живости, и на погашенной куке харвест отвечает «сессия мертва». При отказе тост прямо
   называет выход — заводить руками через форму `➕`, она осталась и работает по-прежнему.
-- **Тест:** `node tools/check-gh-cred-pop.js` — 18 статических инвариантов, без сети и
-  браузера (якорь `data-acct-id` в трёх рендерах, кнопка кредов в трёх таблицах, тикер
+- **Тест:** `node tools/check-gh-cred-pop.js` — 27 статических инвариантов, без сети и
+  браузера (якорь `data-acct-id` в рендерах пулов, кнопка кредов на всех четырёх вкладках
+  ar/go/tb/jw — список тегов там перечислением, потому что порог «≥3» пропустил бы пятый
+  шлюз молча, тикер
   добивает до окна, ветка деградации, `api_key: ''`, единый источник вердикта, `personal`
   без кредов, и все инлайн-скрипты парсятся — последнее ловит самое дорогое, сломанный
   шаблонный литерал гасит дашборд целиком).
@@ -1934,7 +2078,7 @@ HTTPS+пароль и видит рабочий стол VPS прямо во в�
 | `tools/tg-venv` | venv помнит место создания | тот же скрипт (проверяет импорты, при поломке пересобирает по `tools/tg-venv-requirements.txt`) |
 
 Порядок: погасить сервисы (папку держат cwd процессов — дашборд `:8200`,
-конвертеры `:20126/20130/20131/20132`, keepalive `:20133/20155/20156`; последний
+конвертеры `:20126/20130/20131/20132`, keepalive `:20133/20155/20156/20157/20158`; последний
 обслуживает Claude Code, поэтому переносить из обычного терминала, а не из-под CC)
 → переместить папку → `powershell -NoProfile -ExecutionPolicy Bypass -File
 tools\fix-paths-after-move.ps1` (есть `-DryRun` и `-OldPath`) →
@@ -2310,6 +2454,18 @@ CLI-агентов в pty-терминалах по изолированным g
 7. **Шкала (опц.):** если у модуля есть квота — переиспользовать `renderEnergyGauge`.
 8. **Обнови этот файл.**
 
-Для нового NewAPI-провайдера по образцу ar/go/tb/xp список длиннее — см. раздел
-«XPeach (xp)»: там же перечислены грабли (whitelist сайдбара, порядок правил в
-статуслайне относительно catch-all Custom, отсутствие `:2015x` в KILLPORT).
+Для нового NewAPI-провайдера по образцу ar/go/tb/xp/jw список длиннее — см. разделы
+«XPeach (xp)» и «JustWoker (jw)»: там же перечислены грабли (whitelist сайдбара, порядок
+правил в статуслайне относительно catch-all Custom, отсутствие `:2015x` в KILLPORT, хост
+с поддоменом, база апстрима без `/v1`).
+
+**Не переписывай проверку с нуля — скопируй `tools/check-justwoker.js`.** Он сверяет
+пятую вкладку с эталоном `go` множествами (константы, хендлеры, хелперы, роуты, id
+элементов, все реестры), а не списком строк из спецификации, поэтому ловит и то, о чём
+при заведении провайдера никто не подумал. Заодно поднять счётчики в чекерах, где
+теги перечислены руками: `tools/check-autorotate.js` (`MONEY_TAGS`),
+`tools/check-gh-cred-pop.js` (`CRED_TAGS`), `tools/check-provider-sort.js` (селекты
+`<tag>-sort`), `tools/check-1m.js` (кейсы `resolveCcModel`), `tools/mac-balance-probe.js`
+и `tools/mac-cookie-probe.js` (хост + `token` для поиска куки). Перечисление там
+намеренное: единственная альтернатива — регулярка по двум буквам, а она пропускает
+нового провайдера **молча**, оставляя проверку зелёной.

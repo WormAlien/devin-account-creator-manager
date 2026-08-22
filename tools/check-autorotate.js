@@ -292,22 +292,30 @@ async function main() {
             'подмена = файл активного ключа + флаг active в пуле');
     }
 
-    // 11. Реестр покрывает все четыре шлюза, и хосты совпадают с таблицей прокси.
+    // 11. Реестр покрывает все пять шлюзов, и хосты совпадают с таблицей прокси.
     //     Разъезд здесь = прокси звонит в несуществующий пул и молча отдаёт 403.
+    //     ⚠️ Список тегов в обоих regexp — не украшение: пятый шлюз (jw, 22.08) под
+    //     старым `(ar|go|tb|xp)` не подходил ВООБЩЕ, и проверка «четыре шлюза»
+    //     оставалась зелёной, ничего про JustWoker не проверив. Заводя шестой —
+    //     дописывать тег здесь и поднимать число ниже.
+    const MONEY_TAGS = ['ar', 'go', 'tb', 'xp', 'jw'];
     {
+        const tags = MONEY_TAGS.join('|');
         const reg = /const MONEY_GW = \{([\s\S]*?)\n\};/.exec(src);
         check(!!reg, 'реестр MONEY_GW найден');
         const hostsDash = {};
-        for (const m of (reg ? reg[1].matchAll(/^\s*(ar|go|tb|xp):[\s\S]*?host: '([^']+)'/gm) : [])) hostsDash[m[2]] = m[1];
+        for (const m of (reg ? reg[1].matchAll(new RegExp(`^\\s*(${tags}):[\\s\\S]*?host: '([^']+)'`, 'gm')) : [])) hostsDash[m[2]] = m[1];
         const gw = /const GW_BY_HOST = \{([\s\S]*?)\n\};/.exec(kaSrc);
         check(!!gw, 'таблица GW_BY_HOST в keepalive-proxy.js найдена');
         const hostsProxy = {};
-        for (const m of (gw ? gw[1].matchAll(/'([^']+)':\s*'(ar|go|tb|xp)'/g) : [])) hostsProxy[m[1]] = m[2];
-        check(Object.keys(hostsDash).length === 4, `в реестре четыре шлюза (нашли ${Object.keys(hostsDash).length})`);
+        for (const m of (gw ? gw[1].matchAll(new RegExp(`'([^']+)':\\s*'(${tags})'`, 'g')) : [])) hostsProxy[m[1]] = m[2];
+        check(Object.keys(hostsDash).length === MONEY_TAGS.length,
+            `в реестре ${MONEY_TAGS.length} шлюзов (нашли ${Object.keys(hostsDash).length}: ${Object.values(hostsDash).join(', ')})`);
         check(JSON.stringify(hostsDash) === JSON.stringify(hostsProxy)
             || Object.keys(hostsDash).every(h => hostsProxy[h] === hostsDash[h]),
             `хосты дашборда и прокси совпадают (${JSON.stringify(hostsDash)} vs ${JSON.stringify(hostsProxy)})`);
     }
+
 
     // 12. Порядок в прокси: «нет баланса» решается ДО isTransientBody. Иначе китайский
     //     текст уйдёт в RETRY_NO_ZH (постоянная → 403 клиенту), а английский — в три
@@ -393,15 +401,16 @@ async function main() {
     {
         const w = makeWorld({ pool: [{ name: 'a', balance: 5, active: true }] });
         const st = w.api.moneyState;
-        check(st('go').enabled === false && st('tb').enabled === false,
-            'по умолчанию авторотация выключена у всех шлюзов');
+        check(MONEY_TAGS.every(t => st(t).enabled === false),
+            `по умолчанию авторотация выключена у всех ${MONEY_TAGS.length} шлюзов`);
         st('go').enabled = true;
-        check(st('ar').enabled === true && st('tb').enabled === true && st('xp').enabled === true,
-            'включил на одном шлюзе — включено на всех (смена провайдера не выключает)');
+        const onElsewhere = MONEY_TAGS.filter(t => t !== 'go' && st(t).enabled !== true);
+        check(onElsewhere.length === 0,
+            `включил на одном шлюзе — включено на всех (смена провайдера не выключает)${onElsewhere.length ? ' — мимо: ' + onElsewhere.join(', ') : ''}`);
         check(w.api.moneyAutoShared.enabled === true,
             'хранилище флага одно — moneyAutoShared, а не поле на каждом шлюзе');
         st('xp').enabled = false;
-        check(st('go').enabled === false, 'выключение тоже общее');
+        check(st('go').enabled === false && st('jw').enabled === false, 'выключение тоже общее');
         // Журнал подмен и дедуп обязаны остаться ПО шлюзу: это состояние работы,
         // а не выбор пользователя. Слить их вместе — потерять, кто куда переехал.
         st('go').recent.push({ to: 'go-acct' });
@@ -409,6 +418,7 @@ async function main() {
         check(st('tb').recent.length === 0 && st('tb').lastAt === 0,
             'журнал подмен и дедуп остались раздельными по шлюзам');
     }
+
 
     // 15. Файл состояния: новый формат — один флаг, старый (по шлюзу) читается как
     //     «включён хоть где-то = включён». Иначе владелец, у которого тумблер стоял на
@@ -431,7 +441,7 @@ async function main() {
                 },
                 path: { dirname: () => 'logs', join: () => 'AUTO.json' },
                 MONEY_AUTO_FILE: 'AUTO.json',
-                MONEY_GW: { ar: {}, go: {}, tb: {}, xp: {} },
+                MONEY_GW: Object.fromEntries(MONEY_TAGS.map(t => [t, {}])),
                 logLine: (m) => logs.push(m),
             };
             const f = new Function('deps', `

@@ -27,6 +27,13 @@ function fileFor(port, dir) {
 // Точки за окно, по возрастанию времени. Пустые минуты НЕ выдумываем нулями: «в эту
 // минуту запросов не было» и «в эту минуту отвечали за 0мс» — разные вещи, и ноль на
 // графике читался бы как мгновенный ответ.
+//
+// Кроме окна отдаём и границы ВСЕЙ истории (newest_at/oldest_at/total_all). Без них
+// читатель не может отличить «данных нет вообще» от «данные есть, но старше окна», и
+// пустой график у неактивного провайдера объяснялся неверно — «keepalive не запущен,
+// точки появятся, когда он станет активным», хотя замеры лежали в файле и показать их
+// мешало только выбранное окно (поймано 22.08 на вкладке Tabi: 140 бакетов за
+// 16:59–21:35, окно 1ч → ноль точек).
 function series(buckets, windowSec, meta) {
   const m0 = meta || {};
   const win = Math.max(60, Math.min(86400, Number(windowSec) || 86400));
@@ -34,8 +41,13 @@ function series(buckets, windowSec, meta) {
   const nowM = Math.floor(now / BUCKET_MS);
   const fromM = nowM - Math.ceil(win / 60) + 1;
   const pts = [];
+  let newestM = null, oldestM = null, totalAll = 0;
   for (const b of buckets || []) {
-    if (!b || !(b.n > 0) || b.m < fromM || b.m > nowM) continue;
+    if (!b || !(b.n > 0)) continue;
+    totalAll += b.n;
+    if (newestM === null || b.m > newestM) newestM = b.m;
+    if (oldestM === null || b.m < oldestM) oldestM = b.m;
+    if (b.m < fromM || b.m > nowM) continue;
     pts.push({ t: b.m * BUCKET_MS, n: b.n, avg: Math.round(b.sum / b.n), min: b.min, max: b.max });
   }
   pts.sort((a, z) => a.t - z.t);
@@ -48,6 +60,10 @@ function series(buckets, windowSec, meta) {
     window_sec: win, bucket_ms: BUCKET_MS, now,
     last_ms: Number(m0.last_ms) || 0, last_at: Number(m0.last_at) || 0,
     total: all.n, avg_ms: all.n ? Math.round(all.sum / all.n) : 0, max_ms: all.max,
+    // Вся история, независимо от окна: 0/null = показывать действительно нечего.
+    total_all: totalAll,
+    newest_at: newestM === null ? 0 : newestM * BUCKET_MS,
+    oldest_at: oldestM === null ? 0 : oldestM * BUCKET_MS,
     points: pts,
   };
 }

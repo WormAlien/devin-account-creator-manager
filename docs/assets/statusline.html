@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ABUSE HUB — statusline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── ТЕМА ZEN. Смена темы = правка этих строк ────────────────────────────────
+   bg #0c233d · surface #1d3756 · elevated #2b4564 · line-soft #324b6a
+   line #4d647f · faint #6b7a8d · dim #8c99a9 · muted #b2bcc9 · ink #eef4fc
+   emerald #00f391 · amber #ffb700 · azure #00d8ff · violet #d7a7ff
+   crimson #ff8487 · rose #ff81aa                                            */
+:root{
+  --bg:#0c233d; --surface:#1d3756; --elevated:#2b4564; --line-soft:#324b6a;
+  --line:#4d647f; --faint:#6b7a8d; --dim:#8c99a9; --muted:#b2bcc9; --ink:#eef4fc;
+  --emerald:#00f391; --amber:#ffb700; --azure:#00d8ff; --violet:#d7a7ff;
+  --crimson:#ff8487; --rose:#ff81aa;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg)}
+body{font-family:"Geist",ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased;
+     font-feature-settings:"cv11","ss01","ss03";color:var(--ink)}
+.canvas{width:1280px;height:260px;overflow:hidden;background:var(--bg);padding:24px 40px}
+.term{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.bar{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line-soft)}
+.dot{width:10px;height:10px;border-radius:9999px;flex:none}
+.d1{background:var(--crimson)} .d2{background:var(--amber)} .d3{background:var(--emerald)}
+.title{margin-left:8px;font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       font-size:12px;color:var(--dim)}
+.body{padding:16px 18px 18px;font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:15px;line-height:1.85;white-space:nowrap}
+.l1{color:var(--muted)}
+.sep{color:var(--faint)}
+.prov{color:var(--azure)}       /* AgentRouter — цвет провайдера */
+.model{color:var(--muted)}
+.money{color:var(--emerald)}    /* деньги — emerald */
+.ctx{color:var(--azure)}        /* контекст — azure */
+.gift{color:var(--amber)}       /* 🎁 бонус ждёт — amber */
+.legend{margin-top:14px;font-size:12px;line-height:1.7;color:var(--dim)}
+.legend b{font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+          font-weight:500;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="canvas">
+  <div class="term">
+    <div class="bar">
+      <span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="title">claude &mdash; bash</span>
+    </div>
+    <div class="body">
+      <div class="l1">~/Desktop/Autoreger_Clean $ claude &quot;прогони тесты и покажи диф&quot;</div>
+      <div>
+        <span class="prov">agentrouter</span><span class="model">/claude-opus-5</span>
+        <span class="sep">&#9474;</span> <span class="money">$250.00</span>
+        <span class="sep">&#9474;</span> <span class="ctx">&#10697; 140k/1M</span>
+        <span class="gift">&#127873;3</span>
+      </div>
+    </div>
+  </div>
+  <div class="legend">
+    <b>agentrouter/&lt;модель&gt;</b> — активный шлюз и модель этой сессии &nbsp;·&nbsp;
+    <b>&#9474;</b> — разделитель полей &nbsp;·&nbsp;
+    <b>$250.00</b> — доступные деньги на активном ключе; тускло и с <b>~12м</b> — цифра из кеша и отстала на 12 минут (<b>~3ч</b>, <b>~5д</b> — часы и дни), <b>&#9888;</b> рядом — последняя проверка баланса упала &nbsp;·&nbsp;
+    <b>&#8987;2ч14м</b> — окно выжрано, ключ на перезарядке &nbsp;·&nbsp;
+    <b>&#10697; 140k/1M</b> — контекстное окно: занято / всего &nbsp;·&nbsp;
+    <b>&#127873;3</b> — на трёх аккаунтах AgentRouter уже можно забрать дневной бонус
+  </div>
+</div>
+</body>
+</html>

@@ -9,7 +9,7 @@ ABUSE HUB (GitHub-репо `WormAlien/hub-cc`, локальная папка `Au
 
 **Какие страницы обновлять (обычными файловыми правками — `Read` / `Edit` / `Write` / `Grep`):**
 - `wiki/log.md` — запись о проделанной работе (format: `## [YYYY-MM-DD] {type} | Title`, новые сверху)
-- `wiki/entities/Autoreger Clean.md` — порты, модули, статусы, новые фичи
+- `wiki/entities/ABUSE HUB.md` — порты, модули, статусы, новые фичи (заметка переименована 2026-08-22, было `Autoreger Clean.md`; папка на диске осталась `Autoreger_Clean`)
 - `wiki/meta/Known Issues.md` — известные проблемы (удалять при решении)
 - `wiki/meta/Debug Reference.md` — найденные/пофикшенные баги
 - `wiki/overview.md` — если изменился статус системы

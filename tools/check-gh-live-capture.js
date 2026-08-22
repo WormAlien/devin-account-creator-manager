@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { chromium } = require('playwright');
 
-const { makeCapture, POLL_MS } = require('../routing/lib/gh-live-capture.js');
+const { makeCapture, ghIdByLogin, POLL_MS } = require('../routing/lib/gh-live-capture.js');
 
 const FUTURE = Math.floor(Date.now() / 1000) + 14 * 24 * 3600;
 let failed = 0;
@@ -76,6 +76,30 @@ async function main() {
         cap.holdOpen(context).catch(() => {});
         await new Promise(r => setTimeout(r, POLL_MS + 2500));
         ok(savedSession(cap.backupFile).value === 'SESSION-C', `holdOpen подхватил вход сам за ${(POLL_MS / 1000) | 0}+ с`);
+
+        // Личный аккаунт владельца: в пуле маркер `personal`, своя запись в хранилище есть.
+        // Снимок обязан лечь под её id, а маркер в пуле — остаться нетронутым.
+        const accountsFile = path.join(root, 'routing', 'github-accounts.json');
+        fs.mkdirSync(path.dirname(accountsFile), { recursive: true });
+        fs.writeFileSync(accountsFile, JSON.stringify([
+            { id: 'gh_owner_1', login: 'WormAlien', note: 'личный аккаунт владельца' },
+            { id: 'gh_other_1', login: 'someoneelse' },
+        ]), 'utf8');
+        fs.writeFileSync(poolFile, JSON.stringify([{ id: 'personal_1', ghId: 'personal' }]), 'utf8');
+
+        const capPersonal = makeCapture({ label: 'acct_personal_1', moduleDir, poolFile });
+        await context.addCookies(ghCookies('SESSION-OWNER'));
+        ok(await capPersonal.captureOnce(context, { quiet: true }) === true, 'личная запись: копия профиля сохранена');
+        const ownerSnap = path.join(moduleDir, '..', 'github', 'sessions', 'gh_owner_1.json');
+        ok(fs.existsSync(ownerSnap), 'маркер personal → снимок лёг под id хранилища (по логину из кук)');
+        ok(JSON.parse(fs.readFileSync(poolFile, 'utf8'))[0].ghId === 'personal', 'маркер personal в пуле не переписан');
+
+        ok(ghIdByLogin(accountsFile, 'WormAlien') === 'gh_owner_1', 'логин ищется без учёта регистра и через nickname/email');
+        ok(ghIdByLogin(accountsFile, 'нетакого') === null, 'незнакомый логин → снимок не пишем');
+        fs.writeFileSync(accountsFile, JSON.stringify([
+            { id: 'gh_dup_a', login: 'WormAlien' }, { id: 'gh_dup_b', login: 'wormalien' },
+        ]), 'utf8');
+        ok(ghIdByLogin(accountsFile, 'WormAlien') === null, 'двусмысленность (два аккаунта под логином) → молчим, а не берём первый');
     } finally {
         await context.close().catch(() => {});
         fs.rmSync(root, { recursive: true, force: true });

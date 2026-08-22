@@ -37,7 +37,7 @@ call :KILLPORT 20131 "VyceAI proxy"
 call :KILLPORT 20132 "agentrouter proxy"
 call :KILLPORT 20133 "keepalive proxy"
 REM Front-door :20100 — единый вход Claude Code. Убивать безопасно только потому,
-REM что transparent-proxy.js спавнит его обратно на boot. Порты :20155-20157
+REM что transparent-proxy.js спавнит его обратно на boot. Порты :20155-20158
 REM (keepalive провайдеров) здесь НЕ перечислены намеренно: их разбирает сам дашборд
 REM на boot — активный пересоздаёт (force), лежалых детей прошлого запуска снимает
 REM (bootSweepStaleChildren), а поднимает их обратно активация провайдера. Так «весь

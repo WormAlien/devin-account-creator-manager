@@ -72,6 +72,7 @@ routing/frontdoor-proxy.js  :20100
     tabi           127.0.0.1:20155 (keepalive)               ставит keepalive сам
     gorouter       127.0.0.1:20156 (keepalive)               ставит keepalive сам
     xpeach         127.0.0.1:20157 (keepalive)               ставит keepalive сам
+    justwoker      127.0.0.1:20158 (keepalive)               ставит keepalive сам
     omniroute      127.0.0.1:20128/v1                        —
     fm_openai      127.0.0.1:20130                           прокси сам из fm-active-key.txt
     vyce_openai    127.0.0.1:20131                           прокси сам из vyceai/keys.txt

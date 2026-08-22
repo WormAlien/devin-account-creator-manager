@@ -187,9 +187,19 @@ async function main() {
         check(/killPortListeners\(/.test(bring), 'keepaliveBring умеет снять зомби с занятого порта');
         const spawnFns = (src.match(/if \(!free\) return \{ ok: true, already: true \};/g) || []).length;
         check(spawnFns >= 1, `низкоуровневые спавны остались идемпотентными по bind (${spawnFns} шт.)`);
-        const direct = (src.match(/await (?:ar|go|tb|xp)KeepaliveSpawn\(\)/g) || []);
-        check(direct.length === 0, `прямых вызовов спавна в обход keepaliveBring нет (нашлось ${direct.length})`);
+        // Тег провайдера НЕ перечисляем: список `(ar|go|tb|xp)` пропустил бы пятый шлюз
+        // (jw, 22.08) молча — проверка осталась бы зелёной, ничего не проверив. Любой
+        // `await <что-то>KeepaliveSpawn()` в обход keepaliveBring — дыра по определению.
+        const direct = (src.match(/await \w+KeepaliveSpawn\(\)/g) || []);
+        check(direct.length === 0, `прямых вызовов спавна в обход keepaliveBring нет (нашлось ${direct.length}${direct.length ? ': ' + direct.join(', ') : ''})`);
+        // Карта порт→спавн обязана знать про все инстансы, включая :20158.
+        const inst = (/function keepaliveInstances\(\) \{[\s\S]*?\n\}/.exec(src) || [''])[0];
+        const ports = (inst.match(/\[\w+_KEEPALIVE_PORT\]:/g) || []).length;
+        check(ports >= 5, `keepaliveInstances знает ${ports} keepalive-портов (пять шлюзов + front-door)`);
+        check(/\[JW_KEEPALIVE_PORT\]: \{ name: 'JustWoker', spawn: jwKeepaliveSpawn \}/.test(inst),
+            'JustWoker :20158 в карте порт→спавн — иначе кнопка «перезапустить» в Health его не поднимет');
     }
+
 
     for (const m of ok) console.log(`  ok   ${m}`);
     for (const m of fails) console.log(`  FAIL ${m}`);

@@ -10,8 +10,8 @@
 # Скрипт удаляет только те профили, чей PID в системе уже не жив, поэтому его
 # безопасно запускать при работающих авторегах. Живые профили провайдеров
 # (tabi/profiles, gorouter/profiles, agentrouter/profiles, xpeach/profiles,
-# github/profiles, tools/tg-profiles, routing/tokenrouter/chrome-profile)
-# не подпадают под маску и не трогаются.
+# justwoker/profiles, github/profiles, tools/tg-profiles,
+# routing/tokenrouter/chrome-profile) не подпадают под маску и не трогаются.
 #
 # Usage:
 #   bash tools/clean-camoufox-profiles.sh --dry-run   # только показать

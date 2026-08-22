@@ -7,7 +7,8 @@
 #   :20131 VyceAI-прокси        routing/vyceai-openai-proxy.js
 #   :8200  Дашборд              routing/transparent-proxy.js
 #         (он сам boot-спавнит AR-конвертер :20132 и keepalive :20133;
-#          keepalive GoRouter :20156 / Tabi :20155 поднимаются при активации)
+#          keepalive провайдеров :20155-20158 — Tabi / GoRouter / XPeach /
+#          JustWoker — поднимаются при активации)
 #
 # Ничего в существующем коде не меняет: для Windows-юзеров restart-dashboard.bat
 # работает как раньше. Здесь мы лишь подсовываем shim-ы (netstat/taskkill/...),
@@ -45,7 +46,7 @@ if [ -x /usr/bin/sqlite3 ]; then
   export SQLITE3=/usr/bin/sqlite3
 fi
 
-PORT_NAMES="8200:dashboard 20126:FM-rotator 20130:FM-OpenAI 20131:VyceAI 20132:AR-converter 20133:AR-keepalive 20155:Tabi-keepalive 20156:GoRouter-keepalive"
+PORT_NAMES="8200:dashboard 20126:FM-rotator 20130:FM-OpenAI 20131:VyceAI 20132:AR-converter 20133:AR-keepalive 20155:Tabi-keepalive 20156:GoRouter-keepalive 20157:XPeach-keepalive 20158:JustWoker-keepalive"
 
 kill_port() {
   local port="$1" name="$2" pids tries=0

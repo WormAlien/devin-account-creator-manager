@@ -35,6 +35,10 @@ const PROFILE_ROOTS = [
     { tag: 'go', dir: path.join(ROOT, 'gorouter', 'profiles'), host: 'gorouter.app' },
     { tag: 'tb', dir: path.join(ROOT, 'tabi', 'profiles'), host: 'tabitoken.com' },
     { tag: 'xp', dir: path.join(ROOT, 'xpeach', 'profiles'), host: 'xpeach.codes' },
+    // 🪤 У JustWoker хост с поддоменом (`api.justwoker.icu`): панель и API живут на одном
+    // адресе, `justwoker.icu` не резолвится. Строка обязана совпадать с NEWAPI_PROFILE_DIRS
+    // и HOST_AUTH буквально, иначе hostToTag вернёт null и профиль выпадет из индекса.
+    { tag: 'jw', dir: path.join(ROOT, 'justwoker', 'profiles'), host: 'api.justwoker.icu' },
 ];
 
 const SESSIONS_DIR = path.join(ROOT, 'github', 'sessions');
@@ -291,7 +295,7 @@ function indexByLogin(profiles = null) {
 }
 
 // Занят ли этот GitHub на этом хосте. Считаем ПО КУКАМ ПРОФИЛЕЙ, а не по полю ghId:
-// ghId есть только у AgentRouter, а профиль с dotcom_user появляется на всех четырёх.
+// ghId есть только у AgentRouter, а профиль с dotcom_user появляется на всех пяти.
 // Побочный плюс — метка самоподдерживающаяся: заселили новый профиль, и он сам попал
 // в скан следующего вызова.
 //

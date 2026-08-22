@@ -11,7 +11,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PORT_NAMES="8200:dashboard 20126:FM-rotator 20130:FM-OpenAI 20131:VyceAI 20132:AR-converter 20133:AR-keepalive 20155:Tabi-keepalive 20156:GoRouter-keepalive"
+PORT_NAMES="8200:dashboard 20126:FM-rotator 20130:FM-OpenAI 20131:VyceAI 20132:AR-converter 20133:AR-keepalive 20155:Tabi-keepalive 20156:GoRouter-keepalive 20157:XPeach-keepalive 20158:JustWoker-keepalive"
 
 kill_port() {
   local port="$1" name="$2" pids tries=0

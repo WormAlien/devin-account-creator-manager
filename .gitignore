@@ -312,9 +312,17 @@ xpeach/sessions/
 xpeach/gh-sessions/
 routing/xpeach-sessions.json
 
+# ── JustWoker (вкладка дашборда): приватные данные ────────────────────────────
+# Профили браузера (куки GitHub/api.justwoker.icu, логины, кеш) и живые сессии —
+# НИКОГДА не коммитить. justwoker-modelmap.json — безопасный конфиг маппинга, коммитим.
+justwoker/profiles/
+justwoker/sessions/
+justwoker/gh-sessions/
+routing/justwoker-sessions.json
+
 # ── Cookie-jar New-API (routing/lib/newapi-account.js) ────────────────────────
 # Живые session/refresh-куки и access-токены аккаунтов agentrouter/gorouter/tabi/
-# xpeach, снятые из профилей Chromium. Refresh-кука одноразовая, поэтому её
+# xpeach/justwoker, снятые из профилей Chromium. Refresh-кука одноразовая, поэтому её
 # ротированное значение хранится здесь, а не в профиле. НИКОГДА не коммитить.
 routing/newapi-jar.json
 

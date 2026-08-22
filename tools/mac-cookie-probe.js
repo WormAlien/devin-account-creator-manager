@@ -21,11 +21,16 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
+// Третий элемент — по какому куску имени искать куки в БД профиля. По умолчанию это
+// первая метка хоста, но у JustWoker она `api` (панель и API на `api.justwoker.icu`):
+// фильтр по ней притянул бы куки любого домена со словом «api». Голый `justwoker.icu`
+// в первую колонку писать нельзя — он не резолвится.
 const POOLS = [
     ['agentrouter.org', 'agentrouter/profiles'],
     ['gorouter.app', 'gorouter/profiles'],
     ['tabitoken.com', 'tabi/profiles'],
     ['xpeach.codes', 'xpeach/profiles'],
+    ['api.justwoker.icu', 'justwoker/profiles', 'justwoker'],
     ['github.com', 'github/profiles'],
 ];
 const COOKIE_RELS = [['Default', 'Network', 'Cookies'], ['Default', 'Cookies']];
@@ -115,7 +120,7 @@ function tryDecrypt(enc, pw, scheme) {
 
 // ── сбор образцов ──
 const samples = [];   // { profile, host, name, enc }
-for (const [host, rel] of POOLS) {
+for (const [host, rel, tokenArg] of POOLS) {
     const base = path.join(ROOT, rel);
     let dirs = [];
     try { dirs = fs.readdirSync(base).filter(d => fs.statSync(path.join(base, d)).isDirectory()); } catch { continue; }
@@ -135,7 +140,7 @@ for (const [host, rel] of POOLS) {
             let rows;
             try { rows = db.prepare('SELECT host_key, name, encrypted_value FROM cookies LIMIT 60').all(); }
             finally { db.close(); }
-            const key = host.split('.')[0];
+            const key = tokenArg || host.split('.')[0];
             for (const r of rows) {
                 const enc = Buffer.isBuffer(r.encrypted_value) ? r.encrypted_value : Buffer.from(r.encrypted_value || '');
                 if (enc.length > 3 && new RegExp(key, 'i').test(String(r.host_key || ''))) {

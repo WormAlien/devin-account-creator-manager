@@ -136,6 +136,7 @@ case "$helper" in
     *tabi-active-key.txt*)           raw_target="tabi" ;;
     *gorouter-active-key.txt*)       raw_target="gorouter" ;;
     *xpeach-active-key.txt*)         raw_target="xpeach" ;;
+    *justwoker-active-key.txt*)      raw_target="justwoker" ;;
     *custom-active-key.txt*)         raw_target="custom" ;;
 esac
 if [ -z "$raw_target" ]; then
@@ -150,12 +151,15 @@ if [ -z "$raw_target" ]; then
         *127.0.0.1:20155*)        raw_target="tabi" ;;
         *127.0.0.1:20156*)        raw_target="gorouter" ;;
         # :20157 обязан стоять ДО catch-all Custom-конвертеров ниже (2015[0-9]),
-        # иначе xpeach определялся бы как custom.
+        # иначе xpeach определялся бы как custom. То же и :20158 (justwoker).
         *localhost:20157*)        raw_target="xpeach" ;;
         *127.0.0.1:20157*)        raw_target="xpeach" ;;
+        *localhost:20158*)        raw_target="justwoker" ;;
+        *127.0.0.1:20158*)        raw_target="justwoker" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
+        *justwoker.icu*)          raw_target="justwoker" ;;
         *localhost:8190*)         raw_target="notion" ;;
         *agentrouter.org*)        raw_target="agentrouter" ;;
         *cc.freemodel.dev*)       raw_target="apihelper" ;;
@@ -179,6 +183,7 @@ case "$raw_target" in
     tabi)                        provider="tabi" ;;
     gorouter)                    provider="gorouter" ;;
     xpeach)                      provider="xpeach" ;;
+    justwoker)                   provider="justwoker" ;;
     custom)                      provider="Custom🧪" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
@@ -202,7 +207,7 @@ balance_age_s=-1   # возраст цифры баланса в секунда�
 balance_err=""     # непустая = последняя проверка баланса не удалась (таймаут/dead)
 active_name=""
 
-# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach):
+# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker):
 # дашборд держит там balance/granted/balanceCheckedAt активного ключа. Читаем блок активного
 # ключа bash-native (0 форков), avail_sum = balance как есть (дашборд уже посчитал точную
 # цифру из /api/user/self либо вывел из вписанного анкера), pct = balance/granted. Ленивый
@@ -376,6 +381,8 @@ elif [ "$provider" = "gorouter" ] && [ -f "$ROUTING/gorouter-sessions.json" ]; t
     gauge_from_balance_cache "$ROUTING/gorouter-sessions.json" "$PROF/.claude/gorouter-active-key.txt" "go/balance" 90
 elif [ "$provider" = "xpeach" ] && [ -f "$ROUTING/xpeach-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/xpeach-sessions.json" "$PROF/.claude/xpeach-active-key.txt" "xp/balance" 90
+elif [ "$provider" = "justwoker" ] && [ -f "$ROUTING/justwoker-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/justwoker-sessions.json" "$PROF/.claude/justwoker-active-key.txt" "jw/balance" 90
 fi
 
 # ---- render ----------------------------------------------------------------

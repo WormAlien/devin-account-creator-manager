@@ -71,7 +71,7 @@
 2. ~~**Проверить idle-стоп**~~ — ✅ сделано 2026-08-13.
 3. ~~**Свипер**~~ — ✅ сухой прогон 2026-08-13.
 4. ~~**ARCHITECTURE.md**~~ — ✅ секция «Obsidian RAG on-demand + свипер зомби-браузеров» добавлена.
-5. ~~**Obsidian-вики**~~ — ✅ `wiki/log.md` (запись `## [2026-08-13] done | On-demand RAG + свипер зомби — живой цикл проверен`) и `wiki/entities/Autoreger Clean.md` (секция «Obsidian RAG on-demand + свипер зомби-браузеров»). Правки через `wiki_patch.py` (top/append), MCP-обвязка не использовалась.
+5. ~~**Obsidian-вики**~~ — ✅ `wiki/log.md` (запись `## [2026-08-13] done | On-demand RAG + свипер зомби — живой цикл проверен`) и `wiki/entities/ABUSE HUB.md` (секция «Obsidian RAG on-demand + свипер зомби-браузеров»). Правки через `wiki_patch.py` (top/append), MCP-обвязка не использовалась.
 6. **Уведомить юзера:** `/wiki` появится в opencode TUI после рестарта. **НЕ закрыт.**
 
 ## Проверено вживую (2026-08-13)

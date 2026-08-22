@@ -6529,6 +6529,17 @@ function arSave(arr) {
 // удаления однажды записанный balanceError выживал на диске и гейдж вечно показывал
 // «⚠ ошибка чека» при живом ключе и свежем балансе.
 const BALANCE_CLEARABLE = ['balanceError', 'selfError', 'granted'];
+// 🪤 `active` через мерж НЕ пропускаем: это не поле баланса, а владение активным
+// ключом, и правда о нём лежит в AR_ACTIVE_KEY_FILE (его прокси перечитывает на
+// каждую попытку). Балансовый чек снимает снимок пула ДО запроса в биллинг, а тот
+// идёт 1–2 с; если в это окно ротация или ручное переключение сменили активный
+// аккаунт, Object.assign вернул бы на диск `active: true` уже ушедшего — и в файле
+// оказывалось ДВА активных (пойман 22.08 владельцем на вкладке AgentRouter:
+// previoussack $0.58 + greedybelieve $105, при том что файл ключа указывал на
+// второго). Работа от этого не ломалась, но таблица показывала две зелёные метки,
+// то есть ответ «на каком аккаунте мы сейчас» переставал быть однозначным.
+// Из четырёх пулов мерж-запись есть только у AgentRouter — и порча нашлась только
+// у него, у go/tb/xp по одному активному.
 function arSaveMerge(changed) {
     const list = Array.isArray(changed) ? changed : [changed];
     const disk = arLoad();
@@ -6537,11 +6548,17 @@ function arSaveMerge(changed) {
         if (!upd || !upd.api_key) continue;
         const cur = byKey.get(upd.api_key);
         if (cur) {
-            Object.assign(cur, upd);
+            const { active, ...rest } = upd;   // владение ключом мержем не переносим
+            Object.assign(cur, rest);
             for (const k of BALANCE_CLEARABLE) if (!(k in upd)) delete cur[k];
         }
-        else disk.push(upd);
+        else disk.push(Object.assign({}, upd, { active: false }));
     }
+    // Инвариант «активен ровно один» восстанавливаем по файлу ключа. Это заодно
+    // ЛЕЧИТ уже испорченные файлы — на первом же чеке баланса. Файла нет или он
+    // пуст → не трогаем ничего: угадывать активного мы права не имеем.
+    const activeKey = (() => { try { return fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { return ''; } })();
+    if (activeKey) disk.forEach(s => { s.active = s.api_key === activeKey; });
     arSave(disk);
 }
 function arReadActiveModel() {
@@ -6744,7 +6761,9 @@ function newapiMigrateAnchors(sessions) {
 // Общий расчёт. target — запись пула (нужен api_key; profile/anchor опциональны).
 // guessGrant(spent) — легаси-угадывание провайдера, вызывается только как резерв.
 // force — не переиспользовать сохранённую точную цифру (явный клик пользователя).
-async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessGrant, force = false }) {
+// selfSnapshot — сырые {quota, used, id, username}, снятые в живом браузере (чек-ин):
+//   готовая точная цифра, за которой не надо идти к шлюзу второй раз. См. ветвь 2а.
+async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessGrant, force = false, selfSnapshot = null }) {
     const apiKey = target && target.api_key;
     if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
     const lib = newapiLib();
@@ -6789,11 +6808,6 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     // проверки кеш 20 минут врал на величину бонуса (ловил $175 против живых $200).
     // Явный клик по цифре приходит с force — он всегда спрашивает сервер.
     const SELF_REUSE_MS = 20 * 60_000;
-    // Ключи профилей — ДО первого сетевого запроса self. Здесь блокировка событийного
-    // цикла безопасна (в воздухе ничего нет), а внутри accountSelf она обрывала бы
-    // соседние fetch'и пачки по таймауту. Холодный кеш — один процесс на все профили,
-    // тёплый — выход по гейту 30с, то есть бесплатно (см. newapiWarmProfileKeys).
-    newapiWarmProfileKeys('чек баланса');
     const prof = newapiResolveProfile(host, target);
     const selfAt = target.selfCheckedAt ? new Date(target.selfCheckedAt).getTime() : 0;
     // Кеш точной цифры лежит в ОТДЕЛЬНОМ поле selfBalance, а не в target.balance: у
@@ -6803,7 +6817,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     const cachedSelf = typeof target.selfBalance === 'number' ? target.selfBalance
         : (target.balanceSource === 'self' && typeof target.balance === 'number' ? target.balance : null);
     let self = null;
-    if (!force && selfAt && cachedSelf != null
+    if (!selfSnapshot && !force && selfAt && cachedSelf != null
         && Number(target.usageSpentAtSelf) === usageSpent
         && newapiLkOpenedAt(prof.label) < selfAt
         && Date.now() - selfAt < SELF_REUSE_MS) {
@@ -6819,7 +6833,58 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     }
     const profileDir = prof.dir;
     let selfError = null;
+
+    // ── 2а. снимок из живого браузера (чек-ин) ──
+    // Цифру отдал тот же /api/user/self, но СЕССИИ САМОЙ СТРАНИЦЫ, пока окно было
+    // открыто, — перехватом её собственного ответа (см. watchSelfResponses в
+    // agentrouter/open-session.js). Поэтому второй раз спрашивать шлюз незачем: не нужны
+    // ни ключи профилей, ни куки с диска, ни запрос за Aliyun WAF — а именно он ловит
+    // рейт-лимит и роняет точный баланс всего пула на 10 минут.
+    //
+    // 🪤 Снимок ПРОВЕРЯЕМ, а не принимаем на слово. Ответ шлюза на колбэк GitHub-входа
+    // тоже содержит quota/used_quota — и они ОБНУЛЕНЫ (живой прогон 2026-08-22 на
+    // аккаунте с $175 вернул нули). Такая цифра выглядит настоящей, а записала бы в пул
+    // $0: с вышибанием активного ключа (moneyKickOnZero) и сломанным детектом чек-ина
+    // (granted стал бы нулём и больше никогда не «вырос» бы на $25). Отсюда два условия:
+    // выдача не может быть НУЛЕВОЙ и не может УМЕНЬШИТЬСЯ — шлюз выданное не отбирает.
+    if (!self && selfSnapshot && lib) {
+        const qpu = await lib.quotaPerUnit(host);
+        const balance = lib.quotaToUsd(Number(selfSnapshot.quota), qpu);
+        const spent = lib.quotaToUsd(Number(selfSnapshot.used), qpu);
+        const granted = (balance != null && spent != null) ? round2(balance + spent) : null;
+        const prevGranted = Number(target.grantedSelf != null ? target.grantedSelf
+            : (target.balanceSource === 'self' ? target.granted : NaN));
+        const bad = !isFinite(granted) || granted <= 0 ? 'выдача в снимке нулевая'
+            : (isFinite(prevGranted) && granted < prevGranted - 0.01)
+                ? `выдача в снимке $${granted.toFixed(2)} МЕНЬШЕ известной $${prevGranted.toFixed(2)}`
+                : null;
+        if (bad) {
+            logLine(`баланс ${host}: снимок из браузера отброшен — ${bad}; считаю обычным путём`);
+        } else {
+            self = {
+                balance, spent, granted,
+                newApiUserId: selfSnapshot.id != null ? Number(selfSnapshot.id) : (target.newApiUserId || null),
+                newApiUsername: selfSnapshot.username || target.newApiUsername || null,
+                profileUsed: prof.label,
+                // Штамп — момент ПРИМЕНЕНИЯ, а не съёма: чек-ин зовёт newapiLkVisited
+                // перед этим расчётом, и штамп из прошлого не дал бы переиспользовать
+                // цифру (условие newapiLkOpenedAt < selfAt), то есть следующий чек всё
+                // равно пошёл бы к шлюзу — ровно то, что мы тут и убираем.
+                selfCheckedAt: new Date().toISOString(),
+                fromBrowser: selfSnapshot.from || 'browser',
+            };
+            logLine(`баланс ${host}: цифра из браузера (${self.fromBrowser}) — $${balance.toFixed(2)},`
+                + ` выдача $${granted.toFixed(2)}; запрос self не понадобился`);
+        }
+    }
+
     if (!self && lib && (profileDir || target.accessToken)) {
+        // Ключи профилей — ДО первого сетевого запроса self. Здесь блокировка событийного
+        // цикла безопасна (в воздухе ничего нет), а внутри accountSelf она обрывала бы
+        // соседние fetch'и пачки по таймауту. Холодный кеш — один процесс на все профили,
+        // тёплый — выход по гейту 30с, то есть бесплатно (см. newapiWarmProfileKeys).
+        // Со снимком из браузера сюда не заходим вообще — расшифровывать нечего.
+        newapiWarmProfileKeys('чек баланса');
         try {
             const me = await lib.accountSelf({
                 host,
@@ -6948,6 +7013,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
 
 // Баланс ключа AgentRouter. Точный — из /api/user/self; резервы см. newapiBalance.
 // opts.force — не брать сохранённую цифру, спросить сервис (явный клик пользователя).
+// opts.selfSnapshot — готовая цифра, снятая в браузере при чек-ине (запрос self не нужен).
 async function arBalance(target, opts = {}) {
     return newapiBalance({
         target: typeof target === 'string' ? { api_key: target } : (target || {}),
@@ -6957,6 +7023,7 @@ async function arBalance(target, opts = {}) {
         subUrl: `${AR_BASE_URL}/v1/dashboard/billing/subscription`,
         guessGrant: spent => Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP),
         force: !!opts.force,
+        selfSnapshot: opts.selfSnapshot || null,
     });
 }
 
@@ -7195,14 +7262,16 @@ const AR_BALANCE_LAST = new Map();         // api_key → ts последней 
 
 // Считает баланс и мержит в сессию. Параллельные вызовы по одному ключу
 // переиспользуют один промис — в billing уйдёт ровно один запрос.
-function arBalanceOnce(apiKey, force = false) {
+function arBalanceOnce(apiKey, force = false, selfSnapshot = null) {
     const running = AR_BALANCE_INFLIGHT.get(apiKey);
     // Форсированный чек НЕ подхватывает уже летящий мягкий: тот мог вернуть цифру из
     // кеша, а пользователь кликнул именно затем, чтобы увидеть свежую.
-    if (running && (!force || running.force)) return running.p;
+    // Со снимком из браузера не подхватываем ВООБЩЕ: летящий чек считает по старому
+    // пути, а у нас на руках цифра свежее любой его.
+    if (running && !selfSnapshot && (!force || running.force)) return running.p;
     const p = (async () => {
         const target = arLoad().find(s => s.api_key === apiKey);
-        const bal = await arBalance(target || { api_key: apiKey }, { force });
+        const bal = await arBalance(target || { api_key: apiKey }, { force, selfSnapshot });
         if (target) {
             arApplyBalance(target, bal);
             arSaveMerge(target);   // мерж, а не перезапись файла: не затираем параллельный батч
@@ -7603,6 +7672,10 @@ const AR_AUTO_CHECKIN_FAIL = {
     4: 'шлюз переделал страницу входа: кнопку GitHub найти не удалось — добери бонус кнопкой 🎁',
     5: 'шлюз отверг OAuth (код/state) — бонус не забран',
 };
+// Ручной режим ждёт человека 10 минут, а не 90 с — текст про таймаут другой.
+const AR_CHECKIN_FAIL_MANUAL = {
+    2: 'вход в окне так и не случился (10 мин) — бонус не забран, открой ещё раз',
+};
 
 // Разбираем маркер, который скрипт печатает последней строкой: AUTOCHECKIN_RESULT {...}.
 // `checkedIn` — слово САМОГО шлюза (data.checked_in в ответе /api/oauth/github), это
@@ -7613,32 +7686,40 @@ function arParseAutoCheckinMarker(out) {
     try { return JSON.parse(m[1]); } catch { return null; }
 }
 
-// Хвост автоподарка: браузер закрылся → куки уже на диске → считаем точный баланс и
-// ставим отметку 🎁/📦. Исключения гасим здесь же: это обработчик 'exit', падение в
-// нём уронило бы дашборд.
-async function arAutoCheckinFinish(id, label, code, marker) {
+// Хвост чек-ина: браузер закрылся → ставим точный баланс и отметку 🎁/📦. Цифру берём
+// ИЗ СНИМКА, снятого в самом браузере (marker.self) — тогда к шлюзу за ней идти не надо
+// и ждать флаша кук на диск тоже незачем. Снимка нет (не удалось перехватить) — старый
+// путь: пауза на флаш + чтение куки профиля + запрос self.
+// Исключения гасим здесь же: это обработчик 'exit', падение в нём уронило бы дашборд.
+async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
     const st = AR_AUTO_CHECKIN.get(label) || { id, label };
     st.finishedAt = new Date().toISOString();
+    const tag = auto ? 'автоподарок' : 'чек-ин';
     try {
         if (code !== 0) {
             st.state = 'error';
-            st.message = AR_AUTO_CHECKIN_FAIL[code] || `скрипт завершился с кодом ${code}`;
-            logLine(`agentrouter автоподарок [${label}]: ${st.message}`);
+            st.message = (auto ? AR_AUTO_CHECKIN_FAIL[code] : AR_CHECKIN_FAIL_MANUAL[code])
+                || AR_AUTO_CHECKIN_FAIL[code] || `скрипт завершился с кодом ${code}`;
+            logLine(`agentrouter ${tag} [${label}]: ${st.message}`);
             return;
         }
-        // Chromium флашит куки в SQLite на закрытии, но запись в файл асинхронна:
-        // без паузы точный баланс читал бы профиль на полсекунды раньше времени.
-        await new Promise(r => setTimeout(r, 2000));
+        // Снимок годен только с положительной квотой: обнулённый ответ шлюза записал бы
+        // в пул $0 (см. ловушку в newapiBalance, ветвь 2а).
+        const snap = marker && marker.self && Number(marker.self.quota) > 0 ? marker.self : null;
+        // Chromium флашит куки в SQLite на закрытии, но запись в файл асинхронна: без
+        // паузы точный баланс читал бы профиль на полсекунды раньше времени. Со снимком
+        // читать нечего — паузу не платим.
+        if (!snap) await new Promise(r => setTimeout(r, 2000));
         const sessions = arLoad();
         const target = sessions.find(s => s.id === id);
         if (!target) { st.state = 'error'; st.message = 'аккаунт исчез из пула'; return; }
 
         newapiLkVisited(label);                       // визит в ЛК → сохранённая цифра больше не годится
-        const bal = await arBalanceOnce(target.api_key, true).catch(e => ({ error: e.message }));
+        const bal = await arBalanceOnce(target.api_key, true, snap).catch(e => ({ error: e.message }));
 
         // Отметку ставим по слову шлюза. checkedIn === false → бонуса не было (окно не
-        // сменилось) — врать «забрано» нельзя. null (маркер не поймали) → оставляем
-        // как есть: детект по росту выдачи в arApplyBalance мог поставить её сам.
+        // сменилось) — врать «забрано» нельзя. null (маркер не поймали или ручной режим)
+        // → оставляем как есть: детект по росту выдачи в arApplyBalance мог поставить её сам.
         const checkedIn = marker && typeof marker.checkedIn === 'boolean' ? marker.checkedIn : null;
         if (checkedIn === true) {
             const fresh = arLoad();
@@ -7652,29 +7733,33 @@ async function arAutoCheckinFinish(id, label, code, marker) {
         st.state = 'done';
         st.checkedIn = checkedIn;
         st.balance = bal && typeof bal.balance === 'number' ? bal.balance : null;
+        st.balanceFrom = (bal && bal.self && bal.self.fromBrowser) || null;
         const after = arLoad().find(s => s.id === id) || {};
         st.checkinAt = after.checkinAt || null;
         st.checkinFrom = after.checkinFrom || null;
-        st.message = checkedIn === true ? `чек-ин зачтён, на счету $${(st.balance ?? 0).toFixed(2)}`
+        const where = st.balanceFrom ? ' (снято в браузере, без запроса к шлюзу)' : '';
+        st.message = checkedIn === true ? `чек-ин отмечен, на счету $${(st.balance ?? 0).toFixed(2)}${where}`
             : checkedIn === false ? 'вошёл, но чек-ин не зачтён — суточное окно ещё не сменилось'
-            : 'вошёл; ответ шлюза не поймали — отметку поставит проверка баланса';
-        logLine(`agentrouter автоподарок [${label}]: ${st.message}`);
+            : `вошёл, на счету $${(st.balance ?? 0).toFixed(2)}${where}`;
+        logLine(`agentrouter ${tag} [${label}]: ${st.message}`);
     } catch (e) {
         st.state = 'error';
         st.message = e.message;
-        logLine(`agentrouter автоподарок [${label}] ERR: ${e.message}`);
+        logLine(`agentrouter ${tag} [${label}] ERR: ${e.message}`);
     } finally {
         AR_AUTO_CHECKIN.set(label, st);
     }
 }
 
-// GET /__switch/api/ar/checkin-status → прогоны автоподарка моложе 10 минут.
+// GET /__switch/api/ar/checkin-status → прогоны чек-ина моложе 10 минут.
+// Идущие прогоны по TTL НЕ выбрасываем: ручной режим ждёт человека до 10 минут, и
+// запись успела бы исчезнуть прямо под наблюдателем.
 function handleArCheckinStatus(req, res) {
     const now = Date.now();
     const runs = [];
     for (const [label, st] of AR_AUTO_CHECKIN) {
         const born = Date.parse(st.finishedAt || st.startedAt || 0) || 0;
-        if (born && now - born > AR_AUTO_CHECKIN_TTL_MS) { AR_AUTO_CHECKIN.delete(label); continue; }
+        if (st.state !== 'running' && born && now - born > AR_AUTO_CHECKIN_TTL_MS) { AR_AUTO_CHECKIN.delete(label); continue; }
         runs.push({ label, ...st });
     }
     jsonRes(res, 200, { runs });
@@ -7727,12 +7812,14 @@ async function handleArSessionOpen(req, res) {
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
         const mode = wantAuto ? 'autocheckin' : wantCheckin ? 'checkin' : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
-        // Автоподарку stdout нужен не только для логов: в последней строке приезжает
-        // маркер AUTOCHECKIN_RESULT со словом шлюза про суточный бонус.
+        // Чек-ину stdout нужен не только для логов: в последней строке приезжает маркер
+        // AUTOCHECKIN_RESULT — слово шлюза про суточный бонус и СНИМОК точного баланса,
+        // снятый в самом браузере. Ловим его в ОБОИХ режимах: цифра одинаково избавляет
+        // от повторного чека, кто бы ни жал кнопку входа — скрипт или человек.
         let outTail = '';
         proc.stdout.on('data', d => {
             const s = String(d);
-            if (wantAuto) outTail = (outTail + s).slice(-4000);
+            if (wantCheckin) outTail = (outTail + s).slice(-4000);
             logLine(`agentrouter session/open [${label}]: ${s.trim()}`);
         });
         proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
@@ -7740,20 +7827,21 @@ async function handleArSessionOpen(req, res) {
         proc.on('exit', (code, sig) => {
             arLkPids.delete(label);
             logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
-            if (wantAuto) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail));
+            if (wantCheckin) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail), wantAuto);
         });
         proc.unref();
         arLkPids.set(label, proc.pid);
-        if (wantAuto) {
+        if (wantCheckin) {
             AR_AUTO_CHECKIN.set(label, {
-                id, label, name: dispName, state: 'running', message: 'разлогин и вход через GitHub…',
+                id, label, name: dispName, state: 'running',
+                message: wantAuto ? 'разлогин и вход через GitHub…' : 'браузер открыт: жду входа через GitHub…',
                 startedAt: new Date().toISOString(), finishedAt: null,
             });
         }
         const failed = await sessionOpenEarlyFailure(proc);
         if (failed) {
             arLkPids.delete(label);
-            if (wantAuto) AR_AUTO_CHECKIN.set(label, { id, label, name: dispName, state: 'error', message: failed, finishedAt: new Date().toISOString() });
+            if (wantCheckin) AR_AUTO_CHECKIN.set(label, { id, label, name: dispName, state: 'error', message: failed, finishedAt: new Date().toISOString() });
             logLine(`agentrouter session/open FAIL [${label}]: ${failed}`);
             return jsonRes(res, 502, { error: failed });
         }
@@ -10548,29 +10636,47 @@ const MONEY_MAX_PROBES = 3;
 // достаточно узнать, что ключ уже сменился.
 const MONEY_DEDUP_MS = 10_000;
 
-const moneyAuto = {};   // p → { enabled, rotating (Promise|null), lastAt, lastKey, recent[] }
+const moneyAuto = {};   // p → { rotating (Promise|null), lastAt, lastKey, recent[] }
+// Тумблер авторотации — ОДИН на все четыре шлюза (2026-08-22, по замечанию владельца).
+// Был по шлюзу, и смена провайдера читалась как «авторотация выключилась»: сидел на
+// GoRouter с включённым тумблером, перешёл на Tabi — у того свой флаг, по умолчанию
+// выключённый, и следующий отказ по деньгам снова прилетал в лицо. Смысл у настройки
+// один на всех («не умирать на кончившемся аккаунте»), поэтому и хранилище одно.
+// Что осталось по шлюзу — журнал подмен, мьютекс и дедуп: это состояние работы, а не выбор.
+const moneyAutoShared = { enabled: false };
 function moneyState(p) {
-    if (!moneyAuto[p]) moneyAuto[p] = { enabled: false, rotating: null, lastAt: 0, lastKey: null, recent: [] };
+    if (!moneyAuto[p]) {
+        const st = { rotating: null, lastAt: 0, lastKey: null, recent: [] };
+        // `enabled` — не поле, а окно в общий тумблер: все места читают и пишут его как
+        // раньше (`moneyState(p).enabled`), но хранится он в одном месте. Иначе пришлось
+        // бы держать два источника правды и следить, чтобы они не разъехались.
+        Object.defineProperty(st, 'enabled', {
+            get: () => moneyAutoShared.enabled,
+            set: (v) => { moneyAutoShared.enabled = !!v; },
+            enumerable: true,
+        });
+        moneyAuto[p] = st;
+    }
     return moneyAuto[p];
 }
 function moneySavePersist() {
     try {
         const dir = path.dirname(MONEY_AUTO_FILE);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        const out = {};
-        for (const p of Object.keys(MONEY_GW)) out[p] = { enabled: !!moneyState(p).enabled };
-        fs.writeFileSync(MONEY_AUTO_FILE, JSON.stringify(out, null, 2) + '\n', 'utf-8');
+        fs.writeFileSync(MONEY_AUTO_FILE, JSON.stringify({ enabled: !!moneyAutoShared.enabled }, null, 2) + '\n', 'utf-8');
     } catch (e) { logLine(`money auto persist: ${e.message}`); }
 }
 function moneyLoadPersist() {
     try {
         if (!fs.existsSync(MONEY_AUTO_FILE)) return;
         const j = JSON.parse(fs.readFileSync(MONEY_AUTO_FILE, 'utf-8'));
-        for (const p of Object.keys(MONEY_GW)) {
-            if (j && j[p] && j[p].enabled) moneyState(p).enabled = true;
-        }
-        const on = Object.keys(MONEY_GW).filter(p => moneyState(p).enabled);
-        if (on.length) logLine(`money auto: восстановлено включённым — ${on.join(', ')}`);
+        // Новый формат — один флаг `{enabled}`. Старый — по шлюзу `{go:{enabled}}`, и
+        // тогда «включён хоть у одного» = включён: иначе владелец, у которого тумблер
+        // стоял на GoRouter, после этого обновления нашёл бы его выключенным.
+        moneyAutoShared.enabled = typeof (j || {}).enabled === 'boolean'
+            ? !!j.enabled
+            : Object.keys(MONEY_GW).some(p => j && j[p] && j[p].enabled);
+        if (moneyAutoShared.enabled) logLine('money auto: восстановлено включённым (тумблер общий на все шлюзы)');
     } catch (e) { logLine(`money auto restore: ${e.message}`); }
 }
 
@@ -10704,6 +10810,12 @@ function moneyAutoStatus(p) {
     const pool = gw.load().filter(moneyUsable);
     return {
         provider: p, label: gw.label, enabled: st.enabled,
+        // Признак «тумблер общий на все шлюзы». Нужен фронту, чтобы отличить этот
+        // бэкенд от старого процесса :8200, где флаг был по шлюзу: HTML читается с
+        // диска на каждый запрос и обновляется по F5, а бэкенд — только рестартом.
+        // Без признака новый фронт в паре со старым бэкендом показывал бы «включено»
+        // на шлюзе, где включено не было.
+        shared: true,
         lastSwitch: st.lastAt, rotating: !!st.rotating,
         active, minBal: MONEY_MIN_BAL,
         poolReady: pool.filter(s => s.balance >= MONEY_MIN_BAL).length,
@@ -10733,8 +10845,11 @@ async function handleMoneyRotate(req, res, p) {
 }
 async function handleMoneyAuto(req, res, p, action) {
     try {
-        if (action === 'start') { moneyState(p).enabled = true; moneySavePersist(); logLine(`money auto ${p}: ВКЛ`); }
-        if (action === 'stop')  { moneyState(p).enabled = false; moneySavePersist(); logLine(`money auto ${p}: выкл`); }
+        // Тумблер общий: `start` на вкладке GoRouter включает авторотацию и для Tabi с
+        // AgentRouter. Префикс в пути остался, потому что ответом уходит статус ЭТОГО
+        // шлюза (пул, журнал, активный аккаунт) — а он по-прежнему свой у каждого.
+        if (action === 'start') { moneyAutoShared.enabled = true;  moneySavePersist(); logLine(`money auto: ВКЛ (все шлюзы, включено с ${p})`); }
+        if (action === 'stop')  { moneyAutoShared.enabled = false; moneySavePersist(); logLine(`money auto: выкл (все шлюзы, выключено с ${p})`); }
         jsonRes(res, 200, moneyAutoStatus(p));
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -12490,13 +12605,10 @@ server.listen(LISTEN_PORT, () => {
         fmAutoStart();
     }
 
-    // Тумблеры авторотации денежных шлюзов. Таймера тут нет — ротация реактивная, по
-    // отказу шлюза, поэтому «возобновить» = просто вспомнить, где тумблер был включён.
+    // Тумблер авторотации денежных шлюзов — один на все четыре. Таймера тут нет —
+    // ротация реактивная, по отказу шлюза, поэтому «возобновить» = вспомнить флаг.
     moneyLoadPersist();
-    {
-        const on = Object.keys(MONEY_GW).filter(p => moneyState(p).enabled);
-        if (on.length) console.log(`  money auto-rotate: on for ${on.join(', ')}`);
-    }
+    if (moneyAutoShared.enabled) console.log(`  money auto-rotate: on (все шлюзы: ${Object.keys(MONEY_GW).join(', ')})`);
 
     // Автостарт Grok launcher — чтобы UI-вкладка «Grok Cookie Sessions» работала
     // сразу после запуска дашборда, без ручного `python launcher.py`.

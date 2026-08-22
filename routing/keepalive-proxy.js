@@ -468,30 +468,43 @@ function isTransientBody(status, buf) {
 }
 
 // ── Отказ по деньгам и мёртвый ключ: причина сменить аккаунт, а не умереть ────
-// Один и тот же смысл шлюз говорит двумя способами, и до авторотации обе ветки
-// вели в тупик (замер 22.08 по keepalive-proxy.log):
+// Один и тот же смысл шлюз говорит ТРЕМЯ способами, и до авторотации все ветки
+// вели в тупик (замеры 22.08 по keepalive-proxy.log):
 //   • `预扣费额度失败, 用户剩余额度: $0.309854, 需要预扣费额度: $0.800000` — предоплата
 //     под запрос не прошла. Ловилось RETRY_NO_ZH (`额度`) как постоянная ошибка и
 //     улетало в Claude Code как `403`, роняя задачу.
 //   • `Insufficient account balance` — ни один список не совпадал, fallback
 //     `status === 403` считал её ТРАНЗИЕНТНОЙ: три попытки в пустой аккаунт и `502`.
+//   • `pre-consume quota failed, user quota: ＄0.055238, need quota: ＄1.797580` —
+//     англоязычный перевод той же китайской предоплаты (`预扣费额度失败` дословно и есть
+//     «pre-consume quota failed»). Пойман живьём 22.08 дважды подряд. В OUT_OF_BALANCE
+//     не совпадал ничем, зато RETRY_NO матчил слово `quota` → снова «постоянная
+//     ошибка» и `403` в лицо. Доллар в этой формулировке ПОЛНОШИРИННЫЙ `＄` (U+FF04),
+//     поэтому суммы не читались и планка кандидата не поднималась до нужной — см. moneyNum.
 // Поэтому проверка стоит ВЫШЕ isTransientBody и решает раньше него.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|pre[- ]?consumed?\s+quota\s+failed|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
-// Числа из китайской формулировки. `需要预扣费额度` — сколько шлюз хочет придержать
-// под запрос, `用户剩余额度` — сколько реально осталось на аккаунте. Первое отбирает
-// кандидата (иначе уйдём на аккаунт, которому тоже не хватит), второе бесплатно
+// Числа из текста ошибки. `需要预扣费额度` / `need quota` — сколько шлюз хочет придержать
+// под запрос, `用户剩余额度` / `user quota` — сколько реально осталось на аккаунте. Первое
+// отбирает кандидата (иначе уйдём на аккаунт, которому тоже не хватит), второе бесплатно
 // уточняет кеш баланса в дашборде — точнее, чем анкер и угадывание.
-function moneyNum(s, label) {
-  const m = new RegExp(label + '\\s*[:：]?\\s*\\$?\\s*(-?[0-9]+(?:\\.[0-9]+)?)').exec(s);
-  if (!m) return null;
-  const v = Number(m[1]);
-  return Number.isFinite(v) ? v : null;
+// Метки пробуются ПО ПОРЯДКУ, китайская первой: у английской формулировки те же числа, но
+// своя разметка и полноширинный `＄` (U+FF04) вместо `$`. Без него `need quota: ＄1.797580`
+// не читалось вовсе, а молча непрочитанная сумма опаснее ошибки: планка годности кандидата
+// падала до MONEY_MIN_BAL, и ротация уходила на аккаунт, которому тоже не хватит.
+function moneyNum(s, ...labels) {
+  for (const label of labels) {
+    const m = new RegExp(label + '\\s*[:：]?\\s*[$＄]?\\s*(-?[0-9]+(?:\\.[0-9]+)?)', 'i').exec(s);
+    if (!m) continue;
+    const v = Number(m[1]);
+    if (Number.isFinite(v)) return v;
+  }
+  return null;
 }
-function neededUsd(s) { return moneyNum(s, '需要预扣费额度'); }
-function leftUsd(s) { return moneyNum(s, '用户剩余额度'); }
+function neededUsd(s) { return moneyNum(s, '需要预扣费额度', 'need\\s+quota'); }
+function leftUsd(s) { return moneyNum(s, '用户剩余额度', 'user\\s+quota'); }
 // Причина ротации по ответу шлюза: 'out-of-balance' | 'dead' | null.
 // Статус проверяем, чтобы фраза из чужого контекста (эхо тела в 200) не считалась
 // отказом. 402 сюда добавлен на будущее: в HTTP это и есть Payment Required.
@@ -1385,6 +1398,19 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(neededUsd(ZH_OOB), 0.8, 'нужно $0.80 распарсилось');
   assert.strictEqual(leftUsd(ZH_OOB), 0.309854, 'осталось $0.31 распарсилось');
   assert.strictEqual(neededUsd(EN_OOB), null, 'у английского текста цифр нет — это не ошибка');
+  // Третья формулировка — англоязычный перевод той же китайской предоплаты (`预扣费额度失败`
+  // дословно и есть «pre-consume quota failed»). Поймана живьём 22.08 дважды: не совпадала
+  // ни с одним списком, зато RETRY_NO матчил слово `quota` → «постоянная ошибка» → 403 в
+  // лицо. Доллар в ней ПОЛНОШИРИННЫЙ (U+FF04), из-за чего суммы молча не читались, а это
+  // хуже несовпадения: планка кандидата падала до MONEY_MIN_BAL и ротация шла в тот же тупик.
+  const EN_PRE = '{"error":{"message":"pre-consume quota failed, user quota: ＄0.055238, need quota: ＄1.797580 (request id: 20260822132728743038807xq9qve9y9lsyJ)"}}';
+  assert.strictEqual(rotateReason(403, Buffer.from(EN_PRE)), 'out-of-balance', 'en предоплата не прошла = нет баланса');
+  assert.strictEqual(neededUsd(EN_PRE), 1.79758, 'нужно $1.80 прочитано из полноширинного ＄');
+  assert.strictEqual(leftUsd(EN_PRE), 0.055238, 'осталось $0.055 — метка user quota не перехлестнулась с need quota');
+  assert.strictEqual(rotateReason(200, Buffer.from(EN_PRE)), null, 'эхо английской формулировки в 200 — не отказ');
+  // Слово `quota` само по себе деньгами не является: у New-API так же звучат «нет прав на
+  // модель» и лимит запросов. Ротация на них крутила бы пул зря, не вылечив запрос.
+  assert.strictEqual(rotateReason(403, Buffer.from('{"error":{"message":"quota exceeded for this model"}}')), null, 'просто quota ≠ нет денег');
   // Мёртвый ключ — тоже причина уйти, но с другой пометкой (аккаунт → dead).
   assert.strictEqual(rotateReason(403, Buffer.from('{"error":{"message":"User has been banned"}}')), 'dead', 'бан = мёртвый ключ');
   assert.strictEqual(rotateReason(401, Buffer.from('无效的令牌')), 'dead', 'zh невалидный токен = мёртвый ключ');

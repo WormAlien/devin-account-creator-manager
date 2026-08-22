@@ -23,7 +23,7 @@
 //             autocheckin: то же, но вход через GitHub скрипт делает САМ и закрывается,
 //             auto (по умолчанию): чистый профиль = register, иначе console.
 //
-// Коды возврата: 0 = готово (autocheckin печатает маркер AUTOCHECKIN_RESULT {...}),
+// Коды возврата: 0 = готово (оба чек-ин-режима печатают маркер AUTOCHECKIN_RESULT {...}),
 //   2 = таймаут ожидания GitHub-логина, 3 = GitHub-сессия в профиле мертва (нужен
 //   ручной вход, пароль и 2FA автоматика не вводит), 4 = не нашёл, чем начать
 //   GitHub-вход, 5 = шлюз отверг OAuth (state/код), 1 = прочая ошибка.
@@ -41,9 +41,13 @@ const ROOT_URL = 'https://agentrouter.org/';
 // Чек-ин +$25 капает раз в сутки только после ПОВТОРНОГО входа через GitHub, поэтому
 // режим checkin гасит сессию и ставит браузер на страницу входа.
 const LOGIN_URL = 'https://agentrouter.org/login';
-// Роут разлогина у New-API не задокументирован — пробуем best-effort, чтобы погасить
-// сессию и на сервере. Результат не проверяем: куки профиля мы всё равно чистим сами.
+// Роут разлогина у New-API не задокументирован. С 2026-08-22 он не основной путь, а
+// фолбэк: сначала выходим через меню профиля в шапке (см. uiLogout), как это делает
+// человек. Прямой заход сюда навигацией оставлен на случай, если шапка переедет.
 const LOGOUT_URL = 'https://agentrouter.org/api/user/logout';
+// Пункт «выйти» в дропдауне аватара. UI сайта китайский (退出), но пул языков держим
+// шире: шлюз уже менял локаль страницы входа, и селектор по одному языку — мина.
+const LOGOUT_MENU_RE = /退出|登出|注销|logout|log ?out|sign ?out|выйти|выход/i;
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
@@ -293,6 +297,16 @@ function watchOauthResult(context) {
         // id пользователя нужен для заголовка New-Api-User: в localStorage его пишет
         // колбэк-компонент, а мы к тому моменту уже закрываем попап — своя копия надёжнее.
         out.userId = (j.data && j.data.id) || null;
+        // 🪤 quota/used_quota в колбэке ЕСТЬ, но они ОБНУЛЕНЫ. Проверено живым прогоном
+        // 2026-08-22 на аккаунте с $175: `checked_in: true` приехало верное, а
+        // `quota: 0, used_quota: 0`. То есть шлюз отдаёт на входе урезанный объект
+        // пользователя (в списке полей при этом видны и password, и access_token —
+        // дело не в санитайзе целиком, обнулена именно квота).
+        // Поэтому балансом из колбэка пользоваться НЕЛЬЗЯ: он выглядит как настоящая
+        // цифра, а записал бы в пул $0 — с вышибанием активного аккаунта
+        // (moneyKickOnZero) и сломанным детектом чек-ина (granted стал бы нулём).
+        // Из колбэка берём только два факта: зачтён ли бонус и id пользователя.
+        if (j.data) console.log(`🧾 колбэк отдал поля: ${Object.keys(j.data).join(',')}`);
         console.log(out.success
           ? `🔑 шлюз принял GitHub-вход${out.checkedIn ? ', суточный чек-ин зачтён' : ' — чек-ин НЕ зачтён (окно ещё не сменилось)'}`
           : `⚠️  шлюз отверг вход: ${out.message || 'без причины'}`);
@@ -437,17 +451,107 @@ async function siteSelfOk(page, userId = null) {
       const r = await fetch('/api/user/self', { credentials: 'include', headers: { 'New-Api-User': String(uid) } });
       const j = await r.json();
       if (!j || !j.success || !j.data) return null;
-      return { quota: j.data.quota, used: j.data.used_quota };
+      // Отдаём СЫРЫЕ поля шлюза: их же читает дашборд с диска (selfToBalance в
+      // newapi-account.js), и делить на quota_per_unit тут нельзя — множитель живёт
+      // в /api/status и у разных инстансов New-API отличается.
+      return { quota: j.data.quota, used: j.data.used_quota, id: j.data.id, username: j.data.username };
     } catch { return null; }
   }, userId).catch(() => null);
 }
 
-// Цифру со счёта печатаем в лог: точный чек дашборда мог быть отложен паузой WAF, а
-// глазами по логу сразу видно, налил шлюз бонус или нет. quota_per_unit = 500000.
-async function reportSelfBalance(page, userId = null) {
-  const self = await siteSelfOk(page, userId);
-  if (!self || typeof self.quota !== 'number') return;
-  console.log(`💰 на счету $${(self.quota / 500000).toFixed(2)} (потрачено $${((self.used || 0) / 500000).toFixed(2)})`);
+// Объект пользователя, который SPA кладёт в localStorage после входа. Ноль запросов к
+// шлюзу: читаем то, что страница уже получила. Имена полей печатаем — состав шлюз меняет.
+async function readStoredUser(page) {
+  if (page.isClosed()) return null;
+  return await page.evaluate(() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null');
+      if (!u || typeof u !== 'object') return null;
+      return { keys: Object.keys(u), quota: u.quota, used: u.used_quota, id: u.id, username: u.username };
+    } catch { return null; }
+  }).catch(() => null);
+}
+
+// ───── Точный остаток: перехват вместо своего запроса ─────────────────────
+// Страница на кошельке сама ходит в /api/user/self — это и есть цифра, которую видит
+// глаз. Перехватываем ЕЁ ответ: своего запроса к шлюзу не добавляется вообще, а WAF тут
+// ни при чём (запрос всё равно был бы). route.fetch() буферизует тело у нас, fulfill
+// отдаёт его странице — приём тот же, что с колбэком OAuth.
+const SELF_API_RE = /\/api\/user\/self/i;
+
+function watchSelfResponses(context) {
+  const out = { last: null, seen: 0, stubs: 0 };
+  context.route(SELF_API_RE, async (route) => {
+    try {
+      const resp = await route.fetch();
+      const body = await resp.text();
+      out.seen++;
+      try {
+        const j = JSON.parse(body);
+        const d = j && j.data;
+        if (j && j.success && d && typeof d.quota === 'number') {
+          out.last = { quota: d.quota, used: Number(d.used_quota) || 0, id: d.id != null ? d.id : null, username: d.username || null };
+        }
+      } catch {
+        // HTTP 200 + HTML — заглушка Aliyun WAF. Ровно на ней падает и наш чек с диска:
+        // «WAF-заглушка (слишком часто), пауза 10 мин» в newapi-account.js.
+        out.stubs++;
+      }
+      await route.fulfill({ response: resp, body });
+    } catch (e) {
+      await route.continue().catch(() => {});
+    }
+  }).catch(() => {});
+  return out;
+}
+
+// Снимок годен, только если в нём есть ЧЕМ распорядиться. Нули отбиваем: именно так
+// выглядел обнулённый ответ колбэка, и он бы записал в пул $0 (см. watchOauthResult).
+function selfSnapshotUsable(s) {
+  return !!s && typeof s.quota === 'number' && isFinite(s.quota)
+    && (s.quota > 0 || Number(s.used) > 0);
+}
+
+// Точный остаток БЕЗ повторного обращения к шлюзу нашим клиентом. Источники по порядку:
+//
+//   1. перехваченный ответ САМОЙ страницы (watchSelfResponses) — ноль лишних запросов;
+//   2. localStorage['user'] — то же, но разобранное SPA; работает и в ручном режиме;
+//   3. свой fetch из страницы — последний резерв. Это запрос БРАУЗЕРА, а не нашего
+//      клиента: клиентской паузы coolDownHost на нём нет, но заглушку WAF он поймать
+//      может (проверено живьём 2026-08-22 — кабинет с живой сессией показывал $0.00).
+//
+// Снимок уезжает в маркер AUTOCHECKIN_RESULT: дашборд ставит цифру как есть, вместо того
+// чтобы после закрытия окна идти за ней второй раз через куки профиля с диска.
+// Делитель 500000 здесь только для ЛОГА — в маркер уходит сырая quota, а на доллары её
+// переводит бэкенд по quota_per_unit своего инстанса (см. newapi-account.js).
+async function captureSelfSnapshot(page, oauth, selfWatch) {
+  const show = s => `$${(s.quota / 500000).toFixed(2)} (потрачено $${((s.used || 0) / 500000).toFixed(2)})`;
+
+  if (selfWatch) {
+    console.log(`🛰️  запросов /api/user/self через страницу: ${selfWatch.seen}`
+      + (selfWatch.stubs ? `, из них заглушек WAF: ${selfWatch.stubs}` : '')
+      + (selfWatch.last ? '' : ' — годного ответа среди них нет'));
+  }
+  if (selfWatch && selfSnapshotUsable(selfWatch.last)) {
+    console.log(`💰 на счету ${show(selfWatch.last)} — перехвачено у самой страницы, лишних запросов ноль`);
+    return { ...selfWatch.last, from: 'page-self' };
+  }
+
+  const ls = await readStoredUser(page);
+  if (ls) console.log(`🗃️  localStorage['user'] отдал поля: ${ls.keys.join(',')}`);
+  if (selfSnapshotUsable(ls)) {
+    console.log(`💰 на счету ${show(ls)} — цифра из localStorage страницы, лишних запросов ноль`);
+    return { quota: ls.quota, used: ls.used || 0, id: ls.id, username: ls.username, from: 'localStorage' };
+  }
+
+  const self = await siteSelfOk(page, (oauth && oauth.userId) || (ls && ls.id) || null);
+  if (selfSnapshotUsable(self)) {
+    console.log(`💰 на счету ${show(self)} — цифра своим запросом из страницы`);
+    return { ...self, from: 'self-fetch' };
+  }
+  console.log('⚠️  годной цифры со страницы нет (перехват / localStorage / свой запрос) —'
+    + ' дашборд посчитает баланс сам, как раньше');
+  return null;
 }
 
 async function waitForSiteSession(context, page, timeoutMs, oauth, pollMs = 3000) {
@@ -542,7 +646,114 @@ async function settleAfterCheckin(page) {
   return !bad;
 }
 
-// Чек-ин +$25: гасим сессию agentrouter и ставим браузер на страницу входа.
+// Тихий вариант reportRender: дождаться, что SPA нарисовалась. Нужен там, где белый
+// экран не диагноз, а просто «ещё рано искать элемент». Ждать обязательно: HTTP-кеш у нас
+// выключен намеренно (см. disableHttpCache), бандл и /api/user/self тянутся заново на
+// каждом запуске, и шапки с аватаром в первые секунды в DOM нет вообще — на этом первый
+// прогон UI-выхода и сорвался в фолбэк.
+async function waitSpaReady(page, ms) {
+  return page.waitForFunction(
+    () => { const r = document.getElementById('root'); return !!r && r.innerHTML.length > 200; },
+    { timeout: ms },
+  ).then(() => true).catch(() => false);
+}
+
+// Подписка на ответ роута разлогина. Вешать ДО клика: сайт зовёт его сам, и другого
+// надёжного признака выхода у нас нет (см. uiLogout — куку сервер не отзывает).
+function watchLogoutAck(page) {
+  const out = { seen: false, ok: false };
+  const onResp = async (r) => {
+    if (out.seen || !/\/api\/user\/logout/i.test(r.url())) return;
+    out.seen = true;
+    try {
+      const j = JSON.parse(await r.text());
+      out.ok = !!j.success;
+    } catch { out.ok = r.status() === 200; }
+  };
+  page.on('response', onResp);
+  return { out, off: () => page.off('response', onResp) };
+}
+
+// Убрать куки СВОЕГО домена через CDP. После UI-выхода они уже мертвы на сервере, но на
+// диске остаются — а точный баланс дашборд читает по кукам профиля и принял бы мёртвую
+// `session` за живую сессию (тот же ложный позитив, что с `user_session` у GitHub).
+// Ровно перечисленные имена, чужих домены не касаемся — почему не clearCookies, см. apiLogout.
+async function purgeSiteCookies(context, page) {
+  const ck = await context.cookies('https://agentrouter.org').catch(() => []);
+  if (!ck.length) return 0;
+  let n = 0;
+  try {
+    const cdp = await context.newCDPSession(page);
+    for (const k of ck) {
+      await cdp.send('Network.deleteCookies', { name: k.name, domain: k.domain, path: k.path || '/' });
+      n++;
+    }
+    await cdp.detach().catch(() => {});
+  } catch { /* не вышло — не беда, сессия и так погашена сервером */ }
+  return n;
+}
+
+// Выход через меню профиля — основной путь с 2026-08-22 (просьба владельца).
+// Раньше скрипт сразу удалял куки домена, и в окне это выглядело так: белая страница
+// JSON-роута, потом сайт с руганью «не авторизован», и только потом форма входа. Клик по
+// аватару делает то же самое руками сайта: сессию гасит его собственный обработчик, на
+// /login SPA уезжает клиентским роутом (бандл заново не грузится), лишнего экрана с
+// ошибкой не появляется вообще. GitHub-кук этот путь не касается совсем.
+//
+// Селекторы сняты с живой страницы 2026-08-22 (профиль acct_ar_1787282231931_14):
+// аватар в шапке — единственный .semi-avatar внутри <button> (semi-avatar-extra-small,
+// буква логина); дропдаун — .semi-dropdown-content с четырьмя <li>: 个人设置 / API令牌 /
+// 钱包 / 退出. Ищем по тексту, а не по позиции: порядок пунктов шлюз уже менял.
+//
+// ⚠️ ПРИЗНАК УСПЕХА — ОТВЕТ РОУТА, А НЕ ПРОПАЖА КУКИ. Замерено там же: сайт зовёт
+// GET /api/user/logout, получает {"success":true}, чистит localStorage.user и уезжает на
+// /login — но `Set-Cookie` в ответе НЕТ, и `session` остаётся в браузере (значение то же,
+// на сервере уже мёртвое). Первый прогон ждал пропажи куки, не дождался и honestly ушёл
+// в фолбэк с удалением кук, хотя выход прошёл. Мёртвую куку убираем сами, но уже после —
+// не как способ разлогина, а чтобы не оставлять на диске ложный признак живой сессии.
+async function uiLogout(context, page) {
+  await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  const before = await context.cookies('https://agentrouter.org').catch(() => []);
+  if (!hasSessionCookie(before)) {
+    console.log('🚪 сессии сайта в профиле и не было — выходить не из чего');
+    return true;
+  }
+  await dismissModals(page);
+  await waitSpaReady(page, 25000);
+  await dismissModals(page);
+
+  const avatar = page.locator('button:has(.semi-avatar)').first();
+  const shown = await avatar.waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
+  if (!shown) {
+    console.log(`⚠️  аватара в шапке не нашёл (url=${page.url()}, кнопок с аватаром ${await page.locator('button:has(.semi-avatar)').count().catch(() => '?')})`);
+    return false;
+  }
+
+  const ack = watchLogoutAck(page);
+  try {
+    await avatar.click({ timeout: 5000 }).catch(e => console.log(`⚠️  клик по аватару не прошёл: ${e.message}`));
+    const item = page.locator('.semi-dropdown-content li, .semi-dropdown-item').filter({ hasText: LOGOUT_MENU_RE }).first();
+    const hasItem = await item.waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false);
+    if (!hasItem) { console.log('⚠️  в меню профиля нет пункта выхода'); return false; }
+    await item.click({ timeout: 5000 }).catch(e => console.log(`⚠️  клик по «выйти» не прошёл: ${e.message}`));
+
+    const until = Date.now() + 8000;
+    while (!ack.out.seen && Date.now() < until) await page.waitForTimeout(200);
+  } finally {
+    ack.off();
+  }
+
+  if (!ack.out.ok) {
+    console.log(ack.out.seen ? '⚠️  шлюз не подтвердил выход' : '⚠️  сайт так и не позвал роут разлогина');
+    return false;
+  }
+  const purged = await purgeSiteCookies(context, page);
+  console.log(`🚪 вышел через меню профиля — шлюз подтвердил${purged ? `, мёртвых кук убрано ${purged}` : ''}; GitHub-куки не тронуты`);
+  return true;
+}
+
+// Фолбэк: погасить сессию, не считаясь с версткой сайта. Раньше это был основной путь.
+//
 // Порядок важен: сначала best-effort logout на сервере (пока куки ещё живые), потом
 // удаляем куки домена — это и есть гарантия разлогина, не зависящая от роутов сайта.
 //
@@ -556,35 +767,41 @@ async function settleAfterCheckin(page) {
 // Network.deleteCookies → GitHub 3/3. CDP удаляет ровно названные записи и чужих
 // не касается вообще, поэтому терять нечего.
 // localStorage не трогаем: там реф-код `aff`, к сессии он не относится.
+async function apiLogout(context, page, ghBefore) {
+  await page.goto(LOGOUT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(800);
+
+  const total = (await context.cookies('https://agentrouter.org').catch(() => [])).length;
+  const deleted = await purgeSiteCookies(context, page);
+  if (total && !deleted) {
+    // Последний резерв — НЕ clearCookies(): он снёс бы GitHub (см. выше). Лучше
+    // оставить пользователя разлогиниться руками, чем потерять вход одним кликом.
+    console.log('⚠️  удалить куки через CDP не удалось — GitHub трогать не буду.');
+    console.log('   Разлогинься на странице сам: аватар в шапке → 退出.');
+  }
+  const arLeft = (await context.cookies('https://agentrouter.org').catch(() => [])).length;
+  console.log(`🚪 куки agentrouter.org: удалено ${deleted}/${total}, осталось ${arLeft}${arLeft === 0 ? ' — сессия погашена' : ' (разлогинься вручную)'}`);
+  await restoreGithubIfLost(context, ghBefore);
+}
+
+// Чек-ин +$25: гасим сессию agentrouter и ставим браузер на страницу входа.
+// Сначала по-человечески (меню профиля), и только если шапка не поддалась — грубым
+// путём через удаление кук.
 async function doCheckinLogout(context, page) {
   const ghBefore = (await context.cookies('https://github.com').catch(() => []));
   const saved = saveGhBackup(label, ghBefore);
   console.log(`🐙 GitHub-сессия: ${ghBefore.length} кук в профиле${saved ? `, копия сохранена (${saved} долгоживущих)` : ', сохранять нечего'}`);
 
-  await page.goto(LOGOUT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
-  await page.waitForTimeout(800);
-
-  const arCookies = await context.cookies('https://agentrouter.org').catch(() => []);
-  let deleted = 0;
-  try {
-    const cdp = await context.newCDPSession(page);
-    for (const k of arCookies) {
-      await cdp.send('Network.deleteCookies', { name: k.name, domain: k.domain, path: k.path || '/' });
-      deleted++;
-    }
-    await cdp.detach().catch(() => {});
-  } catch (e) {
-    // Последний резерв — НЕ clearCookies(): он снёс бы GitHub (см. выше). Лучше
-    // оставить пользователя разлогиниться руками, чем потерять вход одним кликом.
-    console.log(`⚠️  удалить куки через CDP не удалось (${e.message})`);
-    console.log('   GitHub трогать не буду — разлогинься на странице сам (меню профиля → Logout).');
+  if (!(await uiLogout(context, page))) {
+    console.log('↪️  выход через меню не вышел — гашу сессию удалением кук');
+    await apiLogout(context, page, ghBefore);
   }
 
-  const arLeft = (await context.cookies('https://agentrouter.org').catch(() => [])).length;
-  console.log(`🚪 куки agentrouter.org: удалено ${deleted}/${arCookies.length}, осталось ${arLeft}${arLeft === 0 ? ' — сессия погашена' : ' (разлогинься вручную)'}`);
-  await restoreGithubIfLost(context, ghBefore);
-
-  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  // После клиентского роута мы, скорее всего, уже на /login — тогда навигация лишняя
+  // и стоит секунду загрузки бандла заново.
+  if (!/\/login\b/.test(page.url())) {
+    await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  }
   await reportRender(page);
 }
 
@@ -649,6 +866,9 @@ async function main() {
     // Подписку на ответ колбэка вешаем ДО клика и на КОНТЕКСТ, а не на страницу:
     // колбэк уедет в попап, которого сейчас ещё нет.
     const oauth = auto ? watchOauthResult(context) : null;
+    // Перехват self — тоже до навигации и в обоих режимах: страница кошелька запросит
+    // остаток сама, и это единственный способ узнать цифру, ничего не спрашивая заново.
+    const selfWatch = watchSelfResponses(context);
     try {
       console.log(auto
         ? '⚡ Автоподарок: гашу сессию и вхожу через GitHub сам.'
@@ -700,7 +920,6 @@ async function main() {
         // навигацией нельзя, только закрыть.
         if (target !== page && !target.isClosed()) await target.close().catch(() => {});
         await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
-        await reportSelfBalance(page, oauth && oauth.userId);
       } else {
         console.log('   Жми «Continue with GitHub» — GitHub-сессия в профиле осталась, пароль и 2FA не нужны.');
 
@@ -721,22 +940,29 @@ async function main() {
         }
       }
       await settleAfterCheckin(page);
+      // Точную цифру снимаем ЗДЕСЬ, пока браузер жив и стоит на балансе: /api/user/self
+      // отвечает сессии САМОЙ страницы. Это тот же ответ, за которым дашборд после
+      // закрытия окна лез бы во второй раз — расшифровывая куки профиля с диска и
+      // стучась к шлюзу за Aliyun WAF (именно этот запрос ловит рейт-лимит и роняет
+      // точный баланс всего пула на 10 минут). Снимок уезжает в маркер, дашборд ставит
+      // цифру как есть; не снялся — старый путь остаётся фолбэком.
+      const selfSnap = await captureSelfSnapshot(page, auto ? oauth : null, selfWatch);
       await backupGhAfterLogin(context);
       console.log('✅ Вход выполнен. Закрываю браузер, чтобы куки легли на диск —');
-      console.log('   без этого точный баланс не читается и чек показал бы прикидку.');
+      console.log('   без этого следующий чек баланса не найдёт в профиле живой сессии.');
       await context.close().catch(() => {});
-      if (auto) {
-        // Маркер для дашборда: checkedIn = слово ШЛЮЗА про суточный бонус, null —
-        // ответ колбэка поймать не удалось (вход подтвердился кукой), тогда бэкенд
-        // решает по росту выдачи, как раньше.
-        console.log(`AUTOCHECKIN_RESULT ${JSON.stringify({
-          checkedIn: oauth && oauth.seen ? !!oauth.checkedIn : null,
-          message: (oauth && oauth.message) || '',
-        })}`);
-        console.log('⚡ Готово. Дашборд сам пересчитает баланс и переставит колонку 🎁.');
-      } else {
-        console.log('🎁 Готово. Жми 💰 в дашборде: увидишь +$25 и колонка станет 📦.');
-      }
+      // Маркер печатают ОБА режима: цифра, снятая со страницы, одинаково избавляет
+      // дашборд от повторного чека, кто бы ни жал кнопку входа — скрипт или человек.
+      // checkedIn = слово ШЛЮЗА про суточный бонус (только auto, в ручном режиме
+      // колбэк не перехватываем); null — решает бэкенд по росту выдачи, как раньше.
+      console.log(`AUTOCHECKIN_RESULT ${JSON.stringify({
+        checkedIn: auto && oauth && oauth.seen ? !!oauth.checkedIn : null,
+        message: (auto && oauth && oauth.message) || '',
+        self: selfSnap,
+      })}`);
+      console.log(selfSnap
+        ? '🎁 Готово. Баланс снят со страницы — дашборд поставит цифру и 📦 сам, жать 💰 не нужно.'
+        : '🎁 Готово, но цифру со страницы снять не удалось — дашборд пересчитает баланс сам, как раньше.');
       process.exit(0);
     } catch (e) {
       await context.close().catch(() => {});

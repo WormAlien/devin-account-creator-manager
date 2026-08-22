@@ -53,10 +53,32 @@ function ghIdForLabel(poolFile, label) {
     } catch { return null; }
 }
 
+// Личный GitHub владельца помечен в пуле маркером `ghId: 'personal'` — это метка «мой,
+// не из пула»: по ней рисуется фиолетовый бейдж и работает isOwnerAccount. Своя запись в
+// хранилище у него при этом ЕСТЬ (`login: WormAlien`), просто пул на неё не ссылается.
+// Поэтому id для общего снимка достаём по логину из живых кук (`dotcom_user`): маркер в
+// пуле не трогаем, а снимок всё равно попадает под правильный id и уходит на заселение
+// новых профилей. Тот же путь спасает записи вообще без привязки.
+function ghIdByLogin(accountsFile, login) {
+    if (!login) return null;
+    try {
+        const want = String(login).toLowerCase();
+        const raw = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+        const arr = Array.isArray(raw) ? raw : (raw.accounts || raw.keys || []);
+        const hits = arr.filter(a => [a.login, a.nickname, a.nick, a.email]
+            .some(v => String(v || '').toLowerCase() === want ||
+                       String(v || '').toLowerCase().split('@')[0] === want));
+        // Двусмысленность не разруливаем молча: два аккаунта под одним ником — повод
+        // ничего не писать, а не выбирать первый попавшийся.
+        return hits.length === 1 ? hits[0].id : null;
+    } catch { return null; }
+}
+
 function makeCapture({ label, moduleDir, poolFile }) {
     const backupDir = path.join(moduleDir, 'gh-sessions');
     const backupFile = path.join(backupDir, label + '.json');
     const sharedDir = path.join(moduleDir, '..', 'github', 'sessions');
+    const accountsFile = path.join(moduleDir, '..', 'routing', 'github-accounts.json');
 
     // Что уже лежит на диске. Сравниваем по значению user_session: сессия скользящая,
     // GitHub ротирует куку — новое значение и есть признак «вход был».
@@ -99,6 +121,16 @@ function makeCapture({ label, moduleDir, poolFile }) {
         return true;
     }
 
+    // Под каким id ложится общий снимок. Привязка `gh_…` в пуле — прямой ответ; маркер
+    // `personal` и пустая привязка — через логин из живых кук. Если логин не сошёлся ни
+    // с одной записью хранилища (или сошёлся с двумя), снимок не пишем вообще: пусть
+    // лучше не будет, чем встанет под чужой id.
+    function resolveGhId(login) {
+        const fromPool = poolFile ? ghIdForLabel(poolFile, label) : null;
+        if (fromPool) return fromPool;
+        return ghIdByLogin(accountsFile, login);
+    }
+
     // Один замер. Возвращает true, если сессия оказалась новой и копия обновлена.
     async function captureOnce(context, { quiet = false } = {}) {
         const cookies = await context.cookies('https://github.com').catch(() => []);
@@ -108,9 +140,10 @@ function makeCapture({ label, moduleDir, poolFile }) {
             const n = writeBackup(cookies);
             if (!n) return false;
             if (!quiet) console.log(`🐙 ручной вход в GitHub сохранён (${n} кук) — чек-ин сможет его вернуть`);
-            const ghId = poolFile ? ghIdForLabel(poolFile, label) : null;
+            const login = ((cookies || []).find(c => c.name === 'dotcom_user') || {}).value || null;
+            const ghId = resolveGhId(login);
             if (ghId && await writeShared(context, ghId, cookies)) {
-                if (!quiet) console.log(`   общий снимок ${ghId} обновлён — новые профили заселятся этой сессией`);
+                if (!quiet) console.log(`   общий снимок ${ghId}${login ? ` (${login})` : ''} обновлён — новые профили заселятся этой сессией`);
             }
             return true;
         } catch (e) {
@@ -132,4 +165,4 @@ function makeCapture({ label, moduleDir, poolFile }) {
     return { captureOnce, holdOpen, backupFile };
 }
 
-module.exports = { makeCapture, isGithubCookie, userSessionOf, POLL_MS };
+module.exports = { makeCapture, isGithubCookie, userSessionOf, ghIdForLabel, ghIdByLogin, POLL_MS };

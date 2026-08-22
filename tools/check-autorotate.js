@@ -35,8 +35,10 @@ const path = require('path');
 
 const DASH = path.join(__dirname, '..', 'routing', 'transparent-proxy.js');
 const KA = path.join(__dirname, '..', 'routing', 'keepalive-proxy.js');
+const HTML = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const src = fs.readFileSync(DASH, 'utf8');
 const kaSrc = fs.readFileSync(KA, 'utf8');
+const htmlSrc = fs.readFileSync(HTML, 'utf8');
 
 const fails = [];
 const ok = [];
@@ -47,7 +49,7 @@ function check(cond, msg) { (cond ? ok : fails).push(msg); }
 // закрывает счётчик на себе же.
 function cutFn(text, head) {
     const start = text.indexOf(head);
-    if (start < 0) throw new Error(`не нашёл в transparent-proxy.js: ${head}`);
+    if (start < 0) throw new Error(`не нашёл в исходнике: ${head}`);
     let i = start, paren = 0, sawParen = false;
     for (; i < text.length; i += 1) {
         const c = text[i];
@@ -78,6 +80,7 @@ const parts = [
     cutConst(src, 'MONEY_MAX_PROBES'),
     cutConst(src, 'MONEY_DEDUP_MS'),
     cutConst(src, 'moneyAuto'),
+    cutConst(src, 'moneyAutoShared'),
     cutFn(src, 'function moneyState('),
     cutFn(src, 'function moneyUsable('),
     cutFn(src, 'function moneyRank('),
@@ -129,7 +132,7 @@ function makeWorld(opts = {}) {
     const factory = new Function('deps', `
         const { fs, logLine, isRealKey, round2, MONEY_GW } = deps;
         ${parts.join('\n')}
-        return { moneyRotate, moneyRank, moneyUsable, moneyState, MONEY_MIN_BAL };
+        return { moneyRotate, moneyRank, moneyUsable, moneyState, moneyAutoShared, MONEY_MIN_BAL };
     `);
     world.api = factory(deps);
     return world;
@@ -320,6 +323,246 @@ async function main() {
         check(/rotations < MAX_ROTATIONS/.test(kaSrc), 'цепочка ротаций ограничена сверху');
         check(!/log\(`[^`]*\$\{sentKey\}/.test(kaSrc) && !/fromKey: sentKey \|\| null[^]]*log/.test(kaSrc),
             'ключ в лог не пишется — только маска');
+    }
+
+    // 13. Фронт: подмена активного аккаунта видна БЕЗ F5. Флаг `active` в
+    //     `<prov>-sessions.json` переезжает сразу, но таблицу шлюза с зелёной меткой
+    //     перерисовывал только autoRefreshTick — а он слушается тумблера
+    //     «Автообновление». С выключенным тумблером метка врала до перезагрузки
+    //     страницы: ротация сработала, а на экране прежний аккаунт.
+    //     Функцию режем из HTML и прогоняем в песочнице.
+    {
+        const fnSrc = cutFn(htmlSrc, 'function sideDetectRotation(');
+        const mapSrc = cutConst(htmlSrc, '_sideActiveKey');
+        const calls = { reload: 0, toasts: [], autoRefAsked: 0 };
+        const acct = (name, key, bal, active) => ({ email: name, api_key: key, balance: bal, active });
+        const factory = new Function('deps', `
+            const { MONEY_PROVIDERS, localStorage, toast, console, autoRefreshEnabled } = deps;
+            ${mapSrc}
+            ${fnSrc}
+            return sideDetectRotation;
+        `);
+        const sideDetectRotation = factory({
+            MONEY_PROVIDERS: { gorouter: { label: 'GoRouter', sym: '$', reload: () => { calls.reload += 1; } } },
+            localStorage: { getItem: () => 'gorouter' },
+            toast: (m) => calls.toasts.push(m),
+            console,
+            // Тумблер выключен. Если функция его спросит — тест это увидит и упадёт.
+            autoRefreshEnabled: () => { calls.autoRefAsked += 1; return false; },
+        });
+
+        const before = [acct('cicidewiy', 'sk-a', 0, true), acct('melodicknot', 'sk-b', 79, false)];
+        const after = [acct('cicidewiy', 'sk-a', 0, false), acct('melodicknot', 'sk-b', 79, true)];
+
+        check(sideDetectRotation('gorouter', before) === false,
+            'первый тик после загрузки страницы подменой не считается');
+        check(calls.reload === 0 && calls.toasts.length === 0,
+            'на первом тике таблица не перерисовывается и тоста нет');
+        check(sideDetectRotation('gorouter', before) === false,
+            'тот же активный ключ — не событие');
+        check(calls.reload === 0, 'без смены ключа таблицу не трогаем (не прыгает под курсором)');
+        check(sideDetectRotation('gorouter', after) === true, 'смена активного ключа поймана');
+        check(calls.reload === 1, 'таблица открытой вкладки перерисована ровно один раз');
+        check(calls.autoRefAsked === 0,
+            'перерисовка НЕ спрашивает тумблер «Автообновление» — иначе метка снова врала бы до F5');
+        check(calls.toasts.length === 1 && /melodicknot/.test(calls.toasts[0]) && /\$79/.test(calls.toasts[0]),
+            `тост называет новый аккаунт и его баланс (${calls.toasts[0] || '—'})`);
+        check(sideDetectRotation('gorouter', after) === false && calls.reload === 1,
+            'повторный тик после подмены ничего не перерисовывает');
+        // Вкладка шлюза закрыта — перерисовывать нечего, но событие всё равно событие:
+        // тост нужен, а таблицу подтянет refreshNavCounts при открытии.
+        {
+            const w = factory({
+                MONEY_PROVIDERS: { gorouter: { label: 'GoRouter', sym: '$', reload: () => { calls.reload += 1; } } },
+                localStorage: { getItem: () => 'health' },
+                toast: (m) => calls.toasts.push(m),
+                console,
+                autoRefreshEnabled: () => false,
+            });
+            const hits = calls.reload;
+            w('gorouter', before);
+            w('gorouter', after);
+            check(calls.reload === hits, 'на чужой открытой вкладке таблица шлюза не перерисовывается');
+            check(calls.toasts.length === 2, 'тост о подмене приходит и с другой вкладки');
+        }
+    }
+
+    // 14. Тумблер ОДИН на все шлюзы. Был по шлюзу, и смена провайдера читалась как
+    //     «авторотация выключилась»: включил на GoRouter, перешёл на Tabi — там свой
+    //     флаг, по умолчанию выключённый, и следующий отказ по деньгам снова в лицо.
+    {
+        const w = makeWorld({ pool: [{ name: 'a', balance: 5, active: true }] });
+        const st = w.api.moneyState;
+        check(st('go').enabled === false && st('tb').enabled === false,
+            'по умолчанию авторотация выключена у всех шлюзов');
+        st('go').enabled = true;
+        check(st('ar').enabled === true && st('tb').enabled === true && st('xp').enabled === true,
+            'включил на одном шлюзе — включено на всех (смена провайдера не выключает)');
+        check(w.api.moneyAutoShared.enabled === true,
+            'хранилище флага одно — moneyAutoShared, а не поле на каждом шлюзе');
+        st('xp').enabled = false;
+        check(st('go').enabled === false, 'выключение тоже общее');
+        // Журнал подмен и дедуп обязаны остаться ПО шлюзу: это состояние работы,
+        // а не выбор пользователя. Слить их вместе — потерять, кто куда переехал.
+        st('go').recent.push({ to: 'go-acct' });
+        st('go').lastAt = 111;
+        check(st('tb').recent.length === 0 && st('tb').lastAt === 0,
+            'журнал подмен и дедуп остались раздельными по шлюзам');
+    }
+
+    // 15. Файл состояния: новый формат — один флаг, старый (по шлюзу) читается как
+    //     «включён хоть где-то = включён». Иначе владелец, у которого тумблер стоял на
+    //     GoRouter, после обновления нашёл бы авторотацию молча выключенной.
+    {
+        const persistParts = [
+            cutConst(src, 'moneyAutoShared'),
+            cutFn(src, 'function moneySavePersist('),
+            cutFn(src, 'function moneyLoadPersist('),
+        ].join('\n');
+        const makePersist = (fileBody) => {
+            const disk = { has: fileBody !== null, body: fileBody };
+            const logs = [];
+            const deps = {
+                fs: {
+                    existsSync: (f) => (f === 'AUTO.json' ? disk.has : true),
+                    mkdirSync: () => {},
+                    readFileSync: () => disk.body,
+                    writeFileSync: (f, v) => { disk.has = true; disk.body = v; },
+                },
+                path: { dirname: () => 'logs', join: () => 'AUTO.json' },
+                MONEY_AUTO_FILE: 'AUTO.json',
+                MONEY_GW: { ar: {}, go: {}, tb: {}, xp: {} },
+                logLine: (m) => logs.push(m),
+            };
+            const f = new Function('deps', `
+                const { fs, path, MONEY_AUTO_FILE, MONEY_GW, logLine } = deps;
+                ${persistParts}
+                return { moneySavePersist, moneyLoadPersist, moneyAutoShared, disk: null };
+            `);
+            return Object.assign(f(deps), { disk, logs });
+        };
+
+        const legacy = makePersist(JSON.stringify({ ar: { enabled: false }, go: { enabled: true }, tb: { enabled: false }, xp: { enabled: false } }));
+        legacy.moneyLoadPersist();
+        check(legacy.moneyAutoShared.enabled === true,
+            'старый формат: тумблер стоял на GoRouter → после обновления авторотация всё ещё включена');
+
+        const legacyOff = makePersist(JSON.stringify({ ar: { enabled: false }, go: { enabled: false } }));
+        legacyOff.moneyLoadPersist();
+        check(legacyOff.moneyAutoShared.enabled === false, 'старый формат без включённых — выключено');
+
+        const fresh = makePersist(null);
+        fresh.moneyAutoShared.enabled = true;
+        fresh.moneySavePersist();
+        check(/"enabled":\s*true/.test(fresh.disk.body) && !/"go"/.test(fresh.disk.body),
+            `на диск пишется один общий флаг, без разбивки по шлюзам (${String(fresh.disk.body).replace(/\s+/g, ' ').trim()})`);
+        const reread = makePersist(fresh.disk.body);
+        reread.moneyLoadPersist();
+        check(reread.moneyAutoShared.enabled === true, 'новый формат читается обратно — переживает рестарт дашборда');
+
+        const offFile = makePersist(JSON.stringify({ enabled: false }));
+        offFile.moneyAutoShared.enabled = true;   // мусор в памяти обязан быть перезатёрт
+        offFile.moneyLoadPersist();
+        check(offFile.moneyAutoShared.enabled === false,
+            'явное `{enabled:false}` в файле уважается, а не «включаем, если хоть что-то»');
+    }
+
+    // 16. Рукопожатие фронта и бэкенда: `shared: true` в статусе. HTML читается с диска
+    //     на каждый запрос (обновляется по F5), а бэкенд — только рестартом `:8200`.
+    //     В окне между F5 и рестартом новый фронт видит СТАРЫЙ статус без этого поля и
+    //     обязан не подставлять состояние одного шлюза другому — иначе пообещает
+    //     включённую авторотацию там, где её нет.
+    {
+        const statusFn = cutFn(src, 'function moneyAutoStatus(');
+        check(/shared:\s*true/.test(statusFn), 'статус шлюза несёт признак `shared: true`');
+        const anyKnown = cutFn(htmlSrc, 'function moneyAutoAnyKnown(');
+        check(/\.shared/.test(anyKnown),
+            'фронт подставляет чужой статус только при `shared` (совместимость со старым процессом :8200)');
+        const toggle = cutFn(htmlSrc, 'async function sideAutoToggle(');
+        check(/if \(st\.shared\)/.test(toggle),
+            'раскраска соседних вкладок после клика тоже под `shared`');
+    }
+
+    // 17. Мерж-запись баланса не воскрешает `active` ушедшего аккаунта. Балансовый чек
+    //     снимает снимок пула ДО запроса в биллинг (1-2 с), и если в это окно сменился
+    //     активный ключ, Object.assign возвращал на диск `active: true` ушедшего — в файле
+    //     оказывалось ДВА активных (пойман 22.08: previoussack $0.58 + greedybelieve $105).
+    //     Правда о владении ключом — только файл `<prov>-active-key.txt`.
+    {
+        const mergeSrc = [
+            cutConst(src, 'BALANCE_CLEARABLE'),
+            cutFn(src, 'function arSaveMerge('),
+        ].join('\n');
+        const makeDisk = (arr, keyFile) => {
+            const world = { disk: arr, keyFile };
+            const deps = {
+                fs: {
+                    readFileSync: (f) => {
+                        if (f === 'AR_KEY') { if (world.keyFile === null) throw new Error('ENOENT'); return world.keyFile; }
+                        throw new Error('ENOENT ' + f);
+                    },
+                },
+                arLoad: () => JSON.parse(JSON.stringify(world.disk)),
+                arSave: (a) => { world.disk = a; },
+                AR_ACTIVE_KEY_FILE: 'AR_KEY',
+            };
+            const f = new Function('deps', `
+                const { fs, arLoad, arSave, AR_ACTIVE_KEY_FILE } = deps;
+                ${mergeSrc}
+                return arSaveMerge;
+            `);
+            return { world, arSaveMerge: f(deps) };
+        };
+        const act = (w) => w.disk.filter(s => s.active).map(s => s.email);
+
+        // Гонка: снимок снят до подмены, ротация переставила активного, чек добрался
+        // до диска после неё и принёс `active: true` старого владельца.
+        {
+            const { world, arSaveMerge } = makeDisk(
+                [{ email: 'gone', api_key: 'sk-a', active: false }, { email: 'now', api_key: 'sk-b', active: true }],
+                'sk-b',
+            );
+            arSaveMerge({ email: 'gone', api_key: 'sk-a', active: true, balance: 0.58 });
+            check(act(world).join(',') === 'now',
+                `мерж не воскресил active ушедшего (активны: ${act(world).join(',') || '—'})`);
+            check(world.disk.find(s => s.api_key === 'sk-a').balance === 0.58,
+                'цифра баланса из того же мержа при этом записана');
+        }
+        // Лечение уже испорченного файла: два активных на входе, один на выходе.
+        {
+            const { world, arSaveMerge } = makeDisk(
+                [{ email: 'gone', api_key: 'sk-a', active: true }, { email: 'now', api_key: 'sk-b', active: true }],
+                'sk-b',
+            );
+            arSaveMerge({ email: 'now', api_key: 'sk-b', balance: 105 });
+            check(act(world).join(',') === 'now',
+                `испорченный файл вылечен по файлу ключа (активны: ${act(world).join(',') || '—'})`);
+        }
+        // Файла ключа нет — активного не выдумываем, чужие флаги не трогаем.
+        {
+            const { world, arSaveMerge } = makeDisk(
+                [{ email: 'a', api_key: 'sk-a', active: true }, { email: 'b', api_key: 'sk-b', active: false }],
+                null,
+            );
+            arSaveMerge({ email: 'b', api_key: 'sk-b', balance: 3 });
+            check(act(world).join(',') === 'a',
+                `без файла ключа флаги не переставляются (активны: ${act(world).join(',') || '—'})`);
+        }
+        // Новая запись из мержа не приезжает активной.
+        {
+            const { world, arSaveMerge } = makeDisk([{ email: 'a', api_key: 'sk-a', active: true }], 'sk-a');
+            arSaveMerge({ email: 'fresh', api_key: 'sk-new', active: true, balance: 9 });
+            check(act(world).join(',') === 'a' && world.disk.length === 2,
+                `дописанная мержем запись не становится активной (активны: ${act(world).join(',') || '—'})`);
+        }
+        // BALANCE_CLEARABLE продолжает работать: метка ошибки снимается успешным чеком.
+        {
+            const { world, arSaveMerge } = makeDisk(
+                [{ email: 'a', api_key: 'sk-a', active: true, balanceError: 'таймаут' }], 'sk-a',
+            );
+            arSaveMerge({ email: 'a', api_key: 'sk-a', balance: 5 });
+            check(!('balanceError' in world.disk[0]), 'успешный чек по-прежнему снимает balanceError');
+        }
     }
 
     // Итог

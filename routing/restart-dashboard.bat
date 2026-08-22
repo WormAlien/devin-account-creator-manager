@@ -58,19 +58,32 @@ if not exist "%USERPROFILE%\.claude" mkdir "%USERPROFILE%\.claude" >nul 2>&1
 >"%USERPROFILE%\.claude\autoreger-root.txt" echo %REPO_ROOT_U%
 if exist "%~dp0statusline-shim.sh" copy /Y "%~dp0statusline-shim.sh" "%USERPROFILE%\.claude\autoreger-statusline.sh" >nul 2>&1
 
+REM Три служебных прокси стартуют СКРЫТО и ОТДЕЛЬНЫМ процессом (2026-08-22, вторая
+REM правка). До неё перебрали два варианта, и оба плохи по-разному:
+REM   * `start /B node ...` — окна нет, но процесс остаётся привязан к ЭТОЙ консоли,
+REM     а консольное окно живёт, пока к нему привязан хоть один процесс: `exit 0`
+REM     отрабатывал, cmd умирал, а окно висело вечно с «Window will close in 3 s».
+REM   * `start "FM Rotator" /MIN node ...` — окно закрывается, но их становится
+REM     ЧЕТЫРЕ в таскбаре вместо одного (владелец: «плодятся, было одно раньше»).
+REM Start-Process не привязывает ребёнка к нашей консоли (значит окно закроется) и
+REM `-WindowStyle Hidden` не создаёт ему своего окна. Логи не теряются: все три
+REM прокси пишут через routing/proxy-logger.js батчем в сам дашборд, их видно на
+REM вкладке «Server Logs» под префиксами [fm-rot], [fm-oa], [vyce] — то есть stdout
+REM этих окон никому и не был нужен. Единственное окно, которое остаётся видимым, —
+REM ABUSE HUB ниже: это дашборд, и его /MIN не трогаем.
 echo Starting Freemodel Key Rotator on :20126 ...
 call :STARTGUARD 20126 || goto FAILED
-start "FM Rotator" /B node freemodel-rotator.js
+call :STARTHIDDEN freemodel-rotator.js
 ping 127.0.0.1 -n 2 >nul
 
 echo Starting FreeModel OpenAI Proxy on :20130 ...
 call :STARTGUARD 20130 || goto FAILED
-start "FM OpenAI Proxy" /B node freemodel-openai-proxy.js
+call :STARTHIDDEN freemodel-openai-proxy.js
 ping 127.0.0.1 -n 2 >nul
 
 echo Starting VyceAI OpenAI Proxy on :20131 ...
 call :STARTGUARD 20131 || goto FAILED
-start "Vyce OpenAI Proxy" /B node vyceai-openai-proxy.js
+call :STARTHIDDEN vyceai-openai-proxy.js
 ping 127.0.0.1 -n 2 >nul
 
 echo Starting transparent-proxy.js (switcher + dashboard) on :8200 ...
@@ -109,6 +122,17 @@ if errorlevel 2 exit 1
 echo  Keeping window open. Press any key to close.
 pause >nul
 exit 1
+
+REM ----------------------------------------------------------------------------
+REM Запустить node-скрипт %1 без своего окна и НЕ привязывая к нашей консоли.
+REM `-WindowStyle Hidden` прячет консоль ребёнка, отдельный процесс даёт нашей
+REM консоли право закрыться (см. блок комментариев у вызовов выше). Рабочий каталог
+REM задаём явно: у Start-Process он НЕ наследуется от cmd, и без него node не найдёт
+REM свой .js. Ошибки PowerShell не глотаем — порт всё равно проверит следующий
+REM STARTGUARD, но текст в окне полезнее молчания.
+:STARTHIDDEN
+powershell -NoProfile -Command "Start-Process -FilePath 'node' -ArgumentList '%~1' -WorkingDirectory '%~dp0' -WindowStyle Hidden"
+exit /b 0
 
 REM ----------------------------------------------------------------------------
 REM Kill all LISTENING PIDs on port %1 ("%2" = friendly name).

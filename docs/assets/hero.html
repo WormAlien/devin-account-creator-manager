@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ABUSE HUB — hero</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── ТЕМА ZEN. Смена темы = правка этих строк ────────────────────────────────
+   bg #0c233d · surface #1d3756 · elevated #2b4564 · line-soft #324b6a
+   line #4d647f · faint #6b7a8d · dim #8c99a9 · muted #b2bcc9 · ink #eef4fc
+   emerald #00f391 · amber #ffb700 · azure #00d8ff · violet #d7a7ff
+   crimson #ff8487 · rose #ff81aa                                            */
+:root{
+  --bg:#0c233d; --surface:#1d3756; --elevated:#2b4564; --line-soft:#324b6a;
+  --line:#4d647f; --faint:#6b7a8d; --dim:#8c99a9; --muted:#b2bcc9; --ink:#eef4fc;
+  --emerald:#00f391; --amber:#ffb700; --azure:#00d8ff; --violet:#d7a7ff;
+  --crimson:#ff8487; --rose:#ff81aa;
+  --line-soft-rgb:50,75,106;   /* #324b6a — для сетки фона */
+  --emerald-rgb:0,243,145; --azure-rgb:0,216,255; --amber-rgb:255,183,0;
+  --violet-rgb:215,167,255;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg)}
+body{font-family:"Geist",ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased;
+     font-feature-settings:"cv11","ss01","ss03";color:var(--ink)}
+.canvas{position:relative;width:1280px;height:420px;overflow:hidden;background:
+    /* сетка 32px, видна только вблизи */
+    repeating-linear-gradient(to right, rgba(var(--line-soft-rgb),.30) 0 1px, transparent 1px 32px),
+    repeating-linear-gradient(to bottom, rgba(var(--line-soft-rgb),.30) 0 1px, transparent 1px 32px),
+    var(--bg);}
+/* мягкое свечение вместо тени — как blur-3xl в дашборде */
+.glow{position:absolute;border-radius:9999px;filter:blur(96px);pointer-events:none}
+.glow-em{top:-140px;left:-120px;width:420px;height:420px;background:rgba(var(--emerald-rgb),.13)}
+.glow-az{bottom:-190px;right:-90px;width:460px;height:460px;background:rgba(var(--azure-rgb),.10)}
+.row{position:relative;display:flex;align-items:flex-start;gap:34px;padding:74px 64px 0 64px}
+.mark{width:96px;height:96px;border-radius:22px;flex:none;display:flex;align-items:center;
+      justify-content:center;background:linear-gradient(135deg,var(--emerald),var(--azure));}
+.mark span{font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-weight:600;font-size:58px;line-height:1;color:var(--bg)}
+h1{font-weight:700;font-size:76px;line-height:.96;letter-spacing:-.03em;color:var(--ink)}
+.sub{margin-top:14px;font-weight:400;font-size:22px;color:var(--muted)}
+.chips{margin-top:26px;display:flex;gap:10px;flex-wrap:nowrap}
+.chip{font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-weight:500;font-size:15px;line-height:1.15;padding:4px 10px;border-radius:6px;
+      border:1px solid;white-space:nowrap}
+.c-az{color:var(--azure);border-color:rgba(var(--azure-rgb),.40);background:rgba(var(--azure-rgb),.15)}
+.c-vi{color:var(--violet);border-color:rgba(var(--violet-rgb),.40);background:rgba(var(--violet-rgb),.15)}
+.c-am{color:var(--amber);border-color:rgba(var(--amber-rgb),.40);background:rgba(var(--amber-rgb),.15)}
+.c-em{color:var(--emerald);border-color:rgba(var(--emerald-rgb),.40);background:rgba(var(--emerald-rgb),.15)}
+.corner{position:absolute;right:64px;bottom:34px;text-align:right;
+      font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:13px;line-height:1.6;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="canvas">
+  <div class="glow glow-em"></div>
+  <div class="glow glow-az"></div>
+  <div class="row">
+    <div class="mark"><span>&#8623;</span></div>
+    <div>
+      <h1>ABUSE&nbsp;HUB</h1>
+      <div class="sub">локальный control-plane для Claude Code</div>
+      <div class="chips">
+        <span class="chip c-az">AgentRouter</span>
+        <span class="chip c-vi">GoRouter</span>
+        <span class="chip c-am">Tabi Token</span>
+        <span class="chip c-am">JustWoker</span>
+        <span class="chip c-em">GitHub 2FA</span>
+      </div>
+    </div>
+  </div>
+  <div class="corner">localhost:8200<br>front-door 20100</div>
+</div>
+</body>
+</html>

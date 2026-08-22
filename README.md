@@ -4,9 +4,9 @@
 
 [![XGATE VPN](https://img.shields.io/badge/XGATE_VPN-@xgateonline__bot-00D8FF?style=for-the-badge&labelColor=1D3756&logo=telegram&logoColor=EEF4FC)](https://t.me/xgateonline_bot?start=abusehub)
 [![личный кабинет](https://img.shields.io/badge/личный_кабинет-cabinet.xgate.online-B2BCC9?style=for-the-badge&labelColor=1D3756&logo=googlechrome&logoColor=EEF4FC)](https://cabinet.xgate.online)
-[![промокод ABUSEHUB](https://img.shields.io/badge/промокод-ABUSEHUB_·_3_дня-00F391?style=for-the-badge&labelColor=1D3756&logo=telegram&logoColor=EEF4FC)](https://t.me/xgateonline_bot?start=abusehub)
+[![промокод ABUSEHUB](https://img.shields.io/badge/промокод-ABUSEHUB_·_+3_дня-00F391?style=for-the-badge&labelColor=1D3756&logo=telegram&logoColor=EEF4FC)](https://t.me/xgateonline_bot?start=abusehub)
 
-<sub>Проект бесплатный и живёт с подписок <b>XGATE</b>: свои ноды, IP без истории абуза — регистрации, капчи и API проходят. Промокод <code>ABUSEHUB</code> — 3 дня бесплатно, дальше от 150 ₽/мес.<br>
+<sub>Проект бесплатный и живёт с подписок <b>XGATE</b>: свои ноды, IP без истории абуза — регистрации, капчи и API проходят. Триал <b>3 дня бесплатно</b> кнопкой в боте, промокод <code>ABUSEHUB</code> добавляет ещё <b>+3 дня</b> поверх — дальше от 150 ₽/мес.<br>
 🤖 <a href="https://t.me/xgateonline_bot?start=abusehub"><b>Telegram-бот @xgateonline_bot</b></a> · 🔑 <a href="https://cabinet.xgate.online"><b>Личный кабинет cabinet.xgate.online</b></a> · <a href="#поддержать-проект">зачем это в репозитории</a></sub>
 
 <br>
@@ -32,7 +32,7 @@
 
 ![Дашборд ABUSE HUB: активный маршрут Claude Code, общий запас free-tier, переключение шлюза из сайдбара](docs/dashboard.png)
 
-<sub>Скриншоты сняты живьём в теме <b>Zen</b> — она же дефолтная, свежая установка выглядит так же. Персональное — метки аккаунтов, e-mail, ники GitHub и любые суммы — на кадрах <b>заблюрено</b>; ключи целиком UI не показывает нигде. Снимает <code>tools/render-readme-shots.js</code>, там же список кадров и правила маскировки.</sub>
+<sub>Скриншоты сняты живьём в теме <b>Zen</b> — она же дефолтная, свежая установка выглядит так же. Персональное — метки аккаунтов, e-mail, ники GitHub и любые суммы — на кадрах <b>заблюрено</b>. Ключи шлюзов сам UI показывает только хвостом; целиком по 👁 раскрываются лишь ключи видео/картинко-провайдеров и креды GitHub — дашборд локальный, это осознанно. Снимает <code>tools/render-readme-shots.js</code>, там же список кадров и правила маскировки.</sub>
 
 <br>
 
@@ -253,7 +253,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 <img src="docs/sidebar.png" alt="Сайдбар: активный бэкенд, баланс ключа с запасом пула, тумблер авторотации, счётчики вкладок" width="330">
 </div>
 
-Над контентом любой вкладки — глобальная шкала **«Общий запас free-tier»**: сумма доступного по всем шлюзам плюс строка на каждый (ключей / LIVE / DEAD / доступно).
+Над контентом любой вкладки — глобальная шкала **«Общий запас free-tier»**: сумма доступного по **видимым** шлюзам плюс строка на каждый (ключей / LIVE / DEAD / доступно). 🪤 Скрытые вкладки в сумму не входят — их данные дашборд не тянет вообще.
 
 ### Claude Code
 
@@ -327,7 +327,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 ![Хранилище GitHub-аккаунтов: локальный TOTP с обратным отсчётом, возраст аккаунта, плашки занятости по шлюзам](docs/github-accounts.png)
 
-Колонка **GitHub** есть на всех четырёх шлюзах: бейдж 🐙 в строке открывает модалку привязки, где занятые аккаунты подсвечены, а свободные видны сразу.
+Колонка **GitHub** есть у всех денежных шлюзов, включая архивный XPeach: бейдж 🐙 в строке открывает модалку привязки, где занятые аккаунты подсвечены, а свободные видны сразу.
 
 ### Telegram аккаунты
 
@@ -341,7 +341,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 ### Плагины / MCP
 
-Слева плагины Claude Code (тоггл `enabledPlugins`, кнопка **★ Включить рекомендованные**), справа MCP-серверы из `~/.claude.json` — тоггл, добавление и удаление. Счётчик у вкладки показывает, сколько из сколького включено.
+Слева плагины Claude Code (тоггл `enabledPlugins`, кнопка **★ рекоменд.** — включает рекомендованный набор), справа MCP-серверы из `~/.claude.json` — тоггл, добавление и удаление. Счётчик у вкладки показывает, сколько из сколького включено.
 
 ![Плагины Claude Code и MCP-серверы: тоггл включения, рекомендованный набор](docs/plugins-mcp.png)
 
@@ -484,7 +484,7 @@ npm run check-deps                       # не забыт ли новый фа�
 > [!CAUTION]
 > **Дашборд не требует аутентификации.** Любой, кто достанет до `:8200/__switch`, увидит ключи шлюзов, логины и пароли GitHub, TOTP-секреты и recovery-коды, а POST-роуты переписывают `settings.json`. Поднимай его только на своей машине и не открывай порт наружу.
 
-- Реальные ключи и пароли — в `routing/*.json` (gitignored) и `~/.claude/*-active-key.txt`; в UI они замаскированы (👁/📋), целиком не показывается ни один ключ.
+- Реальные ключи и пароли — в `routing/*.json` (gitignored) и `~/.claude/*-active-key.txt`. Ключ шлюза в UI показан только хвостом; полностью по 👁 раскрываются ключи видео/картинко-провайдеров и креды GitHub — это осознанно, дашборд локальный.
 - `~/.claude/settings.json` бэкапится перед каждым изменением: `*.bak-<timestamp>` рядом с файлом плюс каталог `~/.claude/settings-backups/`.
 - Gitignored: `routing/.env`, `tgbot/.env`, все `routing/*-sessions.json` и `routing/*-keys.json`, `routing/github-accounts.json`, `routing/custom-providers.json`, профили и сессии всех шлюзов, `conduit/accounts/`, `freemodel/{sessions,tg_pool.json}`, `manual_sessions/`, `ready_to_sell/`, `tools/{tg-venv,telegram-portable,tg-profiles}`. Картинки: `*.png` игнорируются везде, кроме `docs/*.png` — 🪤 исключение однократное, `docs/подпапка/x.png` снова попадёт под игнор и молча не уедет в коммит.
 - Скриншоты для README снимаются с блюром персонального (`tools/render-readme-shots.js`): метки аккаунтов, ники GitHub, суммы. Правило простое — если добавил в UI новую колонку с деньгами или логином, допиши селектор в `MASK` этого скрипта.
@@ -502,7 +502,7 @@ git diff --cached | grep -E "sk-[a-z]{2,}-[a-f0-9]+|auth_key_hex|fe_oa_|aero_liv
 <table>
 <tr>
   <td>🎟️ <b>Промокод <code>ABUSEHUB</code></b></td>
-  <td><b>3 дня бесплатно</b>, карта не нужна — вводится в боте</td>
+  <td><b>+3 дня</b> поверх бесплатного триала: сначала триал кнопкой в боте (карта не нужна), потом код — итого 6</td>
 </tr>
 <tr>
   <td>🤖 <b>Telegram-бот</b></td>

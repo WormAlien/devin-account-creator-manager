@@ -41,6 +41,14 @@ const label = (labelArg || `session_${Date.now()}`).replace(/[^\w-]/g, '_');
 const mode = String(process.argv[3] || 'auto'); // register | console | auto
 const profileDir = path.join(PROFILES_DIR, label);
 
+// Ручной вход в GitHub, сделанный человеком в открытом окне, тоже должен попасть в копию
+// сессии — до 2026-08-22 копия не снималась вообще, и вход руками жил только в профиле.
+const ghCapture = require('../routing/lib/gh-live-capture.js').makeCapture({
+  label,
+  moduleDir: __dirname,
+  poolFile: path.join(__dirname, '..', 'routing', 'gorouter-sessions.json'),
+});
+
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
 
 // Если рядом лежит <label>.json — применяем его как storageState: cookies + localStorage.
@@ -325,7 +333,7 @@ async function main() {
       await reportRender(page);
       console.log('✅ Импортированная сессия применена (GitHub/gorouter уже залогинены).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
-      await new Promise(() => {}); // держим открытым, закрытие — вручную
+      await ghCapture.holdOpen(context); // держим открытым, закрытие — вручную
       return;
     }
 
@@ -342,7 +350,7 @@ async function main() {
         if (res.err && res.err.code === 'no_register') {
           console.error('❌ Регистрация на gorouter закрыта администратором — новый аккаунт не создать.');
           console.error('   Браузер оставляю открытым: ответ сайта видно на странице.');
-          await new Promise(() => {});
+          await ghCapture.holdOpen(context);
           return;
         }
         console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
@@ -353,7 +361,7 @@ async function main() {
         ? '✅ Вход выполнен, профиль сохранён на диск. Забирай ключ и вставляй кнопкой 🔑.'
         : '⚠️  Вход прошёл, но сайт всё ещё отдаёт ошибку (см. строку выше) — дальше руками.');
       console.log('   Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
-      await new Promise(() => {});
+      await ghCapture.holdOpen(context);
       return;
     }
 
@@ -389,7 +397,7 @@ async function main() {
       await reportRender(page);
       console.log('✅ Профиль восстановлен (GitHub/gorouter уже залогинены, если заходил раньше).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
-      await new Promise(() => {}); // держим открытым, закрытие — вручную
+      await ghCapture.holdOpen(context); // держим открытым, закрытие — вручную
       return;
     }
 
@@ -403,7 +411,7 @@ async function main() {
     }
 
     console.log('✅ Вход выполнен, профиль сохранён на диск. Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
-    await new Promise(() => {});
+    await ghCapture.holdOpen(context);
   } finally {
     await context.close().catch(() => {});
   }

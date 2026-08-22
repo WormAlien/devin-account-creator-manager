@@ -57,6 +57,14 @@ const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
 const mode = String(process.argv[3] || 'auto'); // register | console | auto | checkin | autocheckin
 const profileDir = path.join(PROFILES_DIR, label);
 
+// Ручной вход в GitHub, сделанный человеком в открытом окне, тоже должен попасть в копию
+// сессии — до 2026-08-22 копия снималась один раз, при открытии, и ручной вход терялся.
+const ghCapture = require('../routing/lib/gh-live-capture.js').makeCapture({
+  label,
+  moduleDir: __dirname,
+  poolFile: path.join(__dirname, '..', 'routing', 'agentrouter-sessions.json'),
+});
+
 // Если рядом лежит <label>.json — применяем его как storageState: cookies + localStorage.
 // Два разных источника такого файла, и различать их обязательно:
 //   share-код друга      → аккаунт agentrouter уже создан, GitHub/agentrouter сразу залогинены;
@@ -761,7 +769,7 @@ async function main() {
       await reportRender(page);
       console.log('✅ Импортированная сессия применена (GitHub/agentrouter уже залогинены).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
-      await new Promise(() => {});
+      await ghCapture.holdOpen(context);
       return;
     }
 
@@ -784,7 +792,7 @@ async function main() {
         ? '✅ Вход выполнен, профиль сохранён на диск. Забирай ключ и вставляй кнопкой 🔑.'
         : '⚠️  Вход прошёл, но сайт всё ещё отдаёт «failed to get user information» — обнови страницу вручную (F5).');
       console.log('   Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
-      await new Promise(() => {});
+      await ghCapture.holdOpen(context);
       return;
     }
 
@@ -821,7 +829,7 @@ async function main() {
       await backupGhAfterLogin(context);
       console.log('✅ Профиль восстановлен (agentrouter уже залогинен, если заходил раньше).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
-      await new Promise(() => {}); // держим открытым, закрытие — вручную
+      await ghCapture.holdOpen(context); // держим открытым, закрытие — вручную
       return;
     }
 
@@ -836,7 +844,7 @@ async function main() {
 
     await backupGhAfterLogin(context);
     console.log('✅ Вход выполнен, профиль сохранён на диск. Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
-    await new Promise(() => {});
+    await ghCapture.holdOpen(context);
   } finally {
     await context.close().catch(() => {});
   }

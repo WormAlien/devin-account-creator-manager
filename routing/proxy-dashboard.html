@@ -1817,7 +1817,7 @@ function randomThemeId() {
               <span class="text-[10px] text-faint">email (логин)</span>
               <input id="ar-add-email" oninput="newapiAddGhHint('ar')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
-            <label class="flex flex-col gap-1 flex-1">
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="ar-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
@@ -1961,7 +1961,7 @@ function randomThemeId() {
               <span class="text-[10px] text-faint">email (логин)</span>
               <input id="go-add-email" oninput="newapiAddGhHint('go')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
-            <label class="flex flex-col gap-1 flex-1">
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="go-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
@@ -2102,7 +2102,7 @@ function randomThemeId() {
               <span class="text-[10px] text-faint">email (логин)</span>
               <input id="tb-add-email" oninput="newapiAddGhHint('tb')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
-            <label class="flex flex-col gap-1 flex-1">
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="tb-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
@@ -2257,7 +2257,7 @@ function randomThemeId() {
               <span class="text-[10px] text-faint">email (логин)</span>
               <input id="xp-add-email" oninput="newapiAddGhHint('xp')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
             </label>
-            <label class="flex flex-col gap-1 flex-1">
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="xp-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
@@ -6472,9 +6472,21 @@ function latChartSvg(pfx, d, width) {
   if (!pts.length) {
     // Разные причины пустоты — разные слова. «Ответов не было» при не запущенном прокси
     // звучит как поломка, хотя это норма: keepalive поднимается под активный провайдер.
-    const why = d && d.proxy_state === 'down'
-      ? `keepalive :${d.port || '?'} не запущен (провайдер не активен) — точки появятся, когда он станет активным`
-      : 'за это окно ответов не было';
+    // А если история в файле ЕСТЬ, но старше окна — виновато окно, и говорить про
+    // «не запущен» прямо неверно: показать нечего только в выбранном срезе.
+    let why;
+    if (d && d.newest_at) {
+      why = `в этом окне замеров нет — последний ответ ${latAgo(d.newest_at)} (${latClock(d.newest_at)})`
+        + `, всего в истории ${d.total_all || 0}; шире окно — и они покажутся`;
+    } else if (d && d.proxy_state === 'down') {
+      // total_all приходит только с новой версии latency-store: без него «в кеше нет»
+      // утверждать нельзя — старый сервер этого поля не отдаёт вовсе.
+      why = d.total_all === 0
+        ? `keepalive :${d.port || '?'} не запущен (провайдер не активен) и замеров в кеше нет — появятся, когда он станет активным`
+        : `keepalive :${d.port || '?'} не запущен (провайдер не активен) — точки появятся, когда он станет активным`;
+    } else {
+      why = 'за это окно ответов не было';
+    }
     return `<div class="h-[92px] flex items-center justify-center text-[10px] text-faint border border-dashed border-line-soft rounded-lg text-center px-3">
       ${esc(why)}</div>`;
   }
@@ -6542,6 +6554,12 @@ function latDraw(pfx) {
     let txt = d.total
       ? `окно ${label} · ${latStamp(d.now - d.window_sec * 1000, winMin)} → ${latStamp(d.now, winMin)} · ответов ${d.total} · среднее ${latFmt(d.avg_ms)} · макс ${latFmt(d.max_ms)} · линия = среднее по минуте, бледная = худший ответ минуты`
       : `окно ${label} · ответов не было`;
+    // Окно расширили сами, потому что в выбранном кеш пуст (см. latLoadChart). Молчать
+    // нельзя: подпись «окно 6ч» рядом с нажатой кнопкой «1ч» иначе читается как баг.
+    if (d.auto_window_min) {
+      const asked = LAT_WINDOWS.find(([m]) => m === latWindow(pfx));
+      txt += ` · окно расширено до ${label} автоматически: в ${asked ? asked[1] : 'выбранном'} замеров нет`;
+    }
     // Данные с диска — это норма для неактивного провайдера, но человек должен знать,
     // что новых точек не будет, пока его keepalive не поднят: иначе «график замёрз».
     if (d.source === 'file') {
@@ -6653,12 +6671,13 @@ function latBindCursor(pfx) {
   svg.addEventListener('touchend', leave);
 }
 
-async function latLoadChart(pfx) {
+async function latLoadChart(pfx, winMinOverride) {
   const api = KEEPALIVE_API[pfx];
   if (!api) return;
   const box = $(pfx + '-lat-chart');
   try {
-    const res = await fetch(api + '/latency?window=' + latWindow(pfx) * 60);
+    const askedMin = winMinOverride || latWindow(pfx);
+    const res = await fetch(api + '/latency?window=' + askedMin * 60);
     const d = await res.json();
     // Прокси жив, но поднят из кода без /__latency (график добавлен 21.08). Рестарт
     // дашборда его не пересоздаёт — спавн не трогает занятый порт с живым /status,
@@ -6674,7 +6693,25 @@ async function latLoadChart(pfx) {
       return;
     }
     if (!d || !Array.isArray(d.points)) throw new Error((d && d.error) || 'нет данных');
+    // Окно пустое, а история в файле ЕСТЬ (вся старше окна) — расширяем окно до
+    // ближайшего, которое её накрывает, и рисуем кеш. Иначе у неактивного провайдера
+    // график всегда пуст: его keepalive снят, новых точек нет, а выбранное окно
+    // (1ч по умолчанию) уехало вперёд от последнего замера. Поймано 22.08 на вкладке
+    // Tabi: 140 минут замеров в файле, окно 1ч → ноль точек и подпись «не запущен».
+    // Выбор пользователя в localStorage НЕ трогаем: он про живой график, а это
+    // разовая подстановка под то, что реально лежит в кеше.
+    //
+    // Только для `source: 'file'` — то есть когда прокси не запущен. У ЖИВОГО прокси
+    // пустое короткое окно означает «сейчас запросов не было», и это ответ на вопрос
+    // пользователя, а не повод молча показать ему другой отрезок времени.
+    if (!winMinOverride && d.source === 'file' && !d.points.length && d.newest_at) {
+      const ageMin = Math.ceil((Date.now() - d.newest_at) / 60000) + 1;
+      const wider = LAT_WINDOWS.find(([m]) => m >= ageMin && m > askedMin);
+      // Найденное окно накрывает newest_at по построению, поэтому повтор точки даст.
+      if (wider) return latLoadChart(pfx, wider[0]);
+    }
     LAT_DATA[pfx] = d;
+    if (winMinOverride) d.auto_window_min = winMinOverride;
     latDraw(pfx);
     // Цифра последнего ответа приходит и с диска — значит, она есть даже когда keepalive
     // провайдера не запущен и /state отвечает 502. Иначе на неактивной вкладке было бы
@@ -7355,8 +7392,8 @@ function ghPickBadges(ghId, prov) {
       title="${esc(`${NEWAPI_SEED_PROV[prov] ? NEWAPI_SEED_PROV[prov].label : prov}: запись уже есть (${what})${here.name ? ' — ' + here.name : ''}. Второй аккаунт под тем же GitHub тут не заведётся — открой существующий.`)}">🔗 занят здесь · ${esc(what)}</span>`);
   }
   if (other.length) {
-    out.push(`<span class="text-[10px] px-1.5 py-0.5 rounded border border-line-soft text-faint font-mono whitespace-nowrap"
-      title="${esc('занят на: ' + other.map(r => (GH_USE_META[r.tag] ? GH_USE_META[r.tag].label : r.tag) + ' ' + r.status).join(', ') + ' — регистрации здесь не мешает')}">${other.map(r => r.tag.toUpperCase()).join(' · ')}</span>`);
+    out.push(`<span class="text-[10px] px-1.5 py-0.5 rounded border border-line-soft text-faint whitespace-nowrap"
+      title="${esc('занят на: ' + other.map(r => (GH_USE_META[r.tag] ? GH_USE_META[r.tag].label : r.tag) + ' ' + r.status).join(', ') + ' — регистрации здесь не мешает')}">${other.map(r => GH_USE_META[r.tag] ? GH_USE_META[r.tag].icon : r.tag.toUpperCase()).join(' ')}</span>`);
   }
   return out.join(' ');
 }
@@ -7439,6 +7476,17 @@ function newapiAddTakeGh(prov, ghId) {
   ghAddPick[prov] = g.id;
   closeGhBindModal();
   newapiAddGhHint(prov);
+  // Клик по строке заполняет форму и больше ничего не делает — запись создаст «Сохранить».
+  // Без этой обратной связи выбор выглядит как «ничего не произошло»: форма ➕ может быть
+  // ниже экрана, а тихо изменившееся поле email в глаза не бросается.
+  const form = $(`${prov}-add-form`);
+  if (form) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (mail) {
+    mail.focus();
+    mail.classList.add('ring-2', 'ring-teal');
+    setTimeout(() => mail.classList.remove('ring-2', 'ring-teal'), 1600);
+  }
+  toast(`🐙 ${g.nickname || g.login} подставлен в форму — нажми «Сохранить», чтобы создать запись`, 'success', 3500);
   // Ник у покупок из 3 полей берётся из email и настоящему юзернейму не равен — а `name`
   // записи участвует в сверке. Поэтому уходит именно ник из менеджера, а не часть email.
 }
@@ -9990,25 +10038,29 @@ let ghUseFilter = '';
 // НЕ учитывается — на вкладке нужен факт «аккаунт израсходован», а профиль на диске
 // переживает и удаление записи, и не состоявшуюся регистрацию.
 //
-// Ярлыки и цвета — те же, что у NEWAPI_SEED_PROV, чтобы шлюз читался одинаково на всех
-// вкладках. Плашка сделана в точности как ghAgeBadge: один стиль на всю карточку.
+// Ярлыки и цвета — те же, что у NEWAPI_SEED_PROV, а иконки — те же, что в сайдваре
+// (🧭 AgentRouter, 🌐 GoRouter, 🎫 Tabi, 🍑 XPeach): шлюз узнаётся по картинке, а не по
+// чтению двух букв. Плашка сделана в точности как ghAgeBadge: один стиль на всю карточку.
 const GH_USE_META = {
-  ar: { short: 'AR', label: 'AgentRouter', badge: 'bg-azure/15  text-azure  border-azure/40' },
-  go: { short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
-  tb: { short: 'TB', label: 'Tabi Token',  badge: 'bg-amber/15  text-amber  border-amber/40' },
-  xp: { short: 'XP', label: 'XPeach',      badge: 'bg-rose/15   text-rose   border-rose/40' },
+  ar: { icon: '🧭', short: 'AR', label: 'AgentRouter', badge: 'bg-azure/15  text-azure  border-azure/40' },
+  go: { icon: '🌐', short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
+  tb: { icon: '🎫', short: 'TB', label: 'Tabi Token',  badge: 'bg-amber/15  text-amber  border-amber/40' },
+  xp: { icon: '🍑', short: 'XP', label: 'XPeach',      badge: 'bg-rose/15   text-rose   border-rose/40' },
 };
 const ghUsageOf = id => (state.ghUsage && state.ghUsage[id]) || [];
 
 // Мёртвая запись — всё равно занятость: аккаунт израсходован, второй раз его на этот
 // шлюз не завести. Поэтому не прячем, а гасим прозрачностью.
+// На плашке — только иконка шлюза и имя: статус записи (`live`/`dead`/`no_key`) уехал в
+// тултип. Он тут ничего не решает — важно «занят или нет», а не в каком состоянии ключ;
+// шесть слов «live» в ряд на карточке читались как шум.
 // Клик по любой плашке открывает модалку занятости — оттуда правится вручную.
 function ghUseBadges(id) {
   const rows = ghUsageOf(id);
   const idJ = JSON.stringify(id).replace(/'/g, '&#39;');
   if (!rows.length) {
     return `<button onclick='ghOpenUsed(${idJ})' title="записи в пуле ни одного шлюза нет — аккаунт можно заводить · клик: отметить занятость вручную"
-      class="text-[10px] px-1.5 py-0.5 rounded border bg-emerald/10 text-emerald border-emerald/40 hover:bg-emerald/20 transition">— свободен</button>`;
+      class="text-[10px] px-1.5 py-0.5 rounded border bg-emerald/10 text-emerald border-emerald/40 hover:bg-emerald/20 transition">✅ свободен</button>`;
   }
   const byTag = new Map();
   for (const r of rows) {
@@ -10016,13 +10068,12 @@ function ghUseBadges(id) {
     byTag.get(r.tag).push(r);
   }
   return [...byTag.entries()].map(([tag, list]) => {
-    const m = GH_USE_META[tag] || { short: tag.toUpperCase(), label: tag, badge: 'bg-elevated text-faint border-line-soft' };
+    const m = GH_USE_META[tag] || { icon: '🔗', short: tag.toUpperCase(), label: tag, badge: 'bg-elevated text-faint border-line-soft' };
     const alive = list.some(r => r.status === 'live');
     const manual = list.every(r => r.source === 'manual');
-    const statuses = [...new Set(list.map(r => r.status === 'manual' ? 'вручную' : r.status))].join('/');
     const tip = `${m.label}: ${list.map(r => `${r.name || '—'} (${r.status === 'manual' ? 'отмечен вручную' : r.status})`).join(', ')} · клик — изменить`;
     return `<button onclick='ghOpenUsed(${idJ})' title="${esc(tip)}"
-      class="text-[10px] px-1.5 py-0.5 rounded border ${m.badge} ${alive ? '' : 'opacity-60'} ${manual ? 'border-dashed' : ''} hover:brightness-125 transition">${m.short}${list.length > 1 ? ` ×${list.length}` : ''} ${esc(statuses)}</button>`;
+      class="text-[10px] px-1.5 py-0.5 rounded border ${m.badge} ${alive ? '' : 'opacity-60'} ${manual ? 'border-dashed' : ''} hover:brightness-125 transition">${m.icon} ${m.short}${list.length > 1 ? ` ×${list.length}` : ''}</button>`;
   }).join('');
 }
 
@@ -10098,7 +10149,7 @@ function ghRenderUsed() {
     }
     return `<div class="rounded-lg bg-elevated/40 border border-line-soft p-3">
       <div class="flex items-center gap-2 mb-2">
-        <span class="text-[10px] px-1.5 py-0.5 rounded border ${m.badge}">${m.short}</span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded border ${m.badge}">${m.icon} ${m.short}</span>
         <span class="text-xs text-ink">${esc(m.label)}</span>
         <span class="flex-1"></span>
         <span class="text-[10px] ${rows.length ? 'text-crimson' : 'text-emerald'}">${rows.length ? 'занят' : 'свободен'}</span>
@@ -10204,7 +10255,7 @@ function ghRenderFilters() {
     const perTag = Object.keys(GH_USE_META)
       .map(t => ({ t, n: all.reduce((acc, a) => acc + ghUsageOf(a.id).filter(r => r.tag === t).length, 0) }))
       .filter(x => x.n)
-      .map(x => `${GH_USE_META[x.t].short} ${x.n}`);
+      .map(x => `${GH_USE_META[x.t].icon} ${GH_USE_META[x.t].short} ${x.n}`);
     sum.textContent = `${all.length} аккаунтов · ${used.length} заняты · ${all.length - used.length} свободны`
       + (perTag.length ? ` · записей в пулах: ${perTag.join(' · ')}` : '');
   }
@@ -11599,24 +11650,38 @@ function renderMoneyRotateLog(prov) {
   if (!rows.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   box.classList.remove('hidden');
   const sym = mp.sym || '$';
-  box.innerHTML = `
-    <div class="flex items-center justify-between mb-3">
-      <h2 class="text-sm font-semibold tracking-tight">🔁 Авторотация — последние подмены</h2>
-      <span class="text-[10px] font-mono ${st.enabled ? 'text-azure' : 'text-faint'}">${st.enabled ? 'включена' : 'выключена'}</span>
-    </div>
-    <div class="space-y-1 text-xs font-mono">
-      ${rows.map(r => `<div class="flex items-center gap-3 text-muted">
+  // Журнал держит до 20 подмен и раздувал карточку на всю высоту экрана.
+  // Видно три последние, остальное — под «показать ещё»; состояние живёт в
+  // moneyRotateExpanded, иначе следующий опрос статуса свернул бы список назад.
+  const expanded = !!moneyRotateExpanded[prov];
+  const shown = expanded ? rows : rows.slice(0, MONEY_ROTATE_COLLAPSED);
+  const hidden = rows.length - shown.length;
+  const row = (r) => `<div class="flex items-center gap-3 text-muted">
         <span class="text-faint w-20 shrink-0">${fmAgo(r.ts)}</span>
         <span class="text-dim w-40 truncate shrink-0" title="аккаунт, на котором шлюз отказал">${esc(r.from || '—')}</span>
         <span class="text-faint shrink-0">→</span>
         <span class="text-azure truncate flex-1">${esc(r.to || '')}</span>
         <span class="text-emerald shrink-0">${typeof r.balance === 'number' ? sym + r.balance.toFixed(2) : ''}</span>
         <span class="text-[10px] text-dim w-32 text-right shrink-0" title="${r.needUsd ? `шлюз требовал предоплату ${sym}${r.needUsd}` : ''}">${MONEY_ROTATE_REASON[r.reason] || esc(r.reason || '')}</span>
-      </div>`).join('')}
+      </div>`;
+  box.innerHTML = `
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold tracking-tight">🔁 Авторотация — последние подмены</h2>
+      <span class="text-[10px] font-mono ${st.enabled ? 'text-azure' : 'text-faint'}">${st.enabled ? 'включена' : 'выключена'}</span>
     </div>
+    <div class="space-y-1 text-xs font-mono">
+      ${shown.map(row).join('')}
+    </div>
+    ${(hidden > 0 || expanded) ? `<button onclick="toggleMoneyRotateLog('${prov}')" class="mt-2 text-[11px] text-azure hover:underline">${expanded ? '▲ свернуть' : `▼ показать ещё ${hidden}`}</button>` : ''}
     <div class="mt-2 text-[10px] text-faint leading-relaxed">
       Журнал живёт в памяти дашборда (последние 20) — после рестарта :8200 он пуст, а история трат остаётся в finance-history.
     </div>`;
+}
+const MONEY_ROTATE_COLLAPSED = 3;
+const moneyRotateExpanded = {};
+function toggleMoneyRotateLog(prov) {
+  moneyRotateExpanded[prov] = !moneyRotateExpanded[prov];
+  renderMoneyRotateLog(prov);
 }
 // TokenRouter: ключ живёт 24ч от createdAt, потом мёртв. Считаем живыми только
 // аккаунты с ключом и возрастом ≤24ч (детерминированно, не по ненадёжному health-чеку).

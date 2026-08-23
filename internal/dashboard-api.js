@@ -880,8 +880,8 @@ function launchScript(kind, extraArgs = []) {
         'svrtr-create':      { title: 'Svrtr Autoreg',        args: [path.join(PROJECT_ROOT, 'svrtr', 'svrtr_autoreger.js')] },
         'helpcoder-create':  { title: 'HelpCoder Autoreg',    args: [path.join(PROJECT_ROOT, 'helpcoder', 'helpcoder_autoreg.js')] },
     };
-    const t = TARGETS[kind];
-    if (!t) throw new Error(`unknown launch kind: ${kind}`);
+    const t = Object.prototype.hasOwnProperty.call(TARGETS, kind) ? TARGETS[kind] : null;
+    if (!t) throw new Error('unknown launch kind');
 
     // Safety: позитивный целочисленный count / FRE-инвайт только, выкидываем мусор
     const safeExtra = (Array.isArray(extraArgs) ? extraArgs : [])

@@ -918,6 +918,32 @@ function randomThemeId() {
             </div>
           </div>
         </div>
+
+        <!-- 💩 Свои реф-коды. Свёрнуто и последним намеренно: настройка разовая, а
+             бэкапы settings.json выше нужны чаще. Пустое поле = код владельца
+             репозитория из routing/ref-codes.default.json. -->
+        <details id="ref-codes-box" class="rounded-xl bg-surface border border-line-soft">
+          <summary class="cursor-pointer select-none px-5 py-4 flex items-center gap-2.5 hover:bg-elevated/40 rounded-xl transition">
+            <span class="text-lg leading-none">💩</span>
+            <span class="text-sm font-medium">Свои реф-коды провайдеров</span>
+            <span id="ref-codes-chip" class="ml-auto text-[11px] font-mono text-muted">—</span>
+          </summary>
+          <div class="px-5 pb-5 pt-4 space-y-3 border-t border-line-soft/60">
+            <p class="text-xs text-muted">
+              Регистрация аккаунтов — и руками через 🌐, и автоматикой ⚡ — идёт по реф-ссылке.
+              Пусто = код владельца репозитория, свой код перебивает его: все ссылки и кнопки
+              этого провайдера поедут на тебя. Рестарт <code class="font-mono text-amber">:8200</code> не нужен.
+            </p>
+            <div id="ref-codes-rows" class="space-y-2">
+              <div class="text-xs text-faint">загружаю…</div>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap pt-1">
+              <button onclick="saveRefCodes()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+              <button onclick="resetRefCodes()" title="Снять все свои коды и вернуться к кодам владельца репозитория" class="text-xs px-3 py-2 bg-surface border border-line-soft text-muted rounded-lg hover:text-ink">Вернуть коды владельца</button>
+              <span id="ref-codes-status" class="text-[11px] text-muted"></span>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -1768,7 +1794,7 @@ function randomThemeId() {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-sky">🧭</span> <a href="https://agentrouter.org/register?aff=oUm3" target="_blank" rel="noopener" title="регистрация по реф-ссылке (+$100 рефереру)" class="text-ink underline underline-offset-4 hover:text-sky">AgentRouter</a>
+              <span class="text-sky">🧭</span> <a href="https://agentrouter.org/register?aff=oUm3" data-ref-link="agentrouter" target="_blank" rel="noopener" title="регистрация по реф-ссылке (+$100 рефереру)" class="text-ink underline underline-offset-4 hover:text-sky">AgentRouter</a>
             </h1>
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">agentrouter.org</code> · клик по ключу = активный (пишется в <code class="font-mono text-sky text-xs">~/.claude/ar-active-key.txt</code> — смена на лету) · claude-* → <code class="font-mono text-sky text-xs">:20133</code> keepalive · gpt-* → <code class="font-mono text-sky text-xs">:20132</code> proxy · base БЕЗ /v1 · WAF пускает только Claude Code запросы</p>
           </div>
@@ -1937,7 +1963,7 @@ function randomThemeId() {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-teal">🌐</span> <a href="https://gorouter.app/sign-up?aff=dzj0" target="_blank" rel="noopener" title="регистрация по реф-ссылке (+$5 рефереру)" class="text-ink underline underline-offset-4 hover:text-teal">GoRouter</a>
+              <span class="text-teal">🌐</span> <a href="https://gorouter.app/sign-up?aff=dzj0" data-ref-link="gorouter" target="_blank" rel="noopener" title="регистрация по реф-ссылке (+$5 рефереру)" class="text-ink underline underline-offset-4 hover:text-teal">GoRouter</a>
             </h1>
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-teal text-xs">gorouter.app</code> · клик по ключу = активный (через keepalive <code class="font-mono text-teal text-xs">:20156</code>) · GitHub-вход в консоль · чек-ин +$5 кнопкой у баланса</p>
           </div>
@@ -2082,7 +2108,7 @@ function randomThemeId() {
           <span class="mx-2 opacity-40">·</span>
           <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://gorouter.app/sign-up?aff=dzj0" target="_blank" class="text-teal hover:underline">регистрация по рефке</a>
+          <a href="https://gorouter.app/sign-up?aff=dzj0" data-ref-link="gorouter" target="_blank" class="text-teal hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -2093,7 +2119,7 @@ function randomThemeId() {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-amber">👷</span> <a href="https://api.justwoker.icu/sign-up?aff=IFYf" target="_blank" rel="noopener" title="регистрация по реф-ссылке · GitHub-аккаунт должен быть СТАРШЕ 365 дней (github_minimum_account_age_days: 365) — свежий из менеджера панель отвергнет" class="text-ink underline underline-offset-4 hover:text-amber">JustWoker</a>
+              <span class="text-amber">👷</span> <a href="https://api.justwoker.icu/sign-up?aff=IFYf" data-ref-link="justwoker" target="_blank" rel="noopener" title="регистрация по реф-ссылке · GitHub-аккаунт должен быть СТАРШЕ 365 дней (github_minimum_account_age_days: 365) — свежий из менеджера панель отвергнет" class="text-ink underline underline-offset-4 hover:text-amber">JustWoker</a>
             </h1>
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-amber text-xs">api.justwoker.icu</code> · клик по ключу = активный (через keepalive <code class="font-mono text-amber text-xs">:20158</code>) · base для CC — <b>корень БЕЗ <code class="font-mono text-amber text-xs">/v1</code></b> (иначе <code class="font-mono text-xs">/v1/v1/messages</code> → 404) · GitHub-вход в консоль, но аккаунт нужен <b>старше 365 дней</b> — свежие из менеджера панель отвергает</p>
           </div>
@@ -2105,6 +2131,11 @@ function randomThemeId() {
              «ничего не работает», хотя механизм просто не понадобился. Заполняет
              renderMoneyRotateLog(). -->
         <div id="jw-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <!-- Живой лог авто-заведения (⚡). Тостов было мало: между «вхожу через GitHub»
+             и результатом проход молчит 17 секунд, и владелец читал это как «лога нет».
+             Карточка остаётся после завершения — тост исчезает, а разбираться нужно потом. -->
+        <div id="jw-autoadd-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Model map (настраиваемый, как в Custom) -->
         <div id="jw-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -2240,7 +2271,7 @@ function randomThemeId() {
           <span class="mx-2 opacity-40">·</span>
           <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://api.justwoker.icu/sign-up?aff=IFYf" target="_blank" class="text-amber hover:underline">регистрация по рефке</a>
+          <a href="https://api.justwoker.icu/sign-up?aff=IFYf" data-ref-link="justwoker" target="_blank" class="text-amber hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -2251,7 +2282,7 @@ function randomThemeId() {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-violet">🎫</span> <a href="https://tabitoken.com/sign-up?aff=cUG3" target="_blank" rel="noopener" title="регистрация по реф-ссылке (+$20 рефереру)" class="text-ink underline underline-offset-4 hover:text-violet">Tabi Token</a>
+              <span class="text-violet">🎫</span> <a href="https://tabitoken.com/sign-up?aff=cUG3" data-ref-link="tabi" target="_blank" rel="noopener" title="регистрация по реф-ссылке (+$20 рефереру)" class="text-ink underline underline-offset-4 hover:text-violet">Tabi Token</a>
             </h1>
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-violet text-xs">tabitoken.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-violet text-xs">:20155</code>) · claude-* → SSE keepalive · base БЕЗ /v1 · GitHub-вход в консоль · выдача $100 + $20/рефка</p>
           </div>
@@ -2393,7 +2424,7 @@ function randomThemeId() {
           <span class="mx-2 opacity-40">·</span>
           <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://tabitoken.com/sign-up?aff=cUG3" target="_blank" class="text-violet hover:underline">регистрация по рефке</a>
+          <a href="https://tabitoken.com/sign-up?aff=cUG3" data-ref-link="tabi" target="_blank" class="text-violet hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -2404,7 +2435,7 @@ function randomThemeId() {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-rose">🍑</span> <a href="https://xpeach.codes/sign-up?aff=0lre" target="_blank" rel="noopener" title="регистрация по реф-ссылке владельца" class="text-ink underline underline-offset-4 hover:text-rose">XPeach</a>
+              <span class="text-rose">🍑</span> <a href="https://xpeach.codes/sign-up?aff=0lre" data-ref-link="xpeach" target="_blank" rel="noopener" title="регистрация по реф-ссылке владельца" class="text-ink underline underline-offset-4 hover:text-rose">XPeach</a>
             </h1>
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-rose text-xs">xpeach.codes</code> · клик по ключу = активный (через keepalive <code class="font-mono text-rose text-xs">:20157</code>) · claude-* нативно (anthropic-эндпоинт) · base БЕЗ /v1 · GitHub-вход в консоль · выдача 10 🍑</p>
           </div>
@@ -2549,7 +2580,7 @@ function randomThemeId() {
           <span class="mx-2 opacity-40">·</span>
           <span>валюта шлюза 🍑, курс к единице квоты как у $ (1:500000)</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://xpeach.codes/sign-up?aff=0lre" target="_blank" class="text-rose hover:underline">регистрация по рефке</a>
+          <a href="https://xpeach.codes/sign-up?aff=0lre" data-ref-link="xpeach" target="_blank" class="text-rose hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -3461,7 +3492,7 @@ function showTab(name) {
     loadTrHealthCache();
     loadTrUsageCache();
   }
-  if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); loadFrontdoor(); }
+  if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); loadFrontdoor(); loadRefCodes(); }
   if (name === 'plugins') { loadPlugins(); loadMcp(); }
   if (name === 'health') { loadHealth(); }
 }
@@ -7463,7 +7494,10 @@ function applySelfSeen(s, data) {
     if (s.balanceAnchor != null && s.anchorGrantedSelf == null) s.anchorGrantedSelf = seen.granted;
   }
   if (seen.selfCheckedAt) s.selfCheckedAt = seen.selfCheckedAt;
-  delete s.selfError;
+  // Ветвь «последняя точная цифра, свежий self не дался»: причина обязана выжить, иначе
+  // в UI это выглядит как обычный успешный чек, и владелец не узнает, что шлюз молчит.
+  if (data.selfCached) { s.selfCached = true; if (data.selfError) s.selfError = data.selfError; }
+  else { delete s.selfCached; delete s.selfError; }
 }
 
 // Ячейка баланса. Данные берём из самого объекта сессии (персистентный кеш из sessions.json).
@@ -7503,6 +7537,17 @@ function balanceSourceBadge(s) {
   const src = BAL_SRC[s.balanceSource];
   if (!src) return '';
   let tip;
+  if (s.balanceSource === 'self' && s.selfCached) {
+    // Цифра точная — её называл шлюз, — но переспросить его сейчас не удалось. Показываем
+    // именно её, а не прикидку: остаток уменьшает только расход, а он с того чека не
+    // сдвинулся. Отдельный значок нужен, чтобы «шлюз молчит» не выглядело как норма.
+    const when = s.selfCheckedAt ? new Date(s.selfCheckedAt).toLocaleString('ru-RU') : '';
+    tip = `Последняя точная цифра шлюза${when ? ` (снята ${when})` : ''} — переспросить не удалось`
+      + `${s.selfError ? `: ${s.selfError}` : ''}`
+      + `. Показываем её, а не прикидку: остаток уменьшает только расход, а он с того чека не сдвинулся`
+      + `${typeof s.granted === 'number' ? ` · выдано всего $${s.granted.toFixed(2)}` : ''}`;
+    return `<span class="text-amber text-[10px] leading-none ml-1" title="${esc(tip)}">⚡</span>`;
+  }
   if (s.balanceSource === 'self') {
     tip = `Точный остаток из ЛК аккаунта${s.newApiUsername ? ` (${s.newApiUsername})` : ''}`
       + `${typeof s.granted === 'number' ? ` · выдано всего $${s.granted.toFixed(2)}` : ''}`;
@@ -8490,6 +8535,20 @@ async function newapiAddGithub(ghId, opts) {
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     closeGhSeedModal();
     toast(`🐙 ${data.ghLogin}: аккаунт создан, сессия из ${data.from} (${data.cookieCount} кук)`, 'success', 4000);
+
+    // JustWoker доводит дело до конца сам: вход через GitHub и снятие ключа, без
+    // открытого браузера и без кнопки 🔑. Только на чистом пути (mode не задан) —
+    // «→ вход» для засвеченного ника ведёт в УЖЕ существующий аккаунт, там заводить
+    // нечего. Остальным провайдерам сценарий не переносится: у них вход уезжает в
+    // попап, и ключа в ответе колбэка нет (замер рекордером 2026-08-22).
+    if (prov === 'jw' && !mode) {
+      const done = await jwAutoAdd(data.id, data.ghLogin);
+      await p.reload();
+      // Ключ в пуле — креды GitHub не понадобились, окно с паролем только мешало бы.
+      if (!done) ghCredPopOpen(prov, data.id, ghId);
+      return true;
+    }
+
     // Браузер открываем существующим роутом — он же синхронизирует куки и ставит отметку визита.
     // mode передаём явно: у безключевой записи роут сам выбрал бы регистрацию, а для
     // засвеченного ника нужен вход — иначе провайдер ответит «аккаунт уже создан».
@@ -8515,6 +8574,90 @@ async function newapiAddGithub(ghId, opts) {
     newapiSeedPick(prov);   // вернуть список, чтобы видеть причину и выбрать другой
     return false;
   }
+}
+
+// ⚡ Авто-заведение JustWoker: скрипт сам входит через GitHub и сам снимает ключ.
+// Ручка отвечает сразу после спавна, работа идёт 20–60 с — прогресс поллим, как всё
+// остальное в дашборде (очередей и SSE тут нет). Возвращает true, если ключ в пуле.
+// Живой лог прогона ⚡ в карточке вкладки. Тост показывает начало и конец, а между ними
+// проход идёт 17 секунд и снаружи не видно ничего. Карточку НЕ убираем после завершения:
+// тост уходит сам, а разбираться (особенно с непривязанным реф-кредитом) нужно потом.
+function renderJwAutoAddLog(run) {
+  const box = $('jw-autoadd-log');
+  if (!box) return;
+  if (!run) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const st = run.state || 'running';
+  const chip = st === 'running' ? '<span class="text-amber">⏳ идёт</span>'
+    : st === 'done' ? '<span class="text-emerald">✅ готово</span>'
+    : '<span class="text-crimson">✗ ошибка</span>';
+  // Реф-кредит называем отдельной строкой: снаружи потеря не видна ничем, а в общем
+  // сообщении она читается как деталь.
+  const aff = st === 'done'
+    ? (run.inviterId
+      ? `<div class="text-[11px] text-emerald mt-1">🤝 реф-кредит привязан (inviter_id=${esc(run.inviterId)})</div>`
+      : `<div class="text-[11px] text-crimson mt-1">⚠️ реф-кредит НЕ привязан (inviter_id=0) — аккаунт создан без нашей рефки</div>`)
+    : '';
+  const rows = (run.lines || []).map(l =>
+    `<div class="flex gap-2 leading-5"><span class="text-faint tabular-nums shrink-0">${esc(l.t)}</span><span class="text-muted break-all">${esc(l.s)}</span></div>`).join('');
+  box.classList.remove('hidden');
+  box.innerHTML = `
+    <div class="flex items-center justify-between gap-3 mb-2">
+      <div class="text-[11px] uppercase tracking-[0.2em] text-dim">⚡ авто-заведение · ${esc(run.name || run.label || '')}</div>
+      <div class="text-xs font-mono">${chip}</div>
+    </div>
+    <div class="text-xs font-mono max-h-64 overflow-y-auto space-y-0.5">${rows || '<span class="text-faint">ждём первых строк…</span>'}</div>
+    ${aff}
+    <div class="text-[11px] text-dim mt-2">Полный лог прогонов — <code class="text-muted">logs/justwoker-autoadd.log</code></div>`;
+}
+
+async function jwAutoAdd(id, ghLogin) {
+  const label = 'acct_' + id;
+  toast(`⚡ ${ghLogin || ''}: вхожу через GitHub и снимаю ключ…`, 'info', 8000);
+  renderJwAutoAddLog({ name: ghLogin, label, state: 'running', lines: [] });
+  try {
+    const res = await fetch('/__switch/api/jw/auto-add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    // Потолок ожидания заведомо больше таймаута самого скрипта (90 с на вход + запас
+    // на возраст GitHub и согласие приложению), иначе поллинг сдался бы раньше работы.
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2000));
+      const st = await fetch('/__switch/api/jw/auto-add/state').then(r => r.json()).catch(() => null);
+      const run = st && st.runs && st.runs.find(x => x.label === label);
+      if (run) renderJwAutoAddLog(run);
+      if (!run || run.state === 'running') continue;
+      if (run.state === 'done') {
+        // Про непривязанный реф-кредит говорим ГРОМКО и отдельно: снаружи потеря
+        // ничем не видна, а тихая строчка в логе дашборда её не покажет.
+        toast(`⚡ ${ghLogin || ''}: ключ в пуле${run.inviterId ? '' : ' · ⚠️ реф-кредит НЕ привязан'}`,
+          run.inviterId ? 'success' : 'warn', 9000);
+        return true;
+      }
+      toast('⚡ авто-заведение: ' + (run.message || 'не получилось'), 'error', 12000);
+      return false;
+    }
+    toast('⚡ авто-заведение: прогресс не дождался ответа — посмотри лог дашборда', 'error', 9000);
+    return false;
+  } catch (e) {
+    renderJwAutoAddLog({ name: ghLogin, label, state: 'error', lines: [{ t: '', s: e.message }] });
+    toast('⚡ авто-заведение: ' + e.message, 'error', 9000);
+    return false;
+  }
+}
+
+// Кнопка ⚡ в строке пула: добить запись, у которой ключа ещё нет, а GitHub привязан.
+// Нужна отдельно от пути через менеджер гитхабов, потому что заведение честно падает
+// от рейт-лимита панели (429) и от протухшей GitHub-сессии — повтор должен быть в один
+// клик, без пересоздания записи.
+async function jwAutoAddOne(id) {
+  const cur = state.justwoker.find(x => x.id === id);
+  const ok = await jwAutoAdd(id, cur && (cur.name || cur.email));
+  await loadJwSessions();
+  return ok;
 }
 
 async function arCopyKey(api_key) {
@@ -9364,6 +9507,9 @@ function renderJw() {
         ${actBtn(`jwRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
         ${noKey ? '' : actBtn(`jwActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
         ${noKey ? '' : actBtn(`jwPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${noKey && s.ghId && s.ghId !== 'personal'
+          ? actBtn(`jwAutoAddOne(${idJ})`, 'Завести аккаунт без человека: вход через GitHub-сессию и снятие ключа (20–60 с, окно не открывается)', '⚡', 'emerald')
+          : ''}
         ${ghCredBtn(s, 'jw', idJ)}
         ${actBtn(`jwOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс justwoker)', '🌐', 'violet')}
         ${actBtn(`jwDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
@@ -13440,7 +13586,7 @@ function trLiveStats(accounts, usageMap) {
 const MONEY_PROVIDERS = {
   agentrouter: { id: 'agentrouter', p: 'ar', stateKey: 'agentrouter', base: 175, sym: '$',  label: 'AgentRouter', icon: '🧭', color: 'sky',    reload: () => loadArSessionsLight() },
   gorouter:    { id: 'gorouter',    p: 'go', stateKey: 'gorouter',    base: 70,  sym: '$',  label: 'GoRouter',    icon: '🌐', color: 'teal',   reload: () => loadGoSessionsLight() },
-  justwoker:   { id: 'justwoker',   p: 'jw', stateKey: 'justwoker',   base: 10,  sym: '$',  label: 'JustWoker',   icon: '👷', color: 'amber',  reload: () => loadJwSessionsLight() },
+  justwoker:   { id: 'justwoker',   p: 'jw', stateKey: 'justwoker',   base: 90,  sym: '$',  label: 'JustWoker',   icon: '👷', color: 'amber',  reload: () => loadJwSessionsLight() },
   tabi:        { id: 'tabi',        p: 'tb', stateKey: 'tabi',        base: 100, sym: '$',  label: 'Tabi Token',  icon: '🎫', color: 'violet', reload: () => loadTbSessionsLight() },
   xpeach:      { id: 'xpeach',      p: 'xp', stateKey: 'xpeach',      base: 10,  sym: '🍑', label: 'XPeach',      icon: '🍑', color: 'rose',   reload: () => loadXpSessionsLight() },
 };
@@ -16453,6 +16599,127 @@ function toggleBackupsList() {
   setBackupsListOpen($('settings-backups-list')?.classList.contains('hidden'));
 }
 
+// ───────── 💩 Свои реф-коды провайдеров ─────────
+// Три слоя приходят с бэкенда отдельно (defaults / user / effective), и путать их нельзя:
+// пустое поле означает «беру код владельца», а не «регистрируюсь без рефки». Поэтому в
+// поле подставляем ТОЛЬКО свой код, а код владельца показываем placeholder'ом.
+let REF_CODES = null;
+
+// 🪤 HTML читается с диска по F5, а серверные роуты живут в памяти процесса `:8200`.
+// Пока дашборд не перезапущен, новый роут отвечает `404 text/plain`, и `res.json()`
+// падает с «JSON.parse: unexpected character at line 1 column 1» — сообщением, из
+// которого причина не следует вообще. Поэтому читаем тело ТЕКСТОМ и разбираем сами:
+// пользователь должен увидеть «нужен рестарт», а не ошибку парсера.
+async function refCodesFetch(opts) {
+  const res = await fetch('/__switch/api/settings/ref-codes', opts);
+  const body = await res.text();
+  let json = null;
+  try { json = JSON.parse(body); } catch { /* не JSON — разбираем ниже */ }
+  if (!json) {
+    if (res.status === 404) throw new Error('роута ещё нет в памяти :8200 — нужен рестарт дашборда (правка лежит в файле)');
+    throw new Error(`сервер ответил не JSON (${res.status}): ${body.slice(0, 80)}`);
+  }
+  if (!res.ok || json.error) throw new Error(json.error || `http ${res.status}`);
+  return json;
+}
+
+async function loadRefCodes() {
+  try {
+    const d = await refCodesFetch();
+    if (!d.ok) throw new Error('ответ без ok');
+    REF_CODES = d;
+    renderRefCodeRows();
+    applyRefLinks();
+  } catch (e) {
+    const box = $('ref-codes-rows');
+    if (box) box.innerHTML = `<div class="text-xs text-crimson">не удалось загрузить: ${esc(e.message)}</div>`;
+    const chip = $('ref-codes-chip');
+    if (chip) { chip.textContent = 'недоступно'; chip.className = 'ml-auto text-[11px] font-mono text-crimson'; }
+  }
+}
+
+function renderRefCodeRows() {
+  const box = $('ref-codes-rows');
+  if (!box || !REF_CODES) return;
+  const mine = Object.keys(REF_CODES.user || {}).length;
+  const chip = $('ref-codes-chip');
+  if (chip) {
+    chip.textContent = mine ? `свои: ${mine} из ${REF_CODES.providers.length}` : 'все коды владельца';
+    chip.className = 'ml-auto text-[11px] font-mono ' + (mine ? 'text-emerald' : 'text-muted');
+  }
+  box.innerHTML = REF_CODES.providers.map(p => {
+    const sh = (REF_CODES.shapes || {})[p] || {};
+    const own = (REF_CODES.defaults || {})[p] || '—';
+    const my = (REF_CODES.user || {})[p] || '';
+    return `<div class="flex items-center gap-2">
+      <label class="text-xs text-muted w-28 shrink-0" for="ref-code-${esc(p)}">${esc(sh.label || p)}</label>
+      <input id="ref-code-${esc(p)}" data-ref-prov="${esc(p)}" value="${esc(my)}" placeholder="${esc(own)} — код владельца"
+        class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none focus:border-emerald/60">
+      <code class="text-[10px] text-faint font-mono hidden sm:block shrink-0">${esc(sh.host || '')}</code>
+    </div>`;
+  }).join('');
+}
+
+// Переписываем href у всех помеченных ссылок регистрации. Без этого «вписал свой код»
+// менял бы только автоматику, а ссылки в шапках вкладок продолжали вести на владельца.
+function applyRefLinks() {
+  if (!REF_CODES || !REF_CODES.urls) return;
+  let n = 0;
+  for (const a of document.querySelectorAll('a[data-ref-link]')) {
+    const u = REF_CODES.urls[a.dataset.refLink];
+    if (u) { a.href = u; n++; }
+  }
+  return n;
+}
+
+async function saveRefCodes() {
+  const patch = {};
+  for (const inp of document.querySelectorAll('#ref-codes-rows input[data-ref-prov]')) {
+    patch[inp.dataset.refProv] = String(inp.value || '').trim();
+  }
+  const st = $('ref-codes-status');
+  try {
+    const d = await refCodesFetch({
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+    });
+    if (!d.ok) throw new Error('ответ без ok');
+    REF_CODES = Object.assign({}, REF_CODES, { user: d.user, effective: d.effective, urls: d.urls });
+    renderRefCodeRows();
+    const n = applyRefLinks();
+    if (st) st.textContent = `сохранено, ссылок обновлено: ${n}`;
+    toast('💩 реф-коды сохранены — ссылки и автоматика поедут на них', 'success');
+  } catch (e) {
+    if (st) st.textContent = '';
+    toast('💩 реф-коды: ' + e.message, 'error', 9000);
+  }
+}
+
+async function resetRefCodes() {
+  if (!confirm('Снять все свои реф-коды и вернуться к кодам владельца репозитория?')) return;
+  // 🪤 Нельзя собирать сброс из полей: если рендер не состоялся (роут ещё не в памяти
+  // `:8200`, сеть отвалилась), полей в DOM нет, patch выйдет пустым, а пустой patch
+  // бэкенд трактует как «не трогали» и СОХРАНЯЕТ прежние коды. Кнопка тогда молча
+  // ничего не делает. Поэтому сброс отправляем по списку провайдеров, а не по разметке.
+  const provs = (REF_CODES && REF_CODES.providers) || ['agentrouter', 'gorouter', 'justwoker', 'tabi', 'xpeach'];
+  const patch = {};
+  for (const p of provs) patch[p] = '';
+  const st = $('ref-codes-status');
+  try {
+    const d = await refCodesFetch({
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+    });
+    if (!d.ok) throw new Error('ответ без ok');
+    REF_CODES = Object.assign({}, REF_CODES, { user: d.user, effective: d.effective, urls: d.urls });
+    renderRefCodeRows();
+    const n = applyRefLinks();
+    if (st) st.textContent = `сброшено, ссылок обновлено: ${n}`;
+    toast('💩 свои реф-коды сняты — вернулись коды владельца', 'success');
+  } catch (e) {
+    if (st) st.textContent = '';
+    toast('💩 сброс реф-кодов: ' + e.message, 'error', 9000);
+  }
+}
+
 async function loadSettingsBackups() {
   try {
     const res = await fetch('/__switch/api/settings/backups');
@@ -17020,6 +17287,10 @@ async function refreshNavCounts(boot) {
 async function bootNavCounts() { return refreshNavCounts(true); }
 bootNavCounts();
 loadHealth();   // бейдж N✓ / N↓ — пробы только по локальным портам, один раз
+// Реф-коды на boot, а не только при заходе в «Настройки»: ссылки регистрации живут в
+// шапках и подвалах пяти вкладок шлюзов, и без этого вызова свой код применился бы к
+// ним лишь после того, как человек однажды откроет «Настройки».
+loadRefCodes();
 
 // Живые счётчики: пока браузерная вкладка на экране. document.hidden — чтобы в фоне
 // не жечь CPU; при возврате тик дёргается сразу (обработчик visibilitychange ниже).

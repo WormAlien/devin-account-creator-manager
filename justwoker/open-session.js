@@ -38,7 +38,11 @@ const path = require('path');
 // Рефка владельца: аккаунт без ключа регистрируем ТОЛЬКО по ней (реф-кредит).
 // Захардкожена намеренно, как у остальных четырёх шлюзов — из аргументов и env
 // её брать нельзя: забытый параметр = молча потерянный реф.
-const REGISTER_URL = 'https://api.justwoker.icu/sign-up?aff=IFYf';
+// Реф-ссылка — из routing/lib/ref-codes.js, а не литералом: код владельца лежит
+// дефолтом в routing/ref-codes.default.json, пользователь вписывает свой через 💩 в
+// «Настройках» дашборда (routing/ref-codes.json, он в .gitignore). Одна точка на весь
+// репозиторий: раньше код был в десяти местах, и забытое = потерянный реф-кредит.
+const REGISTER_URL = require("../routing/lib/ref-codes.js").url("justwoker");
 // Ключ уже вписан → сразу баланс, а не логин. Роут `/wallet` в бандле панели есть
 // (проверено 2026-08-22), это алиас `/console/topup`.
 const CONSOLE_URL = 'https://api.justwoker.icu/wallet';

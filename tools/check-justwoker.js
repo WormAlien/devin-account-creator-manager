@@ -23,8 +23,12 @@
  * 🪤 Два факта провайдера, которые проверяются ЯВНО, потому что стоят денег:
  *   • база для Claude Code — КОРЕНЬ, без `/v1`: `POST /v1/v1/messages` отдаёт 404
  *     (замер 22.08). `/v1` нужен только листингу моделей — это JW_BASE_URL.
- *   • реф-ссылка `?aff=IFYf` захардкожена в `justwoker/open-session.js`: параметром
- *     её брать нельзя, забытый аргумент = молча потерянный реф-кредит.
+ *   • реф-ссылка приходит из `routing/lib/ref-codes.js` (с 23.08), а не литералом:
+ *     код владельца лежит дефолтом в `routing/ref-codes.default.json`, пользователь
+ *     форка вписывает свой через 💩 в «Настройках». Проверяем и то, что скрипт тянет
+ *     URL из модуля, и то, что модуль без переопределения отдаёт прежнюю ссылку
+ *     владельца — иначе рефакторинг тихо увёл бы реф-кредит. Полный набор
+ *     инвариантов одной точки — `tools/check-ref-codes.js`.
  */
 'use strict';
 
@@ -163,12 +167,23 @@ section('routing/transparent-proxy.js · роуты /__switch/api/{go,jw}/*');
     const go = routeSet(proxy, 'go');
     const jw = routeSet(proxy, 'jw');
     const miss = lack(go, jw);
-    const extra = lack(jw, go);
+    // Роуты, которые у JustWoker есть НАМЕРЕННО и у GoRouter пары иметь не должны.
+    // `auto-add` — авто-заведение аккаунта без человека. Оно не переносится на go
+    // копированием: у GoRouter вход через GitHub уезжает в ПОПАП, а у JustWoker идёт
+    // в той же вкладке (замер рекордером 2026-08-22), и ключ там приходит прямо в
+    // ответе OAuth-колбэка. Сценарий надо снимать заново под каждую панель, поэтому
+    // «копия один в один» на эту ручку не распространяется.
+    const JW_ONLY = new Set(['auto-add', 'auto-add/state']);
+    const extra = lack(jw, go).filter((r) => !JW_ONLY.has(r));
     check(go.size >= 20, `роутов go найдено ${go.size} (парсер жив)`);
     check(miss.length === 0,
         `парных jw-роутов ${jw.size} из ${go.size}${miss.length ? ' — не хватает: ' + miss.map((r) => '/jw/' + r).join(' ') : ''}`);
     check(extra.length === 0,
         `лишних jw-роутов нет${extra.length ? ' — у go нет пары: ' + extra.map((r) => '/jw/' + r).join(' ') : ''}`);
+    // Исключения обязаны существовать: опечатка в JW_ONLY иначе просто отключила бы
+    // проверку, и настоящий лишний роут проехал бы незамеченным.
+    check([...JW_ONLY].every((r) => jw.has(r)),
+        `исключения JW_ONLY на месте (${[...JW_ONLY].map((r) => '/jw/' + r).join(' ')})`);
 }
 
 // ── 4. Реестры: то, что легче всего забыть ────────────────────────────────────
@@ -264,8 +279,18 @@ section('justwoker/open-session.js · рефка и адреса');
 if (!openjs) {
     check(false, 'justwoker/open-session.js не читается — регистрация по рефке невозможна');
 } else {
-    check(/const REGISTER_URL = 'https:\/\/api\.justwoker\.icu\/sign-up\?aff=IFYf';/.test(openjs),
-        "REGISTER_URL ровно 'https://api.justwoker.icu/sign-up?aff=IFYf' — реф-кредит владельца");
+    // Реф-ссылка с 23.08 берётся из routing/lib/ref-codes.js — литерала в файле больше
+    // нет намеренно (пользователь форка вписывает свой код через 💩 в «Настройках»).
+    // Проверяем ДВА условия: скрипт тянет URL из модуля, и модуль без переопределения
+    // отдаёт ровно прежнюю ссылку владельца. Подробнее — tools/check-ref-codes.js.
+    check(/const REGISTER_URL = require\(['"]\.\.\/routing\/lib\/ref-codes\.js['"]\)\.url\(['"]justwoker['"]\)/.test(openjs),
+        'REGISTER_URL берётся из routing/lib/ref-codes.js, а не литералом');
+    let refUrlOk = false;
+    try {
+        refUrlOk = require(path.join(REPO, 'routing', 'lib', 'ref-codes.js')).url('justwoker')
+            === 'https://api.justwoker.icu/sign-up?aff=IFYf';
+    } catch { refUrlOk = false; }
+    check(refUrlOk, "модуль без переопределения отдаёт 'https://api.justwoker.icu/sign-up?aff=IFYf' — реф-кредит владельца");
     check(/const CONSOLE_URL = 'https:\/\/api\.justwoker\.icu\//.test(openjs), 'CONSOLE_URL на api.justwoker.icu');
     check(/const ROOT_URL = 'https:\/\/api\.justwoker\.icu\/';/.test(openjs), 'ROOT_URL на api.justwoker.icu');
     check(/justwoker-sessions\.json/.test(openjs),

@@ -26,7 +26,11 @@ const fs = require('fs');
 const path = require('path');
 
 // Рефка владельца: аккаунт без ключа регистрируем ТОЛЬКО по ней.
-const REGISTER_URL = 'https://xpeach.codes/sign-up?aff=0lre';
+// Реф-ссылка — из routing/lib/ref-codes.js, а не литералом: код владельца лежит
+// дефолтом в routing/ref-codes.default.json, пользователь вписывает свой через 💩 в
+// «Настройках» дашборда (routing/ref-codes.json, он в .gitignore). Одна точка на весь
+// репозиторий: раньше код был в десяти местах, и забытое = потерянный реф-кредит.
+const REGISTER_URL = require("../routing/lib/ref-codes.js").url("xpeach");
 // Ключ уже вписан → сразу баланс, а не логин. Маршрут взят из бандла SPA
 // (/static/js/index.*.js): у этого форка New-API страница пополнения/остатка —
 // /console/topup, а ключи лежат на /console/token.

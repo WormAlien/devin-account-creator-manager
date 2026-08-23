@@ -7231,6 +7231,55 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     // Анкер исчерпан расходом — причина едет в UI, чтобы было понятно, почему прикидка.
     if (anchorDrained) selfError = selfError || anchorDrained;
 
+    // ── 4а. последний ответ шлюза, когда свежий не дался ──
+    // self промахнулся (заглушка WAF, пауза по частоте, истёкшая кука), но у нас лежит
+    // цифра, которую шлюз уже называл. Уменьшить остаток может ТОЛЬКО расход, а расход
+    // мы измерили секунду назад тем же `usage`: не сдвинулся с того чека → цифра всё
+    // ещё верна, и возраст тут ни при чём. TTL выше (`SELF_REUSE_MS`) решает «идти ли
+    // к шлюзу», а не «помним ли мы его ответ» — это разные вопросы, и раньше они были
+    // склеены в один: один промах self ронял аккаунт в прикидку `ceil(spent/25)*25`,
+    // то есть в вымысел, при известной точной цифре в `selfBalance`. На 22.08 так
+    // стояли три аккаунта пула, и у всех трёх прикидка случайно совпала — поэтому
+    // потеря была не видна глазом.
+    //
+    // Единственное, чего эта ветвь не видит, — наливка мимо расхода (чек-ин в ЛК,
+    // пополнение владельцем). Отсюда условие про визит в ЛК: заходили после чека —
+    // цифра не годится. Ошибка в остатке возможна только в сторону ЗАНИЖЕНИЯ
+    // (наливка увеличивает остаток), а занижение для решений про деньги безопасно:
+    // ротация выберет другой аккаунт, а не потратит несуществующее.
+    if (cachedSelf != null && selfAt
+        && Number(target.usageSpentAtSelf) === usageSpent
+        && newapiLkOpenedAt(prof.label) < selfAt) {
+        const cachedGranted = target.grantedSelf != null ? Number(target.grantedSelf)
+            : (typeof target.granted === 'number' ? Number(target.granted) : null);
+        const cached = {
+            reused: true,
+            balance: cachedSelf,
+            spent: usageSpent,
+            granted: cachedGranted,
+            newApiUserId: target.newApiUserId,
+            newApiUsername: target.newApiUsername,
+            selfCheckedAt: target.selfCheckedAt,   // НЕ обновляем: иначе TTL перезапустится и к шлюзу мы больше не пойдём
+        };
+        logLine(`баланс ${host}: свежий self не дался (${selfError || 'без причины'}),`
+            + ` расход не сдвинулся ($${usageSpent.toFixed(2)}) — держу последнюю точную цифру $${cachedSelf.toFixed(2)}`);
+        return {
+            status: 'live',
+            balanceSource: 'self',
+            reused: true,
+            selfCached: true,          // цифра точная, но не переспрошенная — UI помечает и объясняет
+            balance: cached.balance,
+            spent: cached.spent,
+            usageSpent,
+            granted: cached.granted,
+            newApiUserId: cached.newApiUserId,
+            newApiUsername: cached.newApiUsername,
+            selfCheckedAt: cached.selfCheckedAt,
+            selfError,
+            self: cached,
+        };
+    }
+
     // ── 5. guess: старое угадывание, последний резерв ──
     const grant = guessGrant(usageSpent);
     const bonus = Number(target.bonus) > 0 ? Number(target.bonus) : 0;
@@ -7393,9 +7442,11 @@ function newapiApplyBalance(target, bal, opts) {
             }
         }
         // Почему точный баланс недоступен — видно в UI подсказкой, чтобы было понятно,
-        // что починить (сопоставить профиль / переоткрыть ЛК).
-        if (seen) delete target.selfError;
+        // что починить (сопоставить профиль / переоткрыть ЛК). У ветви 4а причина обязана
+        // выжить: цифра точная, но не переспрошенная, и владелец должен знать почему.
+        if (seen && !bal.selfCached) delete target.selfError;
         else if (bal.selfError) target.selfError = bal.selfError;
+        if (bal.selfCached) target.selfCached = true; else delete target.selfCached;
         delete target.balanceError;
         // Пишем историю только когда цифры реально сдвинулись. Первый чек аккаунта
         // (prev === NaN) даёт дельту 0, а не весь накопленный расход: иначе в день
@@ -7975,13 +8026,25 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
         const target = sessions.find(s => s.id === id);
         if (!target) { st.state = 'error'; st.message = 'аккаунт исчез из пула'; return; }
 
-        newapiLkVisited(label);                       // визит в ЛК → сохранённая цифра больше не годится
-        const bal = await arBalanceOnce(target.api_key, true, snap).catch(e => ({ error: e.message }));
-
         // Отметку ставим по слову шлюза. checkedIn === false → бонуса не было (окно не
         // сменилось) — врать «забрано» нельзя. null (маркер не поймали или ручной режим)
         // → оставляем как есть: детект по росту выдачи в arApplyBalance мог поставить её сам.
+        // Считаем ДО чека баланса: от этого зависит, годна ли сохранённая точная цифра.
         const checkedIn = marker && typeof marker.checkedIn === 'boolean' ? marker.checkedIn : null;
+
+        // Визит в ЛК обесценивает сохранённую цифру только если там могли НАЛИТЬ: чек-ин
+        // поднимает `quota`, не двигая `used_quota`, поэтому «расход не сдвинулся» перестаёт
+        // означать «остаток тот же». Но шлюз сам сказал, наливал ли он: `checked_in: false`
+        // → не наливал → сохранённая цифра по-прежнему верна, и обнулять её нечем.
+        if (checkedIn !== false) newapiLkVisited(label);
+        // force НЕ ставим намеренно. Он запрещает переиспользовать сохранённую точную цифру
+        // и гонит запрос к шлюзу — а тот за Aliyun WAF отвечает заглушкой и взводит
+        // `coolDownHost`, то есть один неудачный клик 🎁 ронял точный баланс ВСЕМУ пулу на
+        // 10 минут. Свежесть здесь обеспечена без него: либо снимком из браузера, либо тем,
+        // что расход не сдвинулся (ветвь 4а в newapiBalance). Форсировать имеет смысл только
+        // по явному клику пользователя по цифре — там он и остался.
+        const bal = await arBalanceOnce(target.api_key, false, snap).catch(e => ({ error: e.message }));
+
         if (checkedIn === true) {
             const fresh = arLoad();
             const t2 = fresh.find(s => s.id === id);
@@ -9364,13 +9427,21 @@ const JW_UPSTREAM = 'https://api.justwoker.icu';
 const JW_KEEPALIVE_PORT = 20158;
 const JW_KEEPALIVE_URL = `http://localhost:${JW_KEEPALIVE_PORT}`;
 const JW_MODELMAP_FILE = path.join(__dirname, 'justwoker-modelmap.json');
-// Резерв «угадать грант» (см. newapiBalance): выдача JustWoker НЕ ИЗМЕРЕНА — цифру
-// отдаёт только `/api/user/self` куками профиля, а API-ключ туда не пускает (401).
-// Поэтому база консервативная, как у XPeach: занизить безопаснее, чем завысить —
-// на завышенном балансе авторотация выберет пустой аккаунт. Реальную цифру ставит
-// либо ✏️ руками, либо первый заход в 🌐 ЛК (тогда balanceSource = 'self').
+// Резерв «угадать грант» (см. newapiBalance). Выдача ИЗМЕРЕНА 2026-08-22 на двух
+// свежих аккаунтах через `/api/user/self` (Bearer из `/api/user/auth/refresh` в
+// контексте страницы — tools/jw-self-probe.js; API-ключ в self не пускает, 401):
+//   lankymapping (user 8448): quota 46 346 687 → $92.69, used 0
+//   greenpoor    (user 8494): quota 45 619 695 → $91.24, used 0
+// Сходится с уже жившими в пуле `exhaustedar` $92.73 и `creamyevoluti` $96.23, то есть
+// выдача около $91–96 и слегка разная у каждого аккаунта (у панели она случайная в
+// диапазоне, как и суточный бонус).
+// 🪤 До этого замера база была $10 — прикидка занижала баланс в девять раз, и свежий
+// аккаунт с $92 выглядел почти пустым. Берём НИЖНЮЮ границу измеренного, а не среднее:
+// на завышенном балансе авторотация выберет пустой аккаунт, а занижение стоит лишь
+// лишнего переключения. Точную цифру всё равно ставит первый заход в 🌐 ЛК
+// (balanceSource = 'self') или ✏️ руками.
 const JW_GRANT_STEP = 5;
-const JW_DEFAULT_GRANT = 10;
+const JW_DEFAULT_GRANT = 90;
 const JW_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 const JW_CC_HEADERS = {
@@ -9599,6 +9670,197 @@ async function handleJwSessionOpen(req, res) {
         logLine(`justwoker session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── JustWoker: завести аккаунт БЕЗ человека (⚡ авто-заведение) ──────────
+//
+// Что было: 🐙 создавала запись и снимок GitHub-сессии, дальше человек жал 🌐, в
+// открытом браузере — «Продолжить с GitHub», потом шёл на /keys, копировал ключ и
+// вставлял его кнопкой 🔑. Четыре ручных шага на аккаунт.
+//
+// Что стало: `justwoker/auto-add.js` проходит это сам и отдаёт ключ маркером
+// JW_AUTOADD_RESULT. Ключ панель кладёт прямо в ответ OAuth-колбэка (`data.sk`), так
+// что страницу /keys открывать не нужно вовсе — сценарий снят рекордером с живого
+// прохода 2026-08-22, а не выведен из бандла.
+//
+// Работает ТОЛЬКО по записи с привязанным `ghId`: снимок GitHub-сессии — это всё, что
+// заменяет пароль и 2FA, автоматика их не вводит.
+const JW_AUTO_ADD = new Map(); // label → { id, name, state, message, key, userId, inviterId, … }
+const JW_AUTO_ADD_TTL_MS = 10 * 60 * 1000;
+
+// Что означает код возврата justwoker/auto-add.js (см. его заголовок).
+const JW_AUTO_ADD_FAIL = {
+    1: 'скрипт не запустился — смотри лог дашборда',
+    2: 'вход не подтвердился за 90 с — аккаунт не заведён, повтори',
+    3: 'GitHub-сессия мертва: пароль и 2FA автоматика не вводит — открой аккаунт во вкладке GitHub и залогинься заново',
+    4: 'панель переделала страницу входа: кнопку GitHub найти не удалось — сценарий надо переснять рекордером',
+    5: 'панель отвергла OAuth — чаще всего возраст GitHub меньше года или закрыта регистрация',
+    6: 'вошли, но ключ снять не удалось — открой аккаунт кнопкой 🌐 и возьми ключ вручную',
+    7: 'GitHub моложе 365 дней — панель такие не принимает (github_minimum_account_age_days)',
+    8: 'панель включила рейт-лимит (429) — подожди и повтори тем же GitHub, ничего не сломано',
+};
+
+function jwParseAutoAddMarker(out) {
+    const m = /JW_AUTOADD_RESULT\s+(\{[^\n]*\})/.exec(String(out || ''));
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+// Хвост: скрипт закрылся → вписываем ключ в запись пула. Исключения гасим здесь же —
+// это обработчик 'exit', падение в нём уронило бы дашборд.
+function jwAutoAddFinish(id, label, code, marker) {
+    const st = JW_AUTO_ADD.get(label) || { id, label };
+    st.finishedAt = new Date().toISOString();
+    try {
+        if (code !== 0 || !marker || !marker.ok || !marker.key) {
+            st.state = 'error';
+            st.message = JW_AUTO_ADD_FAIL[code] || (marker && !marker.key
+                ? 'аккаунт создан, но ключа в ответе не было'
+                : `скрипт завершился с кодом ${code}`);
+            logLine(`justwoker auto-add [${label}]: ${st.message}`);
+            return;
+        }
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) { st.state = 'error'; st.message = 'запись пропала из пула'; return; }
+        // Дубль ключа — признак того, что заведён НЕ новый аккаунт, а вход в уже
+        // существующий. Молча перезаписывать нельзя: в пуле оказались бы две записи с
+        // одним ключом, и ротация считала бы их разными деньгами.
+        const dup = sessions.find(s => s.id !== id && s.api_key === marker.key);
+        if (dup) {
+            st.state = 'error';
+            st.message = `такой ключ уже есть у записи «${dup.name || dup.email || dup.id}» — это вход в существующий аккаунт, а не новый`;
+            logLine(`justwoker auto-add [${label}]: ${st.message}`);
+            return;
+        }
+        target.api_key = marker.key;
+        // status снимаем в 'unknown', а не в 'active': выдачу и остаток считает чек
+        // баланса, и придумывать за него цифру нельзя (у AgentRouter обнулённая квота
+        // из колбэка однажды записала бы в пул $0).
+        target.status = 'unknown';
+        if (marker.userId) target.jwUserId = marker.userId;
+        // Реф-кредит: 0 = панель код проигнорировала. Пишем в запись, иначе потеря
+        // кредита не видна нигде — ни в UI, ни при разборе задним числом.
+        target.inviterId = marker.inviterId ?? null;
+        if (marker.affCode) target.affCode = marker.affCode;
+        target.autoAddedAt = new Date().toISOString();
+        jwSave(sessions);
+        st.state = 'done';
+        st.key = marker.key;
+        st.userId = marker.userId || null;
+        st.inviterId = marker.inviterId ?? null;
+        st.message = marker.inviterId
+            ? `аккаунт заведён, ключ в пуле (реф-кредит привязан: inviter_id=${marker.inviterId})`
+            : `аккаунт заведён, ключ в пуле — но РЕФ-КРЕДИТ НЕ ПРИВЯЗАН (inviter_id=${marker.inviterId}, отправляли aff=${marker.affSent})`;
+        logLine(`justwoker auto-add [${label}]: ${st.message}`);
+    } catch (e) {
+        st.state = 'error';
+        st.message = `хвост авто-заведения упал: ${e.message}`;
+        logLine(`justwoker auto-add [${label}] ОШИБКА: ${e.message}`);
+    } finally {
+        JW_AUTO_ADD.set(label, st);
+        setTimeout(() => JW_AUTO_ADD.delete(label), JW_AUTO_ADD_TTL_MS).unref?.();
+    }
+}
+
+// Прогресс прогона построчно — для карточки на вкладке. До этого `state` отдавал только
+// начальное и конечное сообщение, и между ними вкладка молчала все 17 секунд прохода:
+// снаружи это читается как «лога нет вообще». Сам скрипт болтлив (37 строк), строки уже
+// летят в Server Logs — но тот буфер на 200 строк общий, и один прогон вытесняет из него
+// всё остальное за минуту.
+// 🪤 Запись прогона может ещё НЕ существовать: обработчик stdout встаёт раньше, чем
+// JW_AUTO_ADD.set ниже, и первые строки прилетают до него. Поэтому создаём на месте, а
+// оба места, где запись перезаписывается целиком, обязаны сохранять `lines`.
+const JW_AUTO_ADD_MAX_LINES = 80;
+function jwAutoAddPush(label, id, chunk) {
+    const st = JW_AUTO_ADD.get(label)
+        || { id, label, state: 'running', startedAt: new Date().toISOString(), finishedAt: null };
+    if (!Array.isArray(st.lines)) st.lines = [];
+    for (const raw of String(chunk).split(/\r?\n/)) {
+        const line = raw.trim();
+        // Маркер результата машинный, его разбирает jwParseAutoAddMarker — человеку он
+        // в карточке не нужен и занял бы всю ширину.
+        if (!line || line.startsWith('JW_AUTOADD_RESULT')) continue;
+        st.lines.push({ t: new Date().toISOString().slice(11, 19), s: line.slice(0, 300) });
+        if (st.state === 'running') st.message = line.slice(0, 300);
+    }
+    if (st.lines.length > JW_AUTO_ADD_MAX_LINES) st.lines = st.lines.slice(-JW_AUTO_ADD_MAX_LINES);
+    JW_AUTO_ADD.set(label, st);
+}
+
+// POST /__switch/api/jw/auto-add { id } → завести аккаунт по привязанному GitHub.
+async function handleJwAutoAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = jwLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (isRealKey(target.api_key)) {
+            return jsonRes(res, 409, { error: 'у записи уже есть ключ — заводить нечего' });
+        }
+        const ghId = String(target.ghId || '').trim();
+        if (!ghId || ghId === 'personal') {
+            return jsonRes(res, 400, {
+                error: 'к записи не привязан GitHub из хранилища — авто-заведение заменяет пароль и 2FA'
+                    + ' именно снимком его сессии. Заведи запись кнопкой 🐙 или привяжи аккаунт кнопкой 🐙 на карточке',
+            });
+        }
+        const acct = ghLoad().find(g => g.id === ghId);
+        if (!acct) return jsonRes(res, 400, { error: 'привязанный GitHub-аккаунт не найден в хранилище' });
+
+        const label = 'acct_' + id;
+        const prevPid = jwLkPids.get(label);
+        if (jwPidAlive(prevPid)) {
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'justwoker', 'auto-add.js');
+        const proc = spawn(process.execPath, [script, label, ghId], { detached: true, stdio: 'pipe' });
+        let outTail = '';
+        proc.stdout.on('data', d => {
+            const s = String(d);
+            outTail = (outTail + s).slice(-4000);
+            logLine(`justwoker auto-add [${label}]: ${s.trim()}`);
+            jwAutoAddPush(label, id, s);
+        });
+        proc.stderr.on('data', d => logLine(`justwoker auto-add ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`justwoker auto-add spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            jwLkPids.delete(label);
+            logLine(`justwoker auto-add: ${label} — exited (code ${code}, sig ${sig})`);
+            jwAutoAddFinish(id, label, code, jwParseAutoAddMarker(outTail));
+        });
+        proc.unref();
+        jwLkPids.set(label, proc.pid);
+        // Мержим, а не пишем целиком: строки stdout уже могли прилететь (обработчик выше
+        // встаёт раньше этой строки), и перезапись потеряла бы начало прогона.
+        const prevRun = JW_AUTO_ADD.get(label);
+        JW_AUTO_ADD.set(label, {
+            id, label, name: String(target.name || target.email || label),
+            state: 'running', message: (prevRun && prevRun.message) || 'вхожу через GitHub и снимаю ключ…',
+            lines: (prevRun && prevRun.lines) || [],
+            startedAt: (prevRun && prevRun.startedAt) || new Date().toISOString(), finishedAt: null,
+        });
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            jwLkPids.delete(label);
+            const cur = JW_AUTO_ADD.get(label) || { id, label };
+            cur.state = 'error'; cur.message = failed;
+            cur.finishedAt = new Date().toISOString();
+            JW_AUTO_ADD.set(label, cur);
+            return jsonRes(res, 502, { error: failed });
+        }
+        logLine(`justwoker auto-add: ${target.name || id} ← GitHub ${acct.nickname || acct.login} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, ghLogin: acct.nickname || acct.login || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/jw/auto-add/state → прогресс всех прогонов. Очередей и SSE в
+// проекте нет, прогресс везде поллится — держим состояние в памяти, как AR_AUTO_CHECKIN.
+function handleJwAutoAddState(req, res) {
+    jsonRes(res, 200, { ok: true, runs: [...JW_AUTO_ADD.values()] });
 }
 
 // ── JustWoker: share/import (передать аккаунт другу и принять чужой) ────────
@@ -12171,6 +12433,42 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // ---- Реф-коды провайдеров (💩 в «Настройках») ----------------------------
+    // Отдаём тремя слоями, а не одним значением: UI обязан различать «код владельца
+    // из репозитория» и «свой вписанный», иначе пустое поле читалось бы как «рефки нет».
+    if (req.method === 'GET' && req.url === '/__switch/api/settings/ref-codes') {
+        try {
+            const rc = require('./lib/ref-codes.js');
+            const urls = {};
+            for (const p of rc.PROVIDERS) urls[p] = rc.url(p);
+            return jsonRes(res, 200, {
+                ok: true,
+                providers: rc.PROVIDERS,
+                shapes: rc.SHAPES,
+                defaults: rc.defaults(),
+                user: rc.user(),
+                effective: rc.effective(),
+                urls,
+            });
+        } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+    }
+    // POST { <prov>: '<код>' | '' } — пустая строка снимает переопределение и
+    // возвращает код владельца. Рестарт `:8200` не нужен: и скрипты, и этот роут
+    // читают файл на каждый вызов.
+    if (req.method === 'POST' && req.url === '/__switch/api/settings/ref-codes') {
+        return (async () => {
+            try {
+                const rc = require('./lib/ref-codes.js');
+                const body = await readJsonBody(req);
+                const saved = rc.save(body || {});
+                const urls = {};
+                for (const p of rc.PROVIDERS) urls[p] = rc.url(p);
+                logLine(`реф-коды: сохранено ${Object.keys(saved).length} своих (${Object.entries(saved).map(([k, v]) => k + '=' + v).join(', ') || 'ни одного — везде коды владельца'})`);
+                jsonRes(res, 200, { ok: true, user: saved, effective: rc.effective(), urls });
+            } catch (e) { jsonRes(res, 500, { error: e.message }); }
+        })();
+    }
+
     if (req.method === 'GET' && req.url === '/__switch/api/settings/current') {
         return handleSettingsCurrent(res);
     }
@@ -12721,6 +13019,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tb/add-github')       return handleTbAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/add-github')       return handleXpAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/add-github')       return handleJwAddGithub(req, res);
+    // ⚡ Авто-заведение: то же, что 🐙 + 🌐 + 🔑, но без человека. Только у JustWoker —
+    // сценарий снят рекордером именно с этой панели, у ar/go/tb вход уезжает в попап.
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/auto-add')          return handleJwAutoAdd(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/jw/auto-add/state')    return handleJwAutoAddState(req, res);
 
     // ---- Svrtr — пул ТГ-аккаунтов, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/svrtr/sessions'))    return handleSvrtrSessions(req, res);

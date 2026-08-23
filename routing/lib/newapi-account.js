@@ -79,7 +79,11 @@ function cookieFailReason(profileDir, host) {
             return 'в профиле нет БД куки — открой ЛК (🌐) и войди в аккаунт';
         }
     } catch {}
-    if (!profileAesKey(profileDir)) {
+    // Отсутствие ключа — диагноз ТОЛЬКО если куки реально зашифрованы. У профилей от
+    // `chrome-headless-shell` (авто-заведение) ключа нет по устройству, а значения лежат
+    // открытым текстом — раньше здесь печаталось «ключ не расшифровался» и уводило
+    // разбор в DPAPI, которого в этом пути нет вовсе.
+    if (!profileAesKey(profileDir) && !profileCookiesArePlain(profileDir)) {
         return IS_MAC
             ? (MAC_KEY_ERROR
                 ? `подбор ключа куки упал: ${String(MAC_KEY_ERROR).slice(0, 90)}`
@@ -87,6 +91,28 @@ function cookieFailReason(profileDir, host) {
             : 'ключ профиля не расшифровался (Local State / DPAPI)';
     }
     return `в профиле нет куки для ${host} — сессия не сохранилась, войди в ЛК заново`;
+}
+
+// Лежат ли куки профиля открытым текстом: `encrypted_value` пустой, а `value` заполнена.
+// Так пишет `chrome-headless-shell`, которым Playwright поднимает headless-режим.
+function profileCookiesArePlain(profileDir) {
+    try {
+        const src = cookieDbPath(profileDir);
+        if (!src) return false;
+        const Database = sqliteModule();
+        if (!Database) return false;
+        const tmp = path.join(os.tmpdir(), `nacp_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
+        try {
+            fs.copyFileSync(src, tmp);
+            const db = new Database(tmp, { readonly: true });
+            try {
+                const r = db.prepare(
+                    'SELECT COUNT(*) n FROM cookies WHERE (encrypted_value IS NULL OR length(encrypted_value) = 0) AND length(value) > 0'
+                ).get();
+                return !!(r && r.n > 0);
+            } finally { db.close(); }
+        } finally { try { fs.unlinkSync(tmp); } catch {} }
+    } catch { return false; }
 }
 
 const QUOTA_PER_UNIT_DEFAULT = 500000;
@@ -525,8 +551,18 @@ const msToChromeTime = ms => (Number(ms) + CHROME_EPOCH_OFFSET_MS) * 1000;
 function readProfileCookies(profileDir) {
     const src = cookieDbPath(profileDir);
     if (!src) return [];
+    // 🪤 Ключа может не быть ЗАКОННО, и это не повод сдаваться. Playwright при
+    // `headless: true` поднимает `chrome-headless-shell`, а он os_crypt не
+    // провизионит вовсе: `Local State` не создаётся, `encrypted_value` пустой, а
+    // значение кладётся ОТКРЫТЫМ ТЕКСТОМ в колонку `value`. Замер 2026-08-23 на
+    // профилях justwoker/auto-add.js: headless — `encrypted_value` 0 байт, `value`
+    // 101 байт; профиль от open-session.js (полный chrome.exe) — `encrypted_value`
+    // 164 байта с префиксом `v10`, `value` пустой.
+    // До этой правки ранний `return []` по отсутствию ключа выкидывал живые куки, и
+    // точный баланс всех авто-заведённых аккаунтов молча падал в `guessGrant` с
+    // диагнозом «ключ профиля не расшифровался (Local State / DPAPI)» — то есть
+    // сообщение указывало на шифрование там, где шифрования не было.
     const key = profileAesKey(profileDir);
-    if (!key) return [];
     const tmp = path.join(os.tmpdir(), `nac_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
     const copied = [tmp];
     try {
@@ -539,11 +575,18 @@ function readProfileCookies(profileDir) {
         const db = new Database(tmp, { readonly: true });
         let rows;
         try {
-            rows = db.prepare('SELECT host_key, name, encrypted_value, last_update_utc FROM cookies').all();
+            rows = db.prepare('SELECT host_key, name, value, encrypted_value, last_update_utc FROM cookies').all();
         } finally { db.close(); }
         const out = [];
         for (const r of rows) {
-            const value = decryptCookieValue(r.encrypted_value, key);
+            const enc = r.encrypted_value;
+            const hasEnc = enc && enc.length > 0;
+            // Порядок важен: зашифрованное значение — источник правды, открытый текст
+            // берём только когда шифрованного нет вообще. Иначе на обычном профиле
+            // (где `value` пустая строка) мы бы затирали расшифрованное пустотой.
+            const value = hasEnc
+                ? (key ? decryptCookieValue(enc, key) : null)
+                : (typeof r.value === 'string' && r.value ? r.value : null);
             if (value) out.push({
                 host: String(r.host_key || '').replace(/^\./, ''),
                 name: r.name,

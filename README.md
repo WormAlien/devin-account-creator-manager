@@ -372,6 +372,7 @@ npm run tgbot                              # опц.: ТГ-пульт
 
 - **Баланс `$`** — есть у AgentRouter, GoRouter, Tabi, JustWoker, XPeach (цифра из `*-sessions.json`), FreeModel (окно квот 5h/7d) и Ourtoken. `~` = устаревший кеш; при протухании >90 с скрипт сам дёргает `GET /__switch/api/{ar,tb,go,xp,jw}/balance` (fire-and-forget), следующий рендер уже свежий.
 - **Контекст `⧉`** — `total_input_tokens/context_window_size` из payload Claude Code; при отсутствии — `⧉ ?`.
+- **Авторотация `💸`** — только на денежных шлюзах (AgentRouter, GoRouter, Tabi, JustWoker, XPeach). Тускло = тумблер включён, красное `💸off` = выключен, и тогда отказ шлюза по балансу поедет в агента вместо подмены ключа. Состояние берётся из `logs/.money_autorotate.json` — того же файла, что у кнопки 💸 в карточке ACTIVE; отсутствие файла означает «выключено», как и у дашборда.
 - Шлюз определяется по `apiKeyHelper`/`ANTHROPIC_BASE_URL` из `settings.json`, без сети.
 
 ---

@@ -209,6 +209,73 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
         check(w.selfCalls === 0, 'на мёртвом ключе за балансом никуда не ходим');
     }
 
+    // ── Ветвь 4а: последняя точная цифра вместо прикидки, когда свежий self не дался ──
+    // Это ровно тот случай, из-за которого 22.08 три аккаунта пула стояли в «~прикидке»
+    // при известной точной цифре в `selfBalance`: self отбит WAF → guess.
+    const cachedTarget = (over = {}) => ({
+        api_key: KEY, balanceSource: 'self', balance: 175, granted: 175,
+        selfBalance: 175, grantedSelf: 175, usageSpentAtSelf: 0,
+        selfCheckedAt: new Date(Date.now() - 5 * 3600_000).toISOString(),   // пять часов назад: TTL давно вышел
+        ...over,
+    });
+    {
+        const w = makeWorld({ usageSpent: 0 });
+        const t = cachedTarget();
+        const bal = await w.run(t);
+        check(bal.balanceSource === 'self' && bal.balance === 175,
+            `свежий self не дался, расход не сдвинулся → держим точные $175 (получили ${bal.balanceSource}/${bal.balance})`);
+        check(bal.selfCached === true, 'цифра помечена как непереспрошенная (selfCached) — UI обязан это показать');
+        check(!!bal.selfError, 'причина, почему не переспросили, доехала до UI');
+        check(bal.selfCheckedAt === t.selfCheckedAt,
+            'штамп НЕ обновлён: иначе перезапустится 20-минутный TTL и к шлюзу мы больше не пойдём');
+        check(bal.granted === 175, 'выдача взята из grantedSelf — база детекта чек-ина не потеряна');
+        check(w.selfCalls === 1, 'попытка спросить шлюз всё равно сделана (ветвь 4а — резерв, а не замена)');
+    }
+    {
+        // Расход сдвинулся — цифра устарела, и подставлять её нельзя.
+        const w = makeWorld({ usageSpent: 20 });
+        const bal = await w.run(cachedTarget());
+        check(bal.balanceSource === 'guess',
+            `расход вырос с $0 до $20 → сохранённая цифра не годится, честная прикидка (получили ${bal.balanceSource})`);
+    }
+    {
+        // Заходили в ЛК после чека: там могли налить, а наливка расход не двигает.
+        const w = makeWorld({ usageSpent: 0, lkOpenedAt: Date.now() });
+        const bal = await w.run(cachedTarget());
+        check(bal.balanceSource === 'guess',
+            `визит в ЛК после чека → цифра не годится, наливка расход не двигает (получили ${bal.balanceSource})`);
+    }
+    {
+        // Анкер по-прежнему главнее сохранённой точной цифры.
+        const w = makeWorld({ usageSpent: 0 });
+        const bal = await w.run(cachedTarget({ balanceAnchor: 500, anchorSpent: 0 }));
+        check(bal.balanceSource === 'anchor', 'вписанное руками главнее сохранённой точной цифры');
+    }
+
+    // Статика бэкенда: хвост чек-ина больше не форсит и не обнуляет цифру вслепую.
+    {
+        const finish = cutFn(src, 'async function arAutoCheckinFinish(');
+        check(/arBalanceOnce\(target\.api_key, false, snap\)/.test(finish),
+            'чек-ин зовёт баланс БЕЗ force: force гонит на WAF-заглушку и гасит точный баланс всему пулу на 10 минут');
+        check(/if \(checkedIn !== false\) newapiLkVisited\(label\)/.test(finish),
+            'newapiLkVisited только когда шлюз НЕ сказал «не наливал» — иначе годная цифра выбрасывается зря');
+        const idxCheckedIn = finish.indexOf('const checkedIn =');
+        const idxBal = finish.indexOf('const bal = await arBalanceOnce');
+        check(idxCheckedIn > 0 && idxCheckedIn < idxBal,
+            'checkedIn считается ДО чека баланса — от него зависит годность сохранённой цифры');
+    }
+    {
+        const apply = cutFn(src, 'function newapiApplyBalance(');
+        check(/seen && !bal\.selfCached/.test(apply),
+            'у непереспрошенной цифры selfError не стирается — иначе «шлюз молчит» выглядит как норма');
+    }
+    {
+        const seenFn = cutFn(htmlSrc, 'function applySelfSeen(');
+        check(/data\.selfCached/.test(seenFn), 'фронт переносит признак selfCached в state');
+        const badge = cutFn(htmlSrc, 'function balanceSourceBadge(');
+        check(/s\.selfCached/.test(badge), 'бейдж источника отличает непереспрошенную цифру от свежей');
+    }
+
     // 9. Статика скрипта: quota из ответа колбэка НЕ идёт в баланс.
     {
         const watch = cutFn(sessSrc, 'function watchOauthResult(');

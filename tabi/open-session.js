@@ -25,7 +25,11 @@ const fs = require('fs');
 const path = require('path');
 
 // Рефка владельца: аккаунт без ключа регистрируем ТОЛЬКО по ней (реф-бонус +$20).
-const REGISTER_URL = 'https://tabitoken.com/sign-up?aff=cUG3';
+// Реф-ссылка — из routing/lib/ref-codes.js, а не литералом: код владельца лежит
+// дефолтом в routing/ref-codes.default.json, пользователь вписывает свой через 💩 в
+// «Настройках» дашборда (routing/ref-codes.json, он в .gitignore). Одна точка на весь
+// репозиторий: раньше код был в десяти местах, и забытое = потерянный реф-кредит.
+const REGISTER_URL = require("../routing/lib/ref-codes.js").url("tabi");
 // Ключ уже вписан → сразу баланс, а не логин.
 const CONSOLE_URL = 'https://tabitoken.com/wallet';
 // Корень нужен для прогрева перед регистрацией (см. openRegisterViaRef).

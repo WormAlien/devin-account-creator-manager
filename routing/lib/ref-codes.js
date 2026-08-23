@@ -27,9 +27,17 @@ const SHAPES = {
     gorouter:    { host: 'gorouter.app',      path: '/sign-up?aff=',  label: 'GoRouter' },
     justwoker:   { host: 'api.justwoker.icu', path: '/sign-up?aff=',  label: 'JustWoker' },
     tabi:        { host: 'tabitoken.com',     path: '/sign-up?aff=',  label: 'Tabi Token' },
-    xpeach:      { host: 'xpeach.codes',      path: '/sign-up?aff=',  label: 'XPeach' },
+    // 🪤 XPeach — ЛЕГАСИ (решение владельца 2026-08-22): все ключи `403 banned`,
+    // регистрация не проходит, вкладка живёт в скрытой группе «Чтим память».
+    // Из резолва его не убираем — `xpeach/open-session.js` по-прежнему просит url(),
+    // — но в списки UI он попадать НЕ должен: настраивать рефку мёртвого шлюза
+    // бессмысленно, а строка в настройках выглядит как живой шлюз. Отсюда `legacy`.
+    xpeach:      { host: 'xpeach.codes',      path: '/sign-up?aff=',  label: 'XPeach', legacy: true },
 };
+// Полный набор — для резолва (его просят и легаси-скрипты).
 const PROVIDERS = Object.keys(SHAPES);
+// Живые — для всего, что показывается человеку. Новые списки строить ОТ ЭТОГО набора.
+const ACTIVE_PROVIDERS = PROVIDERS.filter(p => !SHAPES[p].legacy);
 
 function readJson(file) {
     try {
@@ -96,4 +104,4 @@ function save(patch) {
     return next;
 }
 
-module.exports = { PROVIDERS, SHAPES, defaults, user, effective, code, url, save, USER_FILE, DEFAULTS_FILE };
+module.exports = { PROVIDERS, ACTIVE_PROVIDERS, SHAPES, defaults, user, effective, code, url, save, USER_FILE, DEFAULTS_FILE };

@@ -40,7 +40,14 @@ if (rc) {
         chk(rc.PROVIDERS.includes(p), 'провайдер ' + p + ' в списке');
         chk(rc.url(p) === WAS[p], 'url(' + p + ') совпадает с прежним хардкодом', rc.url(p));
     }
-    // Пустой и мусорный код обязаны деградировать в дефолт, а не уехать в URL.
+    // Решение владельца 23.08: XPeach легаси и в списки, которые видит человек, не
+    // попадает. Резолв для него обязан остаться — xpeach/open-session.js просит url().
+    chk(Array.isArray(rc.ACTIVE_PROVIDERS), 'ACTIVE_PROVIDERS экспортирован');
+    chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('xpeach'),
+        'XPeach НЕ в живом наборе — легаси, в настройках ему места нет');
+    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 4,
+        'живых провайдеров четыре (ar/go/jw/tb)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
+    chk(rc.url('xpeach') === WAS.xpeach, 'url(xpeach) всё ещё резолвится — легаси-скрипт им пользуется');
     const saved = rc.user();
     chk(Object.keys(saved).length === 0 || true, 'user() читается');
 }
@@ -80,6 +87,7 @@ console.log('\n── routing/proxy-dashboard.html ──');
         chk(s.includes(`data-ref-link="${p}"`), 'помечена ссылка ' + p);
     }
     chk(s.includes('id="ref-codes-box"'), 'секция 💩 есть в «Настройках»');
+    chk(!/\['agentrouter'[^\]]*'xpeach'\]/.test(s), 'в фолбэк-списке 💩 нет xpeach (легаси)');
     chk(/<summary[\s\S]{0,200}💩/.test(s), 'заголовок секции — свёрнутый 💩 (details/summary)');
     chk(s.includes('id="ref-codes-rows"'), 'контейнер полей есть');
     chk(/function applyRefLinks/.test(s), 'applyRefLinks объявлена');

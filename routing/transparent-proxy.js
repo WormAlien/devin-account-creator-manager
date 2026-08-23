@@ -12443,7 +12443,10 @@ const server = http.createServer((req, res) => {
             for (const p of rc.PROVIDERS) urls[p] = rc.url(p);
             return jsonRes(res, 200, {
                 ok: true,
-                providers: rc.PROVIDERS,
+                // Только живые шлюзы: XPeach легаси, настраивать рефку мёртвого
+                // бессмысленно. Резолв (`urls`) при этом полный — его просит
+                // xpeach/open-session.js.
+                providers: rc.ACTIVE_PROVIDERS,
                 shapes: rc.SHAPES,
                 defaults: rc.defaults(),
                 user: rc.user(),

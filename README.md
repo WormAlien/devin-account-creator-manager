@@ -17,11 +17,6 @@
 
 Локальный пульт для Claude Code: один фиксированный адрес для всех клиентов, переключение LLM-шлюза одним кликом из веб-дашборда, пулы ключей с живым балансом, GitHub-аккаунты с TOTP и статус-лайн в CLI.
 
-[![AgentRouter](https://img.shields.io/badge/AgentRouter-agentrouter.org-00D8FF?style=for-the-badge&labelColor=1D3756)](https://agentrouter.org)
-[![GoRouter](https://img.shields.io/badge/GoRouter-gorouter.app-D7A7FF?style=for-the-badge&labelColor=1D3756)](https://gorouter.app)
-[![Tabi Token](https://img.shields.io/badge/Tabi_Token-tabitoken.com-FFB700?style=for-the-badge&labelColor=1D3756)](https://tabitoken.com)
-[![JustWoker](https://img.shields.io/badge/JustWoker-api.justwoker.icu-FFB700?style=for-the-badge&labelColor=1D3756)](https://api.justwoker.icu)
-
 [![Windows](https://img.shields.io/badge/Windows-PowerShell_·_одна_строка-00D8FF?style=for-the-badge&labelColor=1D3756&logo=windows&logoColor=EEF4FC)](#windows)
 [![macOS](https://img.shields.io/badge/macOS-Терминал_·_bash-B2BCC9?style=for-the-badge&labelColor=1D3756&logo=apple&logoColor=EEF4FC)](#macos)
 [![License MIT](https://img.shields.io/badge/license-MIT-8C99A9?style=for-the-badge&labelColor=1D3756)](#license)

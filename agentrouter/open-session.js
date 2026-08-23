@@ -483,8 +483,19 @@ async function readStoredUser(page) {
 // отдаёт его странице — приём тот же, что с колбэком OAuth.
 const SELF_API_RE = /\/api\/user\/self/i;
 
+// 🪤 Перехват копит ответы за ВСЮ жизнь браузера, а в режиме чек-ина первый из них
+// приезжает ДО подарка: uiLogout заходит на страницу кошелька ещё залогиненным, и
+// кабинет честно спрашивает /api/user/self со старым остатком. Дальше вход, подарок —
+// и если пост-логиновый ответ окажется заглушкой WAF или придёт со старой цифрой,
+// `out.last` так и останется предподарочным. Дашборд ставит эту цифру как точную
+// (arAutoCheckinFinish), то есть подарок «не считается» ровно так, как жалуется владелец.
+// Поэтому у перехвата есть reset(): предподарочные ответы забываются, и снимок берётся
+// только из того, что приехало ПОСЛЕ входа.
 function watchSelfResponses(context) {
-  const out = { last: null, seen: 0, stubs: 0 };
+  const out = {
+    last: null, seen: 0, stubs: 0,
+    reset() { this.last = null; this.seen = 0; this.stubs = 0; },
+  };
   context.route(SELF_API_RE, async (route) => {
     try {
       const resp = await route.fetch();
@@ -516,6 +527,52 @@ function selfSnapshotUsable(s) {
     && (s.quota > 0 || Number(s.used) > 0);
 }
 
+// Цифра «до подарка». Шлюз наливает бонус на `quota`, не двигая `used_quota`, поэтому
+// сравнение по остатку тут законно: подарок обязан поднять quota выше предподарочной.
+// Считаем устаревшим и РАВЕНСТВО: именно так выглядит кабинет, который надо обновить.
+function selfIsPreGift(s, baseline, expectGrowth) {
+  return !!(expectGrowth && baseline && s && Number(s.quota) <= Number(baseline.quota));
+}
+
+// Обновление страницы после подарка — не косметика, а единственный способ увидеть новую
+// цифру: кабинет спрашивает /api/user/self один раз на загрузку, а колбэк OAuth квоту
+// отдаёт обнулённой (см. watchOauthResult). Руками владелец жмёт F5 — здесь то же самое.
+// Перезагружаем, пока не приедет ответ со ВЫРОСШЕЙ квотой, но не больше трёх раз: шлюз
+// за Aliyun WAF на залп отвечает заглушкой, и лишние круги дороже неточной цифры.
+const GIFT_RELOAD_ATTEMPTS = 3;
+const GIFT_SELF_WAIT_MS = 12000;
+
+async function reloadForFreshSelf(page, selfWatch, baseline, expectGrowth) {
+  if (!selfWatch) return;
+  const show = s => `$${(s.quota / 500000).toFixed(2)}`;
+  for (let attempt = 1; attempt <= (expectGrowth ? GIFT_RELOAD_ATTEMPTS : 1); attempt++) {
+    selfWatch.reset();
+    // На URL колбэка перезагружаться нельзя — `code` одноразовый (см. OAUTH_CALLBACK_RE),
+    // поэтому туда уходим навигацией на кошелёк.
+    if (/agentrouter\.org\/console/i.test(page.url())) await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    else await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+
+    const deadline = Date.now() + GIFT_SELF_WAIT_MS;
+    while (Date.now() < deadline) {
+      const s = selfWatch.last;
+      if (selfSnapshotUsable(s) && !selfIsPreGift(s, baseline, expectGrowth)) {
+        console.log(`🔄 после обновления страницы кабинет отдал ${show(s)}`
+          + (baseline ? ` (было ${show(baseline)})` : '') + ` — круг ${attempt}`);
+        return;
+      }
+      await page.waitForTimeout(500).catch(() => {});
+    }
+    const s = selfWatch.last;
+    if (s && selfIsPreGift(s, baseline, expectGrowth)) {
+      console.log(`⏳ кабинет всё ещё показывает предподарочные ${show(s)} — обновляю ещё раз (${attempt}/${GIFT_RELOAD_ATTEMPTS})`);
+    } else if (!s) {
+      console.log(`⏳ годного /api/user/self после обновления не дождался (${attempt}/${expectGrowth ? GIFT_RELOAD_ATTEMPTS : 1})`);
+    } else {
+      return;
+    }
+  }
+}
+
 // Точный остаток БЕЗ повторного обращения к шлюзу нашим клиентом. Источники по порядку:
 //
 //   1. перехваченный ответ САМОЙ страницы (watchSelfResponses) — ноль лишних запросов;
@@ -528,30 +585,44 @@ function selfSnapshotUsable(s) {
 // чтобы после закрытия окна идти за ней второй раз через куки профиля с диска.
 // Делитель 500000 здесь только для ЛОГА — в маркер уходит сырая quota, а на доллары её
 // переводит бэкенд по quota_per_unit своего инстанса (см. newapi-account.js).
-async function captureSelfSnapshot(page, oauth, selfWatch) {
+//
+// `baseline` + `expectGrowth` отбивают предподарочную цифру во ВСЕХ трёх источниках:
+// localStorage кабинет заполняет из той же загрузки страницы, что и перехват, поэтому
+// без проверки фолбэк вернул бы ровно ту цифру, которую мы только что отвергли.
+async function captureSelfSnapshot(page, oauth, selfWatch, baseline = null, expectGrowth = false) {
   const show = s => `$${(s.quota / 500000).toFixed(2)} (потрачено $${((s.used || 0) / 500000).toFixed(2)})`;
+  const stale = s => selfIsPreGift(s, baseline, expectGrowth);
 
   if (selfWatch) {
     console.log(`🛰️  запросов /api/user/self через страницу: ${selfWatch.seen}`
       + (selfWatch.stubs ? `, из них заглушек WAF: ${selfWatch.stubs}` : '')
       + (selfWatch.last ? '' : ' — годного ответа среди них нет'));
   }
-  if (selfWatch && selfSnapshotUsable(selfWatch.last)) {
+  if (selfWatch && selfSnapshotUsable(selfWatch.last) && !stale(selfWatch.last)) {
     console.log(`💰 на счету ${show(selfWatch.last)} — перехвачено у самой страницы, лишних запросов ноль`);
     return { ...selfWatch.last, from: 'page-self' };
   }
 
   const ls = await readStoredUser(page);
   if (ls) console.log(`🗃️  localStorage['user'] отдал поля: ${ls.keys.join(',')}`);
-  if (selfSnapshotUsable(ls)) {
+  if (selfSnapshotUsable(ls) && !stale(ls)) {
     console.log(`💰 на счету ${show(ls)} — цифра из localStorage страницы, лишних запросов ноль`);
     return { quota: ls.quota, used: ls.used || 0, id: ls.id, username: ls.username, from: 'localStorage' };
   }
 
   const self = await siteSelfOk(page, (oauth && oauth.userId) || (ls && ls.id) || null);
-  if (selfSnapshotUsable(self)) {
+  if (selfSnapshotUsable(self) && !stale(self)) {
     console.log(`💰 на счету ${show(self)} — цифра своим запросом из страницы`);
     return { ...self, from: 'self-fetch' };
+  }
+  // Отдать предподарочную цифру как точную нельзя: дашборд пометит чек-ин забранным и
+  // покажет остаток БЕЗ подарка (arAutoCheckinFinish ставит marker.self как есть).
+  // Пусть лучше он посчитает сам — там подарок доедет со следующим чеком баланса.
+  const anyStale = [selfWatch && selfWatch.last, ls, self].find(s => selfSnapshotUsable(s) && stale(s));
+  if (anyStale) {
+    console.log(`⚠️  все источники отдают предподарочные ${show(anyStale)} — цифру НЕ отправляю,`
+      + ' иначе дашборд запишет остаток без подарка. Баланс он пересчитает сам.');
+    return null;
   }
   console.log('⚠️  годной цифры со страницы нет (перехват / localStorage / свой запрос) —'
     + ' дашборд посчитает баланс сам, как раньше');
@@ -878,6 +949,14 @@ async function main() {
         ? '⚡ Автоподарок: гашу сессию и вхожу через GitHub сам.'
         : '🎁 Чек-ин +$25: гашу сессию и открываю вход.');
       await doCheckinLogout(context, page);
+      // Цифра «до подарка»: uiLogout заходил на кошелёк ещё залогиненным, и кабинет там
+      // спросил /api/user/self сам. Она нужна не как результат, а как ЭТАЛОН — по ней
+      // видно, обновился ли кабинет после подарка. Сразу забываем перехваченное: с этого
+      // момента годным считается только то, что приедет после входа.
+      const baseline = selfSnapshotUsable(selfWatch.last) ? { ...selfWatch.last } : null;
+      if (baseline) console.log(`📌 до подарка на счету $${(baseline.quota / 500000).toFixed(2)} — эталон для проверки обновления`);
+      else console.log('📌 предподарочную цифру снять не удалось — проверять рост будет нечем');
+      selfWatch.reset();
 
       if (auto) {
         // Живость GitHub-сессии смотрим ПО КУКАМ ПРОФИЛЯ. Сырой пробник на github.com
@@ -944,13 +1023,23 @@ async function main() {
         }
       }
       await settleAfterCheckin(page);
+      // Подарок налит, а кабинет об этом ещё не знает: /api/user/self он спрашивает один
+      // раз на загрузку страницы, и цифра в окне меняется только после F5 (жалоба
+      // владельца 2026-08-23). Делаем этот F5 сами — иначе в маркер уехал бы остаток БЕЗ
+      // подарка, и дашборд поставил бы его как точный.
+      //
+      // Роста требуем только когда его обещал САМ шлюз (`checked_in: true` в колбэке):
+      // при `false` (окно ещё не сменилось) остаток законно равен предподарочному, и
+      // ждать роста значило бы выбросить верную цифру.
+      const expectGrowth = !!(auto && oauth && oauth.seen && oauth.checkedIn === true);
+      await reloadForFreshSelf(page, selfWatch, baseline, expectGrowth);
       // Точную цифру снимаем ЗДЕСЬ, пока браузер жив и стоит на балансе: /api/user/self
       // отвечает сессии САМОЙ страницы. Это тот же ответ, за которым дашборд после
       // закрытия окна лез бы во второй раз — расшифровывая куки профиля с диска и
       // стучась к шлюзу за Aliyun WAF (именно этот запрос ловит рейт-лимит и роняет
       // точный баланс всего пула на 10 минут). Снимок уезжает в маркер, дашборд ставит
       // цифру как есть; не снялся — старый путь остаётся фолбэком.
-      const selfSnap = await captureSelfSnapshot(page, auto ? oauth : null, selfWatch);
+      const selfSnap = await captureSelfSnapshot(page, auto ? oauth : null, selfWatch, baseline, expectGrowth);
       await backupGhAfterLogin(context);
       console.log('✅ Вход выполнен. Закрываю браузер, чтобы куки легли на диск —');
       console.log('   без этого следующий чек баланса не найдёт в профиле живой сессии.');

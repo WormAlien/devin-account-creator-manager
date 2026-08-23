@@ -290,6 +290,35 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
         check(/quota\s*>\s*0/.test(usable), 'скрипт сам отбивает нулевую квоту, не надеясь на бэкенд');
     }
 
+    // 9а. Подарок виден только после обновления страницы: предподарочная цифра не должна
+    // уехать в маркер как точная (жалоба владельца 2026-08-23).
+    {
+        check(/reset\(\)\s*\{[^}]*this\.last\s*=\s*null/.test(cutFn(sessSrc, 'function watchSelfResponses(')),
+            'у перехвата self есть reset() — предподарочные ответы забываются');
+        // Эталон снимается ДО входа и сразу после разлогина, иначе рост проверять нечем.
+        const baselineAt = sessSrc.indexOf('const baseline = selfSnapshotUsable(selfWatch.last)');
+        const resetAt = sessSrc.indexOf('selfWatch.reset();', baselineAt);
+        check(baselineAt > 0 && sessSrc.lastIndexOf('await doCheckinLogout(', baselineAt) > 0,
+            'предподарочный эталон снимается сразу после разлогина');
+        check(resetAt > baselineAt, 'после снятия эталона перехват сбрасывается');
+        check(/function reloadForFreshSelf\(/.test(sessSrc)
+            && /reloadForFreshSelf\(page, selfWatch, baseline, expectGrowth\)/.test(sessSrc),
+            'страница перезагружается перед снятием цифры — кабинет иначе показывает старый остаток');
+        const reload = cutFn(sessSrc, 'async function reloadForFreshSelf(');
+        check(/page\.reload\(/.test(reload) && /agentrouter\\.org\\\/console/.test(reload),
+            'перезагружаем только страницы консоли — на URL колбэка лежит одноразовый code');
+        const pre = cutFn(sessSrc, 'function selfIsPreGift(');
+        check(/quota\)\s*<=\s*Number\(baseline\.quota\)/.test(pre),
+            'равенство эталону тоже считается предподарочным — это и есть «надо обновить»');
+        check(/expectGrowth\s*=\s*!!\(auto && oauth && oauth\.seen && oauth\.checkedIn === true\)/.test(sessSrc),
+            'роста требуем только когда шлюз сам сказал checked_in: true');
+        const cap = cutFn(sessSrc, 'async function captureSelfSnapshot(');
+        check((cap.match(/!stale\(/g) || []).length >= 3,
+            'предподарочную цифру отбивают все три источника (перехват, localStorage, свой запрос)');
+        check(/return null;/.test(cap) && /предподарочные/.test(cap),
+            'все источники предподарочные → снимок не отправляется, дашборд считает сам');
+    }
+
     // 10. Статика фронта: после чек-ина третьего похода за балансом нет.
     {
         const watch = cutFn(htmlSrc, 'async function arCheckinWatch(');

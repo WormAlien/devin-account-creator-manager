@@ -567,7 +567,17 @@ t('переезд в Windows Terminal защищён от вечной цепо�
     // Элевацию тут просить нельзя: wt наследует права, а -Verb RunAs дал бы UAC на
     // КАЖДЫЙ запуск хаба — ровно то, за что сняли старый restart-dashboard.bat.
     if (/Verb RunAs/.test(fn)) return 'переезд просит UAC — этого быть не должно';
-    if (!/return r\.status === 0/.test(fn)) return 'результат запуска не проверяется — окно может закрыться в никуда';
+    // Старое окно не закрывается, пока новое не подало признаков жизни. Один раз это
+    // уже стоило владельцу рабочего хаба: окно создавалось скрытым, процесс жил
+    // невидимым, консоль закрывалась — снаружи «HUB.bat не работает».
+    if (!/--wt-mark=/.test(fn)) return 'переезд не передаёт метку — старое окно закроется вслепую';
+    if (!/existsSync\(mark\)/.test(fn)) return 'метка не ожидается — признак жизни нового окна не проверяется';
+    if (!/^async function moveToWindowsTerminal/m.test(src)) return 'функция не async, ждать метку нечем';
+    // И сам переехавший экземпляр обязан метку СОЗДАТЬ и больше не переезжать.
+    const mainPart = src.slice(src.indexOf('async function main'));
+    if (!/markArg/.test(mainPart)) return 'main() не разбирает метку — переехавший хаб поедет по кругу';
+    if (!/!markArg && await moveToWindowsTerminal\(\)/.test(mainPart)) return 'переехавший экземпляр снова вызывает переезд';
+    if (!/writeFileSync\(mark, String\(process\.pid\)\)/.test(mainPart)) return 'метка не создаётся — старое окно будет ждать зря';
     return true;
 });
 
@@ -632,6 +642,18 @@ t('HUB.bat не выключает переезд в Windows Terminal', () => {
     // окон делается не здесь, а маркером HUB_IN_WT в окружении ребёнка.
     const live = src.split('\n').filter(l => !/^\s*rem\b/i.test(l)).join('\n');
     if (/HUB_NO_WT/.test(live)) return 'HUB.bat снова гасит переезд — двойной клик останется в conhost';
+    return true;
+});
+
+t('окно Windows Terminal не запускается скрытым', () => {
+    const src = read('hub.js');
+    const fn = src.slice(src.indexOf('function moveToWindowsTerminal'), src.indexOf('async function main'));
+    if (!fn) return 'нет moveToWindowsTerminal()';
+    // 🪤 Замер видимых окон класса CASCADIA_HOSTING_WINDOW_CLASS до и после запуска:
+    // с `windowsHide: true` 0→0, без него 0→1. То есть с флагом хаб жив, работает и
+    // НЕВИДИМ — снаружи это выглядит как «HUB.bat не работает».
+    const spawnCall = fn.slice(fn.indexOf('spawnSync(wt'), fn.indexOf('spawnSync(wt') + 400);
+    if (/windowsHide:\s*true/.test(spawnCall)) return 'окно терминала создаётся скрытым — хаб будет работать невидимым';
     return true;
 });
 

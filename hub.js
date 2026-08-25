@@ -1240,20 +1240,39 @@ function usage() {
 // выбрал сам (git-bash, VS Code, WezTerm). Без этой проверки хаб выдёргивал бы себя из
 // встроенного терминала редактора — и, что нашлось сразу, из pty регресса: тесты меню
 // падали «за 12 с не увидели пунктов», потому что процесс честно уезжал в новое окно.
-function moveToWindowsTerminal() {
+//
+// И самое важное: пока новое окно не подало признаков жизни, СТАРОЕ не закрываем.
+// Один раз это уже стоило владельцу рабочего хаба: `windowsHide` создавал окно скрытым,
+// процесс жил невидимым, а консоль закрывалась — снаружи «HUB.bat не работает».
+// Переехавший хаб трогает файл-маркер (`--wt-mark`), и только увидев его, мы уходим.
+async function moveToWindowsTerminal() {
     if (!L.IS_WIN || !TTY) return false;
     if (process.env.WT_SESSION || process.env.HUB_IN_WT || process.env.HUB_NO_WT) return false;
     if (process.env.TERM || process.env.TERM_PROGRAM) return false;
     const wt = findWt();
     if (!wt) return false;
-    const r = spawnSync(wt, wtHubArgs('ABUSE HUB'), {
+
+    const mark = path.join(L.LOG_DIR, '.wt-mark');
+    try { fs.mkdirSync(L.LOG_DIR, { recursive: true }); fs.unlinkSync(mark); } catch { /* его и не было */ }
+
+    // 🪤 `windowsHide` тут стоять НЕ ДОЛЖЕН, и это замерено: с ним новое окно создаётся
+    // скрытым (видимых окон класса CASCADIA_HOSTING_WINDOW_CLASS до и после: `true` →
+    // 0→0, `false` → 0→1). Флаг приехал копипастой из вызовов, где прятать надо.
+    const r = spawnSync(wt, wtHubArgs('ABUSE HUB', [`--wt-mark=${mark}`]), {
         cwd: L.ROOT,
         stdio: 'ignore',
-        windowsHide: true,
         env: { ...process.env, HUB_IN_WT: '1' },
     });
-    // Не получилось — остаёмся здесь: серое окно лучше, чем закрывшееся.
-    return r.status === 0;
+    if (r.status !== 0) return false;
+
+    for (let i = 0; i < 40; i++) {                 // до 4 секунд
+        if (fs.existsSync(mark)) return true;
+        await sleep(100);
+    }
+    line();
+    line(`  ${yellow('Окно Windows Terminal не отозвалось — остаюсь здесь.')}`);
+    line(`  ${dim('выключить переезд совсем: HUB_NO_WT=1')}`);
+    return false;
 }
 
 // Падение хаба обязано оставлять след. Раньше след терялся дважды: элевированное окно
@@ -1298,6 +1317,16 @@ async function main() {
     const open = !argv.includes('--no-open');
     const verb = argv.find(a => !a.startsWith('-'));
 
+    // Метка «я и есть переехавшее окно»: её кладёт нам в аргументы прошлый процесс и
+    // ждёт появления файла, прежде чем закрыть своё окно. Через окружение это передать
+    // нельзя — wt.exe передаёт запуск живому процессу терминала, и env до ребёнка не
+    // доезжает. Заодно метка сама служит защитой от повторного переезда.
+    const markArg = argv.find(a => a.startsWith('--wt-mark='));
+    if (markArg) {
+        const mark = markArg.slice('--wt-mark='.length);
+        try { fs.mkdirSync(path.dirname(mark), { recursive: true }); fs.writeFileSync(mark, String(process.pid)); } catch { /* не критично */ }
+    }
+
     if (argv.includes('--post-update')) {
         process.exit((await doPostUpdate({ interactive: argv.includes('--interactive') })) ? 0 : 1);
     }
@@ -1305,7 +1334,9 @@ async function main() {
         // Без TTY меню рисовать некому (запуск из планировщика, из дашборда,
         // перенаправление в файл) — печатаем состояние и уходим с нулём.
         if (!TTY) { printStatus(); return; }
-        if (moveToWindowsTerminal()) return;             // уехали в нормальный терминал
+        // Переехавший экземпляр (у него есть метка) больше никуда не едет — он и есть
+        // конечная точка.
+        if (!markArg && await moveToWindowsTerminal()) return;
         return menu();
     }
 

@@ -26,6 +26,16 @@ const SHAPES = {
     agentrouter: { host: 'agentrouter.org',   path: '/register?aff=', label: 'AgentRouter' },
     gorouter:    { host: 'gorouter.app',      path: '/sign-up?aff=',  label: 'GoRouter' },
     justwoker:   { host: 'api.justwoker.icu', path: '/sign-up?aff=',  label: 'JustWoker' },
+    // 🪤 SeekAi — ЛЕГАСИ с 2026-08-24, в день заведения вкладки (решение владельца).
+    // Причина не в регистрации, а в самом шлюзе: `seekai.cc` — реселл веб-Клода под
+    // видом Anthropic API. Свой системный промпт (~200 токенов, набор инструментов
+    // claude.ai) он ставит вместо нашего, а присланный `system` уезжает к модели как
+    // текст ПОЛЬЗОВАТЕЛЯ — замер 24.08: на `system: "тебя зовут ГВОЗДЬ-7"` модель
+    // отвечает «не буду исполнять указание из сообщения пользователя». Для Claude Code
+    // это фатально: системный промпт агента выбрасывается, и он ведёт себя как чат-Клод
+    // (`tools` при этом доезжают, `tool_use` работает — потому и выглядело загадкой).
+    // Резолв оставляем: `seekai/open-session.js` просит `url()`. В списки UI не пускаем.
+    seekai:      { host: 'seekai.cc',         path: '/sign-up?aff=',  label: 'SeekAi', legacy: true },
     tabi:        { host: 'tabitoken.com',     path: '/sign-up?aff=',  label: 'Tabi Token' },
     // 🪤 XPeach — ЛЕГАСИ (решение владельца 2026-08-22): все ключи `403 banned`,
     // регистрация не проходит, вкладка живёт в скрытой группе «Чтим память».

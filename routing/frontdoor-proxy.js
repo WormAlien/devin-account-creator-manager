@@ -43,6 +43,7 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
 const { createLogger } = require('./proxy-logger.js');
 const { logLine } = createLogger('frontdoor');
+const { createTap } = require('./usage-tap.js');
 const startedAt = Date.now();
 
 function log(msg) {
@@ -283,6 +284,19 @@ function forward(req, res, state, reqBody, reqPath) {
         // Тело не трогаем вообще: SSE, gzip/zstd, MODEL_ECHO — не наша забота,
         // ретраев нет, значит и буферизовать нечего. Просто труба.
         res.writeHead(upRes.statusCode || 502, upRes.headers);
+        // Счётчик токенов висит РЯДОМ с трубой: слушатель `data` получает те же
+        // чанки, что и `pipe`, ответ клиенту от этого не задерживается и не меняется.
+        // Через front-door идут все харнессы, поэтому это единственное место, где
+        // видно весь расход разом (см. usage-tap.js).
+        const tap = createTap({
+            method: req.method, url: reqPath, backend: state.backend,
+            ua: req.headers['user-agent'], status: upRes.statusCode, headers: upRes.headers,
+        });
+        if (tap) {
+            upRes.on('data', tap.chunk);
+            upRes.on('end', tap.end);
+            upRes.on('aborted', tap.end);       // клиент ушёл — считаем то, что успело прийти
+        }
         upRes.pipe(res);
         upRes.on('error', () => { try { res.end(); } catch { /* ignore */ } });
     });
@@ -299,8 +313,33 @@ function forward(req, res, state, reqBody, reqPath) {
         log(`${req.method} ${reqPath} ${state.backend}: ${e.code || e.message}`);
         apiError(res, 502, `front-door → ${state.backend}: ${e.code || e.message}.${hint}`);
     });
-    // Клиент ушёл (Ctrl-C, ESC в CC) — рвём и апстрим, чтобы не платить за ответ в никуда.
-    req.on('aborted', () => upReq.destroy());
+    // ── Клиент ушёл (Ctrl-C, ESC в CC, свой таймаут стрима) ───────────────────
+    // 🪤 `req.on('aborted')` СЛОМАН на Node 17+ (deprecated с 16-й) — в обычном пути
+    // обрыва он не приходит, и до 25.08 здесь стоял только он. Цена: front-door не
+    // узнавал об уходе клиента и держал запрос к keepalive до своего таймаута 600с.
+    // По логам за один день **349 таких висяков** против 3 у keepalive, который тот же
+    // случай ловит правильно (`req.on('close')` + `res.on('close')`).
+    // Хуже, чем просто занятый сокет: пока мы держим запрос, шлюз ПРОДОЛЖАЕТ
+    // генерировать и берёт за это деньги — на плоском тарифе полную цену запроса за
+    // ответ, которого никто не прочитает.
+    // Поэтому слушаем `close` — но с ПРАВИЛЬНЫМИ сторожами, зеркаля keepalive-proxy.js
+    // (§ конец handle): у `res` признак ухода — `!res.writableEnded`, у `req` — строго
+    // `!req.complete`.
+    // 🪤 Сторож у `req` обязателен и обязан быть именно таким: `close` на серверном
+    // запросе приходит, когда ДОЧИТАНО ТЕЛО, а не когда ушёл клиент. Первая версия
+    // этой правки проверяла у `req` тот же `res.writableEnded` — и рвала апстрим на
+    // каждом запросе через 50 мс после старта. Поймано регрессом
+    // `tools/check-frontdoor-abort.js` на подставном порту, до живого стека не дошло.
+    let clientGone = false;
+    const dropUpstream = (why) => {
+        if (clientGone) return;
+        clientGone = true;
+        log(`${req.method} ${reqPath} ${state.backend}: клиент ушёл (${why}) — рву апстрим`);
+        try { upReq.destroy(); } catch { /* уже мёртв */ }
+    };
+    req.on('aborted', () => dropUpstream('aborted'));
+    req.on('close', () => { if (!req.complete) dropUpstream('тело запроса не дочитано'); });
+    res.on('close', () => { if (!res.writableEnded) dropUpstream('ответ не дописан'); });
     upReq.end(body);
 }
 
@@ -385,6 +424,17 @@ if (process.argv[2] === 'selftest') {
     assert.strictEqual((src.match(/^\s*const upReq = requester\(\{/gm) || []).length, 1,
         'апстрим дёргается ровно из одного места (нет ретраев/хеджей)');
     assert.ok(/server\.listen\(PORT, '127\.0\.0\.1'/.test(src), 'слушаем только 127.0.0.1 (инжектим ключи)');
+    // Уход клиента ловится через `close`, а не только через сломанный на Node 17+
+    // `aborted`: без этого front-door держал апстрим до своего таймаута (349 висяков
+    // за день 25.08) и платил шлюзу за ответы, которые никто не читает.
+    assert.ok(/req\.on\('close'/.test(src) && /res\.on\('close'/.test(src),
+        'уход клиента ловится по close (req и res)');
+    // Сторожа перепутать нельзя: у req это !req.complete, у res — !res.writableEnded.
+    // С неверным сторожем у req прокси рвёт КАЖДЫЙ запрос сразу после чтения тела.
+    assert.ok(/req\.on\('close', \(\) => \{ if \(!req\.complete\)/.test(src),
+        'у req сторож — !req.complete (close приходит по дочитанному телу)');
+    assert.ok(/res\.on\('close', \(\) => \{ if \(!res\.writableEnded\)/.test(src),
+        'у res сторож — !res.writableEnded');
 
     // 5. Ошибки в форме Anthropic.
     let captured = null;

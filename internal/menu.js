@@ -1,11 +1,14 @@
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
+// menu.js переехал из корня в internal/ (24.08), но написан от корня репо:
+// пути к routing/, notion/, freemodel/ и config.js отсчитываются отсюда.
+const ROOT = path.join(__dirname, '..');
 const { spawn } = require('child_process');
 const { chromium } = require('playwright');
-const { freemodelSessionsMenu } = require('./internal/freemodel-manager');
-const { createFreemodelSession } = require('./internal/freemodel-creator');
-const { notionSessionsMenu } = require('./internal/notion-manager');
+const { freemodelSessionsMenu } = require('./freemodel-manager');
+const { createFreemodelSession } = require('./freemodel-creator');
+const { notionSessionsMenu } = require('./notion-manager');
 
 const SESSIONS_DIR = 'manual_sessions';
 const QUOTA_CACHE_FILE = 'logs/.quota_cache.json';
@@ -42,10 +45,10 @@ function loadEnvFile(filePath) {
         }
     } catch {}
 }
-loadEnvFile(path.join(__dirname, 'routing', '.env'));
+loadEnvFile(path.join(ROOT, 'routing', '.env'));
 
 // Загружаем текущий config
-let config = require('./config.js');
+let config = require('../config.js');
 
 // Функция для сохранения config
 // Сохраняем только те поля, которые меню может изменить.
@@ -816,7 +819,7 @@ async function binLookupMenu() {
         
         spawnSync(process.execPath, ['autoreger_data/internal/bin-lookup.js', ...args], { 
             stdio: 'inherit',
-            cwd: __dirname
+            cwd: ROOT
         });
         
         clearScreen();
@@ -1761,7 +1764,7 @@ function notionStatusLine() {
 // Количество сохранённых Notion-сессий — для счётчика в главном меню
 function notionSessionsCount() {
     try {
-        const dir = path.join(__dirname, 'notion', 'sessions');
+        const dir = path.join(ROOT, 'notion', 'sessions');
         if (!fs.existsSync(dir)) return '0';
         const items = fs.readdirSync(dir).filter(item => {
             const p = path.join(dir, item);
@@ -1781,7 +1784,7 @@ function notionSessionsCount() {
 // Хранит свой собственный notionConfig в памяти, синкает с notion/config.js
 // тем же приёмом регекс-замены, что и основной saveConfig().
 
-const NOTION_CONFIG_PATH = path.join(__dirname, 'notion', 'config.js');
+const NOTION_CONFIG_PATH = path.join(ROOT, 'notion', 'config.js');
 
 function loadNotionConfig() {
     // require() кэшится — сбрасываем чтобы прочитать актуальное состояние с диска
@@ -1830,7 +1833,7 @@ function saveNotionCardPresets(presets) {
 async function freemodelAutoregV3({ clearScreen, rawInput }) {
     clearScreen();
 
-    const LAST_INVITE_FILE = path.join(__dirname, 'freemodel', '.last_invite');
+    const LAST_INVITE_FILE = path.join(ROOT, 'freemodel', '.last_invite');
     let lastInvite = null;
     try {
         if (fs.existsSync(LAST_INVITE_FILE)) {
@@ -1840,7 +1843,7 @@ async function freemodelAutoregV3({ clearScreen, rawInput }) {
     } catch {}
 
     delete require.cache[require.resolve('./freemodel/config.js')];
-    const fmConfig = require('./freemodel/config.js');
+    const fmConfig = require('../freemodel/config.js');
     const initial = fmConfig.INITIAL_INVITE;
     const startInvite = lastInvite || initial;
 
@@ -1908,7 +1911,7 @@ async function freemodelAutoregV3({ clearScreen, rawInput }) {
 async function tokenrouterAutoregMenu() {
     clearScreen();
 
-    const accountsFile = path.join(__dirname, 'routing', 'tokenrouter', 'accounts.json');
+    const accountsFile = path.join(ROOT, 'routing', 'tokenrouter', 'accounts.json');
     let existingCount = 0;
     try {
         if (fs.existsSync(accountsFile)) {
@@ -1953,7 +1956,7 @@ async function tokenrouterImportMenu() {
     await new Promise(resolve => {
         const child = spawn(
             process.execPath,
-            [path.join(__dirname, 'routing', 'tokenrouter', 'omniroute-api-client.js')],
+            [path.join(ROOT, 'routing', 'tokenrouter', 'omniroute-api-client.js')],
             { stdio: 'inherit', env: { ...process.env } }
         );
         child.on('close', resolve);
@@ -2003,7 +2006,7 @@ async function tokenrouterRunMenu() {
     await new Promise(resolve => {
         const child = spawn(
             'python',
-            [path.join(__dirname, 'routing', 'tokenrouter', 'camoufox_autoreg.py'), String(count)],
+            [path.join(ROOT, 'routing', 'tokenrouter', 'camoufox_autoreg.py'), String(count)],
             {
                 stdio: 'inherit',
                 env: {
@@ -2307,10 +2310,10 @@ async function notionRun() {
     await new Promise(resolve => {
         const child = spawn(
             process.execPath,
-            [path.join(__dirname, 'notion', 'notion_workflow.js')],
+            [path.join(ROOT, 'notion', 'notion_workflow.js')],
             {
                 stdio: 'inherit',
-                cwd: path.join(__dirname, 'notion'),
+                cwd: path.join(ROOT, 'notion'),
             }
         );
         child.on('close', resolve);

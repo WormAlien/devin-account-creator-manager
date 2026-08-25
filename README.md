@@ -97,7 +97,7 @@
 
 </details>
 
-Шлюз тормозит или рвёт поток? Настройка SSE-прокси (хедж / пинги / пре-коммит) и диагностика «кто виноват» — [`routing/KEEPALIVE-TUNING.md`](routing/KEEPALIVE-TUNING.md).
+Шлюз тормозит или рвёт поток? Настройка SSE-прокси (мульти-запрос / пинги / пре-коммит) и диагностика «кто виноват» — [`routing/KEEPALIVE-TUNING.md`](routing/KEEPALIVE-TUNING.md).
 
 ## Сервисы и порты
 
@@ -118,7 +118,7 @@
 | `20128` | OmniRoute (внешний Docker, опц., *архив*) | docker `ghcr.io/diegosouzapw/omniroute` |
 | — | **Telegram-пульт** — long-poll, порт не слушает | `tgbot/bot.js` |
 
-🪤 **`20126` / `20130` / `20131` поднимаются только скриптами `routing/restart-dashboard.bat` (`.sh`)**, вкладки их не спавнят. Активация VyceAI просто прописывает base URL `:20131` — если процесса нет, клиент упрётся в закрытый порт.
+🪤 **`20126` / `20130` / `20131` поднимает только хаб** (`HUB.bat` / `HUB.command`, он же `node hub.js start`), вкладки их не спавнят. Активация VyceAI просто прописывает base URL `:20131` — если процесса нет, клиент упрётся в закрытый порт. Проверить одной командой: `node hub.js status`.
 
 ---
 
@@ -161,7 +161,7 @@ HUBCC_DIR="$HOME/Documents/AbuseHub" /bin/bash -c "$(curl -fsSL https://raw.gith
 > [!NOTE]
 > Папку `Documents` писать латиницей, хотя Finder показывает «Документы» — на диске она английская.
 
-Дальше запуск в любой момент: двойной клик на **`DASHBOARD.command`** в корне репо либо `bash routing/restart-dashboard.sh`. Дашборд: <http://localhost:8200/__switch>
+Дальше запуск в любой момент: двойной клик на **`HUB.command`** в корне репо (меню: старт, стоп, рестарт, обновление) либо `node hub.js start`. `DASHBOARD.command` — тот же старт без меню. Дашборд: <http://localhost:8200/__switch>
 
 ### Если git и node уже стоят
 
@@ -193,12 +193,12 @@ macOS — то же, но `bash install-mac.sh`.
 Установщик дополнительно ловит частую ошибку `hub-cc/hub-cc`: такую двойную вложенность надо исправить **до** создания `tools/tg-venv`, иначе venv запомнит старый путь и сломается после переноса папки.
 
 > [!TIP]
-> **Дашборд не открылся / `:8200` не отвечает?** Запусти **`START.bat`** в корне репо (двойной клик). Он поднимает ротатор + дашборд в видимом окне и **не закрывается** — если что-то падает, текст ошибки останется на экране. Браузер откроется сам на `http://localhost:8200/__switch`.
+> **Дашборд не открылся / `:8200` не отвечает?** Двойной клик по **`HUB.bat`** (Windows) или **`HUB.command`** (mac) — откроется меню, в нём «Запустить». Если старт не удался, хаб печатает хвост лога того сервиса, который не поднялся: у процессов нет окон, каждый пишет в свой файл в `logs/hub/`. `START.bat` делает то же самое одним шагом, без меню.
 
 > [!IMPORTANT]
 > **Версию Claude Code фиксировать не надо.** Исторический пин `2.1.153` («новее ломает `apiKeyHelper`») не подтвердился: ротация ключей на лету работает на всех версиях. `CLAUDE_CODE_API_KEY_HELPER_TTL_MS=0` нужен **только с выключенным front-door**, для режимов на `apiKeyHelper` — дашборд выставляет переменную сам при активации.
 
-**Перенос папки проекта.** Путь к репо нигде не прописан, поэтому папку можно переносить и переименовывать: останови дашборд (`routing/stop-dashboard.sh` на маке, закрыть окно на Windows) → перенеси → запусти из нового места. Статус-лайн привязан через шим в `~/.claude/`, указатель на корень обновляет `restart-dashboard` при каждом старте. Если что-то всё же отвязалось — `node tools/relocate.js`. Пробелы в пути работают, но в терминале путь надо брать в кавычки.
+**Перенос папки проекта.** Путь к репо нигде не прописан, поэтому папку можно переносить и переименовывать: останови дашборд (`node hub.js stop` — работает и на Windows, и на маке; закрыть окно недостаточно, процессы отсоединены) → перенеси → запусти из нового места. Статус-лайн привязан через шим в `~/.claude/`, указатель на корень обновляет хаб при каждом старте. Если что-то всё же отвязалось — `node tools/relocate.js`. Пробелы в пути работают, но в терминале путь надо брать в кавычки.
 
 <details>
 <summary><b>Вручную, без установщика</b> — те же шаги командами (git-bash)</summary>
@@ -219,7 +219,7 @@ npm config delete prefix
 npm install -g @anthropic-ai/claude-code
 
 # 3. базовый settings.json (в шаблоне уже base http://127.0.0.1:20100 + dummy-токен)
-cp claude-settings.example.json ~/.claude/settings.json
+cp docs/claude-settings.example.json ~/.claude/settings.json
 
 # 4. локальные конфиги/секреты (gitignored)
 cp routing/.env.example             routing/.env
@@ -233,7 +233,8 @@ py -3.11 -m venv tools/tg-venv
 tools/tg-venv/Scripts/pip install -r tools/tg-venv-requirements.txt
 
 # 6. запуск
-routing/restart-dashboard.bat              # keepalive-прокси + дашборд :8200 + откроет UI
+HUB.bat / HUB.command                      # меню: старт, стоп, рестарт, обновление, доктор
+node hub.js start                          # keepalive-прокси + дашборд :8200 + откроет UI
 npm run tgbot                              # опц.: ТГ-пульт
 ```
 </details>
@@ -267,9 +268,9 @@ npm run tgbot                              # опц.: ТГ-пульт
 - **🌐 ЛК** — браузер аккаунта (видимый Chromium, профиль `agentrouter/profiles/<label>/`). Ключа ещё нет → открывается регистрация по реф-ссылке; ключ вписан → `agentrouter.org/console/topup`. Аккаунт можно добавить **без ключа**: активация и пинг у него выключены, ключ вписывается потом кнопкой 🔑.
 - 🪤 **Два фильтра, не путать.** **WAF** смотрит на заголовки (`user-agent: claude-cli/…` → 200, `curl` → `401 unauthorized client detected`). **Content-filter** смотрит на текст и только на gpt-путях: режет точную подстроку `you are a helpful assistant.` (с точкой) → `500 sensitive words detected` — именно её шлёт пробник валидации модели у CC. Лечится `WAF_PHRASES`/`wafSanitize` в `agentrouter-proxy.js`.
 
-Карточка **⚡ Keepalive** есть у каждого шлюза: четыре поля (хедж, максимум дублей, попыток на запрос, пре-коммит), кнопки **Применить** и **Рекомендованные**, график латентности (среднее и худший ответ по минуте, выбор окна) и строка счётчиков `запросов · ремапов · keepalive · хеджей · ретраев · ошибок · ответ`. Что чем крутить — [`routing/KEEPALIVE-TUNING.md`](routing/KEEPALIVE-TUNING.md).
+Карточка **⚡ Keepalive** есть у каждого шлюза: четыре поля (мульти-запрос, максимум дублей, попыток на запрос, пре-коммит), кнопки **Применить** и **Рекомендованные**, график латентности (среднее и худший ответ по минуте, выбор окна) и строка счётчиков `запросов · ремапов · keepalive · мульти-запросей · ретраев · ошибок · ответ`. Что чем крутить — [`routing/KEEPALIVE-TUNING.md`](routing/KEEPALIVE-TUNING.md).
 
-![Keepalive :20133 — хедж, ретраи, пре-коммит и график ответов шлюза за сутки](docs/keepalive.png)
+![Keepalive :20133 — мульти-запрос, ретраи, пре-коммит и график ответов шлюза за сутки](docs/keepalive.png)
 
 Тулбар над таблицей: **🔌 Подключить**, **↻ Обновить**, **📡 Пинг статусов**, **💳 Балансы всех**, **🔗 Профили**, **➕ Добавить** (в том числе 🐙 прямо из менеджера GitHub), **📋 Вставить аккаунт** (share-код), поле фильтра и сортировка (порядок помнится). Колонки: e-mail · API Key · Status · Баланс · 🎁 $25 · GitHub · Добавлен · Actions, клик по заголовку = сортировка, в подвале сводка по пулу.
 
@@ -378,18 +379,24 @@ npm run tgbot                              # опц.: ТГ-пульт
 <summary><b>Скрипты</b></summary>
 
 ```bash
-# Дашборд
-routing/restart-dashboard.bat            # Windows: keepalive-прокси + дашборд :8200 + откроет UI
-bash routing/restart-dashboard.sh        # macOS/git-bash; стоп — routing/stop-dashboard.sh
-START.bat                                # запуск в видимом окне (ошибка останется на экране)
-DASHBOARD.command                        # macOS: запуск двойным кликом
-node routing/transparent-proxy.js        # дашборд вручную
+# Хаб — одна точка входа на всё (Windows и mac)
+HUB.bat / HUB.command                    # двойной клик: меню (старт, стоп, рестарт, обновление, доктор)
+node hub.js start                        # поднять то, что лежит (идемпотентно, живой стек не трогает)
+node hub.js stop                         # погасить всё: сервисы, front-door, keepalive, конвертеры Custom
+node hub.js restart                      # погасить и поднять заново
+node hub.js status                       # кто слушает какие порты
+node hub.js update                       # git pull → зависимости → рестарт
+
+# Форвардеры в хаб (имена сохранены для ярлыков)
+START.bat / DASHBOARD.command            # = hub start
+routing/restart-dashboard.bat (.sh)      # = hub restart
+bash routing/stop-dashboard.sh           # = hub stop
+node routing/transparent-proxy.js        # дашборд вручную, без остального стека
 
 # Обслуживание
-UPDATE.bat   / bash update.sh            # git pull + рестарт
-DOCTOR.bat   / bash doctor.sh            # диагностика окружения
-FIX.bat      / bash fix.sh               # починка типовых поломок установки
-SHARE.bat    / bash share.sh             # экспорт/импорт аккаунтов между машинами
+node hub.js doctor                       # диагностика окружения → logs/doctor-report.txt
+node hub.js share                        # отдать свою версию репы веткой и PR
+node internal/menu.js                    # полное TUI-меню (карты, прокси, локаль)
 node tools/enable-statusline.js          # подключить статуслайн на готовой установке
 node tools/relocate.js                   # перепривязать шимы после переноса папки
 

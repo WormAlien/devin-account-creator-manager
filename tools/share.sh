@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 #  share.sh — прислать СВОЮ версию репы обратно: ветка + Pull Request.
-#  Запуск в git-bash:  bash share.sh      (или двойной клик по SHARE.bat)
+#  Запуск: пункт «Поделиться» в HUB.bat / HUB.command, либо `node hub.js share`,
+#  либо напрямую `bash tools/share.sh`.
 #
 #  Что делает: собирает твои правки в отдельную ветку и открывает PR в
 #  WormAlien/hub-cc. Ничего не удаляет и не
@@ -10,9 +11,12 @@
 #  Секреты НЕ уезжают: берём только уже отслеживаемые git-ом файлы, новые
 #  добавляем поштучно и с проверкой .gitignore + стоп-листа (.env, ключи,
 #  сессии, куки). Репа ПУБЛИЧНАЯ — что попало в PR, видно всем.
+#
+#  Переехал из корня в tools/ 2026-08-24. Отсюда `cd ..` — скрипт работает с
+#  репо целиком, а не со своей папкой.
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.." || exit 1
 
 UPSTREAM="WormAlien/hub-cc"
 
@@ -102,10 +106,10 @@ mkdir -p logs
   echo
 } > "$PR_BODY"
 if ask "Приложить отчёт doctor.sh? (репа публичная — в путях видно имя твоего юзера)" Y; then
-  bash doctor.sh </dev/null >/dev/null 2>&1
-  if [ -f doctor-report.txt ]; then
+  bash tools/doctor.sh </dev/null >/dev/null 2>&1
+  if [ -f logs/doctor-report.txt ]; then
     { echo '<details><summary>doctor-report.txt</summary>'; echo; echo '```'
-      head -c 40000 doctor-report.txt; echo; echo '```'; echo '</details>'; } >> "$PR_BODY"
+      head -c 40000 logs/doctor-report.txt; echo; echo '```'; echo '</details>'; } >> "$PR_BODY"
     ok "отчёт вложен в описание PR"
   else
     warn "doctor.sh отчёт не создал — пропускаю"

@@ -1,44 +1,22 @@
 #!/usr/bin/env bash
-# Остановить дашборд и все его прокси (macOS/Linux).
+# ─────────────────────────────────────────────────────────────────────────────
+#  routing/stop-dashboard.sh — форвардер. Реализация одна: hub.js.
 #
-# Зачем отдельным скриптом: на маке всё поднимается через nohup … & и живёт в
-# фоне — закрыть окно Terminal недостаточно, процессы остаются (на Windows там
-# видимое окно, и оно закрывается вместе с ними). Без этого юзер думает, что
-# дашборд остановлен, а :8200 продолжает отвечать из старой папки.
+#  До 24.08 это был ЕДИНСТВЕННЫЙ способ остановить стек, и существовал он только
+#  для мака: на Windows остановки не было вообще. Причина, по которой она нужна,
+#  никуда не ушла — процессы detached, и закрытие окна их не убивает; на Windows
+#  до 24.08 казалось, что убивает, но три прокси стартовали скрыто и переживали
+#  закрытие окна дашборда, а вместе с ними front-door и keepalive.
 #
-# Порты те же, что поднимает restart-dashboard.sh.
-# Запуск:  bash routing/stop-dashboard.sh
-set -u
+#  Теперь `stop` есть на обеих системах и гасит в том числе то, что прежние
+#  скрипты не гасили никогда: конвертеры Custom-провайдеров (их порты лежат в
+#  routing/custom-providers.json и заранее неизвестны).
+# ─────────────────────────────────────────────────────────────────────────────
+cd "$(cd "$(dirname "$0")/.." && pwd)" || exit 1
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PORT_NAMES="8200:dashboard 20126:FM-rotator 20130:FM-OpenAI 20131:VyceAI 20132:AR-converter 20133:AR-keepalive 20155:Tabi-keepalive 20156:GoRouter-keepalive 20157:XPeach-keepalive 20158:JustWoker-keepalive"
+if ! command -v node >/dev/null 2>&1; then
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
+fi
 
-kill_port() {
-  local port="$1" name="$2" pids tries=0
-  pids="$(lsof -ti ":$port" 2>/dev/null)"
-  if [ -z "$pids" ]; then
-    echo "  :$port ($name) уже свободен"
-    return 0
-  fi
-  echo "  :$port ($name) — останавливаю PID: $(echo "$pids" | tr '\n' ' ')"
-  kill $pids 2>/dev/null
-  sleep 1
-  pids="$(lsof -ti ":$port" 2>/dev/null)"
-  [ -n "$pids" ] && kill -9 $pids 2>/dev/null
-  while [ -n "$(lsof -ti ":$port" 2>/dev/null)" ] && [ "$tries" -lt 8 ]; do
-    tries=$((tries + 1))
-    sleep 1
-  done
-  [ -n "$(lsof -ti ":$port" 2>/dev/null)" ] && echo "  !!! :$port не освободился (держит кто-то ещё?)"
-  return 0
-}
-
-echo "== Останавливаю дашборд =="
-for pn in $PORT_NAMES; do
-  kill_port "${pn%%:*}" "${pn##*:}"
-done
-
-echo
-echo "  Готово. Запустить снова: bash routing/restart-dashboard.sh"
-echo "  (или двойной клик на DASHBOARD.command)"
-exit 0
+exec node hub.js stop "$@"

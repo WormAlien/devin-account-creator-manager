@@ -182,17 +182,80 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
         check(bal.balance === 200 && bal.granted === 200, `рост выдачи 175→200 принят: получили ${bal.balance}/${bal.granted}`);
     }
 
-    // 8. Анкер главнее снимка, но снимок обязан доехать в bal.self — на нём держится детект чек-ина.
+    // 8. Цифра сайта главнее вписанной вручную (решение владельца 2026-08-24).
+    // До этого анкер перекрывал self, и на JustWoker это дало $0.26 в дашборде при
+    // $604.38 в кабинете: анкер вписан, когда столько и было, потом шлюз налил.
     {
         const w = makeWorld({ usageSpent: 10 });
         const target = { api_key: KEY, balanceAnchor: 500, anchorSpent: 0, anchorGrantedSelf: 175 };
         const bal = await w.run(target, { selfSnapshot: snap(200 * QPU) });
-        check(bal.balanceSource === 'anchor', 'вписанный руками баланс по-прежнему главнее снимка');
+        check(bal.balanceSource === 'self', 'снимок с сайта главнее вписанного вручную');
+        check(bal.balance === 200, `показан остаток сайта, а не анкер: получили ${bal.balance}`);
         check(bal.self && bal.self.granted === 200, 'снимок доехал в bal.self — детект чек-ина увидит рост выдачи');
-        check(bal.balance === 515, `анкер + прирост выдачи − расход = 500+25−10: получили ${bal.balance}`);
+        check(w.logs.some(l => /беру цифру сайта .* вместо вписанных вручную/.test(l)),
+            'расхождение с анкером сказано в логе, а не только в тултипе');
     }
 
-    // Ключ-заглушка: снимок ничего не меняет, no_key остаётся no_key.
+    // 8а. Анкер — резерв: сайт не ответил, памятной цифры нет → показываем вписанное,
+    // а не прикидку ceil(spent/25)*25.
+    {
+        const w = makeWorld({ usageSpent: 10, selfAnswer: { ok: false, error: 'в профиле нет куки' } });
+        const target = { api_key: KEY, profile: 'p', balanceAnchor: 500, anchorSpent: 0 };
+        const bal = await w.run(target);
+        check(bal.balanceSource === 'anchor', 'без цифры сайта возвращается вписанное вручную');
+        check(bal.balance === 490, `вписанное минус расход: 500−10, получили ${bal.balance}`);
+        check(!!bal.selfError, 'причина, почему сайт не ответил, доехала до UI');
+    }
+
+    // 8б. Тот самый разбор с JustWoker: анкер $0.26 не должен прятать точные $524.38,
+    // когда памятная цифра шлюза годна (расход не сдвинулся, в ЛК не заходили).
+    {
+        const w = makeWorld({ usageSpent: 0.02, selfAnswer: { ok: false, error: 'в профиле нет куки' } });
+        const target = {
+            api_key: KEY, profile: 'p',
+            balanceAnchor: 0.26, anchorSpent: 0.02, anchorGrantedSelf: 524.4,
+            selfBalance: 524.38, grantedSelf: 524.4, usageSpentAtSelf: 0.02,
+            selfCheckedAt: new Date(Date.now() - 20 * 3600_000).toISOString(),
+        };
+        const bal = await w.run(target);
+        check(bal.balanceSource === 'self' && bal.balance === 524.38,
+            `памятная точная цифра главнее анкера $0.26: получили ${bal.balanceSource}/${bal.balance}`);
+        check(bal.selfCached === true, 'цифра помечена непереспрошенной — UI обязан это показать');
+    }
+
+    // 8в. Живой случай владельца 24.08: анкер $0.26 от 22.08 против памятной точной
+    // $604.38, снятой ПОСЛЕ визита в ЛК (то есть строгая ветвь 4а не пускает).
+    // Побеждает цифра шлюза: обе могут занижать, но её занижение честнее.
+    {
+        const w = makeWorld({ usageSpent: 0.03, lkOpenedAt: Date.now(), selfAnswer: { ok: false, error: 'браузер этого аккаунта ОТКРЫТ' } });
+        const target = {
+            api_key: KEY, profile: 'p',
+            balanceAnchor: 0.26, anchorSpent: 0.02,
+            selfBalance: 604.38, grantedSelf: 604.4, usageSpentAtSelf: 0.02,
+            selfCheckedAt: new Date(Date.now() - 3600_000).toISOString(),
+        };
+        const bal = await w.run(target);
+        check(bal.balanceSource === 'self', `памятная цифра шлюза бьёт анкер (получили ${bal.balanceSource})`);
+        check(bal.balance === 604.37, `из памятной вычтен расход с того чека: 604.38−0.01, получили ${bal.balance}`);
+        check(bal.selfCached === true && !!bal.selfError, 'цифра помечена непереспрошенной и причина видна');
+        check(w.logs.some(l => /ПАМЯТНУЮ цифру шлюза/.test(l)), 'подмена анкера памятной цифрой сказана в логе');
+    }
+
+    // 8г. Обратный случай: анкер БОЛЬШЕ памятной цифры — не понижаем. Владелец мог
+    // видеть кабинет позже нашего чека, и его цифра тогда свежее.
+    {
+        const w = makeWorld({ usageSpent: 0, lkOpenedAt: Date.now(), selfAnswer: { ok: false, error: 'нет куки' } });
+        const target = {
+            api_key: KEY, profile: 'p',
+            balanceAnchor: 500, anchorSpent: 0,
+            selfBalance: 100, grantedSelf: 100, usageSpentAtSelf: 0,
+            selfCheckedAt: new Date(Date.now() - 3600_000).toISOString(),
+        };
+        const bal = await w.run(target);
+        check(bal.balanceSource === 'anchor' && bal.balance === 500,
+            `анкер выше памятной цифры остаётся (получили ${bal.balanceSource}/${bal.balance})`);
+    }
+
     {
         const w = makeWorld({});
         const bal = await w.run({ api_key: 'nokey-stub' }, { selfSnapshot: snap(175 * QPU) });
@@ -232,24 +295,38 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
         check(w.selfCalls === 1, 'попытка спросить шлюз всё равно сделана (ветвь 4а — резерв, а не замена)');
     }
     {
-        // Расход сдвинулся — цифра устарела, и подставлять её нельзя.
+        // 🪤 Инвариант ПЕРЕВЁРНУТ 25.08. Расход сдвинулся — сохранённая цифра уже не точна,
+        // но она всё равно ближе к правде, чем прикидка: расход мы вычитаем сами, а
+        // `ceil(spent/25)*25` умеет ЗАВЫШАТЬ. Разбор `lustrouscult`: браузер снял $225
+        // (подарок лёг), следующий чек попал в WAF-заглушку, и таблица показала прикидку
+        // $175 — то есть решения о деньгах принимались бы по числу, которого нет.
         const w = makeWorld({ usageSpent: 20 });
         const bal = await w.run(cachedTarget());
-        check(bal.balanceSource === 'guess',
-            `расход вырос с $0 до $20 → сохранённая цифра не годится, честная прикидка (получили ${bal.balanceSource})`);
+        check(bal.balanceSource === 'self' && bal.balance === 155,
+            `память шлюза минус расход (175−20) главнее прикидки: получили ${bal.balanceSource}/${bal.balance}`);
+        check(bal.selfCached === true, 'цифра помечена непереспрошенной, причина видна');
     }
     {
-        // Заходили в ЛК после чека: там могли налить, а наливка расход не двигает.
+        // Прикидка остаётся ровно там, где помнить нечего.
+        const w = makeWorld({ usageSpent: 20 });
+        const bal = await w.run({ api_key: KEY, profile: 'p' });
+        check(bal.balanceSource === 'guess', `без памяти о шлюзе — честная прикидка (получили ${bal.balanceSource})`);
+    }
+    {
+        // Заходили в ЛК после чека: там могли налить, а наливка расход не двигает. Раньше
+        // это роняло в прикидку; теперь показывается память шлюза — занижение безопасно.
         const w = makeWorld({ usageSpent: 0, lkOpenedAt: Date.now() });
         const bal = await w.run(cachedTarget());
-        check(bal.balanceSource === 'guess',
-            `визит в ЛК после чека → цифра не годится, наливка расход не двигает (получили ${bal.balanceSource})`);
+        check(bal.balanceSource === 'self' && bal.balance === 175,
+            `визит в ЛК: держим память шлюза, а не прикидку (получили ${bal.balanceSource}/${bal.balance})`);
     }
     {
-        // Анкер по-прежнему главнее сохранённой точной цифры.
+        // Обратное правило с 24.08: сохранённая точная цифра главнее вписанного руками.
+        // Анкер остаётся в записи, но всплывает только когда цифры сайта нет вообще.
         const w = makeWorld({ usageSpent: 0 });
         const bal = await w.run(cachedTarget({ balanceAnchor: 500, anchorSpent: 0 }));
-        check(bal.balanceSource === 'anchor', 'вписанное руками главнее сохранённой точной цифры');
+        check(bal.balanceSource === 'self' && bal.balance === 175,
+            `сохранённая точная цифра главнее вписанного руками (получили ${bal.balanceSource}/${bal.balance})`);
     }
 
     // Статика бэкенда: хвост чек-ина больше не форсит и не обнуляет цифру вслепую.
@@ -295,23 +372,53 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
     {
         check(/reset\(\)\s*\{[^}]*this\.last\s*=\s*null/.test(cutFn(sessSrc, 'function watchSelfResponses(')),
             'у перехвата self есть reset() — предподарочные ответы забываются');
-        // Эталон снимается ДО входа и сразу после разлогина, иначе рост проверять нечем.
-        const baselineAt = sessSrc.indexOf('const baseline = selfSnapshotUsable(selfWatch.last)');
+        // Эталон снимается НАМЕРЕННО и при живой сессии — внутри uiLogout, до клика по
+        // «выйти». Раньше он брался из случайно перехваченного ответа страницы, и оба
+        // живых прогона 25.08 остались без эталона: логаут обрывает летящий запрос self.
+        const logoutFn = cutFn(sessSrc, 'async function uiLogout(');
+        check(/readBaselineSelf\(page\)/.test(logoutFn),
+            'эталон снимается внутри uiLogout, пока сессия жива');
+        const baseFn = cutFn(sessSrc, 'async function readBaselineSelf(');
+        check(/readStoredUser\(/.test(baseFn) && /siteSelfOk\(/.test(baseFn),
+            'у эталона два источника: localStorage и свой запрос');
+        const baselineAt = sessSrc.indexOf('const baseline = takenBaseline');
         const resetAt = sessSrc.indexOf('selfWatch.reset();', baselineAt);
         check(baselineAt > 0 && sessSrc.lastIndexOf('await doCheckinLogout(', baselineAt) > 0,
-            'предподарочный эталон снимается сразу после разлогина');
+            'эталон берётся из результата doCheckinLogout, перехват — только фолбэк');
         check(resetAt > baselineAt, 'после снятия эталона перехват сбрасывается');
         check(/function reloadForFreshSelf\(/.test(sessSrc)
-            && /reloadForFreshSelf\(page, selfWatch, baseline, expectGrowth\)/.test(sessSrc),
+            && /reloadForFreshSelf\(page, selfWatch, baseline, expectGrowth, settleOnly\)/.test(sessSrc),
             'страница перезагружается перед снятием цифры — кабинет иначе показывает старый остаток');
+        check(/const settleOnly = !expectGrowth && auto && !gatewaySaysNo/.test(sessSrc),
+            'без эталона цифра берётся вторым чтением, а не первым');
         const reload = cutFn(sessSrc, 'async function reloadForFreshSelf(');
-        check(/page\.reload\(/.test(reload) && /agentrouter\\.org\\\/console/.test(reload),
+        const full = cutFn(sessSrc, 'async function fullReloadConsole(');
+        check(/page\.reload\(/.test(full) && /agentrouter\\.org\\\/console/.test(full),
             'перезагружаем только страницы консоли — на URL колбэка лежит одноразовый code');
         const pre = cutFn(sessSrc, 'function selfIsPreGift(');
         check(/quota\)\s*<=\s*Number\(baseline\.quota\)/.test(pre),
             'равенство эталону тоже считается предподарочным — это и есть «надо обновить»');
-        check(/expectGrowth\s*=\s*!!\(auto && oauth && oauth\.seen && oauth\.checkedIn === true\)/.test(sessSrc),
-            'роста требуем только когда шлюз сам сказал checked_in: true');
+        check(/const expectGrowth = !!\(auto && baseline && !gatewaySaysNo\)/.test(sessSrc),
+            'роста ждём всегда при известном эталоне — флаг checked_in для этого решения не годится');
+        check(/checkedIn === false/.test(sessSrc) && /gatewaySaysNo/.test(sessSrc),
+            'единственное, что решает флаг шлюза — явное checked_in: false (окно не сменилось)');
+        check(/GIFT_SETTLE_MS/.test(reload) && /GIFT_TOTAL_BUDGET_MS/.test(reload),
+            'между кругами есть пауза, у ожидания есть общий потолок');
+        check(/GIFT_RELOAD_ATTEMPTS = 6/.test(sessSrc), 'кругов шесть, а не три — зачисление не мгновенное');
+        check(/waitUntil: 'load'/.test(full) && !/domcontentloaded/.test(full),
+            'перезагрузка ждёт load, а не domcontentloaded — иначе отсчёт течёт до отрисовки');
+        check(/waitSpaReady\(/.test(full) && /waitBalanceRendered\(/.test(full),
+            'ждём и поднявшуюся SPA, и НАРИСОВАННУЮ цифру на странице');
+        // 🪤 Скелетон карточки vs `$0.00` в блоке приглашений: искать любое `$` нельзя.
+        const drawn = cutFn(sessSrc, 'async function waitBalanceRendered(');
+        check(/BALANCE_LABEL_RE/.test(drawn) && /当前余额/.test(sessSrc),
+            'цифру ищем рядом с подписью карточки баланса, а не где угодно на странице');
+        check(!/\$\\s\*\\d|\\d\[\\d\\s\.,\]\*\\s\*\\\$/.test(sessSrc),
+            'старая проверка «любое $ на странице» убрана — она ловила $0.00 из блока приглашений');
+        check(/AR_SELF_PROBE/.test(sessSrc),
+            'диагностическая сверка своим запросом выключена по умолчанию (лишний запрос ловит WAF)');
+        check(/GIFT_WAF_SETTLE_MS/.test(reload) && /заглушки WAF/.test(reload),
+            'круг с заглушками WAF ждёт дольше обычного — частить бессмысленно');
         const cap = cutFn(sessSrc, 'async function captureSelfSnapshot(');
         check((cap.match(/!stale\(/g) || []).length >= 3,
             'предподарочную цифру отбивают все три источника (перехват, localStorage, свой запрос)');
@@ -333,7 +440,9 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
 
     // Бэкенд: маркер ловится в ОБОИХ режимах, а не только в авто.
     {
-        const open = cutFn(src, 'async function handleArSessionOpen(');
+        // Спавн вынесен из обработчика в arSpawnSession (25.08, очередь чек-инов) —
+        // проверки смотрят туда же, поведение то же.
+        const open = cutFn(src, 'function arSpawnSession(');
         check(/if \(wantCheckin\) outTail/.test(open), 'stdout копится для обоих режимов чек-ина');
         check(/if \(wantCheckin\) arAutoCheckinFinish\(/.test(open), 'хвост чек-ина зовётся для обоих режимов');
         const finish = cutFn(src, 'async function arAutoCheckinFinish(');

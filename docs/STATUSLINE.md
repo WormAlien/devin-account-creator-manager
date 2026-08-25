@@ -32,7 +32,7 @@ node tools/enable-statusline.js
 ## Если не помогло — диагностика
 
 ```bash
-bash doctor.sh   # или двойной клик DOCTOR.bat
+node hub.js doctor   # или пункт «Диагностика» в HUB.bat / HUB.command
 ```
 
 Раздел **10** отчёта (`doctor-report.txt`) печатает: что стоит в

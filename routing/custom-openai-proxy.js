@@ -186,6 +186,14 @@ function convertOpenAIToClaude(openaiResp, claudeReq) {
     const choice = (openaiResp.choices && openaiResp.choices[0]) || {};
     const msg = choice.message || {};
     const content = [];
+    // Рассуждение reasoner-моделей приходит отдельным полем — см. подробный разбор в
+    // стриминговой ветке (§ delta.reasoning_content). Здесь та же потеря: без этой
+    // строки ответ дипсика, у которого весь бюджет ушёл на мысли, превращался в
+    // `{type:'text', text:''}` ниже — пустой ответ без объяснения причины.
+    const reasoning = msg.reasoning_content || msg.reasoning || '';
+    if (reasoning && (process.env.REASONING_AS || 'thinking').toLowerCase() !== 'drop') {
+        content.push({ type: 'thinking', thinking: reasoning });
+    }
     if (msg.content) content.push({ type: 'text', text: msg.content });
     for (const tc of msg.tool_calls || []) {
         let input = {};
@@ -203,7 +211,8 @@ function convertOpenAIToClaude(openaiResp, claudeReq) {
         stop_sequence: null,
         usage: {
             input_tokens: (openaiResp.usage && openaiResp.usage.prompt_tokens) || estimateTokens(claudeReq),
-            output_tokens: (openaiResp.usage && openaiResp.usage.completion_tokens) || Math.max(1, Math.ceil((msg.content || '').length / 4)),
+            output_tokens: (openaiResp.usage && openaiResp.usage.completion_tokens)
+                || Math.max(1, Math.ceil(((msg.content || '').length + reasoning.length) / 4)),
         },
     };
 }
@@ -255,10 +264,12 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
 
     let nextBlockIndex = 0;
     let textBlockIndex = null;
+    let thinkBlockIndex = null;
     const toolBlocks = new Map();
     let finishReason = null;
     let usage = { input_tokens: estimateTokens(claudeReq), output_tokens: 0 };
     let streamedChars = 0;
+    let reasonedChars = 0;
     let buffer = '';
 
     function ensureTextBlock() {
@@ -272,6 +283,53 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: textBlockIndex });
         textBlockIndex = null;
     }
+    // ── Рассуждение reasoner-моделей (delta.reasoning_content) ────────────────
+    // DeepSeek и прочие reasoning-модели шлют мысли ОТДЕЛЬНЫМ полем, а ответ — в
+    // delta.content. До 24.08 конвертер читал только второе, а первое молча
+    // выбрасывал. В обычном случае это лишь прятало размышления, но у reasoner'а
+    // весь бюджет max_tokens нередко уходит на них, `content` не приходит вовсе —
+    // и клиент получал content_block_start с пустым текстом, ноль дельт и
+    // content_block_stop, то есть ПУСТОЙ ОТВЕТ без единого признака причины.
+    // Замер живьём (ai.fujcloud.com, deepseek-v4-flash, 24.08): в одном потоке
+    // 31 событие, поля delta = content, reasoning_content, role. Оба поля есть.
+    //
+    // Мапим в thinking-блок Anthropic. Подпись (signature_delta) НЕ выдаём: её
+    // требует только сам Anthropic при отправке блока ОБРАТНО, а сюда история
+    // приходит через convertClaudeToOpenAI, где ассистентские блоки фильтруются
+    // по `b.type === 'text'` — thinking отбрасывается и до шлюза не доезжает.
+    // REASONING_AS=text — аварийный режим, если клиент не понимает thinking:
+    // тогда рассуждение уходит обычным текстом, лишь бы не пропало.
+    const REASONING_AS = (process.env.REASONING_AS || 'thinking').toLowerCase();
+    function ensureThinkBlock() {
+        if (thinkBlockIndex !== null) return thinkBlockIndex;
+        thinkBlockIndex = nextBlockIndex++;
+        sseWrite(clientRes, 'content_block_start', {
+            type: 'content_block_start', index: thinkBlockIndex,
+            content_block: { type: 'thinking', thinking: '' },
+        });
+        return thinkBlockIndex;
+    }
+    function closeThinkBlock() {
+        if (thinkBlockIndex === null) return;
+        sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: thinkBlockIndex });
+        thinkBlockIndex = null;
+    }
+    // Блоки Anthropic не перекрываются: начался ответ или tool_call — рассуждение
+    // обязано быть закрыто, иначе индексы поедут и клиент склеит блоки.
+    function emitReasoning(text) {
+        reasonedChars += text.length;
+        if (REASONING_AS === 'drop') return;
+        if (REASONING_AS === 'text') {
+            const idx = ensureTextBlock();
+            sseWrite(clientRes, 'content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'text_delta', text } });
+            return;
+        }
+        const idx = ensureThinkBlock();
+        sseWrite(clientRes, 'content_block_delta', {
+            type: 'content_block_delta', index: idx,
+            delta: { type: 'thinking_delta', thinking: text },
+        });
+    }
     function processChunk(chunk) {
         const choice = (chunk.choices && chunk.choices[0]) || null;
         if (chunk.usage) {
@@ -279,7 +337,11 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         }
         if (!choice) return;
         const delta = choice.delta || {};
+        // Рассуждение — ПЕРЕД ответом: у reasoner'а оно приходит первым, и открыть
+        // текстовый блок раньше значило бы отдать мысли как ответ.
+        if (delta.reasoning_content) emitReasoning(delta.reasoning_content);
         if (delta.content) {
+            closeThinkBlock();
             streamedChars += delta.content.length;
             const idx = ensureTextBlock();
             sseWrite(clientRes, 'content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'text_delta', text: delta.content } });
@@ -288,6 +350,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
             const oi = tc.index || 0;
             let tb = toolBlocks.get(oi);
             if (!tb) {
+                closeThinkBlock();
                 closeTextBlock();
                 tb = { claudeIndex: nextBlockIndex++, id: tc.id || `toolu_${Date.now()}_${oi}`, name: (tc.function && tc.function.name) || '', started: false };
                 toolBlocks.set(oi, tb);
@@ -305,11 +368,16 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         if (choice.finish_reason) finishReason = choice.finish_reason;
     }
     function finish() {
+        closeThinkBlock();
         closeTextBlock();
         for (const tb of toolBlocks.values()) {
             if (tb.started) sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: tb.claudeIndex });
         }
-        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: { output_tokens: usage.output_tokens || Math.max(1, Math.ceil(streamedChars / 4)) } });
+        // Рассуждение — тоже выходные токены, шлюз их считает и берёт за них деньги.
+        // Без reasonedChars оценка врала в разы на reasoner-моделях: у них мыслей
+        // бывает больше, чем ответа, а при обрыве до `content` оценка была бы 1 токен.
+        const fallbackOut = Math.max(1, Math.ceil((streamedChars + reasonedChars) / 4));
+        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: { output_tokens: usage.output_tokens || fallbackOut } });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();
     }

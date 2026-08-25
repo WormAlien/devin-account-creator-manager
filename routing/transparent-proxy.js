@@ -205,10 +205,27 @@ const BACKENDS = {
         // ключ живёт в justwoker-active-key.txt и инжектится прокси на каждый запрос.
         // 🪤 Корень без /v1 обязателен: `/v1/v1/messages` отдаёт 404 (замер 22.08).
     },
+    seekai: {
+        label: 'SeekAi',
+        base_url: 'http://localhost:20159',
+        api_key: 'dummy',           // real key keepalive reads from seekai-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20159) → seekai.cc (БЕЗ /v1).
+        // Активация через handleSkActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в seekai-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Корень без /v1 обязателен: `/v1/v1/messages` отдаёт 404 (замер 24.08).
+    },
 };
 
 const LOG_BUFFER = [];
 const LOG_BUFFER_MAX = 2000;
+
+// Строки прокси приезжают через /logs/ingest с префиксом `[имя]` после метки времени —
+// по нему вкладки лога и разделяют дашборд от SSE-прокси (см. обработчик /api/logs).
+const INGEST_TAG_RE = /^\[\d{2}:\d{2}:\d{2}\.\d{3}\] \[([\w.@-]+)\]/;
+// Лог одного прогона автоподарка (RUN_LOG в agentrouter/open-session.js).
+const CHECKIN_LOG_RE = /^ar-checkin-[\w.-]+\.log$/;
 
 function logLine(s) {
     const t = new Date().toISOString().substring(11, 23);
@@ -270,6 +287,7 @@ const CC_MODEL_PREFIX = {
     tabi: 'tabi',
     xpeach: 'xpeach',
     justwoker: 'justwoker',
+    seekai: 'seekai',
     ourtoken: 'ot',
     cun: 'cun',
     conduit: 'cdt',
@@ -323,6 +341,11 @@ const MODEL_WINDOWS_FILE = path.join(__dirname, 'model-windows.json');
 // Формат: одна JSON-строка на событие, append-only, без перезаписи файла.
 const FINANCE_HISTORY_FILE = path.join(__dirname, 'finance-history.jsonl');
 const FINANCE_HISTORY_MAX_BYTES = 8 * 1024 * 1024;   // ~40k событий, дальше режем половину
+// Настоящие токены пишет front-door :20100 (usage-tap.js) — через него идут ВСЕ
+// харнессы. До 25.08 вкладка «Финансы» объём работы ОЦЕНИВАЛА, деля расход на
+// зашитые $25 за 1M, и занижала его примерно в 12 раз: реальная ставка шлюзов
+// ≈ $2.05 за 1M. Здесь этот журнал только читается.
+const TOKEN_USAGE_FILE = path.join(__dirname, 'token-usage.jsonl');
 function financeLog(entry) {
     try {
         fs.appendFileSync(FINANCE_HISTORY_FILE, JSON.stringify(entry) + '\n');
@@ -774,6 +797,15 @@ async function handleSettingsApply(req, res) {
     }
 }
 
+// Чем перезапускают дашборд — зависит от системы, и говорить это должен бэкенд:
+// про платформу знает он, браузер — нет. Поэтому подсказка едет в теле ответа, а не
+// зашита во фронт строкой «restart-dashboard.bat» (на маке такого файла нет).
+function restartHint() {
+    return process.platform === 'darwin'
+        ? 'двойной клик по DASHBOARD.command (или bash routing/restart-dashboard.sh)'
+        : 'routing/restart-dashboard.bat';
+}
+
 function jsonRes(res, code, body) {
     if (res.writableEnded) return;
     // Заголовки могли уйти раньше — это keepalive длинного батча (см. jsonKeepalive).
@@ -931,12 +963,13 @@ function makeKeepaliveHandlers(port) {
 }
 
 // Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156, XPeach :20157,
-// JustWoker :20158.
+// JustWoker :20158, SeekAi :20159.
 const keepaliveAr = makeKeepaliveHandlers(Number(process.env.AR_KEEPALIVE_PORT || 20133));
 const keepaliveTb = makeKeepaliveHandlers(Number(process.env.TB_KEEPALIVE_PORT || 20155));
 const keepaliveGo = makeKeepaliveHandlers(Number(process.env.GO_KEEPALIVE_PORT || 20156));
 const keepaliveXp = makeKeepaliveHandlers(Number(process.env.XP_KEEPALIVE_PORT || 20157));
 const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT || 20158));
+const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 
 
 // ---- /__switch/api/whoami --------------------------------------------------
@@ -3826,6 +3859,7 @@ async function handleHealth(res) {
         { name: 'Keepalive Tabi',     port: Number(process.env.TB_KEEPALIVE_PORT || 20155), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive XPeach',   port: Number(process.env.XP_KEEPALIVE_PORT || 20157), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive JustWoker', port: Number(process.env.JW_KEEPALIVE_PORT || 20158), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -5293,7 +5327,7 @@ async function handleGhUpdate(req, res) {
 
 // ───── Честный ответ ручек session/open ────────────────────────────────────
 //
-// Все шесть ручек (github, ar, go, tb, xp, jw) спавнят видимый Chromium detached-процессом
+// Все семь ручек (github, ar, go, tb, xp, jw, sk) спавнят видимый Chromium detached-процессом
 // и отвечают `ok` сразу же. Если процесс умирал на старте — нет бинаря браузера под
 // установленную версию playwright, профиль занят, пропал скрипт — дашборд всё равно
 // рисовал зелёный тост «браузер аккаунта открыт», а окно не появлялось. Причина
@@ -5620,7 +5654,7 @@ async function handleGhStar(req, res) {
 
 // ───── Заселение готовой GitHub-сессии в новый аккаунт New-API ─────
 //
-// Проблема: у каждого аккаунта вкладок ar/go/tb/xp/jw свой персистентный профиль Chromium, и
+// Проблема: у каждого аккаунта вкладок ar/go/tb/xp/jw/sk свой персистентный профиль Chromium, и
 // GitHub в свежем профиле логинится с нуля — логин + пароль + 2FA. При этом ровно эта
 // GitHub-сессия обычно уже лежит в профиле другого провайдера: профили куками не делятся.
 // Замер на 2026-08-19: 41 профиль с GitHub-сессией на 14 уникальных аккаунтов.
@@ -5642,7 +5676,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -5731,12 +5765,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -6142,6 +6176,9 @@ function handleXpAddGithub(req, res) {
 }
 function handleJwAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'justwoker', host: 'api.justwoker.icu', prefix: 'jw_', load: jwLoad, save: jwSave, sessionsDir: JW_SESSIONS_DIR });
+}
+function handleSkAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'seekai', host: 'seekai.cc', prefix: 'sk_', load: skLoad, save: skSave, sessionsDir: SK_SESSIONS_DIR });
 }
 
 // ───── Svrtr — пул ТГ-аккаунтов, активация через API Helper ─────
@@ -6853,6 +6890,8 @@ const NEWAPI_PROFILE_DIRS = {
     // 🪤 Ключ — ХОСТ ПАНЕЛИ, а не домен: у JustWoker панель и API живут на одном
     // `api.justwoker.icu`, поэтому поддомен здесь обязателен (justwoker.icu не резолвится).
     'api.justwoker.icu': path.join(__dirname, '..', 'justwoker', 'profiles'),
+    // У SeekAi панель и API на одном `seekai.cc` — поддомена нет, ключ = сам домен.
+    'seekai.cc':       path.join(__dirname, '..', 'seekai', 'profiles'),
 };
 
 function newapiLib() {
@@ -7142,6 +7181,10 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 profileDir,
                 accessToken: target.accessToken || null,
                 userId: target.newApiUserId || null,
+                // Клик владельца по цифре пробивает паузу по частоте ОДНИМ запросом:
+                // бан у WAF короткий, и к моменту клика он обычно уже снят. Автоматические
+                // тики (force=false) паузу соблюдают — они её и вызывают.
+                force,
             });
             if (me.ok && me.balance != null) {
                 // Точный чек мог ротировать одноразовую refresh-куку. Сразу отдаём новое
@@ -7167,35 +7210,41 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             : 'профиля аккаунта нет — открой ЛК кнопкой 🌐 и войди, тогда баланс станет точным';
     }
 
-    // ── 3. anchor: вписанная руками цифра как ПОПРАВКА к точной ──
-    // Владелец вписывает баланс тогда, когда видит ЛК своими глазами и цифра шлюза его
-    // не устроила (у gorouter /api/user/self отдаёт квоту, расходящуюся с кошельком в
-    // ЛК). Показываем именно вписанное: self его не перебивает — до 20.08 перебивал, и
-    // вписывание выглядело нерабочим.
+    // ── 3. anchor: вписанная руками цифра как РЕЗЕРВ, когда точной нет ──
+    // Анкер — это «баланс, который владелец увидел в ЛК своими глазами и вписал ✏️».
+    // Дальше он живёт сам: убывает на расход и растёт на то, что шлюз налил после
+    // вписывания. Смысл его один — не показывать выдуманную прикидку `ceil(spent/25)*25`
+    // там, где точную цифру взять негде (нет куки профиля, шлюз за WAF, ЛК не открывали).
     //
-    // Но self ВСЁ РАВНО опрашивается (выше), и это главное. Раньше анкер возвращался
-    // ДО него: цифра умела только убывать на расход, а детект чек-ина смотрит на рост
-    // выдачи в точной цифре — значит у анкерного аккаунта не срабатывал никогда, 🎁
-    // горел вечно и +$25 приходилось вписывать руками (поймано на lankymapping и wa,
-    // 2026-08-20). Итого: balance = вписанное + прирост выдачи с сайта − прирост расхода.
+    // ⚠️ ПОРЯДОК ИЗМЕНЁН 2026-08-24 по решению владельца: цифра САЙТА главнее вписанной.
+    // До этого анкер возвращался ДО точной цифры и перекрывал её — на JustWoker `WA
+    // justwoker` это дало $0.26 в дашборде при $604.38 в кабинете: анкер вписан 22.08,
+    // когда на счету и было $0.26, потом шлюз налил, а прирост подхватить оказалось
+    // нечем (сессия JustWoker в профиле умерла → `self` промахивался, `topUp` = 0).
+    // Владелец: «пробует проверить баланс с сайта — за истину считать сайт; анкер нужен,
+    // только когда сайт недоступен». Поэтому теперь анкер стоит ПОСЛЕ ветвей self и 4а.
+    // Сам он никуда не удаляется: вписанное остаётся резервом на следующий промах.
     let anchorDrained = null;
+    let anchorResult = null;
     const anchor = Number(target.balanceAnchor);
     if (isFinite(anchor) && anchor > 0 && target.anchorSpent != null) {
         const drawn = Math.max(0, round2(usageSpent - Number(target.anchorSpent)));
         // Пополнение или бонус после вписывания: шлюз поднял выдачу — ту же сумму
-        // прибавляем к вписанному, иначе владельцу пришлось бы вписывать заново после
-        // каждого чек-ина. База — выдача шлюза на момент вписывания; у записей, сделанных
-        // до этого фикса, её нет: прироста тогда нет, а базу проставит первый успешный
-        // self (см. newapiApplyBalance), и со следующего пополнения всё сойдётся.
+        // прибавляем к вписанному, иначе анкер вечно показывал бы предподарочный остаток.
+        // База — выдача шлюза на момент вписывания; у записей, сделанных до этого фикса,
+        // её нет: прироста тогда нет, а базу проставит первый успешный self.
+        // «Сейчас» берём из свежего self, а если его нет — из последней известной цифры
+        // шлюза: анкер теперь работает именно там, где свежего self не случилось.
         const baseGranted = Number(target.anchorGrantedSelf);
-        const nowGranted = self ? Number(self.granted) : NaN;
+        const nowGranted = self && self.granted != null ? Number(self.granted)
+            : (target.grantedSelf != null ? Number(target.grantedSelf) : NaN);
         const topUp = (isFinite(baseGranted) && isFinite(nowGranted) && nowGranted > baseGranted)
             ? round2(nowGranted - baseGranted) : 0;
         const left = round2(anchor + topUp - drawn);
         // Ушло в ноль или минус — привязка устарела (расход обогнал вписанное).
-        // Отдавать её как факт нельзя: показываем self, потом прикидку, и UI просит вписать заново.
+        // Отдавать её как факт нельзя: показываем прикидку, и UI просит вписать заново.
         if (left > 0) {
-            return {
+            anchorResult = {
                 status: 'live',
                 balanceSource: 'anchor',
                 balance: left,
@@ -7204,14 +7253,21 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 granted: null,
                 anchorTopUp: topUp,
                 self,           // точная цифра нужна для детекта чек-ина, даже когда показываем анкер
-                selfError,
             };
+        } else {
+            anchorDrained = 'вписанный баланс исчерпан расходом — впиши заново';
         }
-        anchorDrained = 'вписанный баланс исчерпан расходом — впиши заново';
     }
 
-    // ── 4. точная цифра, когда анкера нет (или он исчерпан) ──
+    // ── 4. точная цифра: сайт главнее вписанного вручную ──
     if (self) {
+        // Расхождение с анкером говорим вслух: владелец вписывал цифру осознанно, и то,
+        // что теперь показывается другая, он должен видеть в логе, а не только в тултипе.
+        if (anchorResult && Math.abs(anchorResult.balance - self.balance) >= 0.01) {
+            logLine(`баланс ${host}: беру цифру сайта $${Number(self.balance).toFixed(2)}`
+                + ` вместо вписанных вручную $${anchorResult.balance.toFixed(2)}`
+                + ` (вписано ${target.anchoredAt || 'когда-то'}; ✏️ остаётся резервом на случай, когда сайт молчит)`);
+        }
         return {
             status: 'live',
             balanceSource: 'self',
@@ -7278,6 +7334,67 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             selfError,
             self: cached,
         };
+    }
+
+    // ── 4б. память шлюза против анкера И против прикидки: побеждает память ──
+    // Строгая ветвь 4а сюда не пустила по одной из двух причин: сдвинулся расход или
+    // после того чека заходили в ЛК. Обе означают «цифра могла устареть», но устареть
+    // она может ТОЛЬКО В МИНУС: расход мы измерили секунду назад и вычитаем сами, а
+    // наливка в ЛК остаток увеличивает.
+    //
+    // Альтернативы у неё две, и обе хуже:
+    //   анкер — вписанное когда-то и убывающее на расход (случай `WA justwoker` 24.08:
+    //     в записи лежала точная $604.38, а в таблице стоял анкер $0.26);
+    //   прикидка `ceil(spent/25)*25` — выдумка, которая умеет ЗАВЫШАТЬ.
+    //
+    // 🪤 Разбор 25.08, из-за которого ветвь распространили и на случай «анкера нет».
+    // Автоподарок на `lustrouscult` отработал идеально: браузер снял $225.00 (+$25),
+    // маркер уехал, `grantedSelf` в записи стал 225. А в таблице встало **$175 (прикидка)**
+    // с `selfError: WAF-заглушка (слишком часто), пауза 10 мин`: следующий автоматический
+    // чек попал в рейт-лимит Aliyun, `self` промахнулся, визит в ЛК запретил ветвь 4а —
+    // и точная цифра, которую мы ЗНАЕМ, была выброшена в пользу выдуманной. Прикидка ещё и
+    // соврала в плюс: 175 против настоящих 225 — то есть решения о деньгах принимались бы
+    // по числу, которого нет.
+    // Понижать память анкером НЕ имеем права: анкер выше памятной бывает законно —
+    // владелец видел кабинет позже нашего чека.
+    if (cachedSelf != null && selfAt) {
+        const spentAtSelf = Number(target.usageSpentAtSelf);
+        const drawnSince = isFinite(spentAtSelf) ? Math.max(0, round2(usageSpent - spentAtSelf)) : 0;
+        const left = round2(cachedSelf - drawnSince);
+        const anchorShows = anchorResult ? anchorResult.balance : 0;
+        if (left > 0 && left > anchorShows) {
+            const when = target.selfCheckedAt ? new Date(target.selfCheckedAt).toLocaleString('ru-RU') : 'когда-то';
+            logLine(`баланс ${host}: беру ПАМЯТНУЮ цифру шлюза $${left.toFixed(2)} (снята ${when}`
+                + `${drawnSince ? `, минус расход $${drawnSince.toFixed(2)}` : ''}) вместо`
+                + ` ${anchorResult ? `вписанных вручную $${anchorResult.balance.toFixed(2)}` : 'прикидки'}`
+                + ` — занижение возможно, завышение нет (${selfError || 'свежая не далась'})`);
+            return {
+                status: 'live',
+                balanceSource: 'self',
+                reused: true,
+                selfCached: true,
+                balance: left,
+                spent: usageSpent,
+                usageSpent,
+                granted: target.grantedSelf != null ? Number(target.grantedSelf) : null,
+                newApiUserId: target.newApiUserId,
+                newApiUsername: target.newApiUsername,
+                selfCheckedAt: target.selfCheckedAt,   // НЕ обновляем: TTL не должен перезапуститься
+                selfError: selfError || 'свежую цифру взять не удалось — показана последняя, что называл шлюз',
+                self: (anchorResult && anchorResult.self) || null,
+            };
+        }
+    }
+
+    // ── 4в. анкер: вписанное руками, когда цифры сайта нет ни свежей, ни памятной ──
+    // Сюда доходим, только если self промахнулся И памятная цифра либо отсутствует, либо
+    // меньше вписанного. Вписанное лучше прикидки: это цифра, которую владелец видел
+    // своими глазами, уменьшенная на измеренный расход.
+    if (anchorResult) {
+        logLine(`баланс ${host}: цифры сайта нет (${selfError || 'без причины'}) —`
+            + ` показываю вписанное вручную $${anchorResult.balance.toFixed(2)}`
+            + (anchorResult.anchorTopUp > 0 ? ` (в том числе +$${anchorResult.anchorTopUp.toFixed(2)} налито после вписывания)` : ''));
+        return { ...anchorResult, selfError };
     }
 
     // ── 5. guess: старое угадывание, последний резерв ──
@@ -7506,7 +7623,8 @@ async function handleFinanceHistory(req, res) {
         for (let i = conf.n - 1; i >= 0; i--) {
             const d = new Date(now);
             if (conf.hour) d.setHours(d.getHours() - i); else d.setDate(d.getDate() - i);
-            buckets.push({ k: keyOf(d), spend: 0, topup: 0, events: 0 });
+            buckets.push({ k: keyOf(d), spend: 0, topup: 0, events: 0,
+                tin: 0, tout: 0, tcr: 0, tcw: 0, tcost: 0, treq: 0 });
         }
         const idx = new Map(buckets.map((b, i) => [b.k, i]));
         let lines = [];
@@ -7522,6 +7640,34 @@ async function handleFinanceHistory(req, res) {
             if (e.dGrant > 0) buckets[i].topup += e.dGrant;
             buckets[i].events++;
         }
+        // Настоящие токены из журнала front-door. Читается тем же способом, что
+        // finance-history: построчно, битые строки молча мимо. Файла может не быть
+        // вовсе (front-door старой сборки) — тогда бакеты остаются с нулями, и
+        // вкладка сама падает на прежнюю оценку по расходу.
+        const tokens = { file: path.basename(TOKEN_USAGE_FILE), lines: 0, used: 0, bad: 0,
+            harness: {}, model: {}, in: 0, out: 0, cr: 0, cw: 0, cost: 0, req: 0 };
+        try {
+            const tl = fs.readFileSync(TOKEN_USAGE_FILE, 'utf8').split('\n');
+            for (const ln of tl) {
+                if (!ln) continue;
+                tokens.lines++;
+                let e; try { e = JSON.parse(ln); } catch (_) { tokens.bad++; continue; }
+                const i = idx.get(conf.hour ? String(e.t).slice(0, 13) : String(e.t).slice(0, 10));
+                if (i == null) continue;
+                tokens.used++;
+                const b = buckets[i];
+                b.tin += Number(e.in) || 0;   b.tout += Number(e.out) || 0;
+                b.tcr += Number(e.cr) || 0;   b.tcw += Number(e.cw) || 0;
+                b.tcost += Number(e.cost) || 0; b.treq++;
+                tokens.in += Number(e.in) || 0;   tokens.out += Number(e.out) || 0;
+                tokens.cr += Number(e.cr) || 0;   tokens.cw += Number(e.cw) || 0;
+                tokens.cost += Number(e.cost) || 0; tokens.req++;
+                // Разрез по харнессу и модели: у владельца одновременно Claude Code,
+                // opencode и разовые скрипты, и «кто сжёг» — половина вопроса.
+                if (e.h) tokens.harness[e.h] = (tokens.harness[e.h] || 0) + ((Number(e.in) || 0) + (Number(e.out) || 0));
+                if (e.m) tokens.model[e.m] = (tokens.model[e.m] || 0) + ((Number(e.in) || 0) + (Number(e.out) || 0));
+            }
+        } catch (e) { /* журнала ещё нет — не ошибка */ }
         // Текущие суммы по пулам — из тех же файлов, что читает сайдбар.
         const pools = {};
         const sum = (arr, f) => (arr || []).reduce((a, s) => a + (Number(s[f]) || 0), 0);
@@ -7531,11 +7677,12 @@ async function handleFinanceHistory(req, res) {
         try { const a = tbLoad(); pools.tabitoken   = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = xpLoad(); pools.xpeach      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = jwLoad(); pools.justwoker   = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = skLoad(); pools.seekai      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         const totals = Object.values(pools).reduce((a, p) => ({
             spent: a.spent + p.spent, balance: a.balance + p.balance, keys: a.keys + p.keys,
         }), { spent: 0, balance: 0, keys: 0 });
         jsonRes(res, 200, {
-            range, hour: !!conf.hour, buckets, pools, totals,
+            range, hour: !!conf.hour, buckets, pools, totals, tokens,
             history: { file: path.basename(FINANCE_HISTORY_FILE), lines: lines.filter(Boolean).length, used: parsed, bad: skipped },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -7906,6 +8053,9 @@ function handleXpMapProfiles(req, res) {
 function handleJwMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'justwoker', host: 'api.justwoker.icu', load: jwLoad, save: jwSave });
 }
+function handleSkMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'seekai', host: 'seekai.cc', load: skLoad, save: skSave });
+}
 
 // POST /__switch/api/{ar,go,tb,xp}/set-github { api_key, ghId } → привязать/сменить/отвязать
 // GitHub-аккаунт (метка-организация, никакой автоматики). ghId может быть:
@@ -7959,6 +8109,9 @@ function handleXpSetGithub(req, res) {
 }
 function handleJwSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'justwoker', load: jwLoad, save: jwSave });
+}
+function handleSkSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'seekai', load: skLoad, save: skSave });
 }
 
 // POST /__switch/api/ar/session/open { id } → открыть консоль agentrouter под GitHub-сессией
@@ -8088,6 +8241,99 @@ function handleArCheckinStatus(req, res) {
     }
     jsonRes(res, 200, { runs });
 }
+// ───── Очередь чек-инов: залп по кнопкам превращаем в конвейер ─────────────
+// Владелец жмёт ⚡ на нескольких аккаунтах подряд — и раньше это был залп: три окна
+// сразу, отказ 429 на четвёртом, а шлюз ловил нас на частоте и на минуты выключал
+// точный баланс ВСЕМУ пулу. Теперь клики не отбиваются, а встают в очередь: один
+// прогон за раз плюс пауза между стартами. Кнопка отвечает «в очереди, позиция N»,
+// наблюдатель на фронте ждёт своей очереди как обычного прогона.
+const AR_CHECKIN_QUEUE = [];
+const AR_CHECKIN_GAP_MS = 25_000;   // пауза между прогонами: залп ловит рейт-лимит
+let arCheckinLastStart = 0;
+let arCheckinPumpTimer = null;
+
+// Занято, если жив ХОТЬ ОДИН браузер ЛК: чек-ин по природе последовательный (зашёл,
+// вошёл, забрал, закрылось), а обычный визит 🌐 тоже держит профиль и грузит шлюз.
+function arCheckinBusy() {
+    return [...arLkPids.values()].some(pid => arPidAlive(pid));
+}
+
+// Сколько ещё ждать до старта следующего: либо пока закроется текущее окно, либо
+// остаток паузы после прошлого старта.
+function arCheckinWaitMs() {
+    if (arCheckinBusy()) return AR_CHECKIN_GAP_MS;
+    const since = Date.now() - arCheckinLastStart;
+    return since >= AR_CHECKIN_GAP_MS ? 0 : AR_CHECKIN_GAP_MS - since;
+}
+
+function arCheckinPump() {
+    if (arCheckinPumpTimer) { clearTimeout(arCheckinPumpTimer); arCheckinPumpTimer = null; }
+    if (!AR_CHECKIN_QUEUE.length) return;
+    const wait = arCheckinWaitMs();
+    if (wait > 0) {
+        // Обновляем подписи в статусе, чтобы в тосте было видно, сколько ждать.
+        AR_CHECKIN_QUEUE.forEach((job, i) => {
+            const st = AR_AUTO_CHECKIN.get(job.label);
+            if (st && st.state === 'queued') {
+                st.position = i + 1;
+                st.message = `в очереди ${i + 1}/${AR_CHECKIN_QUEUE.length} — старт примерно через ${Math.ceil((wait + i * AR_CHECKIN_GAP_MS) / 1000)}с`;
+                AR_AUTO_CHECKIN.set(job.label, st);
+            }
+        });
+        arCheckinPumpTimer = setTimeout(arCheckinPump, Math.min(wait, 5000));
+        if (arCheckinPumpTimer.unref) arCheckinPumpTimer.unref();
+        return;
+    }
+    const job = AR_CHECKIN_QUEUE.shift();
+    logLine(`agentrouter чек-ин: беру из очереди ${job.dispName} (осталось ${AR_CHECKIN_QUEUE.length})`);
+    try { arSpawnSession(job); } catch (e) {
+        AR_AUTO_CHECKIN.set(job.label, { ...job, state: 'error', message: `запуск не удался: ${e.message}`, finishedAt: new Date().toISOString() });
+        logLine(`agentrouter чек-ин: запуск ${job.dispName} не удался — ${e.message}`);
+    }
+    if (AR_CHECKIN_QUEUE.length) arCheckinPump();
+}
+
+// Спавн окна ЛК/чек-ина. Одна функция на прямой путь (🌐) и на очередь (🎁/⚡) —
+// раньше это был кусок внутри обработчика, и очередь потребовала бы его копии.
+function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
+    const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
+    const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+    // Чек-ину stdout нужен не только для логов: в последней строке приезжает маркер
+    // AUTOCHECKIN_RESULT — слово шлюза про суточный бонус и СНИМОК точного баланса,
+    // снятый в самом браузере. Ловим его в ОБОИХ режимах чек-ина.
+    let outTail = '';
+    proc.stdout.on('data', d => {
+        const s = String(d);
+        if (wantCheckin) outTail = (outTail + s).slice(-4000);
+        logLine(`agentrouter session/open [${label}]: ${s.trim()}`);
+    });
+    proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
+    proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
+    proc.on('exit', (code, sig) => {
+        arLkPids.delete(label);
+        logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
+        if (wantCheckin) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail), wantAuto);
+        // Обычный визит в ЛК (🌐): замок с куки снят, точный баланс стал читаемым.
+        // Режимы чек-ина сюда не входят — у них свой хвост со снимком из браузера,
+        // и второй чек тут же погнал бы к шлюзу лишний запрос за Aliyun WAF.
+        else newapiRecheckAfterLk('ar', id);
+        // Окно закрылось — можно брать следующего из очереди (с паузой, см. arCheckinWaitMs).
+        arCheckinLastStart = Date.now();
+        arCheckinPump();
+    });
+    proc.unref();
+    arLkPids.set(label, proc.pid);
+    arCheckinLastStart = Date.now();
+    if (wantCheckin) {
+        AR_AUTO_CHECKIN.set(label, {
+            id, label, name: dispName, state: 'running',
+            message: wantAuto ? 'разлогин и вход через GitHub…' : 'браузер открыт: жду входа через GitHub…',
+            startedAt: new Date().toISOString(), finishedAt: null,
+        });
+    }
+    return proc;
+}
+
 async function handleArSessionOpen(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -8120,52 +8366,42 @@ async function handleArSessionOpen(req, res) {
         // agentrouter включил защиту, из-за чего ТОЧНЫЙ баланс всего пула на 10 минут
         // выродился в прикидку (см. coolDownHost в newapi-account.js). Чек-ин по своей
         // природе последовательный: зашёл, вошёл, забрал, закрылось.
+        // Залп по кнопкам больше не отбивается 429-м, а встаёт в очередь (см. arCheckinPump).
         if (wantCheckin) {
-            const alive = [...arLkPids.entries()].filter(([, pid]) => arPidAlive(pid));
-            if (alive.length >= AR_CHECKIN_MAX_BROWSERS) {
-                return jsonRes(res, 429, {
-                    error: `уже открыто ${alive.length} браузеров чек-ина — доведи их до конца (войди через GitHub, окно закроется само), потом бери следующий. Залпом по всему пулу шлюз ловит рейт-лимит и точный баланс на 10 минут пропадает.`,
+            const runMode = wantAuto ? 'autocheckin' : 'checkin';
+            const job = { id, label, dispName, mode: runMode, wantCheckin: true, wantAuto };
+            const wait = arCheckinWaitMs();
+            if (wait > 0 || AR_CHECKIN_QUEUE.length) {
+                AR_CHECKIN_QUEUE.push(job);
+                const pos = AR_CHECKIN_QUEUE.length;
+                const etaSec = Math.ceil((wait + (pos - 1) * AR_CHECKIN_GAP_MS) / 1000);
+                AR_AUTO_CHECKIN.set(label, {
+                    id, label, name: dispName, state: 'queued', position: pos,
+                    message: `в очереди ${pos} — старт примерно через ${etaSec}с`,
+                    startedAt: new Date().toISOString(), finishedAt: null,
                 });
+                logLine(`agentrouter чек-ин: ${dispName} в очередь (позиция ${pos}, старт через ~${etaSec}с)`);
+                arCheckinPump();
+                return jsonRes(res, 200, { ok: true, label, queued: true, position: pos, etaSec, mode: runMode });
             }
+            newapiLkVisited(label);
+            const proc = arSpawnSession(job);
+            logLine(`agentrouter session/open: ${dispName} label=${label} mode=${runMode} (pid ${proc.pid})`);
+            return jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode: runMode });
         }
         // Перед запуском отдаём профилю ротированные куки: иначе браузер пойдёт со
         // значением, которое наш чек баланса уже погасил, и разлогинится.
         // Для чек-ина — пропускаем: заливать куки, которые ветка checkin тут же
         // удалит, бессмысленно.
-        if (!wantCheckin) newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
+        // Обычный визит в ЛК (🌐) или регистрация: ротированные куки — в профиль, иначе
+        // браузер пойдёт со значением, которое наш чек баланса уже погасил, и разлогинится.
+        newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
-        const mode = wantAuto ? 'autocheckin' : wantCheckin ? 'checkin' : isRealKey(target.api_key) ? 'console' : 'register';
-        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
-        // Чек-ину stdout нужен не только для логов: в последней строке приезжает маркер
-        // AUTOCHECKIN_RESULT — слово шлюза про суточный бонус и СНИМОК точного баланса,
-        // снятый в самом браузере. Ловим его в ОБОИХ режимах: цифра одинаково избавляет
-        // от повторного чека, кто бы ни жал кнопку входа — скрипт или человек.
-        let outTail = '';
-        proc.stdout.on('data', d => {
-            const s = String(d);
-            if (wantCheckin) outTail = (outTail + s).slice(-4000);
-            logLine(`agentrouter session/open [${label}]: ${s.trim()}`);
-        });
-        proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
-        proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
-        proc.on('exit', (code, sig) => {
-            arLkPids.delete(label);
-            logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
-            if (wantCheckin) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail), wantAuto);
-        });
-        proc.unref();
-        arLkPids.set(label, proc.pid);
-        if (wantCheckin) {
-            AR_AUTO_CHECKIN.set(label, {
-                id, label, name: dispName, state: 'running',
-                message: wantAuto ? 'разлогин и вход через GitHub…' : 'браузер открыт: жду входа через GitHub…',
-                startedAt: new Date().toISOString(), finishedAt: null,
-            });
-        }
+        const mode = isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = arSpawnSession({ id, label, dispName, mode, wantCheckin: false, wantAuto: false });
         const failed = await sessionOpenEarlyFailure(proc);
         if (failed) {
             arLkPids.delete(label);
-            if (wantCheckin) AR_AUTO_CHECKIN.set(label, { id, label, name: dispName, state: 'error', message: failed, finishedAt: new Date().toISOString() });
             logLine(`agentrouter session/open FAIL [${label}]: ${failed}`);
             return jsonRes(res, 502, { error: failed });
         }
@@ -9004,7 +9240,12 @@ async function handleGoSessionOpen(req, res) {
         proc.stdout.on('data', d => logLine(`gorouter session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`gorouter session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`gorouter session/open spawn error: ${e.message}`));
-        proc.on('exit', (code, sig) => { goLkPids.delete(label); logLine(`gorouter session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.on('exit', (code, sig) => {
+            goLkPids.delete(label);
+            logLine(`gorouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('go', id);
+        });
         proc.unref();
         goLkPids.set(label, proc.pid);
         const failed = await sessionOpenEarlyFailure(proc);
@@ -9617,6 +9858,39 @@ function handleJwSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'justwoker', load: jwLoad, save: jwSave, balanceFn: jwBalance, applyFn: jwApplyBalance });
 }
 
+// Окно ЛК закрылось → Chromium снял замок с БД куки и дописал в неё свежую сессию.
+// Ровно в этот момент точный баланс становится читаемым, поэтому пересчитываем сами,
+// один раз и с `force`. Без этого владелец попадал в петлю: жмёт 💰, пока окно открыто,
+// получает «в профиле нет куки», по совету открывает ЛК ещё раз — и держит замок дальше
+// (разбор 24.08 на `WA justwoker`: в кабинете $604.38, в дашборде вписанные $0.26).
+//
+// Пауза: запись SQLite на закрытии асинхронна — тот же приём, что в arAutoCheckinFinish.
+// `force` обязателен: визит в ЛК уже снял годность сохранённой цифры, а без force
+// расчёт вернул бы её же (или анкер), не спросив шлюз.
+const LK_RECHECK_DELAY_MS = 2500;
+function newapiRecheckAfterLk(gwKey, id) {
+    const gw = MONEY_GW[gwKey];
+    if (!gw || !id) return;
+    setTimeout(async () => {
+        try {
+            const sessions = gw.load();
+            const target = sessions.find(s => s.id === id);
+            if (!target || !isRealKey(target.api_key)) return;
+            const bal = await gw.balanceFn(target, { force: true });
+            gw.applyFn(target, bal);
+            gw.save(sessions);
+            const where = bal && bal.balanceSource === 'self' ? 'точная цифра шлюза'
+                : bal && bal.balanceSource === 'anchor' ? 'вписанное вручную (шлюз молчит)'
+                : 'прикидка';
+            logLine(`${gw.tag} после закрытия ЛК: ${target.email || target.name || id} → `
+                + `$${typeof bal.balance === 'number' ? bal.balance.toFixed(2) : '—'} (${where})`
+                + `${bal && bal.selfError ? ` · ${bal.selfError}` : ''}`);
+        } catch (e) {
+            logLine(`${gw.tag} перечёт после закрытия ЛК не удался: ${e.message}`);
+        }
+    }, LK_RECHECK_DELAY_MS).unref?.();
+}
+
 const jwLkPids = new Map();
 function jwPidAlive(pid) {
     if (!pid) return false;
@@ -9657,7 +9931,12 @@ async function handleJwSessionOpen(req, res) {
         proc.stdout.on('data', d => logLine(`justwoker session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`justwoker session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`justwoker session/open spawn error: ${e.message}`));
-        proc.on('exit', (code, sig) => { jwLkPids.delete(label); logLine(`justwoker session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.on('exit', (code, sig) => {
+            jwLkPids.delete(label);
+            logLine(`justwoker session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('jw', id);
+        });
         proc.unref();
         jwLkPids.set(label, proc.pid);
         const failed = await sessionOpenEarlyFailure(proc);
@@ -9697,8 +9976,17 @@ const JW_AUTO_ADD_FAIL = {
     5: 'панель отвергла OAuth — чаще всего возраст GitHub меньше года или закрыта регистрация',
     6: 'вошли, но ключ снять не удалось — открой аккаунт кнопкой 🌐 и возьми ключ вручную',
     7: 'GitHub моложе 365 дней — панель такие не принимает (github_minimum_account_age_days)',
-    8: 'панель включила рейт-лимит (429) — подожди и повтори тем же GitHub, ничего не сломано',
+    8: 'панель включила рейт-лимит (429) — смени IP и повтори тем же GitHub, ничего не сломано',
+    9: 'панель не ответила на колбэк OAuth — залип IP: смени адрес и жми Повтор, GitHub-согласие и снимок сессии целы',
+    10: 'github.com не открылся — навигация оборвалась по сети, вход не начался. Проверь, что GitHub доступен с этой машины (или смени ноду — сменится маршрут), и повтори тем же GitHub, снимок сессии цел',
 };
+
+// Коды, которые лечатся сменой IP, а не разбором поломки: рейт-лимит по адресу (8),
+// молчание панели на колбэке (9) и оборванная по сети навигация на github.com (10 —
+// маршрут до GitHub флапал, другая нода = другой путь). По этому признаку дашборд
+// поднимает плашку «смени IP и жми Повтор» вместо обычного красного тоста — иначе
+// владелец жмёт ⚡ с того же адреса и жжёт следующий GitHub в тот же отказ.
+const JW_AUTO_ADD_IP_CODES = new Set([8, 9, 10]);
 
 function jwParseAutoAddMarker(out) {
     const m = /JW_AUTOADD_RESULT\s+(\{[^\n]*\})/.exec(String(out || ''));
@@ -9711,6 +9999,11 @@ function jwParseAutoAddMarker(out) {
 function jwAutoAddFinish(id, label, code, marker) {
     const st = JW_AUTO_ADD.get(label) || { id, label };
     st.finishedAt = new Date().toISOString();
+    st.exitCode = code;
+    // id нужен клиенту для кнопки «Повтор»: карточка прогона живёт своей жизнью и строку
+    // пула в этот момент могли перерисовать.
+    if (!st.id) st.id = id;
+    st.needIpChange = JW_AUTO_ADD_IP_CODES.has(code);
     try {
         if (code !== 0 || !marker || !marker.ok || !marker.key) {
             st.state = 'error';
@@ -10242,6 +10535,661 @@ function jwReadModelMap() {
     } catch { return {}; }
 }
 
+// ───── SeekAi (sk) — автономная вкладка (NewAPI, GitHub-вход) ─────────────
+// Шестой шлюз, структурная копия вкладки GoRouter/JustWoker: `seekai.cc` — тот же
+// New API (замер 2026-08-24: `system_name: "SeekAi"`, `docs_link` на docs.newapi.pro,
+// `quota_per_unit: 500000`, `quota_display_type: "USD"`). Свой пул
+// (seekai-sessions.json), свой активный ключ/модель, свой keepalive :20159.
+//
+// Активация ЧЕРЕЗ keepalive :20159 (как у go/tb/xp/jw), а не прямым baseUrl: шлюз
+// Anthropic-совместим нативно (замер 24.08: `POST /v1/messages` на `claude-sonnet-5`
+// → 200, claude-модели каталога помечены `supported_endpoint_types:
+// ["anthropic","openai"]`), но thinking-модели дают длинные SSE-паузы, и без
+// keepalive watchdog Claude Code рвёт поток.
+// 🪤 База для CC — корень БЕЗ /v1: `POST /v1/v1/messages` отдаёт 404
+// (`Invalid URL`, замер 24.08). `/v1` нужен только листингу моделей — это SK_BASE_URL.
+//
+// GitHub-вход: seekai/open-session.js, реф-ссылка приезжает из
+// routing/lib/ref-codes.js (`seekai` → `?aff=prEx`), литерала в скрипте нет.
+// Регистрация мягче, чем у JustWoker: `password_register_enabled: true` и
+// `github_oauth: true` разом, ограничения по возрасту GitHub-аккаунта панель не
+// заявляет. 🪤 Зато включён `turnstile_check: true` + `email_verification: true` —
+// поэтому авто-заведения (⚡, как у jw) тут НЕТ намеренно: сценарий нужно снимать
+// рекордером по живой панели, и капча может не пустить вообще.
+// Чек-ин включён (`checkin_enabled: true`), но сумма у New-API случайная, поэтому
+// кнопки «+N» нет — только ✏️ и точная цифра из `/api/user/self` куками профиля.
+const SK_SESSIONS_FILE = path.join(__dirname, 'seekai-sessions.json');
+const SK_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'seekai-active-key.txt');
+const SK_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'seekai-active-model.txt');
+const SK_BASE_URL = 'https://seekai.cc/v1';
+// SSE keepalive proxy для seekai (как у tabi :20155): форвардит напрямую в
+// seekai.cc, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const SK_UPSTREAM = 'https://seekai.cc';
+const SK_KEEPALIVE_PORT = 20159;
+const SK_KEEPALIVE_URL = `http://localhost:${SK_KEEPALIVE_PORT}`;
+const SK_MODELMAP_FILE = path.join(__dirname, 'seekai-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). 🪤 Выдача у seekai НЕ ИЗМЕРЕНА: в
+// `/api/user/self` API-ключ не пускает (401, как у JustWoker), а нужный Bearer живёт
+// только в контексте страницы — значит цифра приедет с первым заходом в 🌐 ЛК
+// (`balanceSource = 'self'`) либо будет вписана ✏️ руками. До этого работает прикидка,
+// и она умышленно ЗАНИЖЕНА: на завышенном балансе авторотация выберет пустой аккаунт
+// (это стоит денег и падений), а занижение стоит лишь лишнего переключения.
+// Когда цифра станет известна — поднять SK_DEFAULT_GRANT до НИЖНЕЙ границы замера,
+// как сделано у JustWoker ($90 при измеренных $91–96).
+const SK_GRANT_STEP = 5;
+const SK_DEFAULT_GRANT = 10;
+const SK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const SK_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function skLoad() {
+    try {
+        const raw = fs.readFileSync(SK_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'sk_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { skSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function skSave(arr) {
+    fs.writeFileSync(SK_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function skReadActiveModel() {
+    try { return fs.readFileSync(SK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function skReadActiveKey() {
+    try { return fs.readFileSync(SK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для seekai: второй экземпляр keepalive-proxy.js на :20159.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с agentrouter
+// :20133 и tabi :20155. UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages.
+async function skKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(SK_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(SK_KEEPALIVE_PORT),
+                UPSTREAM: SK_UPSTREAM,
+                KEY_FILE: SK_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: SK_MODELMAP_FILE,
+                ...(process.env.SK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.SK_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive SeekAi', SK_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`seekai keepalive proxy spawn: :${SK_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`seekai keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+async function skProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${SK_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...SK_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс: usage endpoint на КОРНЕ seekai.cc (не /v1). Точный остаток — из
+// /api/user/self куками профиля; резервы (анкер, угадывание) см. newapiBalance.
+async function skBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'seekai.cc',
+        ccHeaders: SK_CC_HEADERS,
+        usageUrl: 'https://seekai.cc/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(SK_DEFAULT_GRANT, Math.ceil(spent / SK_GRANT_STEP) * SK_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+
+function skApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'seekai' }); }
+
+async function handleSkSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = skLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await skProbe(s.api_key); }));
+            }
+            skSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => skApplyBalance(s, await skBalance(s))));
+            }
+            skSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: skReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleSkPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await skProbe(api_key);
+        const sessions = skLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; skSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSkBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = skLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await skBalance(target || { api_key }, { force });
+            if (target) { skApplyBalance(target, bal); skSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('sk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleSkSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'seekai', load: skLoad, save: skSave, balanceFn: skBalance, applyFn: skApplyBalance });
+}
+
+// Окно ЛК закрылось → точный баланс стал читаемым: пересчёт делает общая
+// newapiRecheckAfterLk('sk', id) из блока GoRouter, здесь только вызов на `exit`.
+
+const skLkPids = new Map();
+function skPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleSkSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = skLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = skLkPids.get(label);
+        if (skPidAlive(prevPid)) {
+            logLine(`seekai session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'seekai', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('seekai.cc', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`seekai session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`seekai session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`seekai session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            skLkPids.delete(label);
+            logLine(`seekai session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('sk', id);
+        });
+        proc.unref();
+        skLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            skLkPids.delete(label);
+            logLine(`seekai session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`seekai session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+const SK_SHARE_SCRIPT = path.join(__dirname, '..', 'seekai', 'share-session.js');
+const SK_SESSIONS_DIR = path.join(__dirname, '..', 'seekai', 'sessions');
+
+function skB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function skB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/sk/share { id } → снять storageState профиля и собрать строку.
+async function handleSkShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = skLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = skLkPids.get(label);
+        if (skPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(SK_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [SK_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`seekai share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'seekai',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = skB64UrlEncode(JSON.stringify(payload));
+        logLine(`seekai share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/sk/import { share } → разобрать строку и добавить аккаунт.
+async function handleSkImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(skB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'seekai' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не seekai-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = skLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'sk_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        skSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(SK_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(SK_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`seekai import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`seekai import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSkAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = skLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'sk_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        skSave(sessions);
+        logLine(`seekai add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
+// в консоли seekai). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
+async function handleSkSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = skLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(SK_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        skSave(sessions);
+        logLine(`seekai set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переименовать аккаунт (подпись) — меняем name и/или email. id и профиль браузера
+// не трогаем, поэтому привязка профиля/сессии сохраняется.
+async function handleSkRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = skLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        skSave(sessions);
+        logLine(`seekai rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleSkDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = skLoad();
+        const target = sessions.find(s => s.id === idKey);
+        skSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === skReadActiveKey()) {
+            try { fs.rmSync(SK_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(SK_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`seekai delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ЧЕРЕЗ keepalive :20159 (не прямым baseUrl): в settings.json уезжает
+// SK_KEEPALIVE_URL, а реальный ключ прокси подставляет сам из seekai-active-key.txt.
+async function handleSkActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в seekai-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = skLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(SK_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        skSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-seekai');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = SK_KEEPALIVE_URL;   // keepalive :20159 → seekai.cc напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — seekai-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const skCurModel = skReadActiveModel() || '';
+            if (skCurModel) settings.model = skCurModel;
+            else { delete settings.model; logLine('seekai activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из seekai-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`seekai activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20159, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const skKa = await keepaliveBring(SK_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!skKa.ok) logLine(`seekai activate: keepalive :${SK_KEEPALIVE_PORT} НЕ поднялся — ${skKa.error || '?'}`);
+        logLine(`seekai activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${SK_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: skKa.ok, port: SK_KEEPALIVE_PORT, error: skKa.ok ? null : (skKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleSkModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (SK_MODELS_CACHE.data && Date.now() - SK_MODELS_CACHE.ts < SK_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: SK_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${SK_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...SK_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        SK_MODELS_CACHE.data = models;
+        SK_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (SK_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: SK_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет seekai-active-model.txt + settings.model (+ env модели).
+async function handleSkSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(SK_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-seekai-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = SK_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`seekai set-model: settings.json FAILED: ${e.message}`);
+        }
+        const skKaM = await keepaliveBring(SK_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!skKaM.ok) logLine(`seekai set-model: keepalive :${SK_KEEPALIVE_PORT} НЕ поднялся — ${skKaM.error || '?'}`);
+        logLine(`seekai set-model: ${m} (base ${SK_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: SK_ACTIVE_MODEL_FILE, base: SK_KEEPALIVE_URL, needRestart: true, keepalive: { up: skKaM.ok, port: SK_KEEPALIVE_PORT, error: skKaM.ok ? null : (skKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Настраиваемый маппинг claude-тиров → seekai-модели (как в Custom). Живёт в сессиях.
+async function handleSkModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = {
+            opus: String(body.opus || '').trim() || null,
+            sonnet: String(body.sonnet || '').trim() || null,
+            haiku: String(body.haiku || '').trim() || null,
+        };
+        fs.writeFileSync(SK_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        logLine(`seekai modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function skReadModelMap() {
+    try {
+        const raw = fs.readFileSync(SK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
 // ───── Tabi (tb) — автономная вкладка (NewAPI, GitHub-вход) ────────────
 // tabitoken.com: Anthropic-совместимый шлюз (прямой /v1/messages жив), но модели
 // -thinking → длинные паузы → watchdog CC рвёт поток. Поэтому активация как у
@@ -10431,6 +11379,7 @@ function keepaliveInstances() {
         [GO_KEEPALIVE_PORT]: { name: 'GoRouter', spawn: goKeepaliveSpawn },
         [XP_KEEPALIVE_PORT]: { name: 'XPeach', spawn: xpKeepaliveSpawn },
         [JW_KEEPALIVE_PORT]: { name: 'JustWoker', spawn: jwKeepaliveSpawn },
+        [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
         [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
@@ -10760,7 +11709,12 @@ async function handleTbSessionOpen(req, res) {
         proc.stdout.on('data', d => logLine(`tabi session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`tabi session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`tabi session/open spawn error: ${e.message}`));
-        proc.on('exit', (code, sig) => { tbLkPids.delete(label); logLine(`tabi session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.on('exit', (code, sig) => {
+            tbLkPids.delete(label);
+            logLine(`tabi session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('tb', id);
+        });
         proc.unref();
         tbLkPids.set(label, proc.pid);
         const failed = await sessionOpenEarlyFailure(proc);
@@ -11376,7 +12330,12 @@ async function handleXpSessionOpen(req, res) {
         proc.stdout.on('data', d => logLine(`xpeach session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`xpeach session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`xpeach session/open spawn error: ${e.message}`));
-        proc.on('exit', (code, sig) => { xpLkPids.delete(label); logLine(`xpeach session/open: ${label} — exited (code ${code}, sig ${sig})`); });
+        proc.on('exit', (code, sig) => {
+            xpLkPids.delete(label);
+            logLine(`xpeach session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('xp', id);
+        });
         proc.unref();
         xpLkPids.set(label, proc.pid);
         const failed = await sessionOpenEarlyFailure(proc);
@@ -11794,6 +12753,7 @@ const MONEY_GW = {
     // 🪤 host здесь — `api.justwoker.icu` целиком: у JustWoker API и панель на одном
     // поддомене, и ровно эту строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима.
     jw: { tag: 'justwoker',   label: 'JustWoker',   host: 'api.justwoker.icu', keyFile: JW_ACTIVE_KEY_FILE, load: jwLoad, save: jwSave, balanceFn: jwBalance, applyFn: jwApplyBalance },
+    sk: { tag: 'seekai',      label: 'SeekAi',      host: 'seekai.cc',      keyFile: SK_ACTIVE_KEY_FILE, load: skLoad, save: skSave, balanceFn: skBalance, applyFn: skApplyBalance },
 };
 
 const MONEY_AUTO_FILE = path.join(__dirname, '..', 'logs', '.money_autorotate.json');
@@ -12311,8 +13271,56 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/logs')) {
-        const limit = parseInt(new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('limit') || '200', 10);
-        return jsonRes(res, 200, { lines: LOG_BUFFER.slice(-Math.max(1, limit)) });
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const limit = parseInt(q.get('limit') || '200', 10);
+        // `src` разделяет то, что раньше валилось в одну трубу: строки самого дашборда и
+        // строки прокси, приходящие через /logs/ingest с префиксом `[имя]`. Keepalive
+        // логирует КАЖДЫЙ ping, поэтому в общем кольце (400 строк) он за секунды съедал
+        // всё остальное — разобрать прогон чек-ина было физически нечем (25.08).
+        //   all (по умолчанию) — как раньше; dash — только дашборд; <имя> — только этот прокси.
+        const src = String(q.get('src') || 'all');
+        const tags = {};
+        for (const l of LOG_BUFFER) {
+            const m = INGEST_TAG_RE.exec(l);
+            const k = m ? m[1] : 'dash';
+            tags[k] = (tags[k] || 0) + 1;
+        }
+        const pick = src === 'all' ? LOG_BUFFER
+            : src === 'dash' ? LOG_BUFFER.filter(l => !INGEST_TAG_RE.test(l))
+            : LOG_BUFFER.filter(l => { const m = INGEST_TAG_RE.exec(l); return !!m && m[1] === src; });
+        return jsonRes(res, 200, { lines: pick.slice(-Math.max(1, limit)), tags, src });
+    }
+
+    // Прогоны автоподарка/чек-ина: каждый пишет свой файл в logs/ (см. RUN_LOG в
+    // agentrouter/open-session.js). Отдельная труба нужна именно потому, что общее кольцо
+    // затапливает keepalive: файл переживает и это, и рестарт `:8200`.
+    //   без параметров → список прогонов (новые сверху); ?file=<имя> → хвост строк.
+    if (req.method === 'GET' && req.url.startsWith('/__switch/api/ar/checkin-logs')) {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const dir = path.join(__dirname, '..', 'logs');
+        const file = q.get('file');
+        try {
+            if (file) {
+                // Только имя файла нужного вида — никаких путей: параметр приходит из
+                // браузера, и `..\..\settings.json` тут был бы дырой на чтение чего угодно.
+                if (!CHECKIN_LOG_RE.test(file)) return jsonRes(res, 400, { error: 'имя файла не похоже на лог прогона' });
+                const p = path.join(dir, file);
+                if (!fs.existsSync(p)) return jsonRes(res, 404, { error: 'файл не найден' });
+                const limit = parseInt(q.get('limit') || '400', 10);
+                const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/);
+                return jsonRes(res, 200, { name: file, lines: lines.slice(-Math.max(1, limit)) });
+            }
+            const files = (fs.existsSync(dir) ? fs.readdirSync(dir) : [])
+                .filter(n => CHECKIN_LOG_RE.test(n))
+                .map(n => {
+                    const st = fs.statSync(path.join(dir, n));
+                    const m = /^ar-checkin-(.+)-(\d{4}-\d{2}-\d{2}T[\d-]+)\.log$/.exec(n);
+                    return { name: n, label: m ? m[1] : n, at: st.mtimeMs, size: st.size };
+                })
+                .sort((a, b) => b.at - a.at)
+                .slice(0, 30);
+            return jsonRes(res, 200, { files });
+        } catch (e) { return jsonRes(res, 500, { error: e.message }); }
     }
 
     // Прокси (отдельные процессы) шлют сюда свои лог-строки батчами, чтобы они
@@ -12481,7 +13489,7 @@ const server = http.createServer((req, res) => {
     // не сбил бэкенд друга). НИЧЕГО не пишет — только отдаёт JSON в редактор.
     if (req.method === 'GET' && req.url === '/__switch/api/settings/clean-template') {
         try {
-            const tplPath = path.join(__dirname, '..', 'claude-settings.example.json');
+            const tplPath = path.join(__dirname, '..', 'docs', 'claude-settings.example.json');
             const raw = fs.readFileSync(tplPath, 'utf8');
             const tpl = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             // подставить живой ключ/URL из текущего конфига, если он есть
@@ -12872,6 +13880,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tb/set-github') return handleTbSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/set-github') return handleXpSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/set-github') return handleJwSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/set-github') return handleSkSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
@@ -12898,12 +13907,15 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/xp/keepalive/config') return keepaliveXp.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/jw/keepalive/state')  return keepaliveJw.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/keepalive/config') return keepaliveJw.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/sk/keepalive/state')  return keepaliveSk.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/keepalive/config') return keepaliveSk.config(req, res);
     // История времени ответа (график) — startsWith: у запроса есть ?window=<сек>.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/keepalive/latency'))    return keepaliveAr.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/keepalive/latency')) return keepaliveXp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/keepalive/latency')) return keepaliveJw.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/keepalive/latency')) return keepaliveSk.latency(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
@@ -12985,6 +13997,26 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/jw/share')    return handleJwShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/import')   return handleJwImport(req, res);
 
+    // ---- SeekAi (sk) — автономная вкладка, keepalive :20159 → seekai.cc ----
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/sessions')) return handleSkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/ping'))     return handleSkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/balance'))  return handleSkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/models'))   return handleSkModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/sk/active-model') return jsonRes(res, 200, { model: skReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/sk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: skReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/add')       return handleSkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/key')       return handleSkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/rename')    return handleSkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/delete')    return handleSkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/activate')  return handleSkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/set-model') return handleSkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/set-balance') return handleSkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/map-profiles') return handleSkMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/modelmap')  return handleSkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/session/open') return handleSkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/share')    return handleSkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/import')   return handleSkImport(req, res);
+
     // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/om/add')       return handleOmAdd(req, res);
@@ -13015,13 +14047,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/gh/star')            return handleGhStar(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/relink')          return handleGhRelink(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/mark')            return handleGhMark(req, res);
-    // Заселение готовой GitHub-сессии в новый аккаунт New-API-вкладок (ar/go/tb/xp/jw).
+    // Заселение готовой GitHub-сессии в новый аккаунт New-API-вкладок (ar/go/tb/xp/jw/sk).
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/gh/available')) return handleGhAvailable(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/add-github')       return handleTbAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/add-github')       return handleXpAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/add-github')       return handleJwAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/sk/add-github')       return handleSkAddGithub(req, res);
     // ⚡ Авто-заведение: то же, что 🐙 + 🌐 + 🔑, но без человека. Только у JustWoker —
     // сценарий снят рекордером именно с этой панели, у ar/go/tb вход уезжает в попап.
     if (req.method === 'POST' && req.url === '/__switch/api/jw/auto-add')          return handleJwAutoAdd(req, res);
@@ -13091,11 +14124,11 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
         return jsonRes(res, 200, fmAutoStatus());
     }
 
-    // ---- Авторотация денежных шлюзов (ar/go/tb/xp/jw): один набор роутов на все пять ----
+    // ---- Авторотация денежных шлюзов (ar/go/tb/xp/jw/sk): один набор роутов на все шесть ----
     // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
     // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {
@@ -13645,6 +14678,38 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
         } catch (e) {
             res.writeHead(500); return res.end('Dashboard not found: ' + e.message);
         }
+    }
+
+    // Роут не найден. Под /__switch/api/ отвечаем JSON, а не text/plain: в дашборде
+    // ~290 вызовов делают `await res.json()` ДО проверки res.ok, и на текстовом теле
+    // все они падают одинаково бесполезно — `Unexpected token 'N', "Not found."…`,
+    // то есть жалобой на разбор ответа вместо «такого роута нет».
+    //
+    // Так это выглядело на маке 24.08. Кнопка «Обновить» тянет код, HTML читается с
+    // диска на каждый запрос и с no-store (см. выше) — страница становится новой сразу,
+    // без перезапуска. А роуты живут в памяти процесса, и он остаётся старым: новый
+    // фронт позвал POST /__switch/api/ar/auto/start, которого в нём ещё нет. На Windows
+    // это не всплывает — там рабочая копия и есть источник кода, щели не возникает.
+    //
+    // Раз причина в JSON, её видно в тосте, а не только в devtools. Сравнение mtime
+    // файла со временем старта процесса делает утверждение доказательным: «код новее
+    // процесса» — это факт, а не догадка.
+    if ((req.url || '').startsWith('/__switch/api/')) {
+        const bootedAt = new Date(Date.now() - process.uptime() * 1000);
+        let codeAt = null, stale = false;
+        try {
+            codeAt = fs.statSync(__filename).mtime;
+            stale = codeAt > bootedAt;
+        } catch { }
+        const hm = d => d.toTimeString().slice(0, 5);
+        return jsonRes(res, 404, {
+            error: `роут не найден: ${req.method} ${req.url}\n`
+                + (stale
+                    ? `Код на диске правлен в ${hm(codeAt)}, процесс поднят в ${hm(bootedAt)} — работает старый. `
+                    : `Процесс поднят в ${hm(bootedAt)}. Если код обновляли позже — работает старый. `)
+                + `Перезапустить: ${restartHint()}`,
+            not_found: true, stale_process: stale,
+        });
     }
 
     res.writeHead(404, { 'Content-Type': 'text/plain' });

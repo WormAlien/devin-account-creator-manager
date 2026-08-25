@@ -113,12 +113,18 @@ PROJECT_INFO.md
 QUICK_START.md
 SESSIONS_STATUS.md
 
-# Батники (локальные) — но routing/ батники и START/UPDATE/FIX.bat мы пушим
+# Батники: локальные не пушим, точки входа и routing/ — пушим.
+# 🪤 Здесь allowlist, а не blocklist: новый .bat в корне по умолчанию НЕ едет в репо.
+# Так и потерялся SHARE.bat (в README описан, в git его нет вообще), а HUB.bat едва
+# не уехал тем же путём — а на него показывают ВСЕ форвардеры, то есть на свежем
+# клоне под Windows не запускалось бы ничего. Добавил файл в корень — добавь строку.
+#
+# UPDATE.bat / DOCTOR.bat / SHARE.bat / FIX.bat сняты 24.08 при уборке корня (было
+# 30 файлов): обновление, диагностика и «поделиться» стали пунктами меню хаба.
 *.bat
 !routing/*.bat
+!HUB.bat
 !START.bat
-!UPDATE.bat
-!FIX.bat
 
 # Routing dir runtime artefacts
 routing/*.log
@@ -276,6 +282,16 @@ postman/
 # Debug garbage quarantine (swept 2026-08-13, restore via MANIFEST.txt)
 _debug_garbage_*/
 
+# ── SeekAi (вкладка дашборда): приватные данные ───────────────────────────────
+# Провайдер добавлен 25.08, и его папка приехала в дерево нетрекаемой: 726 файлов,
+# среди них профили браузера и ЖИВЫЕ куки GitHub (seekai/gh-sessions/acct_*.json).
+# Репозиторий публичный — `git add -A` без этих строк опубликовал бы их. Код
+# (open-session.js) и modelmap коммитим, всё остальное — никогда.
+seekai/profiles/
+seekai/sessions/
+seekai/gh-sessions/
+routing/seekai-sessions.json
+
 # ── GoRouter (вкладка дашборда): приватные данные ─────────────────────────────
 # Профили браузера (куки GitHub/gorouter, логины, кеш) и живые сессии — НИКОГДА
 # не коммитить. gorouter-modelmap.json — безопасный конфиг маппинга, коммитим.
@@ -326,9 +342,17 @@ justwoker/sessions/
 justwoker/gh-sessions/
 routing/justwoker-sessions.json
 
+# ── SeekAi (вкладка дашборда): приватные данные ───────────────────────────────
+# Профили браузера (куки GitHub/seekai.cc, логины, кеш) и живые сессии — НИКОГДА
+# не коммитить. seekai-modelmap.json — безопасный конфиг маппинга, коммитим.
+seekai/profiles/
+seekai/sessions/
+seekai/gh-sessions/
+routing/seekai-sessions.json
+
 # ── Cookie-jar New-API (routing/lib/newapi-account.js) ────────────────────────
 # Живые session/refresh-куки и access-токены аккаунтов agentrouter/gorouter/tabi/
-# xpeach/justwoker, снятые из профилей Chromium. Refresh-кука одноразовая, поэтому её
+# xpeach/justwoker/seekai, снятые из профилей Chromium. Refresh-кука одноразовая, поэтому её
 # ротированное значение хранится здесь, а не в профиле. НИКОГДА не коммитить.
 routing/newapi-jar.json
 
@@ -354,3 +378,13 @@ routing/finance-history.jsonl
 # строк, в репозитории он мусор. Однажды уехал туда `git add -A` (23.08).
 routing/*.bak-*.html
 routing/*.bak
+
+# точки возврата snapshot-rollback.sh (локальные копии, не в git)
+
+
+# рантайм вотчдога пулов (генерируется)
+routing/pool-alert.json
+routing/pool-watchdog.log
+
+# точки возврата rescue.js (локальные копии состояния, содержат ключи)
+routing/.rescue/

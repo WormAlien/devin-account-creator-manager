@@ -1,71 +1,24 @@
 @echo off
-REM ABUSE HUB — starts transparent-proxy.js (UI on :8200/__switch)
-REM This is NOT a request proxy — it only edits ~/.claude/settings.json
-REM and tells you to restart Claude Code.
-
-cd /d "%~dp0"
-
-REM Kill orphaned browser zombies left by autoregers / LK sessions (real user browser untouched)
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cleanup-reg-procs.ps1"
-
-REM Kill any existing instance on :8200 so we don't get EADDRINUSE
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8200 " ^| findstr LISTENING') do (
-    echo Stopping existing listener on :8200 (PID %%P)
-    taskkill /F /PID %%P >nul 2>&1
-)
-
-echo Starting Freemodel Key Rotator on :20126 ...
-start "FM Rotator" /B node freemodel-rotator.js
-timeout /t 1 /nobreak >nul
-
-REM Kill + start FreeModel OpenAI proxy (:20130) — Anthropic->OpenAI for gpt models
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20130 " ^| findstr LISTENING') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
-echo Starting FreeModel OpenAI Proxy on :20130 ...
-start "FM OpenAI Proxy" /B node freemodel-openai-proxy.js
-timeout /t 1 /nobreak >nul
-
-REM Kill + start VyceAI OpenAI proxy (:20131) — Anthropic->OpenAI for vyceai.com
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20131 " ^| findstr LISTENING') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
-echo Starting VyceAI OpenAI Proxy on :20131 ...
-start "Vyce OpenAI Proxy" /B node vyceai-openai-proxy.js
-timeout /t 1 /nobreak >nul
-
-REM Kill agentrouter proxy (:20132) ? ??????????? boot-spawn'?? transparent-proxy.js
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20132 " ^| findstr LISTENING') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
-
-REM Kill keepalive proxy (:20133) — тоже boot-spawn'ится transparent-proxy.js
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20133 " ^| findstr LISTENING') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
-
-REM Kill front-door (:20100) — единый вход Claude Code, тоже boot-spawn'ится
-REM transparent-proxy.js. Порты :20155-20158 не трогаем: у них автоспавна нет.
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":20100 " ^| findstr LISTENING') do (
-    taskkill /F /PID %%P >nul 2>&1
-)
-
-echo Starting ABUSE HUB on :8200 ...
-start "ABUSE HUB" node transparent-proxy.js
-timeout /t 2 /nobreak >nul
-
-echo Opening switch panel...
-start http://localhost:8200/__switch
-
-echo.
-echo Switch panel:  http://localhost:8200/__switch
-echo Status API:    http://localhost:8200/__switch/api/status
-echo.
-echo Window will stay open. Close it (or press a key) to stop the switcher.
-pause >nul
-taskkill /FI "WINDOWTITLE eq ABUSE HUB*" /F >nul 2>&1
-REM Старый заголовок окна — для окон, поднятых версией до переименования.
-taskkill /FI "WINDOWTITLE eq Backend Switcher*" /F >nul 2>&1
-taskkill /FI "WINDOWTITLE eq FM Rotator*" /F >nul 2>&1
-taskkill /FI "WINDOWTITLE eq FM OpenAI Proxy*" /F >nul 2>&1
-taskkill /FI "WINDOWTITLE eq Vyce OpenAI Proxy*" /F >nul 2>&1
+rem ===========================================================================
+rem  DEPRECATED (2026-08-24). Use HUB.bat in the repo root.
+rem
+rem  This was the previous generation of the launcher and it kept its own copy of
+rem  the port list and of the start logic:
+rem    * `start /B node ...` tied every child to THIS console, so the window
+rem      lived on forever after the script exited;
+rem    * no verification that a port was actually released, so the next start
+rem      could die with EADDRINUSE right after "port freed";
+rem    * cleanup at the end killed by WINDOW TITLE, which misses anything
+rem      started hidden or renamed.
+rem  One implementation now: hub.js -> routing/lifecycle.js.
+rem
+rem  NOTE, and it is a real behaviour change: this file also invoked
+rem  cleanup-reg-procs.ps1 (the orphaned chrome/camoufox sweeper) on every
+rem  dashboard start, and restart-dashboard.bat never did. The sweeper is NOT
+rem  wired into the hub - killing browser processes is a side effect with a blast
+rem  radius, so that call is the owner's decision, not a silent addition. Run it
+rem  by hand when needed:
+rem      powershell -NoProfile -ExecutionPolicy Bypass -File routing\cleanup-reg-procs.ps1
+rem ===========================================================================
+call "%~dp0..\HUB.bat" restart %*
+exit /b %ERRORLEVEL%

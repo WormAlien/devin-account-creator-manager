@@ -177,7 +177,7 @@ CLAUDE_DIR="$HOME/.claude"; mkdir -p "$CLAUDE_DIR"
 if [ -f "$CLAUDE_DIR/settings.json" ]; then
   warn "settings.json уже есть — не трогаю (переключатель сам его правит)."
 else
-  cp claude-settings.example.json "$CLAUDE_DIR/settings.json" && ok "settings.json создан из шаблона"
+  cp docs/claude-settings.example.json "$CLAUDE_DIR/settings.json" && ok "settings.json создан из шаблона"
 fi
 
 # Статуслайн: [provider] provider/model + шкала остатка квоты (как в дашборде).

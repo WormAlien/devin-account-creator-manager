@@ -137,6 +137,7 @@ case "$helper" in
     *gorouter-active-key.txt*)       raw_target="gorouter" ;;
     *xpeach-active-key.txt*)         raw_target="xpeach" ;;
     *justwoker-active-key.txt*)      raw_target="justwoker" ;;
+    *seekai-active-key.txt*)         raw_target="seekai" ;;
     *custom-active-key.txt*)         raw_target="custom" ;;
 esac
 if [ -z "$raw_target" ]; then
@@ -151,15 +152,18 @@ if [ -z "$raw_target" ]; then
         *127.0.0.1:20155*)        raw_target="tabi" ;;
         *127.0.0.1:20156*)        raw_target="gorouter" ;;
         # :20157 обязан стоять ДО catch-all Custom-конвертеров ниже (2015[0-9]),
-        # иначе xpeach определялся бы как custom. То же и :20158 (justwoker).
+        # иначе xpeach определялся бы как custom. То же и :20158 (justwoker), :20159 (seekai).
         *localhost:20157*)        raw_target="xpeach" ;;
         *127.0.0.1:20157*)        raw_target="xpeach" ;;
         *localhost:20158*)        raw_target="justwoker" ;;
         *127.0.0.1:20158*)        raw_target="justwoker" ;;
+        *localhost:20159*)        raw_target="seekai" ;;
+        *127.0.0.1:20159*)        raw_target="seekai" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
         *justwoker.icu*)          raw_target="justwoker" ;;
+        *seekai.cc*)              raw_target="seekai" ;;
         *localhost:8190*)         raw_target="notion" ;;
         *agentrouter.org*)        raw_target="agentrouter" ;;
         *cc.freemodel.dev*)       raw_target="apihelper" ;;
@@ -184,6 +188,7 @@ case "$raw_target" in
     gorouter)                    provider="gorouter" ;;
     xpeach)                      provider="xpeach" ;;
     justwoker)                   provider="justwoker" ;;
+    seekai)                      provider="seekai" ;;
     custom)                      provider="Custom🧪" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
@@ -207,7 +212,7 @@ balance_age_s=-1   # возраст цифры баланса в секунда�
 balance_err=""     # непустая = последняя проверка баланса не удалась (таймаут/dead)
 active_name=""
 
-# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker):
+# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker/seekai):
 # дашборд держит там balance/granted/balanceCheckedAt активного ключа. Читаем блок активного
 # ключа bash-native (0 форков), avail_sum = balance как есть (дашборд уже посчитал точную
 # цифру из /api/user/self либо вывел из вписанного анкера), pct = balance/granted. Ленивый
@@ -383,6 +388,8 @@ elif [ "$provider" = "xpeach" ] && [ -f "$ROUTING/xpeach-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/xpeach-sessions.json" "$PROF/.claude/xpeach-active-key.txt" "xp/balance" 90
 elif [ "$provider" = "justwoker" ] && [ -f "$ROUTING/justwoker-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/justwoker-sessions.json" "$PROF/.claude/justwoker-active-key.txt" "jw/balance" 90
+elif [ "$provider" = "seekai" ] && [ -f "$ROUTING/seekai-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/seekai-sessions.json" "$PROF/.claude/seekai-active-key.txt" "sk/balance" 90
 fi
 
 # ---- render ----------------------------------------------------------------
@@ -532,7 +539,7 @@ fi
 # ложной тревогой. Это отличает блок от 🎁, который считается всегда намеренно
 # (бонус лежит на пуле и важен, даже когда сидишь на другом провайдере).
 case "$provider" in
-    agentrouter|tabi|gorouter|xpeach|justwoker)
+    agentrouter|tabi|gorouter|xpeach|justwoker|seekai)
         rot_raw=""
         [ -f "$LOGS/.money_autorotate.json" ] && rot_raw="$(<"$LOGS/.money_autorotate.json")"
         if [[ "$rot_raw" =~ \"enabled\"[[:space:]]*:[[:space:]]*true ]]; then

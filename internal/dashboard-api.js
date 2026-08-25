@@ -786,26 +786,87 @@ function setNotionCardIndex(value) {
 // session there, the dashboard process stays clean.
 const { spawn } = require('child_process');
 
+// Скрипты жизненного цикла с 2026-08-24 — тонкие форвардеры в hub.js, и звать
+// через них незачем: на маке этот путь был просто СЛОМАН (`bash` по .bat, то есть
+// cmd-синтаксис в bash — кнопка «перезапустить» не работала там вообще), а на
+// Windows добавлял лишнее звено. Имена оставлены: на них показывает UI и чужие
+// ярлыки. Всё, что не в этой таблице, идёт прежним путём.
+const LIFECYCLE_VERBS = {
+    'restart-dashboard.bat': 'restart',
+    'start-switcher.bat': 'restart',
+    'start-proxy.bat': 'start',
+    'stop-dashboard.sh': 'stop',
+};
+
 function launchBatFile(batName) {
+    const verb = LIFECYCLE_VERBS[String(batName).toLowerCase()];
+    if (verb) return launchHub(verb);
+
     const batPath = path.join(PROJECT_ROOT, 'routing', batName);
-    if (!fs.existsSync(batPath)) throw new Error(`bat not found: ${batName}`);
+    // 🪤 На маке .bat запускать нечем: cmd.exe там нет, а `bash file.bat` — это не
+    // запуск, а попытка шелла исполнить cmd-скрипт. Ровно так оно и работало: скрипт
+    // падал отсоединённо в stdio:'ignore', то есть в никуда, API отвечал {ok:true}
+    // (спавн отсоединённого процесса «успешен» всегда), а фронт рисовал зелёное
+    // «▶ restart-dashboard.bat запущен». Человек верил, что перезапустил дашборд, и
+    // оставался на старом процессе — с новым HTML (он читается с диска) и старыми
+    // роутами в памяти. Отсюда «Unexpected token 'N', "Not found."» на маке 24.08.
+    // Теперь берём одноимённый .sh, а если его нет — отказываем словами.
+    let runPath = batPath;
+    if (process.platform !== 'win32' && /\.bat$/i.test(batName)) {
+        const sh = batPath.replace(/\.bat$/i, '.sh');
+        if (!fs.existsSync(sh)) {
+            throw new Error(`на этой системе нечем запустить ${batName} — нет ${path.basename(sh)}`);
+        }
+        runPath = sh;
+    }
+    if (!fs.existsSync(runPath)) throw new Error(`bat not found: ${batName}`);
     if (process.platform === 'win32') {
         // `/c`, а НЕ `/k`. С `/k` cmd оставалась жить после скрипта: бат при нехватке
         // прав поднимает элевированную копию и делает `exit /b` — тот завершает
         // скрипт, но не консоль, и окно-запускалка висело в промпте навсегда. По
         // одному на каждый клик «перезапустить» — они копились десятками.
-        // Держать окно открытым — дело самого бата (у restart-dashboard.bat для этого
-        // свои `choice`/`pause` в конце), а не ключа запуска.
-        spawn('cmd.exe', ['/c', 'start', `"${batName.replace(/\.bat$/i, '')}"`, 'cmd.exe', '/c', batPath], {
+        spawn('cmd.exe', ['/c', 'start', `"${batName.replace(/\.bat$/i, '')}"`, 'cmd.exe', '/c', runPath], {
             cwd: PROJECT_ROOT,
             detached: true,
             stdio: 'ignore',
             windowsHide: false,
         }).unref();
     } else {
-        spawn('bash', [batPath], { cwd: PROJECT_ROOT, detached: true, stdio: 'ignore' }).unref();
+        // Вывод в лог, а не в /dev/null: отсоединённый процесс больше никому не
+        // сообщит, почему он не поднялся (см. ловушку выше).
+        const log = fs.openSync(path.join(PROJECT_ROOT, 'logs', 'hub', 'launch.log'), 'a');
+        spawn('bash', [runPath], { cwd: PROJECT_ROOT, detached: true, stdio: ['ignore', log, log] }).unref();
     }
     return { ok: true, bat: batName };
+}
+
+// Отсоединённый запуск операции хаба. На Windows — в своём окне консоли, чтобы
+// человек видел ход и причину отказа (HUB.bat при ненулевом коде держит окно). На
+// маке окна нет: вывод идёт в logs/hub/launch.log (у самих сервисов по файлу).
+//
+// 🪤 Отсоединение обязательно: перезапуск убивает и ЭТОТ дашборд, то есть родителя.
+// Привязанный ребёнок умер бы вместе с ним на середине — порты погашены, обратно
+// никто не поднял.
+function launchHub(verb) {
+    // Явная проверка вместо молчаливого detached-спавна в пустоту: отсоединённый
+    // процесс не сообщит об ошибке никому, и «нажал перезапустить, ничего не
+    // произошло» осталось бы без причины в логах.
+    if (!fs.existsSync(path.join(PROJECT_ROOT, 'hub.js'))) {
+        throw new Error('hub.js не найден — обнови репо (в нём живёт вся механика запуска)');
+    }
+    if (process.platform === 'win32') {
+        spawn('cmd.exe', ['/c', 'start', '"ABUSE HUB"', 'cmd.exe', '/c',
+            path.join(PROJECT_ROOT, 'HUB.bat'), verb, '--no-open'], {
+            cwd: PROJECT_ROOT, detached: true, stdio: 'ignore', windowsHide: false,
+        }).unref();
+    } else {
+        fs.mkdirSync(path.join(PROJECT_ROOT, 'logs', 'hub'), { recursive: true });
+        const log = fs.openSync(path.join(PROJECT_ROOT, 'logs', 'hub', 'launch.log'), 'a');
+        spawn(process.execPath, [path.join(PROJECT_ROOT, 'hub.js'), verb, '--no-open'], {
+            cwd: PROJECT_ROOT, detached: true, stdio: ['ignore', log, log],
+        }).unref();
+    }
+    return { ok: true, hub: verb };
 }
 
 // ── Email backend для FreeModel autoreger (timeweb | tmailor) ─────────
@@ -864,8 +925,10 @@ function listEmailDomains() {
 function launchScript(kind, extraArgs = []) {
     const node = process.execPath; // current Node binary
     const TARGETS = {
-        'menu':            { title: 'Autoreger Menu',         args: [path.join(PROJECT_ROOT, 'menu.js')] },
-        'devin-autoreg':   { title: 'Devin Autoreger',        args: [path.join(PROJECT_ROOT, 'autoreger.js')] },
+        'menu':            { title: 'Autoreger Menu',         args: [path.join(PROJECT_ROOT, 'internal', 'menu.js')] },
+        // 'devin-autoreg' снят 2026-08-24: autoreger.js не существует ни на диске,
+        // ни в git — Devin свёрнут давно, а кнопка осталась и падала «cannot find
+        // module». Заодно уехал в корзину его осиротевший корневой config.js.
         // FreeModel: 10minutemail-based mass register (v3 — v2/emailnator deprecated)
         'freemodel-create':{ title: 'FreeModel Autoreg v3',   args: [path.join(PROJECT_ROOT, 'freemodel', 'freemodel_autoreger_v3.js')] },
         // FreeModel: single manual login (legacy, for restoring sessions)

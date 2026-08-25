@@ -20,10 +20,13 @@ const chk = (cond, name, why) => {
 };
 
 // URL'ы владельца ДО рефакторинга — эталон обратной совместимости.
+// seekai добавлен 24.08 вместе с шестой вкладкой: до рефакторинга он не существовал,
+// поэтому эталон здесь — не «прежний хардкод», а ссылка, которую дал владелец.
 const WAS = {
     agentrouter: 'https://agentrouter.org/register?aff=oUm3',
     gorouter: 'https://gorouter.app/sign-up?aff=dzj0',
     justwoker: 'https://api.justwoker.icu/sign-up?aff=IFYf',
+    seekai: 'https://seekai.cc/sign-up?aff=prEx',
     tabi: 'https://tabitoken.com/sign-up?aff=cUG3',
     xpeach: 'https://xpeach.codes/sign-up?aff=0lre',
 };
@@ -35,19 +38,24 @@ let rc = null;
 try { rc = require(path.join(ROOT, 'routing', 'lib', 'ref-codes.js')); } catch (e) { /* ниже */ }
 chk(!!rc, 'модуль загружается', rc ? '' : 'require упал');
 if (rc) {
-    chk(rc.PROVIDERS.length === 5, 'провайдеров пять', 'нашлось ' + rc.PROVIDERS.length);
+    chk(rc.PROVIDERS.length === 6, 'провайдеров шесть', 'нашлось ' + rc.PROVIDERS.length);
     for (const p of Object.keys(WAS)) {
         chk(rc.PROVIDERS.includes(p), 'провайдер ' + p + ' в списке');
         chk(rc.url(p) === WAS[p], 'url(' + p + ') совпадает с прежним хардкодом', rc.url(p));
     }
     // Решение владельца 23.08: XPeach легаси и в списки, которые видит человек, не
-    // попадает. Резолв для него обязан остаться — xpeach/open-session.js просит url().
+    // попадает. С 24.08 к нему добавился SeekAi (реселл веб-Клода: подменяет системный
+    // промпт, для Claude Code непригоден). Резолв для обоих обязан остаться —
+    // `<prov>/open-session.js` просит url().
     chk(Array.isArray(rc.ACTIVE_PROVIDERS), 'ACTIVE_PROVIDERS экспортирован');
     chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('xpeach'),
         'XPeach НЕ в живом наборе — легаси, в настройках ему места нет');
+    chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('seekai'),
+        'SeekAi НЕ в живом наборе — легаси с 24.08');
     chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 4,
         'живых провайдеров четыре (ar/go/jw/tb)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
     chk(rc.url('xpeach') === WAS.xpeach, 'url(xpeach) всё ещё резолвится — легаси-скрипт им пользуется');
+    chk(rc.url('seekai') === WAS.seekai, 'url(seekai) всё ещё резолвится — легаси-скрипт им пользуется');
     const saved = rc.user();
     chk(Object.keys(saved).length === 0 || true, 'user() читается');
 }

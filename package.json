@@ -2,13 +2,18 @@
   "name": "hub-cc",
   "version": "2.0.0",
   "description": "ABUSE HUB — Devin · Notion · FreeModel autoregs + Claude Code backend router",
-  "main": "autoreger.js",
+  "main": "hub.js",
   "scripts": {
-    "start": "node autoreger.js",
-    "menu": "node menu.js",
+    "start": "node hub.js start",
+    "hub": "node hub.js",
+    "stop": "node hub.js stop",
+    "restart": "node hub.js restart",
+    "status": "node hub.js status",
+    "menu": "node internal/menu.js",
     "dashboard": "node routing/transparent-proxy.js",
     "tgbot": "node tgbot/bot.js",
-    "check-deps": "node tools/check-deps-tracked.js"
+    "check-deps": "node tools/check-deps-tracked.js",
+    "check-hub": "node tools/check-hub.js"
   },
   "keywords": [
     "abuse-hub",

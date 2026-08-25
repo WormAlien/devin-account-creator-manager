@@ -1,15 +1,11 @@
 @echo off
-echo Starting Transparent Proxy Router...
-cd /d "%~dp0"
-start "Transparent Proxy" node transparent-proxy.js
-timeout /t 2 /nobreak >nul
-echo Opening dashboard...
-start http://localhost:8200/dashboard/
-echo.
-echo Proxy running on http://localhost:8200
-echo Notion dashboard: http://localhost:8200/dashboard/
-echo Switch panel:     http://localhost:8200/__switch
-echo.
-echo Press any key to stop...
-pause >nul
-taskkill /FI "WINDOWTITLE eq Transparent Proxy*" /F >nul 2>&1
+rem ===========================================================================
+rem  DEPRECATED (2026-08-24). Use HUB.bat in the repo root.
+rem
+rem  The oldest of the five launchers: it started transparent-proxy.js alone -
+rem  no FreeModel rotator (:20126), no OpenAI proxies (:20130 / :20131), no port
+rem  cleanup at all - and opened /dashboard/, a URL the switcher UI moved off
+rem  long ago. Kept only as a name that may sit in someone's shortcut.
+rem ===========================================================================
+call "%~dp0..\HUB.bat" start %*
+exit /b %ERRORLEVEL%

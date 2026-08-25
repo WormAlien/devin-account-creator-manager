@@ -1,7 +1,7 @@
 # Recreates the keepalive-proxy.js process on the given port (default :20133).
 #   powershell -NoProfile -ExecutionPolicy Bypass -File keepalive-restart.ps1 -Port 20155
 # Instances: 20133 = AgentRouter, 20155 = Tabi, 20156 = GoRouter, 20157 = XPeach,
-#            20158 = JustWoker.
+#            20158 = JustWoker, 20159 = SeekAi.
 #
 # Normal path is the dashboard button (Health tab -> POST /__switch/api/keepalive/restart).
 # This script is the fallback for when the dashboard itself is down.
@@ -44,9 +44,12 @@ $perPort = @{
   # putting it here would send /v1/v1/messages and the gateway answers 404.
   20158 = @{ UPSTREAM = 'https://api.justwoker.icu'; KEY_FILE = "$profileDir\.claude\justwoker-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'justwoker-modelmap.json') }
+  # SeekAi: same trap - bare root, /v1 is for model listing only.
+  20159 = @{ UPSTREAM = 'https://seekai.cc'; KEY_FILE = "$profileDir\.claude\seekai-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'seekai-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159)"; exit 1
 }
 
 # Kill the current listener

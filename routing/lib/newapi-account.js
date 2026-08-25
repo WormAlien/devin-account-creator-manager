@@ -68,6 +68,17 @@ function cookieDbPath(profileDir) {
     return null;
 }
 
+// Заперта ли БД куки прямо сейчас. Chromium с открытым окном держит
+// `Default/Network/Cookies` исключительно: на Windows и `copyFileSync`, и обычный
+// `openSync(...,'r')` отвечают EBUSY (замерено 2026-08-24 на живом профиле JustWoker).
+// Это НЕ «куки не сохранились» — они есть, просто читать их сейчас нечем.
+function cookieDbLocked(profileDir) {
+    const src = cookieDbPath(profileDir);
+    if (!src) return false;
+    try { fs.closeSync(fs.openSync(src, 'r')); return false; }
+    catch (e) { return e && (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES'); }
+}
+
 // Почему у профиля не нашлось куки — текст прямо в UI, без обращения к машине владельца.
 // Дёшево: модуль в require-кеше, AES-ключ профиля кеширован на процесс.
 function cookieFailReason(profileDir, host) {
@@ -79,6 +90,15 @@ function cookieFailReason(profileDir, host) {
             return 'в профиле нет БД куки — открой ЛК (🌐) и войди в аккаунт';
         }
     } catch {}
+    // 🪤 ЗАПЕРТУЮ БД проверяем ДО всего остального. Иначе получается совет, который
+    // делает хуже: пока окно ЛК этого аккаунта открыто, читать куки нельзя, а текст
+    // «сессия не сохранилась, войди в ЛК заново» отправляет владельца открыть ЛК ещё
+    // раз — то есть держать замок дальше. Ровно в эту петлю упёрся аккаунт
+    // `WA justwoker` 24.08: в кабинете $604.38, в дашборде вписанные вручную $0.26.
+    if (cookieDbLocked(profileDir)) {
+        return 'браузер этого аккаунта ОТКРЫТ — Chromium держит файл куки, прочитать их нельзя.'
+            + ' Закрой окно ЛК, и точный баланс появится сам (перечёт после закрытия автоматический)';
+    }
     // Отсутствие ключа — диагноз ТОЛЬКО если куки реально зашифрованы. У профилей от
     // `chrome-headless-shell` (авто-заведение) ключа нет по устройству, а значения лежат
     // открытым текстом — раньше здесь печаталось «ключ не расшифровался» и уводило
@@ -201,6 +221,37 @@ function mergeSetCookie(jar, key, setCookieList) {
     // бампается ещё и при кеше access-токена, а нам нужно честно сравнивать давность
     // с last_update_utc из профиля (см. effectiveCookieHeader / syncJarToProfile).
     if (changed) { entry.updatedAt = new Date().toISOString(); entry.cookiesAt = entry.updatedAt; }
+    return changed;
+}
+
+// Куки, снятые в ЖИВОМ браузере, — в jar. Зачем отдельная дверь: у Aliyun WAF (шлюзы
+// agentrouter/tabi за ним) проверка построена на JS-челлендже. Браузер его решает сам и
+// получает куку-пруф (`acw_sc__v2`, `cdn_sec_tc`), а наш node-клиент JS не исполняет и на
+// `/api/user/self` получает HTML-заглушку — тот самый «WAF-заглушка (слишком часто)».
+// Пруф-кука СЕССИОННАЯ: в SQLite профиля она не попадает вообще, поэтому чтение профиля
+// её не видит и бэкенд остаётся без пруфа навсегда. Замер 25.08 на `lustrouscult`: в
+// профиле только `acw_tc` и `session`, и одиночный запрос через минуты после прогона всё
+// равно получил заглушку — значит дело не в частоте, а в отсутствии пруфа.
+//
+// Поэтому браузерные сценарии перед закрытием окна отдают сюда ВСЁ, что есть у контекста.
+// → сколько имён записано.
+function putJarCookies(host, profileDir, cookies) {
+    const list = Object.entries(cookies || {}).filter(([k, v]) => k && typeof v === 'string' && v);
+    if (!list.length) return 0;
+    const jar = loadJar();
+    const key = jarKey(host, profileDir);
+    const entry = jar[key] || (jar[key] = { cookies: {} });
+    if (!entry.cookies) entry.cookies = {};
+    let changed = 0;
+    for (const [name, value] of list) {
+        if (entry.cookies[name] !== value) { entry.cookies[name] = value; changed++; }
+    }
+    if (changed) {
+        entry.updatedAt = new Date().toISOString();
+        entry.cookiesAt = entry.updatedAt;
+        entry.fromBrowserAt = entry.updatedAt;
+        saveJar(jar);
+    }
     return changed;
 }
 
@@ -816,11 +867,20 @@ function wafBlocked(res, text) {
 // Остывание после отказа по частоте. Aliyun WAF у agentrouter.org, поймав нас на
 // частых запросах, начинает отбивать ВСЁ — и повторы только продлевают блокировку
 // (проверено: с ретраями пачка из 11 аккаунтов шла 109 секунд и не дала ни одной
-// точной цифры). Поэтому первый же отказ выключает точный путь для хоста на 10
-// минут: остальные аккаунты пачки мгновенно уходят в резерв (анкер), а сервис мы
-// не долбим. Ретраев здесь сознательно нет — они делают только хуже.
+// точной цифры). Ретраев здесь по-прежнему НЕТ, они делают хуже.
+//
+// Но длина паузы 25.08 пересмотрена: было глухих 10 минут на первый же отказ, и это
+// стоило дороже самого отказа — на все 10 минут точный баланс пропадал у ВСЕГО пула, а
+// в таблицу лезла прикидка (владелец: «даже по клику вызывает эту сраную прикидку»).
+// Замер: после залпа чек-ина одиночный запрос через ~20 мин прошёл за 268 мс, а свежий
+// headless прошёл корень сайта сразу — то есть бан короткий, а не десятиминутный.
+// Теперь пауза РАСТЁТ от повторов: 45с → 2м → 5м → 10м (потолок), и сама забывается
+// через 15 минут тишины. Плюс явный клик владельца имеет право на ОДИН пробный запрос
+// (см. `force` в accountSelf): если бан уже снят, цифра появится сразу.
 const HOST_COOLDOWN = new Map();   // host → timestamp, до которого не ходим
-const COOLDOWN_MS = 10 * 60_000;
+const HOST_STRIKES = new Map();    // host → { n, at } сколько раз подряд отбивали
+const COOLDOWN_STEPS_MS = [45_000, 120_000, 300_000, 600_000];
+const STRIKE_FORGET_MS = 15 * 60_000;
 
 function hostCoolingDown(host) {
     const until = HOST_COOLDOWN.get(host) || 0;
@@ -828,7 +888,19 @@ function hostCoolingDown(host) {
 }
 
 function coolDownHost(host) {
-    HOST_COOLDOWN.set(host, Date.now() + COOLDOWN_MS);
+    const prev = HOST_STRIKES.get(host);
+    const fresh = prev && (Date.now() - prev.at) < STRIKE_FORGET_MS;
+    const n = fresh ? Math.min(prev.n + 1, COOLDOWN_STEPS_MS.length) : 1;
+    HOST_STRIKES.set(host, { n, at: Date.now() });
+    HOST_COOLDOWN.set(host, Date.now() + COOLDOWN_STEPS_MS[n - 1]);
+    return COOLDOWN_STEPS_MS[n - 1];
+}
+
+// Запрос прошёл — серию отказов забываем, иначе следующая случайная заглушка начнёт
+// отсчёт не с 45 секунд, а с потолка.
+function clearHostStrikes(host) {
+    if (HOST_STRIKES.has(host)) HOST_STRIKES.delete(host);
+    if (HOST_COOLDOWN.has(host)) HOST_COOLDOWN.delete(host);
 }
 
 async function apiFetch(host, pathQuery, { method = 'GET', body = null, cookie = '', userId = null, bearer = null, timeoutMs = TIMEOUT_MS, jar = null, jarK = null } = {}) {
@@ -944,11 +1016,22 @@ async function accountSelf(opts) {
   }
 }
 
-async function accountSelfInner({ host, profileDir, accessToken = null, userId = null }) {
+// Успешный ответ = серия отказов по частоте закончилась. Без этого сброса следующая
+// случайная заглушка начинала бы отсчёт паузы не с 45 секунд, а с потолка.
+function selfOk(host, data, qpu) {
+    clearHostStrikes(host);
+    return selfToBalance(data, qpu);
+}
+
+async function accountSelfInner({ host, profileDir, accessToken = null, userId = null, force = false }) {
     if (!host) return { ok: false, error: 'host обязателен' };
     const kind = authKind(host);
     const cooling = hostCoolingDown(host);
-    if (cooling) return { ok: false, error: `шлюз отбивает по частоте, пауза ещё ${cooling}с` };
+    // Клик владельца по цифре (force) имеет право на ОДИН пробный запрос сквозь паузу:
+    // бан у WAF короткий, и чаще всего к моменту клика он уже снят. Автоматические тики
+    // паузу соблюдают — именно они её и вызывают.
+    if (cooling && !force) return { ok: false, error: `шлюз отбивает по частоте, пауза ещё ${cooling}с` };
+    if (cooling && force) console.log(`[newapi] ${host}: пауза ещё ${cooling}с, но клик владельца — пробую один раз`);
     const qpu = await quotaPerUnit(host);
     const jar = loadJar();
     const jarK = jarKey(host, profileDir);
@@ -964,7 +1047,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
             const r = kind === 'jwt'
                 ? await apiFetch(host, '/api/user/self', { bearer: token, jar, jarK })
                 : await apiFetchRawAuth(host, '/api/user/self', token);
-            if (r.status === 200 && r.json && r.json.data) return selfToBalance(r.json.data, qpu);
+            if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu);
         } catch { /* токен протух — ниже пробуем куки профиля */ }
     }
 
@@ -992,11 +1075,11 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
         saveJar(j);
         // Ответ refresh уже содержит quota и used_quota — второй запрос не нужен.
         if (rt.user && rt.user.quota != null && rt.user.used_quota != null) {
-            return selfToBalance(rt.user, qpu);
+            return selfOk(host, rt.user, qpu);
         }
         const r = await apiFetch(host, '/api/user/self', { bearer: rt.token });
-        if (r.status === 200 && r.json && r.json.data) return selfToBalance(r.json.data, qpu);
-        if (rt.user && rt.user.quota != null) return selfToBalance(rt.user, qpu);
+        if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu);
+        if (rt.user && rt.user.quota != null) return selfOk(host, rt.user, qpu);
         return { ok: false, error: `self: HTTP ${r.status}` };
     }
 
@@ -1016,10 +1099,25 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     if ((r.status === 401 || r.status === 403) && cookieUid && Number(cookieUid) !== Number(uid)) {
         r = await apiFetch(host, '/api/user/self', { cookie, userId: cookieUid, jar, jarK });
     }
-    if (r.status === 200 && r.json && r.json.data) return selfToBalance(r.json.data, qpu);
+    if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu);
     if (r.waf || r.status === 429) {
         coolDownHost(host);
-        return { ok: false, error: r.waf ? 'WAF-заглушка (слишком часто), пауза 10 мин' : 'слишком часто (429), пауза 10 мин' };
+        // 🪤 Текст «слишком часто» был догадкой и уводил разбор в частоту запросов.
+        // Замер 25.08 (`lustrouscult`, agentrouter): одиночный запрос через минуты после
+        // прогона всё равно получил челлендж, а в куках профиля лежали только `acw_tc` и
+        // `session`. Значит дело не в частоте, а в ОТСУТСТВИИ ПРУФА: Aliyun отдаёт
+        // JS-челлендж, браузер его решает и получает `acw_sc__v2` (кука сессионная, на
+        // диск не попадает), а наш клиент JS не исполняет. Пруф теперь приносит в jar
+        // сам браузер — см. putJarCookies и harvestCookiesToJar в agentrouter/open-session.js.
+        const hasProof = /(^|;\s*)acw_sc__v2=/.test(String(cookie || ''));
+        return {
+            ok: false,
+            error: r.waf
+                ? (hasProof
+                    ? 'WAF отбил запрос даже с пруфом (acw_sc__v2) — пауза 10 мин'
+                    : 'WAF просит JS-челлендж, а пруфа (acw_sc__v2) у нас нет: открой ЛК кнопкой 🌐 или ⚡ — браузер добудет куку. Пауза 10 мин')
+                : 'слишком часто (429), пауза 10 мин',
+        };
     }
     if (r.status === 401 || r.status === 403) {
         return { ok: false, error: `сессия профиля недействительна (HTTP ${r.status})`, stale: true };
@@ -1139,10 +1237,10 @@ async function listAccountKeysInner({ host, profileDir, userId, reveal }) {
 module.exports = {
     QUOTA_PER_UNIT_DEFAULT, HOST_AUTH, authKind,
     profileAesKey, warmAesKeys, readProfileCookies, cookieHeaderFor, githubLogin,
-    cookieBackendReady, cookieFailReason,
+    cookieBackendReady, cookieFailReason, cookieDbLocked,
     writeProfileCookies, syncJarToProfile,
     sessionUserId, userIdFromUsername,
     quotaPerUnit, quotaToUsd, hostGate,
-    loadJar, saveJar, jarKey, effectiveCookieHeader,
+    loadJar, saveJar, jarKey, effectiveCookieHeader, putJarCookies,
     accountSelf, refreshAccessToken, mintAccessToken, listAccountKeys,
 };

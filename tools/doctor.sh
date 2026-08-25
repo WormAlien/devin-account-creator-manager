@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-#  doctor.sh — диагностика, НИЧЕГО не меняет. Пишет отчёт в doctor-report.txt
-#  Запуск: двойной клик DOCTOR.bat (или bash doctor.sh). Отчёт прислать целиком.
+#  doctor.sh — диагностика, НИЧЕГО не меняет. Пишет отчёт в logs/doctor-report.txt
+#  Запуск: пункт «Диагностика» в HUB.bat / HUB.command, либо `node hub.js doctor`,
+#  либо напрямую `bash tools/doctor.sh`. Отчёт прислать целиком.
+#
+#  Переехал из корня в tools/ 2026-08-24 (там накопилось 30 файлов). Отсюда
+#  `cd ..` — весь скрипт написан от корня репо, а не от своей папки.
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
-cd "$(dirname "$0")"
-R="doctor-report.txt"
+cd "$(dirname "$0")/.." || exit 1
+mkdir -p logs
+R="logs/doctor-report.txt"
 
 {
 echo "===== DOCTOR REPORT $(date +%F_%T) ====="
@@ -163,6 +168,17 @@ echo "===== КОНЕЦ ====="
 
 echo
 echo "Отчёт готов: $(pwd -W 2>/dev/null || pwd)/$R"
-echo "Открываю в блокноте — скопируй ВЕСЬ текст и пришли."
-notepad "$R" 2>/dev/null || start notepad "$R" 2>/dev/null || cat "$R"
-read -r -p "Enter для выхода..." _
+echo "Скопируй ВЕСЬ текст и пришли."
+
+# Открыть чем есть: на Windows блокнот, на маке `open -t`, иначе просто вывести.
+# До 24.08 здесь был только notepad, и на маке скрипт молча падал в `cat` —
+# сообщение «открываю в блокноте» при этом всё равно печаталось.
+if command -v notepad >/dev/null 2>&1; then notepad "$R" 2>/dev/null &
+elif [ "$(uname -s)" = "Darwin" ]; then open -t "$R" 2>/dev/null
+else cat "$R"
+fi
+
+# Пауза только при живом терминале: `node hub.js doctor` из скрипта или из
+# планировщика иначе висел бы на ней вечно.
+[ -t 0 ] && read -r -p "Enter для выхода..." _
+exit 0

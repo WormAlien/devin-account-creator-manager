@@ -567,7 +567,7 @@ function randomThemeId() {
         </div>
       </div>
 
-      <!-- Чтим память (deprecated: XPeach, FreeModel, TokenRouter, Devin, Notion) -->
+      <!-- Чтим память (deprecated: XPeach, SeekAi, FreeModel, TokenRouter, Devin, Notion) -->
       <div data-extra-nav="memory" class="mt-4 pt-3 border-t border-line-soft">
         <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
              onclick="const s=this.nextElementSibling;const c=this.querySelector('.chev');s.classList.toggle('hidden');c.classList.toggle('rotate-90')">
@@ -578,6 +578,10 @@ function randomThemeId() {
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="xpeach" title="все ключи 403 banned — регистрация больше не проходит">
             🍑 XPeach
             <span class="text-[10px] font-mono opacity-50" id="nav-count-xpeach">—</span>
+          </button>
+          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="seekai" title="реселл веб-Клода под видом API: свой system-промпт шлюза перебивает наш, для Claude Code непригоден (замер 24.08)">
+            🔎 SeekAi
+            <span class="text-[10px] font-mono opacity-50" id="nav-count-seekai">—</span>
           </button>
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="freemodel" title="автореги свёрнуты — аккаунты и ротатор :20126 остались на месте">
             🆓 FreeModel
@@ -607,9 +611,19 @@ function randomThemeId() {
           <span id="log-title" class="text-[11px] font-medium text-muted truncate flex-1">История уведомлений</span>
           <button onclick="clearLog()" class="text-dim hover:text-crimson text-[10px] shrink-0">Очистить</button>
         </div>
+        <!-- Четыре трубы вместо двух (25.08). Раньше «Server logs» мешали строки дашборда
+             и SSE-прокси: keepalive логирует каждый ping и за секунды съедал кольцо на 400
+             строк — прогон чек-ина потом было нечем разбирать. Подписи короткие, полное
+             имя активной вкладки стоит в заголовке панели (#log-title). -->
         <div class="flex bg-bg rounded-md border border-line-soft overflow-hidden">
-          <button id="log-tab-toasts" onclick="setLogMode('toasts')" class="flex-1 text-[10px] px-2 py-1 text-ink bg-elevated/60">Уведомления</button>
-          <button id="log-tab-server" onclick="setLogMode('server')" class="flex-1 text-[10px] px-2 py-1 text-dim hover:text-ink">Server logs</button>
+          <button id="log-tab-toasts" onclick="setLogMode('toasts')" title="История уведомлений дашборда"
+            class="flex-1 text-[10px] px-2 py-1 text-ink bg-elevated/60">🔔</button>
+          <button id="log-tab-server" onclick="setLogMode('server')" title="Лог самого дашборда :8200, без строк прокси"
+            class="flex-1 text-[10px] px-2 py-1 text-dim hover:text-ink">Дашборд</button>
+          <button id="log-tab-keepalive" onclick="setLogMode('keepalive')" title="SSE keepalive-прокси: пинги, мульти-запросы, ретраи"
+            class="flex-1 text-[10px] px-2 py-1 text-dim hover:text-ink">SSE</button>
+          <button id="log-tab-gift" onclick="setLogMode('gift')" title="Прогоны автоподарка ⚡ и чек-ина 🎁: файлы logs/ar-checkin-*.log"
+            class="flex-1 text-[10px] px-2 py-1 text-dim hover:text-ink">🎁</button>
         </div>
       </div>
       <div id="log-box" class="flex-1 w-full bg-bg overflow-y-auto p-2 space-y-1.5 font-mono text-[11px] leading-relaxed"></div>
@@ -669,21 +683,21 @@ function randomThemeId() {
     </div>
 
     <!-- ═════════ TAB: CLAUDE CODE ═════════ -->
-    <!-- FIN-TAB:BEGIN --><!-- собрано build-fin-tab.js из v16-pro.html, сборка 18.7. Руками не править: правки вносить в черновик и пересобирать. -->
+    <!-- FIN-TAB:BEGIN --><!-- собрано build-fin-tab.js из v16-pro.html, сборка 18.9. Руками не править: правки вносить в черновик и пересобирать. -->
     <div data-tab-content="fin">
       <div class="px-6 py-8 space-y-4">
         <div id="finTab">
 <!-- ═══════════ ВКЛАДКА «ФИНАНСЫ» ═══════════
      СОБРАНО СКРИПТОМ, РУКАМИ НЕ ПРАВИТЬ.
-     Источник: _sandbox/finance-drafts/v16-pro.html, сборка 18.7
-     Сборка фрагмента: node _sandbox/finance-drafts/build-fin-tab.js  (2026-08-23 17:30)
+     Источник: _sandbox/finance-drafts/v16-pro.html, сборка 18.9
+     Сборка фрагмента: node _sandbox/finance-drafts/build-fin-tab.js  (2026-08-25 02:59)
      Вставка: node _sandbox/finance-drafts/inject-fin-tab.js
      Правки вносить в черновик и пересобирать, иначе они потеряются. -->
 <style>
 /* Токены вкладки. В дашборде определены только --color-*, а вкладка работает
    через производные от них. Висят на #finTab, а не на :root, чтобы не течь
    на остальной дашборд. */
-#finTab{--sans:"Geist",-apple-system,"Segoe UI",system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;--bg:var(--color-bg,#0b0e13);--surface:var(--color-surface,#131922);--elevated:var(--color-elevated,#1a212b);--line:var(--color-line,#2c3339);--lineSoft:var(--color-line-soft,#1e242c);--ink:var(--color-ink,#e8ebee);--ink2:var(--color-muted,#c9d1d9);--accent:var(--color-amber,#ff8a3d);--good:var(--color-emerald,#3ddc91);--chainShine:color-mix(in oklab,var(--line) 30%,var(--ink));--spend:#d4661f;--topup:#12a568;--bal:#8a7ecb;--spendHi:color-mix(in oklab,#d4661f 62%,var(--ink));--topupHi:color-mix(in oklab,#12a568 58%,var(--ink));--balHi:color-mix(in oklab,#8a7ecb 58%,var(--ink));--dim:color-mix(in oklab,var(--ink) 68%,var(--surface));--faint:color-mix(in oklab,var(--ink) 62%,var(--surface));--faintE:color-mix(in oklab,var(--ink) 68%,var(--elevated))}
+#finTab{--sans:"Geist",-apple-system,"Segoe UI",system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;--bg:var(--color-bg,#0b0e13);--surface:var(--color-surface,#131922);--elevated:var(--color-elevated,#1a212b);--line:var(--color-line,#2c3339);--lineSoft:var(--color-line-soft,#1e242c);--ink:var(--color-ink,#e8ebee);--ink2:var(--color-muted,#c9d1d9);--accent:var(--color-amber,#ff8a3d);--good:var(--color-emerald,#3ddc91);--chainMetal:color-mix(in oklab,var(--line) 74%,var(--ink));--chainShine:color-mix(in oklab,var(--line) 30%,var(--ink));--cc:#D97757;--spend:#d4661f;--topup:#12a568;--bal:#8a7ecb;--spendHi:color-mix(in oklab,#d4661f 62%,var(--ink));--topupHi:color-mix(in oklab,#12a568 58%,var(--ink));--balHi:color-mix(in oklab,#8a7ecb 58%,var(--ink));--dim:color-mix(in oklab,var(--ink) 68%,var(--surface));--faint:color-mix(in oklab,var(--ink) 62%,var(--surface));--dimE:color-mix(in oklab,var(--ink) 72%,var(--elevated));--faintE:color-mix(in oklab,var(--ink) 68%,var(--elevated))}
 
   /* ── Токены ───────────────────────────────────────────────────────────────
      Черновик — отдельная страница, но целится внутрь дашборда ABUSE HUB, а тот
@@ -947,6 +961,37 @@ function randomThemeId() {
   
   @media (prefers-reduced-motion:reduce){#finTab,#finTab *{animation:none!important;transition:none!important}}
 
+/* ── Единственные правила фрагмента ВНЕ #finTab ─────────────────────────────
+   Купюра долетает до кнопки «Финансы» в сайдбаре и до её счётчика, а они лежат
+   СНАРУЖИ вкладки — префиксованный CSS до них не дотягивается, и в дашборде
+   прилёт был немой: класс навешивался, анимации не было (жалоба владельца 24.08
+   «монетка капает на баланс не реализована как в черновике»). В черновике это
+   правила .nav.flash и .nav .cnt.pop; здесь те же кадры, прибитые к ОДНОЙ кнопке
+   и ОДНОМУ счётчику, чтобы не задеть остальные 27 вкладок. Имена кадров с
+   префиксом fin, чтобы не столкнуться с анимациями дашборда.
+   🪤 Обратные кавычки в этом комментарии ставить нельзя — он внутри шаблонной
+   строки сборщика, и первая же кавычка рвёт файл на синтаксисе. */
+@keyframes finNavFlash{0%{box-shadow:0 0 0 0 transparent}
+  45%{box-shadow:0 0 24px 5px color-mix(in oklab,var(--color-amber,#ff8a3d) 67%,transparent)}
+  100%{box-shadow:0 0 0 0 transparent}}
+.nav-btn[data-tab="fin"].flash{animation:finNavFlash .42s ease-out}
+@keyframes finCntPop{0%{color:var(--color-amber,#ff8a3d);transform:scale(1.3)}
+  100%{color:inherit;transform:none}}
+#nav-count-fin.pop{display:inline-block;animation:finCntPop .6s ease-out}
+/* Летящая купюра и знак «в руке». Оба элемента живут на body — иначе их не пронести
+   с одного канваса на другой, — то есть СНАРУЖИ #finTab, и префиксованные правила
+   .spark/.ghost до них не дотягиваются: элемент терял position:fixed и статичным
+   блоком уезжал в конец страницы («кэшик перелетает где-то внизу и не видно его»).
+   Классы finSpark/finGhost навешивает сам черновик вторыми. */
+.finSpark{position:fixed;left:0;top:0;pointer-events:none;z-index:99;font-size:17px;
+  line-height:1;filter:drop-shadow(0 0 8px color-mix(in oklab,var(--color-emerald,#3ddc91) 67%,transparent))}
+.finGhost{position:fixed;z-index:98;pointer-events:none;line-height:1;
+  transform:translate(-50%,-50%) rotate(-8deg);filter:drop-shadow(0 8px 12px #000a);
+  transition:transform .12s,filter .12s}
+.finGhost.burn{transform:translate(-50%,-50%) scale(1.35) rotate(8deg);
+  filter:drop-shadow(0 0 18px var(--color-amber,#ff8a3d))}
+@media (prefers-reduced-motion:reduce){
+  .nav-btn[data-tab="fin"].flash,#nav-count-fin.pop{animation:none!important}}
 </style>
 
     <h1>Финансы <span class="fxChip" id="fxChip">₽/$ <b>—</b></span></h1>
@@ -1013,10 +1058,10 @@ function randomThemeId() {
 
     <div class="card">
       <div class="chead"><h2>Токены · <span id="pTitle2">7 дней</span></h2>
-        <div class="legend"><span><i style="background:var(--spend)"></i>оценка объёма из расхода дашборда</span></div></div>
+        <div class="legend"><span><i style="background:var(--spend)"></i><span id="tokLgd">оценка объёма из расхода дашборда</span></span></div></div>
       <div class="kpi">
         <span>работы сделано<b id="tWork">—</b></span>
-        <span>расход с дашборда<b id="tOfficial" style="color:var(--spendHi)">—</b></span>
+        <span>по прайсу Anthropic<b id="tOfficial" style="color:var(--spendHi)">—</b></span>
         <span>стоило нам<b id="tOurs" style="color:var(--topupHi)">—</b></span>
         <span>наш курс за 1M<b id="tRate">—</b></span>
       </div>
@@ -1031,6 +1076,12 @@ function randomThemeId() {
          с `transform`/`filter`, они создают ему containing block. При вклейке в дашборд
          проверить глазами, что слой считается от окна, а не от карточки. -->
     <canvas id="cGraph" class="gLayer"></canvas>
+    <!-- Подсказка графиков. ⚠ Лежит ВНУТРИ вкладки по той же причине, что слой графа:
+         иначе сборщик её не забирает, и в дашборде вкладка остаётся вообще без
+         элемента `#tip` — наведение на график молча ничего не показывает (жалоба
+         владельца 24.08: «бейджей нет на графиках, которые детально показывают»).
+         `position:fixed`, так что место в DOM на вид не влияет. -->
+    <div class="tip" id="tip"></div>
 <script>
 /* vendor: matter.min.js */
 /*!
@@ -1969,9 +2020,23 @@ CPROBE.style.cssText = 'position:absolute;left:-9999px;top:0;width:0;height:0;po
 const CBUF = document.createElement('canvas'); CBUF.width = CBUF.height = 1;
 const CBCTX = CBUF.getContext('2d', { willReadFrequently: true });
 let CCACHE = {};
+// 🪤 Пробник обязан висеть ВНУТРИ вкладки, а не на body. Свои токены вкладки
+// (`--cc`, `--chainMetal`, `--ink`…) в дашборде объявлены на её контейнере
+// `#finTab`, а не на `:root`: иначе они текли бы на остальные 27 вкладок. Для
+// элемента на `body` они не существуют — и `color:var(--cc)` становится
+// «невалидным на этапе вычисления», то есть `color` НАСЛЕДУЕТСЯ. Маркерный
+// пиксель это не ловит: пришёл честный цвет, просто чужой. Так логотипы Claude
+// Code в куче стали БЕЛЫМИ (цвет текста тёмной темы) вместо терракоты, а цепь —
+// светло-серой; на скриншотах свежей установки видно и то, и другое.
+function tokenHost() {
+  return document.getElementById('finTab')      // вкладка внутри дашборда
+      || document.getElementById('vFin')        // черновик
+      || document.body;
+}
 function themeColor(expr, fallback) {
   if (CCACHE[expr]) return CCACHE[expr];
-  if (!CPROBE.isConnected) document.body.appendChild(CPROBE);
+  const host = tokenHost();
+  if (CPROBE.parentNode !== host) host.appendChild(CPROBE);
   CPROBE.style.color = 'rgb(1,2,3)';
   CPROBE.style.color = expr;
   const c = getComputedStyle(CPROBE).color;
@@ -2180,9 +2245,13 @@ function chainFrame(w, h, link) {
   // срезались краем канваса — ровно то, что было видно как «обрезаны невидимой
   // стеной»: обрезал не мир Matter, а сам битмап.
   const off = R + lwOut / 2 + 1;
-  const cs = getComputedStyle(document.documentElement);
-  const metal = cs.getPropertyValue('--chainMetal').trim() || '#5a636e';
-  const shine = cs.getPropertyValue('--chainShine').trim() || '#8b949f';
+  // 🪤 Через `getPropertyValue('--chainMetal')` этот цвет брать нельзя: у кастомного
+  // свойства вычисленное значение — сама подстановка, то есть строка
+  // `color-mix(in oklab,…)`, а канвас её не понимает и МОЛЧА оставляет прежний
+  // strokeStyle (грабля 31). Плюс в дашборде токен висит на `#finTab`, и с
+  // `documentElement` он не читается вовсе. Оба случая закрывает резолвер.
+  const metal = themeColor('var(--chainMetal)', '#5a636e');
+  const shine = themeColor('var(--chainShine)', '#8b949f');
   const oval = (x, y, flat) => {
     const rx = flat ? R : R * .42, ry = flat ? R * .58 : R;
     g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, 6.283);
@@ -2265,18 +2334,18 @@ function makeFigure(canvas, opts) {
   let baking = 0, built = -1;
   // Цвета берутся из темы ОДИН раз на фигуру и кладутся в st: канвас не понимает
   // `var(--…)`, а спрашивать getComputedStyle каждый кадр — это принудительный
-  // пересчёт стилей 60 раз в секунду.
-  const cs = getComputedStyle(document.documentElement);
+  // пересчёт стилей 60 раз в секунду. Читаются резолвером, а не с
+  // `documentElement`: в дашборде свои токены вкладки висят на `#finTab`.
   const st = { hot:false, font:15, emb:[], near:null, burned:0,
     chain: opts.chain || 0, rattle: 0,
     // Подложка под знаком закрывает щель между рядами: логотип приплюснутый
     // 1.6 : 1, а тела круглые, и без неё куча читается полосами.
-    pad: cs.getPropertyValue('--cc').trim() || '#D97757',
+    pad: themeColor('var(--cc)', '#D97757'),
     // Свечение под горсткой — в языке индикатора запаса дашборда: холодная
     // энергия, а не пламя. ALPHA подставляется на кадре.
     aura: 'rgba(61,220,145,ALPHA)',
     // Точка «живой аккаунт» — тот же признак, которым дашборд помечает LIVE.
-    live: cs.getPropertyValue('--good').trim() || '#3ddc91' };
+    live: themeColor('var(--good)', '#3ddc91') };
 
   function fit(count) {
     // Радиусы масштабируются вместе с доской. Это принципиально: если на широком
@@ -2439,7 +2508,10 @@ function makeFigure(canvas, opts) {
     });
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     ghost = document.createElement('div');
-    ghost.className = 'ghost';
+    // Второй класс — для дашборда: элемент живёт на `body`, то есть СНАРУЖИ `#finTab`,
+    // и префиксованное правило `.ghost` до него не дотягивается. Хостовый блок
+    // сборщика красит `.finGhost`. См. HANDOFF § грабля 50.
+    ghost.className = 'ghost finGhost';
     ghost.style.fontSize = Math.round(opts.dragPx || 26) + 'px';
     // Гроздь в руке — те же знаки со смещениями, видно, сколько взял. Здесь это
     // не эмодзи, а тот же SVG-путь: `background-image` из data-URI, иначе рука
@@ -2693,9 +2765,8 @@ function makeFigure(canvas, opts) {
   // поэтому при переключении темы их надо снять заново, иначе фигура остаётся в
   // палитре прежней темы до перезагрузки страницы.
   function retheme() {
-    const c2 = getComputedStyle(document.documentElement);
-    st.pad = c2.getPropertyValue('--cc').trim() || '#D97757';
-    st.live = c2.getPropertyValue('--good').trim() || '#3ddc91';
+    st.pad = themeColor('var(--cc)', '#D97757');
+    st.live = themeColor('var(--good)', '#3ddc91');
     for (const k of Object.keys(CHAINS)) delete CHAINS[k];   // металл цепи считается от --line
     dirty = true;
   }
@@ -2732,6 +2803,10 @@ function drawPile(ctx, bodies, tick, W, H, hot, st) {
     ctx.save(); ctx.translate(b.position.x, b.position.y);
     // Подсветка грозди под курсором: видно, что возьмётся по клику.
     if (near && near.indexOf(b) >= 0) ctx.scale(1.14, 1.14);
+    // Наклон = физический угол тела + свой разброс. Знаки в куче лежат вповалку, и это
+    // ПРИНЯТЫЙ вид: владелец 24.08 — «с клеткой этой не было проблем, логотип перекрасить
+    // только надо было». Рисовать от одного `plugin.rot` (знаки строго прямо) пробовали
+    // 24.08 — куча превращается в кирпичную кладку, вид отклонён.
     ctx.rotate(b.angle + b.plugin.rot);
     // Лёгкое растяжение по направлению полёта: у летящего тела масса «чувствуется».
     if (!b.isStatic) {
@@ -2926,9 +3001,9 @@ function makeGraph(canvas, anchor) {
   // 14 % за кадр, а на ПЕРВОМ видимом кадре ставятся сразу — чтобы фигура не появлялась
   // узкой и не расползалась на глазах. Во время тяги цель заморожена: иначе за
   // утаскиваемым узлом ехала бы вся сцена.
-  let ox = 0, oy = 0, kx = 1, tox = 0, toy = 0, tkx = 1, primed = false;
+  let ox = 0, oy = 0, kx = 1, kz = 1, tox = 0, toy = 0, tkx = 1, tkz = 1, primed = false;
   function retarget() {
-    if (!nodes.length) { tox = toy = 0; tkx = 1; return; }
+    if (!nodes.length) { tox = toy = 0; tkx = 1; tkz = 1; return; }
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
     for (const p of nodes) {
       x0 = Math.min(x0, p.x - p.r); x1 = Math.max(x1, p.x + p.r);
@@ -2936,14 +3011,32 @@ function makeGraph(canvas, anchor) {
     }
     const r = anchor.getBoundingClientRect();
     tkx = Math.max(1, Math.min(2, (r.width - 30) / Math.max(80, x1 - x0)));
-    tox = -(x0 + x1) / 2 * tkx; toy = -(y0 + y1) / 2;
+    // Общий зум под размер места. Нужен из-за того, что размах облака задаёт равновесие
+    // сил, а оно зависит от ЧИСЛА узлов: на 48 аккаунтах облако само занимает 414×258 в
+    // месте 462×330, а на трёх — треугольник 117×48 посреди пустоты. Владелец увидел это
+    // на свежей установке: «мелкие, съехали от центра, не кликаются». Съехали они не
+    // по-настоящему (центр сходится в пределах 6 px), но крошечное облако в большом месте
+    // читается именно так, а диск радиусом 9 px мышью не поймать.
+    //   · порог 1.12 — принятый вид на 48 узлах остаётся байт в байт: там зум выходит 1.0;
+    //   · потолок 3.2 — дальше три точки превращаются в мишени;
+    //   · радиусы растут как √зум, а не линейно: на трёх узлах диск выходит 15.9 px,
+    //     то есть ровно тот, каким владелец принял вид, а место при этом заполнено.
+    const availW = r.width - 48, availH = r.height - 72;
+    const sw = Math.max(1, (x1 - x0) * tkx), sh = Math.max(1, y1 - y0);
+    const z = Math.min(availW / sw, availH / sh);
+    tkz = z < 1.12 ? 1 : Math.min(3.2, z);
+    tox = -(x0 + x1) / 2 * tkx * tkz; toy = -(y0 + y1) / 2 * tkz;
   }
+  // Радиус на экране: зум по радиусу берётся корнем, см. retarget.
+  const RZ = () => Math.sqrt(kz);
   // Доводка. Возвращает true, если ещё едем — тогда кадр перерисовывается.
   function ease() {
-    if (!primed) { ox = tox; oy = toy; kx = tkx; primed = true; return true; }
-    const d = Math.abs(tox - ox) + Math.abs(toy - oy) + Math.abs(tkx - kx) * 400;
-    if (d < .4) { ox = tox; oy = toy; kx = tkx; return false; }
+    if (!primed) { ox = tox; oy = toy; kx = tkx; kz = tkz; primed = true; return true; }
+    const d = Math.abs(tox - ox) + Math.abs(toy - oy) + Math.abs(tkx - kx) * 400
+            + Math.abs(tkz - kz) * 400;
+    if (d < .4) { ox = tox; oy = toy; kx = tkx; kz = tkz; return false; }
     ox += (tox - ox) * .14; oy += (toy - oy) * .14; kx += (tkx - kx) * .14;
+    kz += (tkz - kz) * .14;
     return true;
   }
   const center = () => {
@@ -3053,22 +3146,24 @@ function makeGraph(canvas, anchor) {
     ctx.save();
     ctx.translate(c.x, c.y);
     const hi = (drag && drag.p) || hover;
-    const X = p => p.x * kx;                 // растяжение под форму места, см. recenter
+    const X = p => p.x * kx * kz;             // растяжение под форму места + зум, см. retarget
+    const Y = p => p.y * kz;
+    const rz = RZ();
     // Связи: сначала все, потом связи подсвеченного — иначе яркая линия уходит под
     // тусклые.
     for (let pass = 0; pass < 2; pass++) for (const l of links) {
       const on = !!(hi && (l.a === hi || l.b === hi));
       if (on !== !!pass) continue;
-      ctx.beginPath(); ctx.moveTo(X(l.a), l.a.y); ctx.lineTo(X(l.b), l.b.y);
+      ctx.beginPath(); ctx.moveTo(X(l.a), Y(l.a)); ctx.lineTo(X(l.b), Y(l.b));
       ctx.lineWidth = on ? 2 : 1.05;
       ctx.strokeStyle = on ? st.edgeHi : hi ? st.edgeFar : st.edge;
       ctx.stroke();
     }
     for (const p of nodes) {
       ctx.globalAlpha = !hi || p === hi || hi.adj.has(p) ? 1 : .26;
-      const d = p.r * 2, x = X(p);
+      const pr = p.r * rz, d = pr * 2, x = X(p), y = Y(p);
       ctx.drawImage(discSprite(Math.round(d * DPR), st.ink, p.data.kind || 'gh'),
-        x - p.r, p.y - p.r, d, d);
+        x - pr, y - pr, d, d);
       // Точка статуса — тот же язык, что у ключей в дашборде: живой зелёный,
       // остывающий янтарный, мёртвый — без точки вовсе (красный у вкладки занят
       // расходом, и заводить для «мёртвого» свой цвет незачем).
@@ -3076,11 +3171,11 @@ function makeGraph(canvas, anchor) {
         : p.data.status === 'cooldown' ? st.warn : null;
       if (dot) {
         ctx.beginPath();
-        ctx.arc(x + p.r*.72, p.y - p.r*.72, Math.max(1.3, p.r*.3), 0, 6.283);
+        ctx.arc(x + pr*.72, y - pr*.72, Math.max(1.3, pr*.3), 0, 6.283);
         ctx.fillStyle = dot; ctx.fill();
       }
       if (p === hi) {
-        ctx.beginPath(); ctx.arc(x, p.y, p.r + 3, 0, 6.283);
+        ctx.beginPath(); ctx.arc(x, y, pr + 3, 0, 6.283);
         ctx.lineWidth = 1.4; ctx.strokeStyle = st.live; ctx.stroke();
       }
     }
@@ -3090,8 +3185,8 @@ function makeGraph(canvas, anchor) {
     if (hi) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.lineJoin = 'round';
       ctx.globalAlpha = 1;
-      ctx.font = '9.5px ' + MONO;
-      const y = hi.y + hi.r + 3;
+      ctx.font = (9.5 * Math.min(1.5, rz)).toFixed(1) + 'px ' + MONO;
+      const y = Y(hi) + hi.r * rz + 3;
       ctx.lineWidth = 3.4; ctx.strokeStyle = st.surf;
       ctx.strokeText(hi.label, X(hi), y);
       ctx.fillStyle = st.ink; ctx.fillText(hi.label, X(hi), y);
@@ -3132,14 +3227,17 @@ function makeGraph(canvas, anchor) {
   // накрыл бы страницу целиком и ни одна кнопка под ним не нажималась бы.
   const at = e => {
     const c = center();
-    return { x: (e.clientX - c.x) / kx, y: e.clientY - c.y };
+    return { x: (e.clientX - c.x) / (kx * kz), y: (e.clientY - c.y) / kz };
   };
   const pick = w => {
     let best = null, bd = 1e9;
+    const rz = RZ();
     for (const p of nodes) {
-      // Допуск по x делится на растяжение: в экранных пикселях узел не стал шире.
-      const d = Math.hypot((p.x - w.x) * kx, p.y - w.y);
-      if (d <= p.r + 5 && d < bd) { best = p; bd = d; }
+      // Считаем в ЭКРАННЫХ пикселях: допуск по x делится на растяжение, а радиус диска
+      // растёт вместе с зумом — иначе на малом числе аккаунтов зона попадания осталась бы
+      // от нарисованного круга в стороне (диск 16 px, а ловится 9 px).
+      const d = Math.hypot((p.x - w.x) * kx * kz, (p.y - w.y) * kz);
+      if (d <= p.r * rz + 6 && d < bd) { best = p; bd = d; }
     }
     return best;
   };
@@ -3205,7 +3303,8 @@ function makeGraph(canvas, anchor) {
     // Экранные координаты узлов — ими проверяются руки со стороны; перебором точек по
     // канвасу это не проверка, а угадывание.
     points: () => { const c = center(); return nodes.map(p => ({ label: p.label,
-      deg: p.deg, sx: Math.round(c.x + p.x * kx), sy: Math.round(c.y + p.y) })); },
+      deg: p.deg, sx: Math.round(c.x + p.x * kx * kz), sy: Math.round(c.y + p.y * kz),
+      sr: +(p.r * Math.sqrt(kz)).toFixed(1) })); },
     // Ручка для калибровки сил из консоли: `__fig.graph.tune({qOut:6})` пересобирает
     // раскладку и доводит её до покоя. Нужна каждый раз, когда владелец говорит про вид
     // облака: сметать силы по одному перезагрузу за правку — полдня.
@@ -3219,10 +3318,22 @@ function makeGraph(canvas, anchor) {
         if (Math.hypot(a.x - b.x, a.y - b.y) < a.r + b.r - .5) over++;
       }
       const xs = nodes.map(p => p.x), ys = nodes.map(p => p.y);
+      const slot = anchor.getBoundingClientRect();
+      const pts = nodes.map(p => ({ x: p.x * kx * kz, y: p.y * kz }));
       return { n: nodes.length, links: links.length,
         settled: alpha === 0 && !drag, alpha: +alpha.toFixed(4), overlaps: over,
-        cloud: nodes.length ? { w: Math.round(Math.max(...xs) - Math.min(...xs)),
-                                h: Math.round(Math.max(...ys) - Math.min(...ys)) } : null,
+        // Облако в ЭКРАННЫХ пикселях: раньше здесь была модельная система координат, и
+        // «58×48 в месте 462×330» читалось как «облако крошечное», хотя растяжение по x
+        // уже было применено. Сравнивать размер с местом можно только в одних единицах.
+        cloud: nodes.length ? { w: Math.round(Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x))
+                                  + 2 * Math.max(...nodes.map(p => p.r)) * Math.sqrt(kz)),
+                                h: Math.round(Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y))
+                                  + 2 * Math.max(...nodes.map(p => p.r)) * Math.sqrt(kz)),
+                                model: { w: Math.round(Math.max(...xs) - Math.min(...xs)),
+                                         h: Math.round(Math.max(...ys) - Math.min(...ys)) } } : null,
+        slot: { w: Math.round(slot.width), h: Math.round(slot.height) },
+        zoom: +kz.toFixed(2), stretchX: +kx.toFixed(2),
+        nodeR: nodes.length ? +(nodes[0].r * Math.sqrt(kz)).toFixed(1) : null,
         hover: hover && hover.label, layer: { w: W, h: H, dpr: DPR } };
     } };
 }
@@ -3523,7 +3634,11 @@ function flySpark(fromEl, toEl) {
   const x1 = b.left + b.width/2, y1 = b.top + b.height/2;
   const cx = (x0+x1)/2, cy = Math.min(y0, y1) - 90;
   const el = document.createElement('div');
-  el.className = 'spark'; el.textContent = '💵';
+  // 🪤 Купюра лежит на `body`, снаружи `#finTab`: без второго класса в дашборде она
+  // теряет `position:fixed` (правило `.spark` префиксовано) и вместо полёта по экрану
+  // уезжает статичным блоком в конец страницы — «кэшик перелетает где-то внизу и не
+  // видно его» (владелец, 25.08). Хостовый блок сборщика красит `.finSpark`.
+  el.className = 'spark finSpark'; el.textContent = '💵';
   document.body.appendChild(el);
   const p = { t:0 };
   gsap.to(p, { t:1, duration:.9, ease:'power2.inOut',
@@ -3558,8 +3673,19 @@ function series(preset) {
   // Токены здесь — оценка объёма из расхода, а не источник цифры.
   if (live && live.range === preset) {
     return { conf: { n: live.buckets.length },
-      rows: live.buckets.map((b, i) => ({ i, k: b.k, spend: b.spend, topup: b.topup,
-        tokens: b.spend / OPUS_PER_M, balance: back.balance })) };
+      rows: live.buckets.map((b, i) => {
+        // Настоящие токены считает front-door :20100 и отдаёт бэк в полях
+        // t*: через front-door идут ВСЕ харнессы (Claude Code, opencode, скрипты).
+        // Пока журнала нет — старая оценка по расходу, но она врёт: замер 25.08
+        // показал ставку шлюзов ≈ $2.05 за 1M против зашитых в оценку $25,
+        // то есть занижение примерно в 12 раз. Признак «цифра настоящая» —
+        // `real`, от него зависят подписи и расчёт официальной цены.
+        const mix = { in: +b.tin || 0, out: +b.tout || 0, cr: +b.tcr || 0, cw: +b.tcw || 0 };
+        const real = (mix.in + mix.out + mix.cr + mix.cw) > 0;
+        return { i, k: b.k, spend: b.spend, topup: b.topup, balance: back.balance,
+          mix, real, gwCost: +b.tcost || 0, req: +b.treq || 0,
+          tokens: real ? (mix.in + mix.out + mix.cr + mix.cw) / 1e6 : b.spend / OPUS_PER_M };
+      }) };
   }
   seed = 20260821;
   const conf = { day:  { n:24, spend:14,  topup:0,   burst:.10 },
@@ -3643,7 +3769,32 @@ function fitViewBox(sel, H) {
   svg.setAttribute('height', H);
   return CW;
 }
-const OPUS_PER_M = 25;                       // $ за 1M выходных токенов Opus
+// Прайс Anthropic за 1M токенов, Claude Opus 5: вход $5, выход $25, чтение кеша
+// $0.50, запись кеша (5 мин) $6.25.
+// 🪤 `OPUS_PER_M` — цена ВЫХОДНЫХ токенов, и до 25.08 на неё делился весь расход
+// шлюза, чтобы получить объём работы. Это было неверно дважды: смешивало две
+// валюты (доллары шлюза против прайса Anthropic) и брало самую дорогую строку
+// прайса на массу, где выход — 0.3 %. Осталась только как ОЦЕНКА на случай, когда
+// журнала настоящих токенов ещё нет.
+const PRICE_PER_M = { in: 5, out: 25, cr: 0.5, cw: 6.25 };
+const OPUS_PER_M = PRICE_PER_M.out;          // только для оценки без журнала
+// Официальная цена НАСТОЯЩЕЙ смеси: считается по составу, а не по одной ставке.
+// На замере 20–25.08 (5 105M токенов: вход 4 027M, кеш-чтение 760M, кеш-запись
+// 303M, выход 16M) выходит $4.47 за 1M — вот эта цифра и есть «сколько это стоило
+// бы официально», а не 25.
+function officialCost(rows) {
+  let usd = 0, real = false;
+  for (const r of rows || []) {
+    if (r.real && r.mix) {
+      real = true;
+      usd += (r.mix.in * PRICE_PER_M.in + r.mix.out * PRICE_PER_M.out
+            + r.mix.cr * PRICE_PER_M.cr + r.mix.cw * PRICE_PER_M.cw) / 1e6;
+    } else {
+      usd += (r.tokens || 0) * OPUS_PER_M;   // оценка: другого состава нет
+    }
+  }
+  return { usd, real };
+}
 // Наш курс: реально уплаченные рубли, поделённые на всю сделанную работу.
 // Считается от токенов за период — то есть отвечает на «во сколько мне встал
 // этот объём», а не «сколько стоил бы он у Anthropic».
@@ -3870,13 +4021,23 @@ function renderCharts(animate = true) {
   roll('#kAvg', sumS/rows.length, v => '$' + v.toFixed(1));
   roll('#kBal', back.balance, v => '$' + f0(v));
 
-  // отчёт по работе: объём — оценка из расхода дашборда, цена по прайсу и наша
+  // Отчёт по работе. Объём — настоящие токены из журнала front-door, если он есть;
+  // иначе оценка по расходу (и подпись честно говорит, что это оценка). Цена —
+  // по составу смеси, а не по одной ставке: см. officialCost.
   const tok = rows.reduce((a,r) => a + r.tokens, 0);
   const rate = ourPerM();
+  const off = officialCost(rows);
+  const reqs = rows.reduce((a,r) => a + (r.req || 0), 0);
   roll('#tWork', tok, v => v.toFixed(1) + 'M токенов');
-  roll('#tOfficial', tok * OPUS_PER_M, v => '$' + f0(v));
+  roll('#tOfficial', off.usd, v => '$' + f0(v));
   roll('#tOurs', tok * rate, v => '$' + v.toFixed(2));
-  $('#tRate').textContent = '$' + rate.toFixed(3) + ' против $' + OPUS_PER_M;
+  // Против чего сравниваем: официальная ставка ЭТОЙ смеси, а не цена выхода Opus.
+  const offPerM = tok ? off.usd / tok : 0;
+  $('#tRate').textContent = '$' + rate.toFixed(3) + ' против $' + offPerM.toFixed(2);
+  const lgd = $('#tokLgd');
+  if (lgd) lgd.textContent = off.real
+    ? `настоящие токены из front-door · ${f0(reqs)} запросов`
+    : 'оценка объёма из расхода дашборда — журнала токенов ещё нет';
 }
 document.querySelectorAll('#presets button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#presets button').forEach(x => x.classList.remove('on'));
@@ -3920,7 +4081,7 @@ async function loadLive(range) {
 
 
 
-const BUILD = '18.7';
+const BUILD = '18.9';
 // Самодиагностика «чёрного текста». Страница проверяет, кто победил в каскаде:
 // если вычисленный цвет значения не тот, что задан в стилях, значит красит
 // что-то извне (расширение тёмной темы, авто-дарк браузера, пользовательский
@@ -3929,12 +4090,18 @@ const BUILD = '18.7';
 function selfCheck() {
   const el = $('#tWork');
   if (!el) return '';
-  const c = getComputedStyle(el).color.replace(/\s/g, '');
+  // 🪤 Сверять с зашитым `rgb(232,235,238)` нельзя: это цвет ДО перехода на токены
+  // (17.7). В дашборде тема отдаёт ink как `oklch(…)`, и проверка ругалась всегда,
+  // на каждой теме — «⚠ цвет значений oklch(0.965 0.012 253.9)» в строке сборки.
+  // Ложная тревога хуже отсутствия проверки: смотреть на неё перестают. Сравниваем
+  // с тем же ink темы, приведя оба значения к sRGB через общий резолвер.
+  const c = themeColor(getComputedStyle(el).color, '#e8ebee');
+  const want = themeColor('var(--ink)', '#e8ebee');
   const dr = document.querySelector('style.darkreader, style#dark-reader-style,'
     + ' style[class*=darkreader]');
   const filt = getComputedStyle(document.documentElement).filter;
   const bad = [];
-  if (c !== 'rgb(232,235,238)') bad.push('цвет значений ' + c);
+  if (c !== want) bad.push('цвет значений ' + c + ' вместо ' + want);
   if (dr) bad.push('Dark Reader активен');
   if (filt && filt !== 'none') bad.push('фильтр на странице: ' + filt);
   return bad.join(' · ');
@@ -4304,7 +4471,9 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
             </select>
             <button onclick="loadDevinSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
             <button onclick="loadDevinSessions(true)" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🔄 Квоты ~30s</button>
-            <button onclick="launchScript('devin-autoreg', '➕ Devin autoreg запущен в новом окне')" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить аккаунт</button>
+            <!-- «➕ Добавить аккаунт» снята 2026-08-24: она звала autoreger.js, которого
+                 нет ни на диске, ни в git — Devin свёрнут давно. Сама вкладка живая,
+                 существующие сессии читаются и квоты обновляются. -->
             <button onclick="launchScript('menu', '🗂 menu.js открыт в новом окне')" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line" title="Полное TUI меню (карта, прокси, локаль и т.д.)">⚙ Настройки</button>
           </div>
         </header>
@@ -5129,8 +5298,6 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
         </header>
 
         <div id="ar-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
-        <!-- Журнал авторотации — см. renderMoneyRotateLog(), скрыт до первой подмены. -->
-        <div id="ar-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Чек-ин +$25: сколько аккаунтов готовы и когда ближайший. Отдельная карточка,
              а не строка в гейдже: renderEnergyGauge диффит по сигнатуре, и текст, который
@@ -5159,15 +5326,15 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
           </div>
         </div>
 
-        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20133) -->
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20133) -->
         <div id="ar-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20133 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20133 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
             <button onclick="arLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
           <div class="flex gap-2 items-end flex-wrap" id="ar-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
-              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
               <input id="ar-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5175,7 +5342,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
               <input id="ar-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
-              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
               <input id="ar-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5199,7 +5366,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
             <span>запросов: <b id="ar-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="ar-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="ar-stat-keepalives" class="text-ink">—</b></span>
-            <span>хеджей: <b id="ar-stat-hedges" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="ar-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="ar-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="ar-stat-errors" class="text-ink">—</b></span>
             <span>ответ: <b id="ar-stat-last" class="text-ink">—</b></span>
@@ -5299,10 +5466,6 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
 
         <div id="go-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
-        <!-- Журнал авторотации. Скрыт, пока подмен не было: пустая карточка сообщала бы
-             «ничего не работает», хотя механизм просто не понадобился. Заполняет
-             renderMoneyRotateLog(). -->
-        <div id="go-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Model map (настраиваемый, как в Custom) -->
         <div id="go-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -5315,15 +5478,15 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
           </div>
         </div>
 
-        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20156) -->
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20156) -->
         <div id="go-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20156 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20156 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
             <button onclick="goLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
           <div class="flex gap-2 items-end flex-wrap" id="go-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
-              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
               <input id="go-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5331,7 +5494,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
               <input id="go-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
-              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
               <input id="go-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5355,7 +5518,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
             <span>запросов: <b id="go-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="go-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="go-stat-keepalives" class="text-ink">—</b></span>
-            <span>хеджей: <b id="go-stat-hedges" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="go-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="go-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="go-stat-errors" class="text-ink">—</b></span>
             <span>ответ: <b id="go-stat-last" class="text-ink">—</b></span>
@@ -5455,10 +5618,6 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
 
         <div id="jw-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
-        <!-- Журнал авторотации. Скрыт, пока подмен не было: пустая карточка сообщала бы
-             «ничего не работает», хотя механизм просто не понадобился. Заполняет
-             renderMoneyRotateLog(). -->
-        <div id="jw-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Живой лог авто-заведения (⚡). Тостов было мало: между «вхожу через GitHub»
              и результатом проход молчит 17 секунд, и владелец читал это как «лога нет».
@@ -5476,15 +5635,15 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
           </div>
         </div>
 
-        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20158) -->
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20158) -->
         <div id="jw-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20158 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20158 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
             <button onclick="jwLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
           <div class="flex gap-2 items-end flex-wrap" id="jw-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
-              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
               <input id="jw-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5492,7 +5651,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
               <input id="jw-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
-              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
               <input id="jw-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5516,7 +5675,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
             <span>запросов: <b id="jw-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="jw-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="jw-stat-keepalives" class="text-ink">—</b></span>
-            <span>хеджей: <b id="jw-stat-hedges" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="jw-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="jw-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="jw-stat-errors" class="text-ink">—</b></span>
             <span>ответ: <b id="jw-stat-last" class="text-ink">—</b></span>
@@ -5604,6 +5763,160 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
       </div>
     </div>
 
+
+    <!-- ═════════ TAB: SEEKAI ════════ -->
+    <div data-tab-content="seekai">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-cyan">🔎</span> <a href="https://seekai.cc/sign-up?aff=prEx" data-ref-link="seekai" target="_blank" rel="noopener" title="регистрация по реф-ссылке · панель не требует старый GitHub-аккаунт (лимита возраста в /api/status нет), но включены капча Turnstile и подтверждение почты" class="text-ink underline underline-offset-4 hover:text-cyan">SeekAi</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-cyan text-xs">seekai.cc</code> · клик по ключу = активный (через keepalive <code class="font-mono text-cyan text-xs">:20159</code>) · base для CC — <b>корень БЕЗ <code class="font-mono text-cyan text-xs">/v1</code></b> (иначе <code class="font-mono text-xs">/v1/v1/messages</code> → 404) · GitHub-вход в консоль <b>или регистрация паролем</b> · в каталоге opus-5 / sonnet-5 / fable-5 · чек-ин есть, но сумма случайная</p>
+          </div>
+        </header>
+
+        <div id="sk-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <!-- Model map (настраиваемый, как в Custom) -->
+        <div id="sk-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации</h2>
+            <button onclick="loadSkModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="sk-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20159) -->
+        <div id="sk-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20159 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="skLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="sk-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="sk-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="sk-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="sk-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="sk-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="skApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="skResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="sk-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="sk-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="sk-lat-chart" class="w-full"></div>
+              <div id="sk-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="sk-lat-windows"></div>
+          </div>
+          <div id="sk-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="sk-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="sk-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="sk-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="sk-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="sk-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="sk-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="sk-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="sk-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadSkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="sk-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadSkSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadSkSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="skCheckAllBalances()" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">💳 Балансы всех</button>
+          <button onclick="skMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="skShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          <button onclick="skShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Кнопки чек-ина здесь
+               нет намеренно: панель его разрешает, но начисляет СЛУЧАЙНУЮ сумму, поэтому
+               «+$N» на кнопке был бы враньём (у GoRouter её тоже нет). Баланс правится
+               вручную — ✏️ у цифры (set-balance). -->
+          <input id="sk-filter" oninput="newapiFilterChange('sk')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-cyan/60">
+          <select id="sk-sort" onchange="newapiSortChange('sk')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-cyan/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="sk-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="sk-add-email" oninput="newapiAddGhHint('sk')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="sk-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="skAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('sk')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">🐙 из менеджера</button>
+            <button onclick="skShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="sk-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="sk-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="skShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/seekai уже залогинены).</p>
+          <textarea id="sk-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="sk-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="skImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="skShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="sk-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20159</code> keepalive → <code class="text-ink">seekai.cc</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://seekai.cc/sign-up?aff=prEx" data-ref-link="seekai" target="_blank" class="text-cyan hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: TABI TOKEN ═════════ -->
     <div data-tab-content="tabi">
       <div class="px-6 py-8 space-y-4">
@@ -5617,8 +5930,6 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
         </header>
 
         <div id="tb-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
-        <!-- Журнал авторотации — см. renderMoneyRotateLog(), скрыт до первой подмены. -->
-        <div id="tb-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Models list -->
         <div id="tb-models" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -5642,15 +5953,15 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
           </div>
         </div>
 
-        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20155) -->
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20155) -->
         <div id="tb-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20155 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20155 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
             <button onclick="tbLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
           <div class="flex gap-2 items-end flex-wrap" id="tb-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
-              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
               <input id="tb-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5658,7 +5969,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
               <input id="tb-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
-              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
               <input id="tb-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5682,7 +5993,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
             <span>запросов: <b id="tb-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="tb-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="tb-stat-keepalives" class="text-ink">—</b></span>
-            <span>хеджей: <b id="tb-stat-hedges" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="tb-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="tb-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="tb-stat-errors" class="text-ink">—</b></span>
             <span>ответ: <b id="tb-stat-last" class="text-ink">—</b></span>
@@ -5778,8 +6089,6 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
         </header>
 
         <div id="xp-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
-        <!-- Журнал авторотации — см. renderMoneyRotateLog(), скрыт до первой подмены. -->
-        <div id="xp-rotate-log" class="hidden rounded-xl bg-surface border border-line-soft p-4"></div>
 
         <!-- Models list -->
         <div id="xp-models" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -5817,15 +6126,15 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
           </div>
         </div>
 
-        <!-- Keepalive хедж-конфиг (runtime, без рестарта :20157) -->
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20157) -->
         <div id="xp-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20157 — хедж (дубль при тишине) · применяется БЕЗ рестарта</h2>
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20157 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
             <button onclick="xpLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
           <div class="flex gap-2 items-end flex-wrap" id="xp-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
-              <span class="text-[10px] text-faint leading-tight">хедж через (сек) · 0 = выкл</span>
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
               <input id="xp-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5833,7 +6142,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
               <input id="xp-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-40">
-              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + хедж)</span>
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
               <input id="xp-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
             <label class="flex flex-col gap-1 w-32">
@@ -5857,7 +6166,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
             <span>запросов: <b id="xp-stat-requests" class="text-ink">—</b></span>
             <span>ремапов: <b id="xp-stat-remaps" class="text-ink">—</b></span>
             <span>keepalive: <b id="xp-stat-keepalives" class="text-ink">—</b></span>
-            <span>хеджей: <b id="xp-stat-hedges" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="xp-stat-hedges" class="text-ink">—</b></span>
             <span>ретраев: <b id="xp-stat-retries" class="text-ink">—</b></span>
             <span>ошибок: <b id="xp-stat-errors" class="text-ink">—</b></span>
             <span>ответ: <b id="xp-stat-last" class="text-ink">—</b></span>
@@ -6608,7 +6917,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -6636,6 +6945,10 @@ const state = {
   jwModels: [],
   jwActiveModel: '',
   jwModelMap: {},
+  seekai: [],
+  skModels: [],
+  skActiveModel: '',
+  skModelMap: {},
   tabi: [],
   tbModels: [],
   tbActiveModel: '',
@@ -6806,6 +7119,7 @@ function showTab(name) {
   if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } arLoadKeepalive(); }
   if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } goLoadKeepalive(); }
   if (name === 'justwoker') { if (!state.loaded.justwoker) { state.loaded.justwoker = true; loadJwSessions(false); } jwLoadKeepalive(); }
+  if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'xpeach') { if (!state.loaded.xpeach) { state.loaded.xpeach = true; loadXpSessions(false); } xpLoadKeepalive(); }
   if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
@@ -6841,8 +7155,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -9661,8 +9975,10 @@ async function arCheckinLk(id) {
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     if (data.already) return toast('🌐 браузер этого аккаунта уже открыт — доведи вход в нём', 'warn', 9000);
-    toast('🎁 браузер открыт разлогиненным: жми «Continue with GitHub» — окно закроется само,'
-      + ' баланс и 📦 встанут сами (💰 жать не нужно)', 'success', 9000);
+    toast(data.queued
+      ? `🎁 ${data.position} в очереди — окно откроется примерно через ${data.etaSec}с (прогоны идут по одному)`
+      : '🎁 браузер открыт разлогиненным: жми «Continue with GitHub» — окно закроется само,'
+        + ' баланс и 📦 встанут сами (💰 жать не нужно)', 'success', 9000);
     // Ждём итога так же, как ⚡: цифру снимает сам браузер, бэкенд её применяет —
     // фронту остаётся перечитать пул. Раньше здесь не было ничего, и владельцу
     // приходилось идти жать 💰 руками.
@@ -9674,7 +9990,11 @@ async function arCheckinLk(id) {
 // GitHub, сам закрывает окно и сам отдаёт бэкенду точную цифру. POST отвечает сразу
 // после спавна, поэтому итог забираем поллингом статуса (SSE в проекте нет).
 const AR_AUTO_POLL_MS = 3000;
-const AR_AUTO_MAX_MS = 3 * 60 * 1000;
+// 5 минут, а не 3 (24.08): вход до 90 с (AUTO_LOGIN_TIMEOUT_MS) плюс ожидание, пока
+// кабинет покажет НАЛИТУЮ цифру, — до 90 с шести полными перезагрузками
+// (GIFT_TOTAL_BUDGET_MS в agentrouter/open-session.js). При старом потолке худший случай
+// заканчивался тостом «результат так и не пришёл» на живом, ещё работающем прогоне.
+const AR_AUTO_MAX_MS = 5 * 60 * 1000;
 // Ручной режим ждёт человека: скрипт держит окно до 10 минут (LOGIN_TIMEOUT_MS).
 const AR_MANUAL_MAX_MS = 11 * 60 * 1000;
 
@@ -9696,7 +10016,12 @@ async function arAutoCheckin(id) {
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     if (data.already) return toast('🌐 браузер этого аккаунта уже открыт — доведи вход в нём или закрой окно', 'warn', 9000);
-    toast('⚡ автоподарок: выхожу через меню профиля и вхожу через GitHub — окно закроется само', 'info', 8000);
+    // Залп по кнопкам: бэкенд ставит прогоны в очередь и пускает по одному с паузой,
+    // чтобы шлюз не поймал нас на частоте (раньше четвёртый клик просто отбивался 429-м).
+    toast(data.queued
+      ? `⚡ ${data.position} в очереди — старт примерно через ${data.etaSec}с. Окна откроются по одному, ждать не надо`
+      : '⚡ автоподарок: выхожу через меню профиля и вхожу через GitHub — окно закроется само',
+      'info', 8000);
     await arCheckinWatch(id, data.label, AR_AUTO_MAX_MS, '⚡');
   } catch (e) { toast('автоподарок: ' + e.message, 'error', 12000); }
   finally {
@@ -9713,8 +10038,9 @@ async function arAutoCheckin(id) {
 // рейт-лимит WAF. Теперь цифру снимает сам браузер и применяет бэкенд, а фронту
 // достаточно перечитать локальный JSON пула — без ?probe=1 / ?balance=1, в сеть не идём.
 async function arCheckinWatch(id, label, maxMs, icon) {
-  const until = Date.now() + maxMs;
+  let until = Date.now() + maxMs;
   let misses = 0;
+  let toldQueued = false;
   while (Date.now() < until) {
     await new Promise(r => setTimeout(r, AR_AUTO_POLL_MS));
     let run = null;
@@ -9726,6 +10052,17 @@ async function arCheckinWatch(id, label, maxMs, icon) {
     // Прогон пропал из статуса (рестарт дашборда) — ждать его бессмысленно.
     if (!run) { if (++misses > 8) return; continue; }
     misses = 0;
+    // Стоим в очереди (залп по кнопкам): бэкенд пускает прогоны по одному с паузой.
+    // Пока ждём — отсчёт таймаута НЕ идёт, иначе на пятом аккаунте наблюдатель сдался бы
+    // до старта. Про очередь говорим один раз, чтобы не сыпать тостами каждые 3 с.
+    if (run.state === 'queued') {
+      until = Date.now() + maxMs;
+      if (!toldQueued) {
+        toldQueued = true;
+        toast(`${icon} ${run.name || ''} ${run.message || 'в очереди'}`.trim(), 'info', 7000);
+      }
+      continue;
+    }
     if (run.state === 'running') continue;
     if (run.state === 'error') return toast(icon + ' ' + (run.message || 'не получилось'), 'error', 14000);
     await loadArSessionsLight();
@@ -9750,9 +10087,9 @@ function arSetNavCount() {
 }
 
 function renderArGauge() {
-  // Журнал авторотации рядом со шкалой пула: подмена аккаунта — это событие про пул.
+  // Журнал подмен → «История уведомлений» (отдельной карточки нет с 24.08).
   // Троттл 10с внутри moneyAutoFetch, поэтому вызов на каждой перерисовке дешёвый.
-  moneyAutoFetch('agentrouter').then(() => renderMoneyRotateLog('agentrouter')).catch(() => {});
+  moneyAutoFetch('agentrouter').then(() => moneyRotateToHistory('agentrouter')).catch(() => {});
   const st = arPoolStats(state.agentrouter);
   // Баланс активного ключа — та же цифра, что в статусбаре Claude Code. Раньше в
   // шапке была только Σ по пулу, и расхождение с баром выглядело как «баланс не едет».
@@ -9965,9 +10302,9 @@ async function arSaveModelMap() {
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
 
-// Keepalive хедж-конфиг + статистика (GET /__state через __switch-мост).
+// Keepalive конфиг мульти-запроса + статистика (GET /__state через __switch-мост).
 // pfx — префикс ID (ar/go/tb), api — base пути /__switch/api/[pfx]/keepalive/.
-// Цвет вспышки по типу метрики: keepalives/requests — небо, ретраи/хеджи — янтарь,
+// Цвет вспышки по типу метрики: keepalives/requests — небо, ретраи/мульти-запросы — янтарь,
 // ошибки — crimson. Задаём CSS-переменной, которую читает .stat-pop-sk.
 const STAT_COLORS = {
   requests: '#38bdf8', remaps: '#a78bfa', keepalives: '#2dd4bf',
@@ -10011,8 +10348,8 @@ async function keepaliveLift(port) {
 
 function keepaliveSummary(cfg, defaults, state) {
   const sec = ms => (ms ? (ms / 1000) + 's' : 'выкл');
-  // Хедж выключен и при hedgeMs=0, и при maxHedges=0 (второе — дефолт шлюзов с плоским
-  // тарифом за запрос, где убитый дубль списывается целиком). Писать «хедж 20s» при
+  // Мульти-запрос выключен и при hedgeMs=0, и при maxHedges=0 (второе — дефолт шлюзов с плоским
+  // тарифом за запрос, где убитый дубль списывается целиком). Писать «мульти-запрос 20s» при
   // нуле дублей было бы враньём.
   const noHedge = !(cfg.hedgeMs > 0 && (typeof cfg.maxHedges === 'undefined' || cfg.maxHedges > 0));
   // На плоскотарифном шлюзе объясняем ПРИЧИНУ: иначе выглядит, будто юзер сам выключил.
@@ -10020,7 +10357,7 @@ function keepaliveSummary(cfg, defaults, state) {
   const hedge = noHedge
     ? (cfg.maxHedges === 0 && cfg.hedgeMs > 0 ? why : 'выкл')
     : `${sec(cfg.hedgeMs)}${typeof cfg.maxHedges === 'undefined' ? '' : ` (дублей ≤${cfg.maxHedges})`}`;
-  let s = `хедж ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
+  let s = `мульти-запрос ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
   // Расхождение с поставочными дефолтами видно сразу: у юзера мог остаться
   // keepalive-config-<PORT>.json с прошлых экспериментов, а он приоритетнее кода.
   if (defaults) {
@@ -10074,8 +10411,8 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
     if (mh) {
       mh.disabled = !!data.paidHedgeLocked;
       mh.title = data.paidHedgeLocked
-        ? 'У этого шлюза плоский тариф: убитый дубль списывается как полный ответ. Хедж заблокирован, включить можно только запуском прокси с ALLOW_PAID_HEDGE=1'
-        : 'Сколько параллельных дублей максимум на запрос. 0 = хедж выкл';
+        ? 'У этого шлюза плоский тариф: убитый дубль списывается как полный ответ. Мульти-запрос заблокирован, включить можно только запуском прокси с ALLOW_PAID_HEDGE=1'
+        : 'Сколько параллельных копий запроса максимум. 0 = мульти-запрос выкл';
       mh.classList.toggle('opacity-40', !!data.paidHedgeLocked);
     }
     if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx], data);
@@ -10163,7 +10500,7 @@ async function resetKeepaliveCard(pfx, api) {
 const KEEPALIVE_API = {
   ar: '/__switch/api/keepalive', tb: '/__switch/api/tb/keepalive',
   go: '/__switch/api/go/keepalive', xp: '/__switch/api/xp/keepalive',
-  jw: '/__switch/api/jw/keepalive',
+  jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
 };
 const LAT_WINDOWS = [[15, '15м'], [60, '1ч'], [360, '6ч'], [1440, '24ч']];
 const LAT_MIN = {};    // pfx → выбранное окно в минутах (помним в localStorage)
@@ -10506,11 +10843,14 @@ const xpLoadKeepalive   = () => loadKeepaliveCard('xp', KEEPALIVE_API.xp);
 const xpApplyKeepalive  = () => applyKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwLoadKeepalive   = () => loadKeepaliveCard('jw', KEEPALIVE_API.jw);
 const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
+const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
+const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const arResetKeepalive  = () => resetKeepaliveCard('ar', KEEPALIVE_API.ar);
 const goResetKeepalive  = () => resetKeepaliveCard('go', KEEPALIVE_API.go);
 const tbResetKeepalive  = () => resetKeepaliveCard('tb', KEEPALIVE_API.tb);
 const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
+const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.
@@ -10518,6 +10858,7 @@ const KEEPALIVE_POLL_TABS = {
   agentrouter: ['ar', '/__switch/api/keepalive'],
   gorouter: ['go', '/__switch/api/go/keepalive'],
   justwoker: ['jw', '/__switch/api/jw/keepalive'],
+  seekai: ['sk', '/__switch/api/sk/keepalive'],
   tabi: ['tb', '/__switch/api/tb/keepalive'],
   xpeach: ['xp', '/__switch/api/xp/keepalive'],
 };
@@ -10645,7 +10986,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -10732,7 +11073,7 @@ function newapiFooter(list, total, prov, q) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -10891,8 +11232,8 @@ function balanceSourceBadge(s) {
     tip = `Вписан вручную: $${(s.balanceAnchor ?? 0).toFixed(2)}${when ? ` (${when})` : ''}`
       + `, с тех пор потрачено $${drawn.toFixed(2)}`
       + (topUp > 0 ? ` · шлюз налил +$${topUp.toFixed(2)} после вписывания, уже прибавлено` : '')
-      + ` · перекрывает цифру шлюза, пустое поле в ✏️ вернёт точный баланс`
-      + (typeof s.selfBalance === 'number' ? ` · шлюз сейчас показывает $${s.selfBalance.toFixed(2)}` : '')
+      + ` · показано потому, что цифру с сайта взять не удалось — она главнее вписанной`
+      + (typeof s.selfBalance === 'number' ? ` · последняя известная цифра шлюза $${s.selfBalance.toFixed(2)}` : '')
       + `${s.selfError ? ` · точный недоступен: ${s.selfError}` : ''}`;
   } else {
     tip = 'Прикидка: выдача угадана, точной цифры нет.'
@@ -10939,6 +11280,76 @@ function balanceColor(v) {
   return v >= 20 ? 'text-emerald' : v >= 5 ? 'text-amber' : 'text-crimson';
 }
 
+// ══ купюра на вкладку «Финансы»: сторож движения денег ═════════════════════
+// Вкладка «Финансы» слушает `abuse-balance-checked` — пускает купюру от элемента-
+// источника к своему пункту в сайдбаре и перечитывает историю.
+//
+// Это НЕ правка в функциях чека, а сторож на тике сайдбара: он сверяет цифры каждого
+// ключа со своим снимком и бросает событие, когда деньги ДВИНУЛИСЬ. Купюра летит от
+// любого пути, которым цифра доехала в state — клик по балансу, батч «все балансы»,
+// фоновый пересчёт активного ключа, автоперечитка таблицы, чек-ин.
+// 🪤 Правка в четырёх копиях `*CheckBalance` этого НЕ даёт: `autoRefreshTick`
+// перечитывает сессии каждые 15 с и подменяет массив `state` целиком, то есть
+// цифра обычно приезжает мимо чека, а «старая» к моменту клика уже потеряна
+// (замерено: подделанная запись выпадала из state за 7 с, и событие не летело).
+//
+// Двигаться деньги могут в две стороны, и обе считаются:
+//   · `granted` вверх (плюс вписанный `balanceAnchor`) — ПОПОЛНЕНИЕ: чек-ин, долив
+//     квоты, реф-бонус. Событие бросается всегда, это редко и всегда важно;
+//   · `spent` вверх — РАСХОД. Владелец 24.08: «обновляю баланс — доллар не летит».
+//     Расход растёт постоянно, пока Claude Code жжёт токены, поэтому здесь троттл
+//     SPEND_BILL_MS: иначе купюра летела бы на каждой автоперечитке, раз в 15 с.
+// Первый прогон только заполняет снимок — на F5 купюра не летает. XPeach не сторожим:
+// он легаси, там нечего двигать.
+const _moneySnap = new Map();            // 'prov|api_key' → {in, out}
+const SPEND_BILL_MS = 25000;
+let _spendBillAt = 0;
+function moneyInOf(s) {
+  return (typeof s.granted === 'number' ? s.granted : 0)
+       + (typeof s.balanceAnchor === 'number' ? s.balanceAnchor : 0);
+}
+function topUpWatch() {
+  for (const prov of Object.keys(MONEY_PROVIDERS)) {
+    if (prov === 'xpeach') continue;
+    const list = state[MONEY_PROVIDERS[prov].stateKey] || [];
+    let gotIn = 0, gotOut = 0;
+    for (const s of list) {
+      if (!s || !s.api_key) continue;
+      const k = prov + '|' + s.api_key;
+      const now = { in: moneyInOf(s), out: typeof s.spent === 'number' ? s.spent : 0 };
+      const was = _moneySnap.get(k);
+      _moneySnap.set(k, now);
+      // Новый ключ в снимке — не движение: иначе первая же загрузка страницы выпустила
+      // бы купюру за все 32 ключа сразу.
+      if (!was) continue;
+      if (now.in > was.in) gotIn += now.in - was.in;
+      if (now.out > was.out) gotOut += now.out - was.out;
+    }
+    const spendOk = gotOut > 0 && Date.now() - _spendBillAt > SPEND_BILL_MS;
+    if (gotIn > 0 || spendOk) {
+      if (spendOk) _spendBillAt = Date.now();
+      document.dispatchEvent(new CustomEvent('abuse-balance-checked', {
+        detail: { el: topUpSrcEl(prov), prov,
+                  grantedDelta: gotIn, spentDelta: gotOut,
+                  kind: gotIn > 0 ? 'topup' : 'spend' },
+      }));
+    }
+  }
+}
+
+// Откуда стартует купюра. Блок баланса в сайдбаре, если он на экране, иначе пункт
+// шлюза в меню. 🪤 Проверять именно размер: скрытый элемент отдаёт нулевой
+// `getBoundingClientRect`, и купюра полетела бы из левого верхнего угла страницы.
+// Не нашлось ничего видимого — `null`: подписка это переживает, купюра просто не
+// летит, а графики на вкладке всё равно перечитываются.
+function topUpSrcEl(prov) {
+  for (const el of [document.getElementById('side-bal-num'),
+                    document.querySelector(`.nav-btn[data-tab="${prov}"]`)]) {
+    if (el && el.getBoundingClientRect().width > 0) return el;
+  }
+  return null;
+}
+
 // prov — 'ar' | 'go' | 'tb' | 'xp': из него собираются имена обработчиков вкладки.
 // sym — символ валюты шлюза. У ar/go/tb это $, у xpeach — 🍑 (курс к единице квоты
 // тот же 1:500000, отличается только вывеска), поэтому цифру не пересчитываем.
@@ -10948,7 +11359,7 @@ function newapiBalanceCell(s, kJ, prov, sym = '$') {
 
   const editTip = s.balanceSource === 'anchor'
     ? `Вписать баланс заново (сейчас ${sym}${(s.balanceAnchor ?? 0).toFixed(2)} от ${s.anchoredAt ? new Date(s.anchoredAt).toLocaleDateString('ru-RU') : '—'}). Пусто = сбросить.`
-    : 'Вписать текущий баланс из ЛК. Дальше он убывает сам по расходу и перекрывает цифру шлюза.';
+    : 'Вписать текущий баланс из ЛК. Дальше он убывает сам по расходу и показывается там, где цифру с сайта взять не удалось.';
   const edit = `<button onclick='${prov}SetBalance(${kJ})' title="${esc(editTip)}"
     class="mt-0.5 px-1.5 py-px rounded font-mono text-[10px] leading-none border transition
     ${s.balanceSource === 'anchor' ? 'bg-sky/15 border-sky/50 text-sky' : 'bg-white/5 border-white/15 text-muted'}
@@ -10981,8 +11392,9 @@ async function newapiSetBalanceUI(prov, api_key, list, rerender) {
   const spent = s && typeof s.spent === 'number' ? s.spent.toFixed(2) : '?';
   const msg = [
     s && s.balanceSource === 'self'
-      ? 'У этого аккаунта баланс читается ТОЧНО из ЛК — вписывать обычно не нужно.'
-        + '\nНо если цифра шлюза расходится с кошельком, вписанное её ПЕРЕКРОЕТ.'
+      ? 'У этого аккаунта баланс читается ТОЧНО из ЛК — вписывать не нужно.'
+        + '\nЦифра с сайта главнее вписанной (с 24.08): вписанное покажется только тогда,'
+        + '\nкогда сайт не ответит — нет куки профиля, шлюз за WAF, ЛК не открывали.'
       : 'Открой ЛК аккаунта и впиши остаток, который там показан.',
     '',
     `Сейчас потрачено $${spent}. Вписанный баланс дальше убывает сам по расходу,`,
@@ -11404,7 +11816,7 @@ const ghRowPickBlock = a => ghRowBlock(a)
   || (a.hasSession && a.allSourcesBusy ? 'профиль с этой сессией открыт в браузере — закрой его, тогда заселю' : null);
 
 // Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
-const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null };
+const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null };
 
 function newapiAddGhReset(prov) {
   ghAddPick[prov] = null;
@@ -11689,6 +12101,7 @@ const NEWAPI_SEED_PROV = {
   ar: { label: 'AgentRouter', host: 'agentrouter.org', color: 'azure',   reload: () => loadArSessions(), list: () => state.agentrouter, render: () => renderAr(), setKey: id => arSetKey(id), open: id => arOpenLk(id) },
   go: { label: 'GoRouter',    host: 'gorouter.app',    color: 'violet',  reload: () => loadGoSessions(), list: () => state.gorouter,    render: () => renderGo(), setKey: id => goSetKey(id), open: id => goOpenLk(id) },
   jw: { label: 'JustWoker',   host: 'api.justwoker.icu', color: 'amber', reload: () => loadJwSessions(), list: () => state.justwoker,  render: () => renderJw(), setKey: id => jwSetKey(id), open: id => jwOpenLk(id) },
+  sk: { label: 'SeekAi',      host: 'seekai.cc',         color: 'cyan',  reload: () => loadSkSessions(), list: () => state.seekai,     render: () => renderSk(), setKey: id => skSetKey(id), open: id => skOpenLk(id) },
   tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions(), list: () => state.tabi,        render: () => renderTb(), setKey: id => tbSetKey(id), open: id => tbOpenLk(id) },
   xp: { label: 'XPeach',      host: 'xpeach.codes',    color: 'rose',    reload: () => loadXpSessions(), list: () => state.xpeach,      render: () => renderXp(), setKey: id => xpSetKey(id), open: id => xpOpenLk(id) },
 };
@@ -11927,6 +12340,17 @@ function renderJwAutoAddLog(run) {
     : '';
   const rows = (run.lines || []).map(l =>
     `<div class="flex gap-2 leading-5"><span class="text-faint tabular-nums shrink-0">${esc(l.t)}</span><span class="text-muted break-all">${esc(l.s)}</span></div>`).join('');
+  // Залипший IP (коды 8, 9 и 10) — не поломка, а «повтори с другого адреса». Плашка
+  // живёт в карточке, а не только в модалке: модалку закрывают, а вернуться к повтору
+  // надо через минуту, когда VPN переключён.
+  const ipFix = run.needIpChange
+    ? `<div class="mt-2 rounded-lg border border-amber/50 bg-amber/10 px-3 py-2">
+         <div class="text-xs text-amber font-medium">🌐 Смени IP и жми Повтор</div>
+         <div class="text-[11px] text-muted mt-1 break-words">${esc(run.message || '')}</div>
+         <div class="text-[11px] text-faint mt-1">Аккаунт цел: снимок сессии и запись в пуле на месте — повтор пойдёт тем же GitHub.</div>
+         ${run.id ? `<button onclick="jwAutoAddOne('${esc(run.id)}')" class="mt-2 text-xs px-3 py-1.5 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Повтор</button>` : ''}
+       </div>`
+    : '';
   box.classList.remove('hidden');
   box.innerHTML = `
     <div class="flex items-center justify-between gap-3 mb-2">
@@ -11935,6 +12359,7 @@ function renderJwAutoAddLog(run) {
     </div>
     <div class="text-xs font-mono max-h-64 overflow-y-auto space-y-0.5">${rows || '<span class="text-faint">ждём первых строк…</span>'}</div>
     ${aff}
+    ${ipFix}
     <div class="text-[11px] text-dim mt-2">Полный лог прогонов — <code class="text-muted">logs/justwoker-autoadd.log</code></div>`;
 }
 
@@ -11964,6 +12389,16 @@ async function jwAutoAdd(id, ghLogin) {
         toast(`⚡ ${ghLogin || ''}: ключ в пуле${run.inviterId ? '' : ' · ⚠️ реф-кредит НЕ привязан'}`,
           run.inviterId ? 'success' : 'warn', 9000);
         return true;
+      }
+      // Залипший IP отделён от поломки намеренно: аккаунт и GitHub целы, лечится сменой
+      // адреса и повтором в один клик — поэтому модалка с кнопкой, а не красный тост,
+      // который уедет раньше, чем переключится VPN. Текст берём из кода возврата: причины
+      // разные (429 панели, молчание колбэка, оборванная навигация на github.com), и
+      // прежняя жёсткая фраза «панель не пустила с этого IP» врала на последней.
+      if (run.needIpChange) {
+        openJwIpModal(run.id || id, run.name || ghLogin || '', run.message || '');
+        toast('⚡ авто-заведение: ' + (run.message || 'смени IP и жми Повтор'), 'warn', 12000);
+        return false;
       }
       toast('⚡ авто-заведение: ' + (run.message || 'не получилось'), 'error', 12000);
       return false;
@@ -12138,7 +12573,7 @@ function goPoolStats(sessions) {
 }
 
 function renderGoGauge() {
-  moneyAutoFetch('gorouter').then(() => renderMoneyRotateLog('gorouter')).catch(() => {});
+  moneyAutoFetch('gorouter').then(() => moneyRotateToHistory('gorouter')).catch(() => {});
   const st = goPoolStats(state.gorouter);
   renderEnergyGauge($('go-energy'), {
     title: 'GoRouter · запас пула',
@@ -12676,7 +13111,7 @@ function jwPoolStats(sessions) {
 }
 
 function renderJwGauge() {
-  moneyAutoFetch('justwoker').then(() => renderMoneyRotateLog('justwoker')).catch(() => {});
+  moneyAutoFetch('justwoker').then(() => moneyRotateToHistory('justwoker')).catch(() => {});
   const st = jwPoolStats(state.justwoker);
   renderEnergyGauge($('jw-energy'), {
     title: 'JustWoker · запас пула',
@@ -13184,6 +13619,547 @@ async function jwSaveModelMap() {
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
 
+// ═══════════════════ SEEKAI ══════════════════════════════════════
+// Провайдер seekai.cc (тот же форк New-API, что gorouter/tabi/justwoker). Шестой шлюз и
+// структурная копия вкладки GoRouter: пул ключей + балансы + keepalive-активация через
+// прокси :20159 + share/import. Аккаунт идентифицируется id (не api_key).
+//
+// Чем отличается от остальных (замеры 2026-08-24):
+//   · base для Claude Code — КОРЕНЬ, без /v1: с /v1 запрос уходит в /v1/v1/messages → 404;
+//   · регистрация мягче, чем у JustWoker: лимита возраста GitHub-аккаунта панель не
+//     заявляет, есть и обычная регистрация паролем. Зато включены капча Turnstile и
+//     подтверждение почты — поэтому авто-заведения (⚡) у вкладки нет;
+//   · чек-ин панель разрешает, но сумма у New-API случайная — кнопки «+$N» здесь нет,
+//     баланс правится вручную (✏️ → set-balance), как у GoRouter;
+//   · шлюз берёт почти ФИКСИРОВАННУЮ плату за вызов: два запроса по ~211 токенов сняли
+//     3.38¢ и 3.16¢. Поэтому мульти-запрос keepalive для seekai.cc выключен (FLAT_RATE_HOSTS).
+//
+// База выдачи 10 = SK_DEFAULT_GRANT в transparent-proxy.js: реальная выдача НЕ измерена
+// (её отдаёт только /api/user/self куками профиля), а занижать безопаснее — на
+// завышенном балансе авторотация выбрала бы пустой аккаунт.
+function skPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      sumGrant += balanceDenom(s, 10);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+
+function renderSkGauge() {
+  moneyAutoFetch('seekai').then(() => moneyRotateToHistory('seekai')).catch(() => {});
+  const st = skPoolStats(state.seekai);
+  renderEnergyGauge($('sk-energy'), {
+    title: 'SeekAi · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20159 → seekai.cc (корень, БЕЗ /v1). Пинг и баланс идут с CC-заголовками (WAF пропускает только Claude Code).',
+  });
+}
+
+async function loadSkSessions(probe) {
+  if (probe) $('sk-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/sk/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.seekai = data.sessions || [];
+    if ($('nav-count-seekai')) $('nav-count-seekai').textContent = state.seekai.length;
+    await newapiEnsureGhNames(state.seekai);
+    renderSk();
+    renderSkGauge();
+    loadSkModels();
+    loadSkModelMap();
+    if (probe) toast('✓ SeekAi: статусы обновлены', 'success');
+  } catch (e) {
+    $('sk-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadSkSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/sk/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.seekai = data.sessions || [];
+    if ($('nav-count-seekai')) $('nav-count-seekai').textContent = state.seekai.length;
+    renderSk();
+    renderSkGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+
+async function loadSkModels(force) {
+  const keys = state.seekai
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('sk-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('sk-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/sk/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderSkModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('sk-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderSkModels(models) {
+  if (models) state.skModels = models;
+  const list = state.skModels || [];
+  let active = state.skActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/sk/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.skActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('sk-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-emerald/15 border border-emerald/50 text-emerald' : 'bg-cyan/10 border border-cyan/30 text-cyan'}"
+      onclick='skSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + seekai-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderSkModelMap();
+}
+
+async function skSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/sk/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.skModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.skActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderSkModels(state.skModels);
+  } catch (e) { toast('skSelectModel: ' + e.message, 'error'); }
+}
+
+function renderSk() {
+  const { list: all, total, q } = newapiRows(state.seekai, 'sk');
+  if (!all.length) {
+    $('sk-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-emerald text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
+    const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = skBalanceCell(s, kJ);
+    const keyCell = noKey ? noKeyCell(`skSetKey(${idJ})`) : `<button onclick='skActivate(${kJ})' title="Сделать активным (keepalive :20159 → seekai.cc)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-cyan hover:border-cyan/50'} transition">${esc(keyMask)}</button>`;
+    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'sk')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`skCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`skShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`skSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`skRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`skActivate(${kJ})`, 'Сделать активным', '🤝', 'cyan')}
+        ${noKey ? '' : actBtn(`skPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'sk', idJ)}
+        ${actBtn(`skOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс seekai)', '🌐', 'violet')}
+        ${actBtn(`skDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('sk-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'sk', q),
+    { sortProv: 'sk', accent: 'cyan' }
+  );
+}
+
+function skBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'sk'); }
+
+function skShowAdd(show = true) {
+  $('sk-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('sk');
+  if (show) { $('sk-add-email').value = ''; $('sk-add-key').value = ''; $('sk-add-email').focus(); }
+}
+
+async function skAdd() {
+  const email = $('sk-add-email').value.trim();
+  const api_key = $('sk-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/sk/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.sk }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      skShowAdd(false);
+      loadSkSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) skOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function skDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/sk/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadSkSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function skShare(id) {
+  const cur = state.seekai.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/sk/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'SeekAi',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function skShowImport(show = true) {
+  $('sk-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('sk-import-text').value = '';
+    $('sk-import-preview').innerHTML = '';
+    $('sk-import-text').focus();
+  }
+}
+
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function skImport() {
+  const share = $('sk-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('sk-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/sk/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('sk-import-preview').innerHTML = '';
+    skShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadSkSessions(false);
+  } catch (e) {
+    $('sk-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли seekai).
+async function skSetKey(id) {
+  const cur = state.seekai.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли seekai после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/sk/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadSkSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (skSetKey).
+async function skRename(id) {
+  const cur = state.seekai.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/sk/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadSkSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function skActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/sk/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'seekai';
+      state.urls.seekai = 'http://localhost:20159';
+      paintStatus();
+      loadSkSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+async function skPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/sk/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.seekai.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.seekai[idx].status = data.status;
+    renderSk();
+    renderSkGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function skCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/sk/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.seekai.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderSk();
+    renderSkGauge();
+    if (data.status === 'live') {
+      const lbl = (BAL_SRC[data.balanceSource] || {}).label || '?';
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+
+async function skCheckAllBalances() {
+  $('sk-list').innerHTML = `<div class="p-12 text-center text-cyan text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/sk/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.seekai = data.sessions || [];
+    renderSk();
+    renderSkGauge();
+    balanceBatchToast(state.seekai);
+  } catch (e) {
+    $('sk-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function skSetBalance(api_key) {
+  return newapiSetBalanceUI('sk', api_key, () => state.seekai, () => { renderSk(); renderSkGauge(); });
+}
+
+function skMapProfiles() {
+  return newapiMapProfilesUI('sk', () => loadSkSessions(false));
+}
+
+async function skOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/sk/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function skCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+// Настраиваемый маппинг opus/sonnet/haiku → seekai-модели (как в Custom).
+async function loadSkModelMap() {
+  try {
+    const res = await fetch('/__switch/api/sk/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.skModelMap = data.modelMap || {};
+    renderSkModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderSkModelMap() {
+  const mm = state.skModelMap || {};
+  const models = (state.skModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /go/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя seekai-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="sk-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('sk-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='skSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function skSaveModelMap() {
+  const mm = {
+    opus: $('sk-mm-opus')?.value || '',
+    sonnet: $('sk-mm-sonnet')?.value || '',
+    haiku: $('sk-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/sk/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.skModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+
 // ═══════════════════ TABI TOKEN ════════════════════════════════════════
 // Провайдер tabitoken.com (NewAPI). Пул ключей + балансы (выдача $100, рефка +$20) +
 // keepalive-активация через прокси :20155 (как agentrouter claude-*) + share/import.
@@ -13207,7 +14183,7 @@ function tbPoolStats(sessions) {
 }
 
 function renderTbGauge() {
-  moneyAutoFetch('tabi').then(() => renderMoneyRotateLog('tabi')).catch(() => {});
+  moneyAutoFetch('tabi').then(() => moneyRotateToHistory('tabi')).catch(() => {});
   const st = tbPoolStats(state.tabi);
   renderEnergyGauge($('tb-energy'), {
     title: 'Tabi Token · запас пула',
@@ -13735,7 +14711,7 @@ function xpPoolStats(sessions) {
 }
 
 function renderXpGauge() {
-  moneyAutoFetch('xpeach').then(() => renderMoneyRotateLog('xpeach')).catch(() => {});
+  moneyAutoFetch('xpeach').then(() => moneyRotateToHistory('xpeach')).catch(() => {});
   const st = xpPoolStats(state.xpeach);
   renderEnergyGauge($('xp-energy'), {
     title: 'XPeach · запас пула',
@@ -14980,7 +15956,7 @@ async function ghOpenUsed(id) {
   // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
   // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
   for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
-    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker' }[tag];
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai' }[tag];
     if (state.loaded[key]) continue;
     try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
   }
@@ -16796,7 +17772,7 @@ async function sideAutoToggle() {
       if (moneyAutoLast[k] && k !== p) moneyAutoLast[k].enabled = st.enabled;
     }
     paintSideAuto();
-    if (typeof renderMoneyRotateLog === 'function') renderMoneyRotateLog(p);
+    if (typeof moneyRotateToHistory === 'function') moneyRotateToHistory(p);
     const scope = st.shared ? 'на всех шлюзах' : `у ${mp.label}`;
     toast(enable
       ? `✓ Авторотация включена ${scope}${st.poolReady ? ` · у ${mp.label} ${st.poolReady} аккаунтов готовы подхватить` : ''}`
@@ -16814,59 +17790,56 @@ function updateSideAuto() {
   try { paintSideAuto(); } catch (e) { console.warn('paintSideAuto', e); }
 }
 
-// Журнал подмен на вкладке шлюза. Одна функция на четыре вкладки; контейнер —
-// `#<p>-rotate-log`, где p это префикс эндпоинтов (ar/go/tb/xp), как и у остальных
-// id на этих вкладках. Пока подмен не было — карточки нет вовсе: пустая таблица
-// читалась бы как «сломано», хотя механизм просто не понадобился.
+// Журнал подмен уезжает в «Историю уведомлений» (панель 📜 в сайдбаре), а отдельной
+// карточки на вкладке шлюза БОЛЬШЕ НЕТ — просьба владельца 2026-08-24: «хочу, чтобы лог
+// не был отдельным, а был в нашей Истории уведомлений». Плюс к тому карточка дублировала
+// событие: подмену и так объявлял тост из sideDetectRotation, только без причины и суммы.
+//
+// Источник — `recent` из `/__switch/api/<p>/auto/status` (последние 20, живут в памяти
+// `:8200`). Он честнее локального детекта: помнит подмены, случившиеся при закрытой
+// странице, и знает ПРИЧИНУ отказа. Поэтому тост из sideDetectRotation убран — иначе на
+// одну подмену приходилось бы две строки в истории.
 const MONEY_ROTATE_REASON = {
-  'out-of-balance': '💸 нет баланса',
-  'dead': '💀 мёртвый ключ',
-  'zero-cache': '📉 ноль по чеку',
-  'manual': '🖐 вручную',
+    'out-of-balance': '💸 нет баланса',
+    'dead': '💀 мёртвый ключ',
+    'zero-cache': '📉 ноль по чеку',
+    'manual': '🖐 вручную',
 };
-function renderMoneyRotateLog(prov) {
+// Ключ «уже показано»: статус опрашивается каждые 10 с и возвращает те же 20 записей.
+// Без этого история набивалась бы копиями одного события каждые десять секунд.
+const _moneyRotateSeen = new Set();
+function moneyRotateToHistory(prov) {
   const mp = MONEY_PROVIDERS[prov];
   if (!mp) return;
-  const box = document.getElementById(`${mp.p}-rotate-log`);
-  if (!box) return;
   const st = moneyAutoLast[prov];
   const rows = (st && st.recent) || [];
-  if (!rows.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  box.classList.remove('hidden');
+  if (!rows.length) return;
   const sym = mp.sym || '$';
-  // Журнал держит до 20 подмен и раздувал карточку на всю высоту экрана.
-  // Видно три последние, остальное — под «показать ещё»; состояние живёт в
-  // moneyRotateExpanded, иначе следующий опрос статуса свернул бы список назад.
-  const expanded = !!moneyRotateExpanded[prov];
-  const shown = expanded ? rows : rows.slice(0, MONEY_ROTATE_COLLAPSED);
-  const hidden = rows.length - shown.length;
-  const row = (r) => `<div class="flex items-center gap-3 text-muted">
-        <span class="text-faint w-20 shrink-0">${fmAgo(r.ts)}</span>
-        <span class="text-dim w-40 truncate shrink-0" title="аккаунт, на котором шлюз отказал">${esc(r.from || '—')}</span>
-        <span class="text-faint shrink-0">→</span>
-        <span class="text-azure truncate flex-1">${esc(r.to || '')}</span>
-        <span class="text-emerald shrink-0">${typeof r.balance === 'number' ? sym + r.balance.toFixed(2) : ''}</span>
-        <span class="text-[10px] text-dim w-32 text-right shrink-0" title="${r.needUsd ? `шлюз требовал предоплату ${sym}${r.needUsd}` : ''}">${MONEY_ROTATE_REASON[r.reason] || esc(r.reason || '')}</span>
-      </div>`;
-  box.innerHTML = `
-    <div class="flex items-center justify-between mb-3">
-      <h2 class="text-sm font-semibold tracking-tight">🔁 Авторотация — последние подмены</h2>
-      <span class="text-[10px] font-mono ${st.enabled ? 'text-azure' : 'text-faint'}">${st.enabled ? 'включена' : 'выключена'}</span>
-    </div>
-    <div class="space-y-1 text-xs font-mono">
-      ${shown.map(row).join('')}
-    </div>
-    ${(hidden > 0 || expanded) ? `<button onclick="toggleMoneyRotateLog('${prov}')" class="mt-2 text-[11px] text-azure hover:underline">${expanded ? '▲ свернуть' : `▼ показать ещё ${hidden}`}</button>` : ''}
-    <div class="mt-2 text-[10px] text-faint leading-relaxed">
-      Журнал живёт в памяти дашборда (последние 20) — после рестарта :8200 он пуст, а история трат остаётся в finance-history.
-    </div>`;
+  let added = 0;
+  for (const r of rows) {
+    const key = `${prov}|${r.ts}|${r.from || ''}|${r.to || ''}`;
+    if (_moneyRotateSeen.has(key)) continue;
+    _moneyRotateSeen.add(key);
+    const bal = typeof r.balance === 'number' ? ` · ${sym}${r.balance.toFixed(2)}` : '';
+    const why = MONEY_ROTATE_REASON[r.reason] || r.reason || '';
+    const need = r.needUsd ? ` (шлюз требовал ${sym}${r.needUsd})` : '';
+    state.toastLog.push({
+      // Штамп — момент САМОЙ подмены, а не импорта: иначе события, случившиеся при
+      // закрытой странице, встали бы в историю с временем загрузки и порядок бы соврал.
+      t: new Date(r.ts).getTime() || Date.now(),
+      text: `🔁 ${mp.label}: ${r.from || '—'} → ${r.to || '—'}${bal}${why ? ` · ${why}` : ''}${need}`,
+      kind: 'success',
+    });
+    added++;
+  }
+  if (!added) return;
+  // toastLog хранится newest-first, а импорт кладёт в конец: сортируем, иначе старые
+  // записи журнала окажутся ниже новых тостов в отрисовке (она делает reverse).
+  state.toastLog.sort((a, b) => b.t - a.t);
+  if (state.toastLog.length > 200) state.toastLog.length = 200;
+  renderLogPanel();
 }
-const MONEY_ROTATE_COLLAPSED = 3;
-const moneyRotateExpanded = {};
-function toggleMoneyRotateLog(prov) {
-  moneyRotateExpanded[prov] = !moneyRotateExpanded[prov];
-  renderMoneyRotateLog(prov);
-}
+
 // TokenRouter: ключ живёт 24ч от createdAt, потом мёртв. Считаем живыми только
 // аккаунты с ключом и возрастом ≤24ч (детерминированно, не по ненадёжному health-чеку).
 const TR_KEY_TTL_MS = 24 * 3600 * 1000;
@@ -16915,6 +17888,7 @@ const MONEY_PROVIDERS = {
   agentrouter: { id: 'agentrouter', p: 'ar', stateKey: 'agentrouter', base: 175, sym: '$',  label: 'AgentRouter', icon: '🧭', color: 'sky',    reload: () => loadArSessionsLight() },
   gorouter:    { id: 'gorouter',    p: 'go', stateKey: 'gorouter',    base: 70,  sym: '$',  label: 'GoRouter',    icon: '🌐', color: 'teal',   reload: () => loadGoSessionsLight() },
   justwoker:   { id: 'justwoker',   p: 'jw', stateKey: 'justwoker',   base: 90,  sym: '$',  label: 'JustWoker',   icon: '👷', color: 'amber',  reload: () => loadJwSessionsLight() },
+  seekai:      { id: 'seekai',      p: 'sk', stateKey: 'seekai',      base: 10,  sym: '$',  label: 'SeekAi',      icon: '🔎', color: 'cyan',   reload: () => loadSkSessionsLight() },
   tabi:        { id: 'tabi',        p: 'tb', stateKey: 'tabi',        base: 100, sym: '$',  label: 'Tabi Token',  icon: '🎫', color: 'violet', reload: () => loadTbSessionsLight() },
   xpeach:      { id: 'xpeach',      p: 'xp', stateKey: 'xpeach',      base: 10,  sym: '🍑', label: 'XPeach',      icon: '🍑', color: 'rose',   reload: () => loadXpSessionsLight() },
 };
@@ -17013,6 +17987,9 @@ let _sideBalLastAt = 0;
 let _sideBalProv = null;
 async function sideBalanceTick() {
   if (document.hidden) return;
+  // Сторож пополнений — до всех выходов из функции: он не про сайдбар, а про купюру
+  // на вкладке «Финансы», и должен работать даже когда открыт не денежный шлюз.
+  try { topUpWatch(); } catch (e) { console.warn('[fin] top-up watch fail', e); }
   const prov = state.current;
   if (!MONEY_PROVIDERS[prov]) return;
   // Троттл, потому что зовут из двух мест: свой интервал и paintStatus (тот дёргается
@@ -17030,7 +18007,7 @@ async function sideBalanceTick() {
   // сама, по отказу шлюза, и строка обязана это показать.
   await moneyAutoFetch(prov, switched || rotated);
   paintSideAuto();
-  if (typeof renderMoneyRotateLog === 'function') renderMoneyRotateLog(prov);
+  if (typeof moneyRotateToHistory === 'function') moneyRotateToHistory(prov);
   // Пересчёт цифры — по АКТИВНОМУ провайдеру, а не по открытой вкладке. Свой троттл
   // внутри (60с на ключ), поэтому на каждом 10-секундном тике в billing не летит.
   try { nudgeActiveBalance(prov); } catch (e) { console.warn('[side] bal-nudge fail', prov, e); }
@@ -17060,13 +18037,11 @@ function sideDetectRotation(prov, accounts) {
   if (openTab === prov) {
     try { mp.reload(); } catch (e) { console.warn('[side] перерисовка после ротации не удалась', prov, e); }
   }
-  // Тост — потому что подмена бывает и на другой вкладке: иначе единственным следом
-  // события остался бы журнал подмен, до которого надо доскроллить.
-  if (cur) {
-    const sym = mp.sym || '$';
-    const bal = typeof act.balance === 'number' ? ` · ${sym}${act.balance.toFixed(2)}` : '';
-    toast(`🔁 ${mp.label}: активный аккаунт → ${act.email || act.name || '***' + cur.slice(-6)}${bal}`, 'success');
-  }
+  // Тоста здесь БОЛЬШЕ НЕТ (24.08). Подмену объявляет журнал шлюза, который уезжает в
+  // «Историю уведомлений» (moneyRotateToHistory) — он знает причину отказа и сумму, а
+  // главное, помнит подмены, случившиеся при закрытой странице. Локальный тост давал на
+  // то же событие вторую строку без причины. Возврат `true` остаётся: он форсирует
+  // перечитывание статуса, чтобы свежая запись журнала доехала в историю сразу.
   return true;
 }
 
@@ -19510,9 +20485,24 @@ function launchTokenrouterCreate() {
 
 // ═══════════════════ LOG PANEL ════════════════════════════════════════
 let logPanelOpen = false;
-let logMode = 'toasts';   // 'toasts' | 'server'
+// 'toasts' — история уведомлений; 'server' — лог дашборда; 'keepalive' — SSE-прокси;
+// 'gift' — прогоны автоподарка из файлов logs/ar-checkin-*.log.
+let logMode = 'toasts';
 let logPollInterval = null;
 let serverLogLines = [];
+// Что показывает каждая вкладка: подпись в заголовке панели, откуда брать и как часто.
+// `src` уезжает в /api/logs?src= — разделение дашборда и прокси делает бэкенд.
+const LOG_TABS = {
+  toasts:    { title: 'История уведомлений',       poll: 0 },
+  server:    { title: 'Лог дашборда :8200',        poll: 2000, src: 'dash' },
+  keepalive: { title: 'SSE keepalive-прокси',      poll: 2000, src: 'keepalive' },
+  gift:      { title: 'Прогоны автоподарка 🎁 ⚡', poll: 5000 },
+};
+// Выбранный прогон подарка и его строки. Файл живёт на диске, поэтому переживает и
+// рестарт `:8200`, и потоп keepalive в кольце логов.
+let giftRuns = [];
+let giftPick = null;
+let giftLines = [];
 
 function toggleLogPanel() {
   const panel = $('log-panel');
@@ -19522,32 +20512,70 @@ function toggleLogPanel() {
     panel.classList.remove('hidden');
     btn.classList.add('text-emerald');
     renderLogPanel();
-    if (logMode === 'server' && !logPollInterval) logPollInterval = setInterval(pollServerLogs, 2000);
+    startLogPoll();
   } else {
     panel.classList.add('hidden');
     btn.classList.remove('text-emerald');
-    if (logPollInterval) { clearInterval(logPollInterval); logPollInterval = null; }
+    stopLogPoll();
   }
+}
+
+function stopLogPoll() {
+  if (logPollInterval) { clearInterval(logPollInterval); logPollInterval = null; }
+}
+
+// Один опросчик на все вкладки: интервал берётся из описания вкладки, поэтому
+// «Уведомления» (poll: 0) не гоняют сеть вообще — они рисуются из памяти страницы.
+function startLogPoll() {
+  stopLogPoll();
+  const tab = LOG_TABS[logMode];
+  if (!logPanelOpen || !tab || !tab.poll) return;
+  const tick = logMode === 'gift' ? pollGiftLogs : pollServerLogs;
+  tick();
+  logPollInterval = setInterval(tick, tab.poll);
 }
 
 function setLogMode(mode) {
-  logMode = mode;
-  $('log-tab-toasts').className = `text-[10px] px-2 py-1 ${mode === 'toasts' ? 'text-ink bg-elevated/60' : 'text-dim hover:text-ink'}`;
-  $('log-tab-server').className = `text-[10px] px-2 py-1 ${mode === 'server' ? 'text-ink bg-elevated/60' : 'text-dim hover:text-ink'}`;
-  $('log-title').textContent = mode === 'toasts' ? 'История уведомлений' : 'Server logs';
-  if (mode === 'server') {
-    if (!logPollInterval) logPollInterval = setInterval(pollServerLogs, 2000);
-    pollServerLogs();
-  } else {
-    if (logPollInterval) { clearInterval(logPollInterval); logPollInterval = null; }
+  logMode = LOG_TABS[mode] ? mode : 'toasts';
+  for (const k of Object.keys(LOG_TABS)) {
+    const el = $('log-tab-' + k);
+    if (el) el.className = `flex-1 text-[10px] px-2 py-1 ${logMode === k ? 'text-ink bg-elevated/60' : 'text-dim hover:text-ink'}`;
   }
+  $('log-title').textContent = LOG_TABS[logMode].title;
+  serverLogLines = [];
   renderLogPanel();
+  startLogPoll();
+}
+
+// Список прогонов + хвост выбранного. Опрос дешёвый: чтение каталога и одного файла.
+async function pollGiftLogs() {
+  if (!logPanelOpen || logMode !== 'gift') return;
+  try {
+    const res = await fetch('/__switch/api/ar/checkin-logs');
+    const data = await res.json();
+    giftRuns = data.files || [];
+    if (!giftRuns.some(f => f.name === giftPick)) giftPick = giftRuns.length ? giftRuns[0].name : null;
+    if (giftPick) {
+      const r2 = await fetch('/__switch/api/ar/checkin-logs?file=' + encodeURIComponent(giftPick) + '&limit=400');
+      const d2 = await r2.json();
+      giftLines = d2.lines || [];
+    } else giftLines = [];
+    renderLogPanel();
+  } catch { /* silent */ }
+}
+
+function giftPickRun(name) {
+  giftPick = name;
+  giftLines = [];
+  renderLogPanel();
+  pollGiftLogs();
 }
 
 async function pollServerLogs() {
-  if (!logPanelOpen || logMode !== 'server') return;
+  const tab = LOG_TABS[logMode];
+  if (!logPanelOpen || !tab || !tab.src) return;
   try {
-    const res = await fetch('/__switch/api/logs?limit=200');
+    const res = await fetch(`/__switch/api/logs?limit=300&src=${encodeURIComponent(tab.src)}`);
     if (!res.ok) throw new Error('fetch failed');
     const data = await res.json();
     serverLogLines = data.lines || [];
@@ -19558,13 +20586,44 @@ async function pollServerLogs() {
 function renderLogPanel() {
   const box = $('log-box');
   if (!box) return;
-  if (logMode === 'server') {
-    const text = serverLogLines.join('\n');
+  // Текстовые трубы — дашборд и SSE-прокси. Строки приходят уже с метками времени.
+  if (logMode === 'server' || logMode === 'keepalive') {
+    const text = serverLogLines.length ? serverLogLines.join('\n')
+      : (logMode === 'keepalive' ? 'SSE-прокси пока ничего не присылал (или он не запущен)'
+        : 'дашборд пока ничего не писал');
     if (box.textContent !== text) {
       box.textContent = text;
       box.className = 'flex-1 w-full bg-bg overflow-y-auto p-2 font-mono text-[11px] text-dim leading-relaxed whitespace-pre-wrap';
       box.scrollTop = box.scrollHeight;
     }
+    return;
+  }
+  // Прогоны подарка: сверху выбор прогона, ниже — его строки как есть.
+  if (logMode === 'gift') {
+    box.className = 'flex-1 w-full bg-bg overflow-y-auto p-2';
+    if (!giftRuns.length) {
+      box.innerHTML = '<div class="text-[11px] text-dim text-center py-8 font-sans">'
+        + 'Прогонов ещё не было. Жми ⚡ на аккаунте AgentRouter — каждый прогон пишет свой файл в <code class="font-mono">logs/</code>.</div>';
+      return;
+    }
+    const opts = giftRuns.map(f => {
+      const when = new Date(f.at).toLocaleString('ru-RU', { hour12: false, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      return `<option value="${esc(f.name)}"${f.name === giftPick ? ' selected' : ''}>${when} · ${esc(f.label)}</option>`;
+    }).join('');
+    // Ключевые строки прогона подсвечены: по ним видно, дождался ли скрипт налитой
+    // цифры. Остальное — серым, чтобы глаз не тонул в служебном.
+    const paint = (l) => {
+      const cls = /^✅|^💰|🔑 шлюз принял/.test(l) ? 'text-emerald'
+        : /^⚠️|^❌|^⌛/.test(l) ? 'text-amber'
+        : /^📌|^🎯|^🧭|^🔄|^🔬|^⏳/.test(l) ? 'text-azure'
+        : /AUTOCHECKIN_RESULT/.test(l) ? 'text-violet'
+        : 'text-dim';
+      return `<div class="${cls} whitespace-pre-wrap">${esc(l)}</div>`;
+    };
+    box.innerHTML = `<select onchange="giftPickRun(this.value)"
+        class="w-full mb-2 bg-surface border border-line-soft rounded text-[10px] px-1 py-1 text-muted">${opts}</select>`
+      + `<div class="font-mono text-[11px] leading-relaxed">${giftLines.filter(Boolean).map(paint).join('')}</div>`;
+    box.scrollTop = box.scrollHeight;
     return;
   }
   box.className = 'flex-1 w-full bg-bg overflow-y-auto p-2 space-y-1.5';
@@ -19595,6 +20654,11 @@ function renderLogPanel() {
 function clearLog() {
   if (logMode === 'toasts') {
     state.toastLog = [];
+  } else if (logMode === 'gift') {
+    // Файлы прогонов НЕ удаляем: это единственный сохранённый след разбора, а кнопка
+    // «Очистить» в остальных вкладках чистит только показанное. Убираем из вида.
+    giftLines = [];
+    toast('🎁 файлы прогонов остались на диске (logs/ar-checkin-*.log) — очищен только вид', 'info', 5000);
   } else {
     serverLogLines = [];
   }
@@ -20030,7 +21094,7 @@ async function resetRefCodes() {
   // ничего не делает. Поэтому сброс отправляем по списку провайдеров, а не по разметке.
   // Фолбэк-список — только живые шлюзы, без XPeach: он легаси, и в настройках его
   // быть не должно (бэкенд отдаёт ровно этот набор в `providers`).
-  const provs = (REF_CODES && REF_CODES.providers) || ['agentrouter', 'gorouter', 'justwoker', 'tabi'];
+  const provs = (REF_CODES && REF_CODES.providers) || ['agentrouter', 'gorouter', 'justwoker', 'seekai', 'tabi'];
   const patch = {};
   for (const p of provs) patch[p] = '';
   const st = $('ref-codes-status');
@@ -20230,7 +21294,11 @@ function onSettingsFm() {
 // у всех (в т.ч. у тех, у кого уже сохранён конфиг), пока пользователь явно
 // не включит их глазком (тогда ключ попадает в config.shown).
 const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
-const DEFAULT_TABS_VISIBLE = ['claude', 'custom', 'agentrouter', 'gorouter', 'justwoker', 'tabi', 'fin', 'grok', 'github', 'telegram', 'settings', 'plugins', 'health'];
+// Порядок и состав — как на рабочей установке владельца (снимок 25.08): деньги
+// первыми, гитхабы, четыре живых шлюза, Custom, затем служебное. `claude`, `grok` и
+// `telegram` из дефолта убраны намеренно — на чистой установке они пустые, а место в
+// сайдбаре занимают; включаются в «Настроить вкладки» одним кликом.
+const DEFAULT_TABS_VISIBLE = ['fin', 'github', 'agentrouter', 'gorouter', 'justwoker', 'tabi', 'custom', 'plugins', 'health', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -20539,6 +21607,7 @@ function autoRefreshTick() {
       case 'agentrouter':   loadArSessionsLight(); break;
       case 'gorouter':      loadGoSessionsLight(); break;
       case 'justwoker':     loadJwSessionsLight(); break;
+      case 'seekai':        loadSkSessionsLight(); break;
       case 'tabi':          loadTbSessionsLight(); break;
       case 'xpeach':        loadXpSessionsLight(); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
@@ -20582,6 +21651,7 @@ const NAV_COUNT_JOBS = [
   ['agentrouter', () => loadArSessionsLight()],
   ['gorouter',    () => loadGoSessionsLight()],
   ['justwoker',   () => loadJwSessionsLight()],
+  ['seekai',      () => loadSkSessionsLight()],
   ['tabi',        () => loadTbSessionsLight()],
   ['xpeach',      () => loadXpSessionsLight()],
   ['github',      () => loadGhKeys()],
@@ -20999,6 +22069,15 @@ applyTabsConfig();
 }
 // log panel open by default
 document.addEventListener('DOMContentLoaded', toggleLogPanel);
+// Журнал подмен собираем СРАЗУ по всем пяти шлюзам, а не только по открытой вкладке.
+// Карточка была привязана к вкладке — историю привязывать нельзя: подмена случается на
+// АКТИВНОМ шлюзе, а сидеть в этот момент можно на любом. Пять статусов — чтение памяти
+// `:8200`, один раз на загрузку страницы; дальше новые записи приносит тик сайдбара.
+document.addEventListener('DOMContentLoaded', () => {
+  for (const p of Object.keys(MONEY_PROVIDERS || {})) {
+    moneyAutoFetch(p, true).then(() => moneyRotateToHistory(p)).catch(() => {});
+  }
+});
 </script>
 <!-- TG bind modal -->
 <div id="tg-bind-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -21094,6 +22173,53 @@ document.addEventListener('DOMContentLoaded', toggleLogPanel);
     </div>
   </div>
 </div>
+
+<!-- ⚡ Авто-заведение упёрлось в IP → плашка «смени адрес и жми Повтор».
+     Отдельная модалка, а не тост: смена IP это ручное действие на минуту (VPN/прокси),
+     а тост уезжает через 12 с и вместе с ним уезжает понимание, что аккаунт цел и
+     повтор бесплатный. Кнопка «Повтор» зовёт то же авто-заведение по тому же id. -->
+<div id="jw-ip-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onclick="if(event.target===this) closeJwIpModal()">
+  <div class="bg-surface rounded-xl border border-amber/40 shadow-2xl p-5 w-[520px] max-w-[92vw]">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-sm font-semibold">🌐 Смени IP и повтори</h3>
+      <button onclick="closeJwIpModal()" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mt-2">Панель JustWoker не ответила на колбэк OAuth с этого адреса — <span id="jw-ip-modal-name" class="font-mono text-ink">—</span>.</p>
+    <p id="jw-ip-modal-reason" class="text-[11px] text-amber mt-2 break-words">—</p>
+    <p class="text-[11px] text-faint mt-2">Ничего не сломано: GitHub-согласие выдано, снимок сессии и запись в пуле целы. Переключи VPN/прокси на другой адрес и жми «Повтор» — заведение пойдёт тем же GitHub, второй аккаунт не тратится.</p>
+    <div class="flex gap-2 justify-end mt-4">
+      <button onclick="closeJwIpModal()" class="text-xs px-3 py-2 rounded-lg border border-line-soft hover:bg-elevated transition">Позже</button>
+      <button onclick="jwIpModalRetry()" class="text-xs px-4 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔄 Повтор</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════ JUSTWOKER: ЗАЛИПШИЙ IP ══════════════════════════
+// id последнего прогона, упёршегося в IP: кнопка «Повтор» в модалке заводит тот же
+// аккаунт, а не тот, на котором в этот момент стоит курсор в таблице.
+let jwIpModalId = null;
+
+function openJwIpModal(id, name, reason) {
+  jwIpModalId = id || null;
+  $('jw-ip-modal-name').textContent = name || '—';
+  $('jw-ip-modal-reason').textContent = reason || 'ответа на колбэк не было вовсе';
+  $('jw-ip-modal').classList.remove('hidden');
+}
+
+function closeJwIpModal() {
+  $('jw-ip-modal').classList.add('hidden');
+}
+
+// Повтор закрывает окно сразу: прогон идёт 20–60 с и показывает себя карточкой ⚡,
+// а висящая поверх модалка её же и закрывала бы.
+function jwIpModalRetry() {
+  const id = jwIpModalId;
+  closeJwIpModal();
+  if (!id) return toast('повтор: аккаунт потерялся — жми ⚡ в строке пула', 'warn');
+  jwAutoAddOne(id);
+}
+</script>
 
 <script>
 // ═══════════════════ GROK COOKIE SESSION ══════════════════════════════

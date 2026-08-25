@@ -217,7 +217,7 @@ copy_example() {
     warn "нет шаблона $src — пропускаю"
   fi
 }
-copy_example claude-settings.example.json "$HOME/.claude/settings.json"
+copy_example docs/claude-settings.example.json "$HOME/.claude/settings.json"
 copy_example routing/.env.example routing/.env
 copy_example routing/al-sessions.example.json routing/al-sessions.json
 copy_example routing/video-keys.example.json routing/video-keys.json
@@ -300,7 +300,7 @@ $(b "── Шпаргалка ────────────────�
   Доп. deps    bash install-deps.sh   — venv для ✈ Открыть TG + Telegram.app
   Диагностика  node tools/mac-balance-probe.js ar   — точный баланс по шагам
                node tools/enable-statusline.js      — вернуть статус-бар в CC
-               bash doctor.sh                       — отчёт целиком (раздел 5: venv, 11: бэкенд)
+               bash tools/doctor.sh                 — отчёт целиком (раздел 5: venv, 11: бэкенд)
 
 EOF
 

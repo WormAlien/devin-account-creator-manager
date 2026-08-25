@@ -44,7 +44,10 @@ const IDLE_MS = Number(process.env.IDLE_MS || 5000);
 const LOG_FILE = process.env.LOG_FILE || '';
 const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 1500);
 const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
-const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 600000);
+// UPSTREAM_TIMEOUT_MS переехал в cfg (см. DEFAULT_CFG.upstreamTimeoutMs): он стал
+// такой же крутилкой, как мульти-запрос и пре-коммит, и правится на живом процессе через
+// POST /__config. Env-переменная с прежним именем по-прежнему работает — ею уже
+// запускают процессы в bat/ps1 и в спавне дашборда.
 
 // Активный ключ agentrouter: keepalive инжектит его в исходящие заголовки на каждый
 // запрос, поэтому переключение ключа на вкладке дашборда работает на лету (без
@@ -134,7 +137,7 @@ const upstream = new URL(UPSTREAM);
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
 const upBase = upstream.pathname.replace(/\/+$/, '');
 // Пул исходящих коннектов. В глобальном агенте Node 24 keepAlive уже включён, но
-// maxSockets = Infinity: хедж-дубль плюс ретраи давали пачку одновременных TLS-
+// maxSockets = Infinity: мульти-дубль плюс ретраи давали пачку одновременных TLS-
 // рукопожатий через туннель (happ-tun/sing-tun часть их роняет — в логе это выглядело
 // как `Client network socket disconnected before secure TLS`). Явный лимит гасит эти
 // кластеры обрывов и заодно переиспользует сокет: замер 20.08 — первое рукопожатие
@@ -175,8 +178,8 @@ function log(msg) {
   logLine(msg);
 }
 
-// --- Runtime-конфиг хеджинга (меняется на лету через POST /__config) ---
-// Хедж: если шлюз молчит дольше cfg.hedgeMs, пускаем ПАРАЛЛЕЛЬНЫЙ дубль запроса и
+// --- Runtime-конфиг мульти-запросынга (меняется на лету через POST /__config) ---
+// Мульти-запрос: если шлюз молчит дольше cfg.hedgeMs, пускаем ПАРАЛЛЕЛЬНЫЙ дубль запроса и
 // берём того, кто ответил первым, остальных рвём. Дефолты замерены на живом
 // agentrouter (v1tusha, 15.08.2026): hedgeMs=5000 + 5 попыток дали ~3x нагрузку и
 // рост ответов 8с → 15-30с; 20с/2 вернули 6.6–8.6с. А/Б 20.08 на медиане: 12с/3 и
@@ -189,8 +192,9 @@ function log(msg) {
 // Менять — в дашборде (POST /__config, без рестарта), файл
 // keepalive-config-<PORT>.json переживает рестарт и имеет приоритет над этими
 // дефолтами. 0 = выключить.
-// CONFIG_FILE кейсуется по PORT — у нас 5 экземпляров прокси на одном скрипте
-// (:20133 agentrouter, :20155 tabi, :20156 gorouter, :20157 xpeach, :20158 justwoker).
+// CONFIG_FILE кейсуется по PORT — у нас 6 экземпляров прокси на одном скрипте
+// (:20133 agentrouter, :20155 tabi, :20156 gorouter, :20157 xpeach, :20158 justwoker,
+// :20159 seekai).
 const CONFIG_FILE = process.env.CONFIG_FILE
   || path.join(__dirname, `keepalive-config-${Number(process.env.PORT || 8787)}.json`);
 // ЕДИНСТВЕННОЕ место, где живут обкатанные цифры. Дашборд не хранит их копию, а
@@ -202,7 +206,7 @@ const CONFIG_FILE = process.env.CONFIG_FILE
 //                      худшую четверть запросов; на 20с побеждают 67% дублей
 //                      против 47% на 12с
 //   maxHedges 1      — второй параллельный дубль скорости не добавлял, только полосы
-//   maxAttempts 3    — 1 запрос + 1 хедж + 1 ретрай на транзиентную 500 (无可用渠道)
+//   maxAttempts 3    — 1 запрос + 1 мульти-запрос + 1 ретрай на транзиентную 500 (无可用渠道)
 //   preCommitMs 10000 — шлюз молчит >10с на 46% запросов, а клиент при нуле байт
 //                      сдаётся сам на ~18-20с; 10с оставляют запас на пинги
 const DEFAULT_CFG = {
@@ -210,8 +214,26 @@ const DEFAULT_CFG = {
   maxAttempts: 3,
   maxHedges: 1,
   preCommitMs: 10000,
+  // Таймаут ПРОСТОЯ сокета на попытку. Был константой 600000 мимо конфига — и это
+  // единственная ручка, которую нельзя было покрутить, не пересобрав процесс.
+  //
+  // Почему 600с плохо: это таймаут БЕЗДЕЙСТВИЯ, живой стрим его сбрасывает каждым
+  // чанком, поэтому длинным ответам он не мешает вообще. Зато мёртвый запрос висел
+  // десять минут на попытку, а при maxAttempts 3 — до получаса. Симптом наблюдался
+  // живьём: `POST /v1/messages?beta=true justwoker: таймаут 600000мс` во
+  // frontdoor-proxy.log (22.08), плюс max 325с в суточной истории латентности.
+  //
+  // Почему 300с, а не 150с и не 60с. Первая версия этой правки поставила 150с по
+  // своему замеру (максимум наблюдённого молчания до первого события — 65.8с). Это
+  // было МАЛО: хендофф автора апстрима (`docs/HANDOFF-upstream-keepalive.md` § 1.2)
+  // приводит замеры на порядок шире — n=153: медиана 20.4с, p75 32.5с, худший ответ
+  // 135.3с; n=376 в другом окне: худший **159.6с**. То есть 150с режет не аномалию, а
+  // хвост нормального распределения, и каждый такой обрыв ещё и жжёт попытку.
+  // Рекомендация того же документа — минимум 300с. Берём её: она стоит на 529
+  // наблюдениях против моих двадцати.
+  upstreamTimeoutMs: 300000,
 };
-// Шлюзы с ПЛОСКИМ тарифом за запрос — там хедж выключен из коробки.
+// Шлюзы с ПЛОСКИМ тарифом за запрос — там мульти-запрос выключен из коробки.
 // Замер 21.08: tabitoken списывает 50¢, gorouter 20¢ — одинаково за полный ответ на
 // 2000 токенов, за крошечный на 16 токенов И за дубль, который мы порвали на 20-й
 // секунде. То есть на них страховка от висяка покупается по полной цене запроса, а не
@@ -224,19 +246,26 @@ const DEFAULT_CFG = {
 // вообще только opus-модели. 🪤 Ошибка тут не симметрична: не внести хост = дубли по
 // полной цене запроса молча, внести зря = потеря страховки от висяка. Поэтому вносим
 // до замера, а не после.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu']);
+// seekai.cc (24.08) — ЗАМЕРЕН, и он плоский: два запроса по ~211 токенов
+// (`claude-sonnet-5`, 205 in / 6 out) сняли 3.38¢ и 3.16¢ по
+// `/dashboard/billing/usage`. Токенами такой ответ стоит доли цента, то есть шлюз
+// берёт почти фиксированную ставку за вызов — мульти-запрос удвоил бы счёт без ускорения.
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
-// Хедж считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
+// Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
 const cfg = {
   hedgeMs: Number(process.env.HEDGE_MS || DEFAULT_CFG.hedgeMs),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || process.env.MAX_RETRIES || DEFAULT_CFG.maxAttempts),
   // Сколько ПАРАЛЛЕЛЬНЫХ дублей максимум на один запрос. Раньше ограничения не было:
   // scheduleHedge перевзводил себя, и при maxAttempts=3 на молчащем шлюзе в воздухе
-  // оказывалось три копии, а бюджет попыток был выеден хеджами — на транзиентную 500
-  // ретрая не оставалось. Счётчик отдельный именно поэтому. 0 = хедж выкл.
+  // оказывалось три копии, а бюджет попыток был выеден мульти-запросами — на транзиентную 500
+  // ретрая не оставалось. Счётчик отдельный именно поэтому. 0 = мульти-запрос выкл.
   maxHedges: Number(process.env.MAX_HEDGES || DEFAULT_CFG.maxHedges),
   preCommitMs: Number(process.env.PRE_COMMIT_MS || DEFAULT_CFG.preCommitMs),
+  // Старое имя переменной сохранено: им уже запускают процессы в bat/ps1 и в спавне
+  // дашборда, ломать совместимость ради красоты нельзя.
+  upstreamTimeoutMs: Number(process.env.UPSTREAM_TIMEOUT_MS || DEFAULT_CFG.upstreamTimeoutMs),
 };
 
 // Числовая ручка из патча: мусор игнорируем, дурь зажимаем (иначе опечатка
@@ -252,8 +281,12 @@ function patchNum(v, min, max, allowZero) {
 // Иначе новая цифра не доедет до тех, кто однажды нажал «Применить» — json приоритетнее
 // кода, и они навсегда останутся на настройках того дня. А это ровно те люди, которые
 // потом жгут баланс дублями на плоском тарифе и приходят с «у меня деньги текут».
-const CFG_VERSION = 2;
-// Платный хедж: на плоскотарифных шлюзах дубль стоит полную цену запроса, поэтому там
+// v3 (2026-08-25): в DEFAULT_CFG добавлен upstreamTimeoutMs (150с вместо константы
+// 600с). Версию поднимаем ровно по правилу выше — иначе у того, кто однажды нажал
+// «Применить», в json нет этого поля, cfg остался бы на дефолте кода, а вот прежние
+// мульти-запрос/пре-коммит из файла применились бы: полусостояние, которое не отладить.
+const CFG_VERSION = 3;
+// Платный мульти-запрос: на плоскотарифных шлюзах дубль стоит полную цену запроса, поэтому там
 // его нельзя включить ни из json, ни из панели, ни curl'ом — только осознанным
 // ALLOW_PAID_HEDGE=1 при запуске процесса. Гвоздь прибит НАД конфигом намеренно:
 // «не высасывать баланс» важнее, чем «уважать любую цифру в файле».
@@ -288,6 +321,10 @@ function loadConfig() {
   if (mh !== null) cfg.maxHedges = mh;
   const p = patchNum(c.preCommitMs, 2000, 120000, true);
   if (p !== null) cfg.preCommitMs = p;
+  // Нижняя граница 20с не случайна: наблюдалось честное молчание 65.8с, и порог ниже
+  // него превратил бы таймаут из страховки в генератор лишних платных ретраев.
+  const ut = patchNum(c.upstreamTimeoutMs, 20000, 600000, false);
+  if (ut !== null) cfg.upstreamTimeoutMs = ut;
 }
 function saveConfig() {
   try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({ v: CFG_VERSION }, cfg), null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
@@ -309,9 +346,13 @@ function applyPatch(p) {
     const pc = patchNum(p.preCommitMs, 2000, 120000, true);
     if (pc !== null) cfg.preCommitMs = pc;
   }
+  if ('upstreamTimeoutMs' in p) {
+    const ut = patchNum(p.upstreamTimeoutMs, 20000, 600000, false);
+    if (ut !== null) cfg.upstreamTimeoutMs = ut;
+  }
   const clamped = clampPaidHedge('патч конфига');
   saveConfig();
-  log(`config updated: хедж ${hedgeOff(cfg) ? 'off' : `${cfg.hedgeMs}ms`}, дублей максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'off'}`);
+  log(`config updated: мульти-запрос ${hedgeOff(cfg) ? 'выкл' : `${cfg.hedgeMs}ms`}, копий максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'выкл'}, таймаут апстрима ${cfg.upstreamTimeoutMs}ms`);
   return clamped;
 }
 function publicState() {
@@ -334,10 +375,10 @@ function publicState() {
   };
 }
 // Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
-// AgentRouter в том же блоке, что и крутилки хеджа. retries — всего повторов,
+// AgentRouter в том же блоке, что и крутилки мульти-запроса. retries — всего повторов,
 // byStatus/byModel — распределение финальных ответов для отладки.
-// winBy — КТО принёс ответ: `первый` / `хедж` / `ретрай`. Это единственная цифра,
-// по которой можно настраивать hedgeMs не наугад: если `хедж` почти нулевой, дубли
+// winBy — КТО принёс ответ: `первый` / `мульти-запрос` / `ретрай`. Это единственная цифра,
+// по которой можно настраивать hedgeMs не наугад: если `мульти-запрос` почти нулевой, дубли
 // только грузят шлюз (его WAF чувствителен к пачкам) и hedgeMs надо ПОДНИМАТЬ.
 const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, rotations: 0, byStatus: {}, byModel: {}, winBy: {} };
 const startedAt = Date.now();
@@ -451,7 +492,13 @@ function shouldRetryStatus(status) {
   return status === 401 || status === 403 || status === 429 || (status >= 500 && status <= 599);
 }
 
-const RETRY_NO = /invalid|authentication|api[ _-]?key|expired|billing|quota|permission|denied|bad request|missing|required|incorrect|not supported|bad gateway upstream/i;
+// 🪤 `required` раньше стоял голым словом — и матчил `owner_action_required` внутри
+// тела Cloudflare на 522. То есть «origin не отвечает, попробуй ещё» классифицировалось
+// как ПОСТОЯННАЯ ошибка, ретрая не было вовсе, и 23.08 это положило агентов. Ловушка
+// общая: угадывать класс ошибки по прозе — значит ловить подстроки в чужих
+// идентификаторах. Отрицательный lookbehind оставляет «field X is required» (это
+// правда постоянная ошибка) и снимает `*_required` / `*-required`.
+const RETRY_NO = /invalid|authentication|api[ _-]?key|expired|billing|quota|permission|denied|bad request|missing|(?<![_-])required|incorrect|not supported|bad gateway upstream/i;
 // Отклонение контента шлюзом — ДЕТЕРМИНИРОВАННОЕ: тот же body даёт тот же ответ,
 // ретрай только жжёт запросы (проверено 2026-08-16: фраза из блок-листа → 500
 // "sensitive words detected" стабильно 12/12). Без этого правила такая ошибка
@@ -463,9 +510,55 @@ const RETRY_NO_CONTENT = /sensitive words|content-blocked/i;
 const RETRY_NO_ZH = /无权|权限|无效|过期|余额|额度|欠费|不存在|认证|封禁|禁用/;
 const RETRY_OK = /unauthorized client detected|overloaded|too many|rate limit|internal|upstream|temporar|busy|unavailable/i;
 
+// ── Структурный ответ вместо угадывания по прозе ──────────────────────────────
+// Cloudflare и часть шлюзов СООБЩАЮТ класс ошибки полями, а не текстом:
+//   {"retryable": true, "retry_after": 120, "error_category": "origin", …}
+// Читать их надо ДО словарей: поле — это утверждение сервера, а регулярка по прозе —
+// наша догадка, и на 522 догадка была неверной (см. RETRY_NO выше).
+// Возвращает true / false / null («ничего структурного не нашли, решай словарями»).
+function structuredRetry(s) {
+  let doc;
+  try { doc = JSON.parse(s); } catch { return null; }
+  if (!doc || typeof doc !== 'object') return null;
+  // Поле может лежать и в корне, и внутри error — проверяем оба места.
+  const nodes = [doc, doc.error].filter((x) => x && typeof x === 'object');
+  for (const n of nodes) {
+    if (typeof n.retryable === 'boolean') return n.retryable;
+  }
+  for (const n of nodes) {
+    const cat = String(n.error_category || n.errorCategory || '').toLowerCase();
+    // origin/timeout/upstream — не отвечает сторона ЗА шлюзом, это транзиентно.
+    if (/^(origin|timeout|upstream|gateway)$/.test(cat)) return true;
+    // конфигурация и авторизация повтором не лечатся
+    if (/^(auth|authorization|configuration|validation|billing)$/.test(cat)) return false;
+  }
+  return null;
+}
+
+// Сколько шлюз просит подождать. Мы этому НЕ подчиняемся буквально: `retry_after: 120`
+// больше терпения клиента (~18-20с без байт), и честнее отдать ошибку, чем держать
+// его две минуты. Но в лог пишем — по этой цифре видно, что шлюз считает себя
+// лежачим надолго, и это повод переключить провайдера руками.
+function retryAfterSec(s) {
+  let doc;
+  try { doc = JSON.parse(s); } catch { return null; }
+  for (const n of [doc, doc && doc.error].filter((x) => x && typeof x === 'object')) {
+    const v = Number(n.retry_after || n.retryAfter);
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
 function isTransientBody(status, buf) {
   const s = buf.toString('utf8');
   if (!s.trim()) return true;
+  // Структурный вердикт приоритетнее словарей: сервер сам сказал, повторять или нет.
+  const structured = structuredRetry(s);
+  if (structured !== null) {
+    const ra = retryAfterSec(s);
+    if (ra) log(`тело ответа: retryable=${structured}, шлюз просит ${ra}с (ждать столько не будем)`);
+    return structured;
+  }
   if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s) || RETRY_NO_CONTENT.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
@@ -533,6 +626,7 @@ const GW_BY_HOST = {
   // `api.justwoker.icu` буквально как в MONEY_GW дашборда. `justwoker.icu` не резолвится,
   // и опечатка в этой строке выглядит не ошибкой, а молча выключенной авторотацией.
   'api.justwoker.icu': 'jw',
+  'seekai.cc': 'sk',
 };
 const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
 // ROTATE_PROVIDER — только для тестов (routing/test-rotate.js прогоняет весь путь
@@ -713,7 +807,7 @@ const server = http.createServer((req, res) => {
   let aborted = false;
   let clientSSE = false;          // мы уже открыли SSE-ответ клиенту (ранний SSE)
   let tail = Buffer.alloc(0);     // последние ≤4 байта отправленного клиенту (для формата keepalive)
-  let activeSet = new Set();      // все живые попытки (ретраи + хедж-дубли)
+  let activeSet = new Set();      // все живые попытки (ретраи + мульти-дубли)
   let winner = null;              // победитель гонки
   let finished = false;           // исход решён (победитель или сдались)
   let launched = 0;               // сколько попыток/дублей уже запущено
@@ -725,7 +819,7 @@ const server = http.createServer((req, res) => {
   let rotations = 0;
   let bonusAttempts = 0;
   let rotating = false;           // ждём ответа дашборда — новых попыток не пускаем
-  let hedgeTimer = null;          // таймер хедж-дубля
+  let hedgeTimer = null;          // таймер мульти-дубля
   let preTimer = null;            // таймер отложенного пре-коммита (preCommitMs)
   let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
   let tgt = null;                 // результат remapHaiku
@@ -1001,13 +1095,13 @@ const server = http.createServer((req, res) => {
     // Победитель остаётся в activeSet: на обрыв клиента его тоже надо рвать.
     activeSet.clear();
     if (!r.destroyed) activeSet.add(r);
-    // Пишем ИМЕННО кто победил: без этого хедж настраивается наугад. `первый` = дубли
-    // не нужны, `хедж`/`ретрай` = спасли. Агрегат — в stats.winBy (GET /__state).
+    // Пишем ИМЕННО кто победил: без этого мульти-запрос настраивается наугад. `первый` = дубли
+    // не нужны, `мульти-запрос`/`ретрай` = спасли. Агрегат — в stats.winBy (GET /__state).
     const wKind = r.__kind || 'первый';
     stats.winBy[wKind] = (stats.winBy[wKind] || 0) + 1;
     const took = Date.now() - started;
     // В историю идёт только победитель: убитый дубль показал бы не скорость шлюза, а
-    // цифру хеджа, а сдохшая попытка — таймаут. Пишем здесь, а не в forward(), потому
+    // цифру мульти-запроса, а сдохшая попытка — таймаут. Пишем здесь, а не в forward(), потому
     // что forward для буферизованных ответов вызывается уже после дренажа тела.
     noteLatency(took);
     log(`${req.method} ${reqPath} winner: ${wKind} (попытка #${r.__attempt || 1} из ${launched}) за ${took}ms`);
@@ -1034,7 +1128,7 @@ const server = http.createServer((req, res) => {
     if (finished || aborted) return;
     if (launched < cfg.maxAttempts + bonusAttempts) {
       stats.retries += 1;
-      log(`${req.method} ${reqPath} -> ретрай/дубль #${launched + 1} через ${delayMs}ms (${why})`);
+      log(`${req.method} ${reqPath} -> повтор/копия #${launched + 1} через ${delayMs}ms (${why})`);
       setTimeout(() => { if (!aborted && !finished) makeUpstream('ретрай'); }, delayMs);
       return;
     }
@@ -1081,10 +1175,10 @@ const server = http.createServer((req, res) => {
     });
   };
 
-  // Хедж-дубль: если через cfg.hedgeMs апстрим всё ещё молчит (нет даже заголовков),
+  // Мульти-запрос-дубль: если через cfg.hedgeMs апстрим всё ещё молчит (нет даже заголовков),
   // запускаем ПАРАЛЛЕЛЬНУЮ попытку. Победит тот, кто ответит первым — остальных рвём.
   // Дублей не больше cfg.maxHedges: своим счётчиком, а не бюджетом maxAttempts, иначе
-  // хеджи выедали попытки и на транзиентную 500 ретраить было уже нечем.
+  // мульти-запросы выедали попытки и на транзиентную 500 ретраить было уже нечем.
   const scheduleHedge = () => {
     if (cfg.hedgeMs <= 0 || cfg.maxHedges <= 0 || finished || aborted || hedgeTimer !== null) return;
     if (launched >= cfg.maxAttempts) return;
@@ -1092,10 +1186,10 @@ const server = http.createServer((req, res) => {
     hedgeTimer = setTimeout(() => {
       hedgeTimer = null;
       if (finished || aborted) return;
-      log(`${req.method} ${reqPath} хедж: тишина ${Date.now() - started}ms, пускаю дубль #${launched + 1}`);
+      log(`${req.method} ${reqPath} мульти-запрос: тишина ${Date.now() - started}ms, пускаю дубль #${launched + 1}`);
       stats.hedges += 1;
       hedgesLaunched += 1;
-      makeUpstream('хедж');
+      makeUpstream('мульти-запрос');
       scheduleHedge();
     }, cfg.hedgeMs);
   };
@@ -1141,7 +1235,7 @@ const server = http.createServer((req, res) => {
       headers['content-length'] = Buffer.byteLength(body);
     }
     // Просим апстрим НЕ кодировать ответ — и для стрима (gzip-мусор в SSE-канале
-    // после раннего SSE/хеджа ломает поток, v1tusha), и для обычных запросов: тело
+    // после раннего SSE/мульти-запроса ломает поток, v1tusha), и для обычных запросов: тело
     // нужно читать как текст (MODEL_ECHO, проверка на пустой 200, isTransientBody).
     // Клиентский `accept-encoding: zstd` не пробрасываем: если шлюз всё же сожмёт,
     // тело уйдёт клиенту байт-в-байт (isCompressedBody), но уже без эха модели.
@@ -1153,7 +1247,7 @@ const server = http.createServer((req, res) => {
       path: t.base + reqPath,
       headers: headers,
       agent: agentFor(t.requester),
-      timeout: UPSTREAM_TIMEOUT_MS,
+      timeout: cfg.upstreamTimeoutMs,
     }, (upRes) => {
       const status = upRes.statusCode;
       const headers = upRes.headers;
@@ -1202,7 +1296,7 @@ const server = http.createServer((req, res) => {
           // запрос — Claude Code видит только успешный ответ.
           const reason = ROTATE_ON ? rotateReason(status, buf) : null;
           if (reason) {
-            // Ротация уже идёт (её начал параллельный хедж-дубль) — эта попытка
+            // Ротация уже идёт (её начал параллельный мульти-дубль) — эта попытка
             // просто уходит: запрос доведёт та, что стартует после подмены.
             if (rotating) { activeSet.delete(upReq); return; }
             if (rotations < MAX_ROTATIONS) {
@@ -1229,7 +1323,7 @@ const server = http.createServer((req, res) => {
     upReq.__kind = kindLabel;
     upReq.on('timeout', () => {
       if (finished || aborted) return;
-      log(`${req.method} ${reqPath} upstream timeout ${UPSTREAM_TIMEOUT_MS}ms (attempt ${attempt})`);
+      log(`${req.method} ${reqPath} upstream timeout ${cfg.upstreamTimeoutMs}ms (attempt ${attempt})`);
       upReq.destroy(new Error('upstream timeout'));
     });
     upReq.on('error', (err) => {
@@ -1394,6 +1488,37 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(isTransientBody(500, Buffer.from('missing required field')), false, 'missing required = постоянная');
   assert.strictEqual(isTransientBody(500, Buffer.from('model not supported')), false, 'not supported = постоянная');
 
+  // ── 522 от Cloudflare: структурные поля решают, а не проза ───────────────────
+  // Инцидент 23.08: тело содержало `owner_action_required`, слово `required` попадало
+  // в RETRY_NO, ошибка считалась постоянной, ретрая не было — агенты легли.
+  const cf522 = JSON.stringify({
+    success: false, retryable: true, retry_after: 120,
+    error_category: 'origin',
+    errors: [{ code: 'owner_action_required', message: 'Web server is down (Error 522)' }],
+  });
+  assert.strictEqual(isTransientBody(522, Buffer.from(cf522)), true,
+    '522 с retryable:true ретраим, несмотря на owner_action_required в теле');
+  // Тот же текст БЕЗ структурных полей больше не ловится словарём: lookbehind
+  // отсекает `*_required`, оставляя честное «field is required».
+  assert.strictEqual(isTransientBody(522, Buffer.from('owner_action_required: Web server is down')), true,
+    'owner_action_required без полей больше не считается постоянной');
+  assert.strictEqual(isTransientBody(400, Buffer.from('field model is required')), false,
+    '«field is required» по-прежнему постоянная');
+  // retryable:false — уважаем, даже если проза выглядит транзиентной.
+  assert.strictEqual(isTransientBody(503, Buffer.from('{"retryable":false,"error":{"message":"service unavailable"}}')), false,
+    'retryable:false сильнее словаря RETRY_OK');
+  // Поле внутри error, а не в корне.
+  assert.strictEqual(isTransientBody(500, Buffer.from('{"error":{"retryable":true,"message":"bad request"}}')), true,
+    'retryable внутри error читается и бьёт RETRY_NO');
+  // Категории.
+  assert.strictEqual(isTransientBody(502, Buffer.from('{"error_category":"origin"}')), true, 'категория origin = транзиентная');
+  assert.strictEqual(isTransientBody(500, Buffer.from('{"error_category":"configuration"}')), false, 'категория configuration = постоянная');
+  // Не-JSON и мусор не должны ронять классификатор.
+  assert.strictEqual(structuredRetry('<html>502 Bad Gateway</html>'), null, 'не-JSON → решают словари');
+  assert.strictEqual(structuredRetry('null'), null, 'JSON null → решают словари');
+  assert.strictEqual(retryAfterSec(cf522), 120, 'retry_after читается');
+  assert.strictEqual(retryAfterSec('не json'), null, 'retry_after из мусора — null');
+
   // ── авторотация: отказ по деньгам ловится в ОБЕИХ формулировках ──────────────
   // Это те самые два текста, которые до ротации вели в разные тупики: китайский
   // улетал клиенту как 403, английский жёг три попытки и отдавал 502.
@@ -1433,6 +1558,8 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(GW_BY_HOST['gorouter.app'], 'go', 'gorouter.app → пул go');
   assert.strictEqual(GW_BY_HOST['agentrouter.org'], 'ar', 'agentrouter.org → пул ar');
   assert.strictEqual(GW_BY_HOST['api.justwoker.icu'], 'jw', 'api.justwoker.icu (с поддоменом!) → пул jw');
+  assert.strictEqual(GW_BY_HOST['seekai.cc'], 'sk', 'seekai.cc → пул sk');
+  assert.ok(FLAT_RATE_HOSTS.has('seekai.cc'), 'seekai.cc в плоских тарифах — мульти-запрос выключен (замер 24.08: ~3.2¢ за вызов)');
   assert.strictEqual(GW_BY_HOST['api.anthropic.com'], undefined, 'чужой хост → ротации нет');
 
   // publicState отдаёт апстрим и пре-коммит, без сюрпризов
@@ -1448,7 +1575,7 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(wantsStream('POST', '/v1/messages', {}, Buffer.from('not json')), false, 'не-JSON = не поток');
   assert.strictEqual(wantsStream('GET', '/v1/messages', {}, Buffer.alloc(0)), false, 'GET = не поток');
 
-  // Ручки хеджа/пре-коммита на лету: применяются, мусор игнорируется, дурь зажимается.
+  // Ручки мульти-запроса/пре-коммита на лету: применяются, мусор игнорируется, дурь зажимается.
   applyPatch({ hedgeMs: 7000, maxAttempts: 4, preCommitMs: 12000 });
   assert.strictEqual(cfg.hedgeMs, 7000, 'hedgeMs применился');
   assert.strictEqual(cfg.maxAttempts, 4, 'maxAttempts применился');
@@ -1457,10 +1584,28 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(cfg.hedgeMs, 1000, 'hedgeMs зажат по нижней границе');
   assert.strictEqual(cfg.maxAttempts, 10, 'maxAttempts зажат по верхней границе');
   assert.strictEqual(cfg.preCommitMs, 120000, 'preCommitMs зажат по верхней границе');
+  // Таймаут апстрима — такая же крутилка, и у неё свои границы. Нижняя (20с) важнее
+  // верхней: порог ниже наблюдённого честного молчания 65.8с рвал бы живые запросы.
+  applyPatch({ upstreamTimeoutMs: 1000 });
+  assert.strictEqual(cfg.upstreamTimeoutMs, 20000, 'таймаут зажат по нижней границе');
+  applyPatch({ upstreamTimeoutMs: 9999999 });
+  assert.strictEqual(cfg.upstreamTimeoutMs, 600000, 'таймаут зажат по верхней границе');
+  applyPatch({ upstreamTimeoutMs: 150000 });
+  assert.strictEqual(cfg.upstreamTimeoutMs, 150000, 'валидный таймаут применяется');
+  applyPatch({ upstreamTimeoutMs: 300000 });
+  assert.strictEqual(cfg.upstreamTimeoutMs, 300000, 'поставочные 300с применяются');
+  applyPatch({ upstreamTimeoutMs: 'нет' });
+  assert.strictEqual(cfg.upstreamTimeoutMs, 300000, 'мусор в таймауте игнорируется');
+  // 🪤 `0` таймаут НЕ выключает (в отличие от мульти-запроса и пре-коммита): `allowZero: false`,
+  // и ноль зажимается в нижнюю границу. Так и надо — «ждать вечно» это то, от чего
+  // мы уходим, и случайный ноль из UI не должен возвращать прежние 10 минут.
+  applyPatch({ upstreamTimeoutMs: 0 });
+  assert.strictEqual(cfg.upstreamTimeoutMs, 20000, '0 не выключает таймаут, а зажимается в минимум');
+  assert.strictEqual(DEFAULT_CFG.upstreamTimeoutMs, 300000, 'поставочный таймаут 300с — по замерам хендоффа (n=529), не 150с');
   applyPatch({ hedgeMs: 'нет' });
   assert.strictEqual(cfg.hedgeMs, 1000, 'мусор в hedgeMs игнорируется');
   applyPatch({ hedgeMs: 0 });
-  assert.strictEqual(cfg.hedgeMs, 0, '0 выключает хедж');
+  assert.strictEqual(cfg.hedgeMs, 0, '0 выключает мульти-запрос');
   applyPatch({ preCommitMs: 0 });
   assert.strictEqual(cfg.preCommitMs, 0, '0 выключает пре-коммит');
 
@@ -1490,6 +1635,6 @@ server.on('clientError', (err, socket) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, хедж ${hedgeOff(cfg) ? 'off' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${UPSTREAM_TIMEOUT_MS}ms)`);
+  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, мульти-запрос ${hedgeOff(cfg) ? 'выкл' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${cfg.upstreamTimeoutMs}ms)`);
   log(`gpt-конвертер: ${GPT_PROXY_ENABLED ? HAIKU_GPT_PROXY : 'off (чужой шлюз — gpt остаётся на ' + upstream.host + ')'}`);
 });

@@ -430,7 +430,41 @@ t('пункт меню и вердикт в «Проверке» на месте
     // Своё меню со своим выходом: пауза после него не нужна, иначе «q назад» упирается
     // в «Enter — вернуться», и кажется, что q не работает (так и было).
     if (!/noPause: true/.test(src)) return 'после подменю снова пауза — q будет казаться нерабочей';
-    if (!/name === 'up' \|\| name === 'k'[\s\S]{0,200}acts\.length/.test(src)) return 'в подменю нет стрелок';
+
+    // Стрелки и точечная перерисовка. Кадр подменю рисуется через draw() под флагом
+    // needFull; на стрелку меняются ровно две строки. Пока весь кадр перерисовывался
+    // на каждое нажатие, логотип и состояние мигали (владелец 25.08: «на стрелочке
+    // жмёшь, обновляется опять текст»).
+    const sub = src.slice(src.indexOf('async function doDictationFix'));
+    const body = sub.slice(0, sub.indexOf('\n}\n'));
+    if (!/name === 'up' \|\| name === 'k'/.test(body)) return 'в подменю нет стрелок';
+    if (!/const move = dir =>[\s\S]{0,400}acts\.length/.test(body)) return 'в подменю нет точечной перерисовки';
+    if (!/itemLine\(acts\[i\]/.test(body)) return 'стрелка не перепечатывает строку пункта';
+    if (!/const draw = \(\) => \{/.test(body)) return 'кадр подменю не вынесен в draw()';
+    if (!/if \(needFull\) \{ draw\(\)/.test(body)) return 'кадр подменю рисуется без флага needFull — будет мигать';
+    if ((body.match(/clearScreen\(\)/g) || []).length !== 1) return 'clearScreen в подменю зовётся не только из draw()';
+    return true;
+});
+
+t('хоткеи работают в русской раскладке', () => {
+    const src = read('hub.js');
+    // readline для кириллицы отдаёт key.name === undefined: на «й» вместо q приходило
+    // пустое имя, и выход из меню не работал (владелец 25.08: «на русском не работают
+    // хоткей»). Нормализация ровно одна, и оба экрана ходят через неё.
+    if (!/const RU_TO_EN = \{/.test(src)) return 'нет карты раскладки';
+    if (!/function keyName\(k\)/.test(src)) return 'нет нормализации имени клавиши';
+    const need = { 'й': 'q', 'ф': 'a', 'о': 'j', 'л': 'k' };
+    for (const [ru, en] of Object.entries(need)) {
+        if (!new RegExp(`'${ru}': '${en}'`).test(src)) return `в карте нет ${ru} → ${en}`;
+    }
+    // Ни один экран не должен читать k.name напрямую — иначе раскладка снова отвалится
+    // именно там. Единственное разрешённое место — сама keyName.
+    const raw = src.split('\n').filter(l => /k\.name/.test(l) && !/^\s*\/\//.test(l));
+    if (raw.length !== 1) return `k.name читается в ${raw.length} местах, а должно только в keyName`;
+    for (const fn of ['async function menu', 'async function doDictationFix']) {
+        const part = src.slice(src.indexOf(fn), src.indexOf(fn) + 4000);
+        if (!/const name = keyName\(k\)/.test(part)) return `${fn} не пользуется keyName`;
+    }
     return true;
 });
 
@@ -748,11 +782,101 @@ async function tui() {
     const afterArrow = buf.slice(before);
     !/\bB\b/.test(afterArrow.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')) ? ok('стрелки не печатаются как буквы') : bad('стрелки не печатаются как буквы', 'в выводе появилась «B»');
 
+    // И перерисовка на стрелку обязана быть точечной. Мерим сам поток: полный кадр —
+    // это картинка (брайль) и заголовок панели баланса. Если они прилетели снова,
+    // значит экран мигнул целиком.
+    if (/[⠀-⣿]/.test(afterArrow) || /ПОСЛЕДНИЙ/.test(afterArrow)) bad('стрелка не перерисовывает кадр', 'в ответ на стрелку приехала вся шапка');
+    else if (afterArrow.length > 900) bad('стрелка не перерисовывает кадр', `на стрелку прилетело ${afterArrow.length} байт — это похоже на полный кадр`);
+    else ok(`стрелка перерисовывает только строки пунктов (${afterArrow.length} байт)`);
+
+    // Последний известный запас — в шапке справа от картинки, полублочным шрифтом
+    // (вариант владельца от 25.08). Проверяем и подпись, и сами цифры.
+    /ПОСЛЕДНИЙ ИЗВЕСТНЫЙ ЗАПАС/.test(buf) ? ok('в шапке есть последний известный запас') : bad('запас в шапке', 'подписи панели нет');
+    /опрошено/.test(buf) ? ok('у суммы стоит время опроса') : bad('время опроса', 'нет отметки «опрошено»');
+    /[▀▄]/.test(buf) ? ok('сумма набрана полублочным шрифтом') : bad('шрифт суммы', 'полублочных глифов ▀▄ в выводе нет');
+
+    // Русская раскладка: «о» это физическая клавиша j (вниз), «й» — q (выход). До 25.08
+    // readline отдавал для кириллицы пустое имя, и на русском не работало ничего.
+    const beforeRu = buf.length;
+    term.write('о');
+    await L.sleep(400);
+    const afterRu = buf.slice(beforeRu);
+    /❯/.test(afterRu) ? ok('«о» двигает выбор как j — русская раскладка понята') : bad('русская раскладка: «о» = j', 'курсор не сдвинулся\n' + JSON.stringify(afterRu.slice(0, 200)));
+
     const exited = new Promise(resolve => term.onExit(({ exitCode }) => resolve(exitCode)));
-    term.write('q');
+    term.write('й');
     const code = await Promise.race([exited, L.sleep(6000).then(() => 'таймаут')]);
-    if (code === 0) ok('q выходит из меню с нулём');
-    else { bad('q выходит из меню', `получили ${code}`); try { term.kill(); } catch { /* уже мёртв */ } }
+    if (code === 0) ok('«й» выходит из меню с нулём — q в русской раскладке');
+    else { bad('«й» выходит из меню', `получили ${code}`); try { term.kill(); } catch { /* уже мёртв */ } }
+}
+
+// ── 12. Готовность к macOS ───────────────────────────────────────────────────
+// Проверки статические: регресс гоняется на Windows, живого мака под рукой нет.
+// Смысл в том, чтобы правка «под винду» не выбила POSIX-ветку молча — а именно так
+// и происходит, когда ветки лежат в одной функции и одна из них не исполняется.
+function macReady() {
+    const life = read('routing/lifecycle.js');
+    const hub = read('hub.js');
+
+    // У каждой платформенной функции обязана быть вторая половина. Ищем по инструменту:
+    // на POSIX это lsof/ss (порты), ps (имя процесса), getuid (права), detached (запуск).
+    const posix = {
+        'слушатели портов': /lsof/.test(life) && /'ss'/.test(life),
+        'имя процесса по PID': /ps',\s*\['-p'/.test(life),
+        'права': /process\.getuid/.test(life),
+        'запуск сервиса': /detached: true/.test(life),
+        'убийство процесса': /process\.kill\(pid, hard \? 'SIGKILL' : 'SIGTERM'\)/.test(life),
+    };
+    for (const [what, present] of Object.entries(posix)) {
+        present ? ok(`POSIX-ветка на месте: ${what}`) : bad(`POSIX-ветка: ${what}`, 'на маке эта функция ничего не вернёт');
+    }
+
+    // Windows-инструменты вне гейта. Считаем построчно и только по коду: в комментариях
+    // они упоминаются постоянно (и уже дважды ломали этот тест ложным провалом).
+    const guilty = [];
+    for (const [f, src] of [['hub.js', hub], ['routing/lifecycle.js', life]]) {
+        const lines = src.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const l = lines[i];
+            if (/^\s*(\/\/|\*|\/\*)/.test(l)) continue;
+            if (!/taskkill|tasklist|wt\.exe|'powershell'|'netstat'|'cmd'|LOCALAPPDATA/.test(l)) continue;
+            // Гейт может стоять на этой же строке или выше в теле функции — смотрим
+            // окно назад до начала функции. 25 строк: в relaunchElevated между
+            // `if (!L.IS_WIN) return false` и вызовом powershell лежат 16 строк сборки
+            // команды, и окно поменьше давало ложный провал.
+            const back = lines.slice(Math.max(0, i - 25), i + 1).join('\n');
+            if (!/IS_WIN|platform === 'win32'/.test(back)) guilty.push(`${f}:${i + 1}`);
+        }
+    }
+    guilty.length === 0 ? ok('вызовов Windows-утилит вне гейта IS_WIN нет')
+        : bad('Windows-утилиты вне гейта', guilty.join(', ') + ' — на маке это ENOENT');
+
+    // Браузер и установщик — развилки, без которых на маке ломается «Открыть» и «Обновить».
+    /'open', \[url\]|'open'/.test(hub) && /xdg-open/.test(hub)
+        ? ok('открытие браузера знает open и xdg-open') : bad('открытие браузера', 'нет ветки для darwin/linux');
+    /darwin' \? 'install-mac\.sh' : 'install\.sh'/.test(hub)
+        ? ok('обновление зовёт install-mac.sh на маке') : bad('установщик на маке', 'обновление уедет в install.sh для git-bash');
+    /if \(!L\.IS_WIN\) return '\/bin\/bash'/.test(hub)
+        ? ok('bash на маке берётся из /bin, а не ищется как git-bash') : bad('поиск bash', 'на маке вернётся null');
+
+    // Шелл-скрипты обязаны работать на bash 3.2: в macOS до сих пор он, и bash 4-only
+    // синтаксис падает не сообщением, а строкой про syntax error в середине установки.
+    const b4 = /declare -A|mapfile|readarray|\$\{[A-Za-z_]+,,\}|\$\{[A-Za-z_]+\^\^\}/;
+    const olds = [];
+    for (const f of ['install-mac.sh', 'install.sh', 'install-lib.sh', 'install-deps.sh', 'tools/doctor.sh', 'tools/share.sh',
+        'HUB.command', 'DASHBOARD.command']) {
+        if (has(f) && b4.test(read(f))) olds.push(f);
+    }
+    olds.length === 0 ? ok('шелл-скрипты обходятся синтаксисом bash 3.2 (в macOS он)')
+        : bad('bash 4-only синтаксис', olds.join(', '));
+
+    // Exec-бит в индексе. `core.fileMode false` на Windows скрывает разницу, и файл
+    // легко уезжает как 100644 — на маке двойной клик тогда падает «нет прав».
+    const idx = String(require('child_process').execFileSync('git', ['ls-files', '-s',
+        'HUB.command', 'DASHBOARD.command', 'install-mac.sh', 'install.sh', 'install-deps.sh'], { cwd: ROOT, encoding: 'utf8' }));
+    const notExec = idx.split('\n').filter(Boolean).filter(l => !l.startsWith('100755')).map(l => l.split('\t')[1]);
+    notExec.length === 0 ? ok('точки входа для мака лежат в git с exec-битом')
+        : bad('exec-бит в индексе', notExec.join(', ') + ' — двойной клик на маке упрётся в права');
 }
 
 (async () => {
@@ -764,6 +888,8 @@ async function tui() {
     await windowsSpawnProps();
     console.log('\x1b[1m\n11. Меню в настоящем терминале (node-pty)\x1b[0m');
     await tui();
+    console.log('\x1b[1m\n12. Готовность к macOS (статически)\x1b[0m');
+    macReady();
     console.log(`\n\x1b[1mИтого: ${pass} проверок пройдено, ${fails.length} провалено\x1b[0m`);
     if (fails.length) {
         for (const f of fails) console.log(`  \x1b[31m✗\x1b[0m ${f}`);

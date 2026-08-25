@@ -388,3 +388,13 @@ routing/pool-watchdog.log
 
 # точки возврата rescue.js (локальные копии состояния, содержат ключи)
 routing/.rescue/
+
+# ── TrueSota (вкладка дашборда): приватные данные ─────────────────────────────
+# Провайдер заводится параллельно, и его папки приехали в дерево нетрекаемыми —
+# ровно как seekai/ 25.08, когда `git add -A` опубликовал бы живые куки GitHub.
+# Пока они пусты, и закрыть их надо ДО первого прогона сессии, а не после.
+# truesota-modelmap.json — безопасный конфиг маппинга, его коммитим.
+truesota/profiles/
+truesota/sessions/
+truesota/gh-sessions/
+routing/truesota-sessions.json

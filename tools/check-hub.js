@@ -750,7 +750,9 @@ async function tui() {
     const term = pty.spawn(process.execPath, [path.join(ROOT, 'hub.js')], {
         // 113×36 — окно владельца с запасом на одну строку: при 30 строках картинка
         // скрывается по гейту, и тест ловил бы её отсутствие как поломку.
-        cwd: ROOT, cols: 113, rows: 36, env: process.env,
+        // HUB_NO_DRIP — чтобы мерить точечную перерисовку: капель шлёт свои кадры сама,
+        // и в дельте после стрелки они выглядели бы как перерисовка всего кадра.
+        cwd: ROOT, cols: 113, rows: 36, env: { ...process.env, HUB_NO_DRIP: '1' },
     });
     let buf = '';
     term.onData(d => { buf += d; });
@@ -879,6 +881,70 @@ function macReady() {
         : bad('exec-бит в индексе', notExec.join(', ') + ' — двойной клик на маке упрётся в права');
 }
 
+// ── 13. Анимация шапки: проявление, капель, фокус ─────────────────────────────
+// Отдельная сессия pty, потому что предыдущая идёт с HUB_NO_DRIP=1. Здесь наоборот:
+// капель должна капать сама, а при потере фокуса — замолчать полностью.
+async function headerAnim() {
+    let pty;
+    try { pty = require('node-pty'); } catch (e) {
+        console.log(`  \x1b[33m·\x1b[0m анимация пропущена: node-pty недоступен (${e.message.slice(0, 60)})`);
+        return;
+    }
+    const term = pty.spawn(process.execPath, [path.join(ROOT, 'hub.js')], { cwd: ROOT, cols: 113, rows: 36, env: process.env });
+    let buf = '';
+    term.onData(d => { buf += d; });
+    const kill = () => { try { term.kill(); } catch { /* уже мёртв */ } };
+
+    const gotMenu = await (async () => {
+        for (let i = 0; i < 120; i++) { if (/Выход/.test(buf)) return true; await L.sleep(100); }
+        return false;
+    })();
+    if (!gotMenu) { bad('анимация: меню поднялось', 'за 12 с не дождались'); kill(); return; }
+
+    // Доллар — тем же полублочным шрифтом и ПОСЛЕ числа (пометка владельца 25.08).
+    /██▀▀/.test(buf) && /▄█▄█/.test(buf) ? ok('знак доллара нарисован шрифтом суммы')
+        : bad('знак доллара', 'глифа $ в выводе нет');
+
+    // Капель идёт сама, без единого нажатия, и зелёная.
+    let mark = buf.length;
+    await L.sleep(2000);
+    const grow = buf.length - mark;
+    grow > 200 ? ok(`капель идёт сама (${(grow / 2 / 1024).toFixed(1)} КБ/с)`)
+        : bad('капель идёт сама', `за 2 с прилетело ${grow} байт — анимация стоит`);
+    /38;5;46/.test(buf) ? ok('капли зелёные, ярче картинки') : bad('цвет капель', 'зелёного 38;5;46 в выводе нет');
+    grow < 12000 ? ok('поток капели скромный') : bad('поток капели', `${grow} байт за 2 с — это перерисовка кадрами, а не ячейками`);
+
+    // Потеря фокуса обязана снимать таймер НАСОВСЕМ: не «реже», а ноль байт.
+    term.write('\x1b[O');
+    await L.sleep(700);
+    mark = buf.length;
+    await L.sleep(1500);
+    const bgGrow = buf.length - mark;
+    bgGrow === 0 ? ok('в фоне не отправлено ни байта — таймер снят')
+        : bad('в фоне капель молчит', `прилетело ${bgGrow} байт за 1.5 с`);
+
+    term.write('\x1b[I');
+    await L.sleep(1200);
+    buf.length - mark > bgGrow ? ok('фокус вернулся — капель ожила') : bad('возврат фокуса', 'после ESC[I ничего не приехало');
+
+    // Курсор после капели вернулся на место: иначе стрелка перепишет не ту строку.
+    mark = buf.length;
+    term.write('\x1b[B');
+    await L.sleep(400);
+    /❯/.test(buf.slice(mark)) ? ok('стрелка работает поверх капели — курсор возвращается')
+        : bad('курсор после капели', 'стрелка не перерисовала строку пункта');
+
+    // И события фокуса не должны читаться как нажатия: до 25.08 их вообще не было в
+    // потоке, а теперь есть — если readKey отдаст их как клавишу, меню запустит пункт.
+    !/гашу |поднимаю |Обновление|Отчёт собран/.test(buf) ? ok('события фокуса не сработали как нажатие')
+        : bad('события фокуса', 'меню выполнило пункт от ESC[I/ESC[O');
+
+    const exited = new Promise(resolve => term.onExit(({ exitCode }) => resolve(exitCode)));
+    term.write('q');
+    const code = await Promise.race([exited, L.sleep(6000).then(() => 'таймаут')]);
+    code === 0 ? ok('выход из меню с капелью — чистый') : (bad('выход с капелью', `получили ${code}`), kill());
+}
+
 (async () => {
     console.log('\x1b[1m\n8. Механика на подставном порту (живой стек не трогаем)\x1b[0m');
     await mechanics();
@@ -890,6 +956,8 @@ function macReady() {
     await tui();
     console.log('\x1b[1m\n12. Готовность к macOS (статически)\x1b[0m');
     macReady();
+    console.log('\x1b[1m\n13. Анимация шапки: проявление, капель, фокус\x1b[0m');
+    await headerAnim();
     console.log(`\n\x1b[1mИтого: ${pass} проверок пройдено, ${fails.length} провалено\x1b[0m`);
     if (fails.length) {
         for (const f of fails) console.log(`  \x1b[31m✗\x1b[0m ${f}`);

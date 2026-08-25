@@ -42,7 +42,11 @@ const cyan = s => e(96, s);
 const grey = s => e(90, s);
 
 const out = s => process.stdout.write(s);
-const line = (s = '') => out(s + '\n');
+// Счётчик напечатанных строк. Нужен ровно для одного: капель должна знать, сколько
+// строк кадра лежит НИЖЕ картинки, чтобы прыгать к ней курсором. Считать формулой
+// нельзя — состав кадра меняется от размера окна и числа пунктов.
+let printedLines = 0;
+const line = (s = '') => { printedLines++; out(s + '\n'); };
 const clearScreen = () => TTY && out('\x1b[2J\x1b[H');
 const hideCursor = () => TTY && out('\x1b[?25l');
 const showCursor = () => TTY && out('\x1b[?25h');
@@ -100,6 +104,14 @@ function bigNum(text) {
     return rows;
 }
 
+// Знак доллара тем же шрифтом, ПОСЛЕ числа — так его пометил владелец на скриншоте
+// 25.08. Четыре колонки, а не три: стержень должен стоять отдельной колонкой, иначе
+// он сливается с перекладинами S в кляксу. Перебрано 13 вариантов, черновик остался
+// в `Downloads\dollar-fonts.js`. Брайлевый доллар из `wiki/WORKSPACE/ART 1.md` тут не
+// годится: он 14×11 символов, а при уменьшении до трёх строк штрих S исчезает и
+// остаётся пятно (замер — `Downloads\dollar-shrink.js`).
+const DOLLAR = ['██▀▀', '▀█▀█', '▄█▄█'];
+
 // Правая колонка шапки: последний ИЗВЕСТНЫЙ запас пулов. Читается с диска, поэтому
 // цифра есть и когда дашборд лежит — как раз тогда её больше негде посмотреть.
 // Отсюда и подпись «последний известный», а не «баланс»: это кэш опроса.
@@ -121,7 +133,7 @@ function balancePanel() {
     return [
         dim('ПОСЛЕДНИЙ ИЗВЕСТНЫЙ ЗАПАС'),
         '',
-        ...bigNum(whole).map(l => green(l)),
+        ...bigNum(whole).map((l, i) => green(l + DOLLAR[i])),
         '',
         `${bold('$' + b.available.toFixed(2))}${dim('  опрошено ' + when)}`,
         dim(pools),
@@ -160,8 +172,14 @@ function artFits(lines) {
     return (process.stdout.columns || 80) >= w + 4;
 }
 
-// Шапка: картинка проявляется построчно сверху вниз, ~200 мс. В не-TTY один плоский кадр.
-async function intro() {
+// Шапка: картинка ПРОЯВЛЯЕТСЯ по точкам сверху вниз, ~350 мс. Разово — при входе в
+// меню и при возврате из подменю; постоянное движение делает капель (см. ниже).
+// В не-TTY один плоский кадр.
+//
+// Проявление считается по точкам брайля, а не по строкам: одна ячейка это 2×4 точки,
+// и биты лежат в коде символа. Построчный вариант, стоявший тут до 25.08, выглядел
+// как открывающиеся жалюзи.
+async function intro({ animate = true } = {}) {
     const pad = '  ';
     const { art: A, withArt } = layout();
     if (!withArt) return;
@@ -173,16 +191,92 @@ async function intro() {
     const panel = cols >= artW + 3 + 34 ? balancePanel() : [];
     const composed = A.map((l, i) => pad + (TTY ? cyan(l) : l) + (panel[i] ? '   ' + panel[i] : ''));
 
-    if (!TTY) {
+    if (!TTY || !animate) {
         for (const l of composed) line(l);
         return;
     }
-    // Проявление — только по картинке: панель появляется в финальном проходе, иначе
-    // цифра мигала бы вместе с ней и читалась как «баланс скачет».
-    for (const l of A) { line(pad + grey(l)); await sleep(20); }
+
+    const AN = require('./internal/art-anim');
+    const B = AN.create(A);
+    const R = AN.reveal(B);
+    line('\n'.repeat(A.length - 1));          // место под картинку
+    for (;;) {
+        const f = R.next();
+        up(A.length);
+        // Панель появляется только в финальном кадре: мигать вместе с картинкой ей
+        // нельзя — цифра баланса, которая скачет, читается как «баланс скачет».
+        for (const l of f.lines) { eraseLine(); line(pad + cyan(l)); }
+        if (f.done) break;
+        await sleep(24);
+    }
     up(A.length);
     for (const l of composed) { eraseLine(); line(l); }
 }
+
+// ── Капель ───────────────────────────────────────────────────────────────────
+// Постоянное движение в шапке, пока открыто меню: зелёные капли отрываются от
+// нижних кромок картинки и падают. Решение владельца 25.08 — «капли зелёные, чтобы
+// были постоянно», сама картинка остаётся голубой и целой.
+//
+// Три вещи, из которых это дёшево:
+//   * перерисовываются только ЯЧЕЙКИ с каплями (десятки символов), а не строки;
+//   * символ капли смешан с картинкой, поэтому точки под ней не пропадают;
+//   * при потере фокуса окна таймер СНИМАЕТСЯ (см. focus reporting ниже) — в фоне
+//     не тратится вообще ничего, а не «тратится мало».
+//
+// `HUB_NO_DRIP=1` выключает капель совсем: нужно для замеров точечной перерисовки в
+// регрессе и на случай терминала, который такой поток не любит.
+const DROP = '\x1b[38;5;46m';                 // ярко-зелёный, ярче картинки
+const FOCUS_ON = '\x1b[?1004h';
+const FOCUS_OFF = '\x1b[?1004l';
+let dripStop = null;
+// Хук фокуса окна. Ставит его капель, дёргает readKey: последовательности ESC[I/ESC[O
+// приходят в тот же поток ввода, что и клавиши, поэтому разбираются там же.
+let focusHook = null;
+
+// Курсор стоит под всем кадром; картинка — `linesBelow + A.length` строк выше.
+// Каждую ячейку рисуем от сохранённой позиции (ESC 7 / ESC 8): относительные
+// прыжки пришлось бы складывать, а любая ошибка в сумме уводит рисунок в текст.
+function startDrip(A, linesBelow) {
+    if (!TTY || !A.length || process.env.HUB_NO_DRIP) return;
+    const AN = require('./internal/art-anim');
+    const B = AN.create(A);
+    const D = AN.drip(B);
+    const top = linesBelow + A.length;
+    let timer = null, paused = false;
+
+    const tick = () => {
+        timer = null;
+        if (paused) return;
+        const { paint, clear } = D.next();
+        if (paint.length || clear.length) {
+            let s = '\x1b7';
+            for (const c of clear) s += `\x1b8\x1b[${top - c.cy}A\x1b[${c.cx + 3}G${cyan(c.ch)}`;
+            for (const c of paint) s += `\x1b8\x1b[${top - c.cy}A\x1b[${c.cx + 3}G${DROP}${c.ch}\x1b[0m`;
+            out(s + '\x1b8');
+        }
+        timer = setTimeout(tick, 90);
+    };
+
+    dripStop = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        dripStop = null;
+        focusHook = null;
+        out(FOCUS_OFF);
+    };
+    // Фокус ушёл — снимаем таймер; вернулся — заводим заново.
+    focusHook = on => {
+        paused = !on;
+        if (!on && timer) { clearTimeout(timer); timer = null; }
+        if (on && !timer) timer = setTimeout(tick, 90);
+    };
+    // Просим терминал сообщать о фокусе. Windows Terminal умеет, старый conhost
+    // молча игнорирует — там капель будет капать и в фоне, стоимость известна.
+    out(FOCUS_ON);
+    timer = setTimeout(tick, 300);
+}
+
 
 // ── Строка с крутилкой ───────────────────────────────────────────────────────
 // Одна активная строка: пока операция идёт — крутится, по завершении затирается и
@@ -814,12 +908,21 @@ function pause(text = 'Enter — вернуться в меню') {
 // Одна нажатая клавиша. Raw-режим включаем только на время ожидания и снимаем
 // перед запуском операций: пока он включён, дочерние процессы со stdio inherit
 // (doctor.sh, установщик) не получают нормальный ввод, а Ctrl+C не прерывает их.
+//
+// 🪤 Сюда же приходят события фокуса окна (ESC[I / ESC[O от DECSET 1004) — их нужно
+// отдать капели и ПРОДОЛЖИТЬ ждать клавишу, а не вернуть как нажатие: иначе щелчок
+// мышью по другому окну выглядел бы для меню как нажатая кнопка.
 function readKey() {
     return new Promise(resolve => {
         readline.emitKeypressEvents(process.stdin);
         if (process.stdin.isTTY) process.stdin.setRawMode(true);
         process.stdin.resume();
         const onKey = (str, key) => {
+            const seq = (key && key.sequence) || str || '';
+            if (seq === '\x1b[I' || seq === '\x1b[O') {
+                if (focusHook) focusHook(seq === '\x1b[I');
+                return;                                   // ждём дальше
+            }
             process.stdin.removeListener('keypress', onKey);
             if (process.stdin.isTTY) process.stdin.setRawMode(false);
             process.stdin.pause();
@@ -886,7 +989,7 @@ function itemLine(it, on) {
 
 async function menu() {
     hideCursor();
-    process.on('exit', showCursor);
+    process.on('exit', () => { showCursor(); if (TTY) out(FOCUS_OFF); });
     let sel = 0;
     const items = menuItems();
 
@@ -899,14 +1002,18 @@ async function menu() {
 
     for (;;) {
         if (needFull) {
+            if (dripStop) dripStop();
             clearScreen();
-            const { compact } = layout();
-            await intro();
+            const { art: A, withArt, compact } = layout();
+            await intro();                                // проявление по точкам
+            const belowFrom = printedLines;
             statusBlock({ compact });
             if (!compact) line();
             for (const [i, it] of items.entries()) line(itemLine(it, i === sel));
             line(dim('  ↑↓ выбрать · Enter запустить · цифра — сразу · q выход'));
             needFull = false;
+            // Капель заводится ПОСЛЕ кадра: ей нужно знать, сколько строк под картинкой.
+            if (withArt) startDrip(A, printedLines - belowFrom);
         }
 
         const k = await readKey();
@@ -930,15 +1037,19 @@ async function menu() {
 
         if (name === 'up' || name === 'k') { move(-1); continue; }
         if (name === 'down' || name === 'j') { move(1); continue; }
-        if (name === 'c' && k.ctrl) { showCursor(); process.exit(0); }
+        if (name === 'c' && k.ctrl) { if (dripStop) dripStop(); showCursor(); process.exit(0); }
         let pick = null;
         if (name === 'return' || name === 'enter' || name === 'space') pick = items[sel];
         else pick = items.find(it => it.key === name);
         if (!pick) continue;
 
+        // Капель гасим до операции: она рисует по абсолютной позиции кадра, а вывод
+        // операции этот кадр сдвинет. Плюс на время дочерних процессов со stdio inherit
+        // снимается focus reporting — иначе ESC[I/ESC[O улетали бы им в ввод.
+        if (dripStop) dripStop();
         showCursor();
         clearScreen();
-        await intro();
+        await intro({ animate: false });        // шапка над выводом операции — без проявления
         await pick.run();
         if (!pick.noPause) await pause();
         hideCursor();

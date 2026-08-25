@@ -509,6 +509,29 @@ t('панель с большим знаком влезает в окно вла
     return true;
 });
 
+t('нижние кромки картинки и знака совпадают', () => {
+    const H = require(path.join(ROOT, 'hub.js'));
+    Object.defineProperty(process.stdout, 'columns', { value: 113, configurable: true });
+    Object.defineProperty(process.stdout, 'rows', { value: 30, configurable: true });
+    let out = '';
+    const real = process.stdout.write.bind(process.stdout);
+    process.stdout.write = s => { out += s; return true; };
+    try { H.intro(); } finally { process.stdout.write = real; }
+
+    // Владелец провёл линию по низу картинки и показал, что знак свисает ниже
+    // («не ровно, не по линии»). Значит: последняя строка шапки обязана содержать И
+    // последнюю строку картинки, И последнюю строку знака.
+    const lines = out.split('\n').filter(l => l.length);
+    const artLast = H.art().slice(-1)[0];
+    const dollarLast = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n').filter(Boolean).slice(-1)[0];
+    const last = lines[lines.length - 1];
+    if (!last.includes(artLast)) return 'в последней строке шапки нет низа картинки';
+    if (!last.includes(dollarLast)) return 'в последней строке шапки нет низа знака — он снова свисает';
+    // И наоборот: первая строка шапки — только знак, картинка начинается ниже.
+    if (lines[0].includes(H.art()[0])) return 'картинка снова прижата к верху, кромки разъедутся';
+    return true;
+});
+
 t('Windows Terminal ищется НЕ через existsSync', () => {
     const src = read('hub.js');
     // 🪤 Причина серого окна администратора: wt.exe в WindowsApps — точка повторного
@@ -519,8 +542,9 @@ t('Windows Terminal ищется НЕ через existsSync', () => {
     if (/existsSync/.test(fn)) return 'снова existsSync — на алиасе он отвечает false, окно будет серым';
     if (!/where\.exe/.test(fn)) return 'wt не ищется через where.exe';
     if (!/lstatSync/.test(fn)) return 'нет запасного пути через lstat';
-    // И сама элевация обязана иметь лестницу попыток, а не одну.
-    const re = src.slice(src.indexOf('function relaunchElevated'), src.indexOf('function relaunchElevated') + 2000);
+    // И сама элевация обязана иметь лестницу попыток, а не одну. Строки строит
+    // elevateCommands(), поэтому смотрим её, а не relaunchElevated.
+    const re = src.slice(src.indexOf('function elevateCommands'), src.indexOf('function relaunchElevated'));
     if ((re.match(/tries\.push/g) || []).length < 3) return 'у элевации меньше трёх попыток — при отказе wt не будет ничего';
     if (!/Verb RunAs/.test(re)) return 'элевация без -Verb RunAs';
     return true;
@@ -544,6 +568,70 @@ t('переезд в Windows Terminal защищён от вечной цепо�
     // КАЖДЫЙ запуск хаба — ровно то, за что сняли старый restart-dashboard.bat.
     if (/Verb RunAs/.test(fn)) return 'переезд просит UAC — этого быть не должно';
     if (!/return r\.status === 0/.test(fn)) return 'результат запуска не проверяется — окно может закрыться в никуда';
+    return true;
+});
+
+t('аргументы элевации не разваливаются на пробелах', () => {
+    const H = require(path.join(ROOT, 'hub.js'));
+    const cmds = H.elevateCommands([]);
+    if (!cmds.length) return 'elevateCommands() ничего не вернул';
+    // 🪤 Start-Process с любым -Verb идёт через ShellExecute: PowerShell склеивает
+    // элементы -ArgumentList пробелами и НЕ кавычит их сам. Замер живьём (эхо argv):
+    // и запись через запятую, и через @(...) дают ["--title","ABUSE","HUB","(админ)"],
+    // то есть wt получает команду «HUB» и падает. Спасает только двойная кавычка внутри
+    // значения. Ровно это и проверяем — по самим строкам, которые уйдут в powershell.
+    for (const cmd of cmds) {
+        const from = cmd.indexOf('@('), to = cmd.indexOf('); Start-Process');
+        if (from < 0 || to < 0) return 'в команде нет массива аргументов';
+        // Токены вынимаем сканером по одинарным кавычкам, а не split(',') — в значениях
+        // есть и запятые, и скобки («ABUSE HUB (админ)»), и первая же наивная версия
+        // этой проверки на них и сломалась.
+        const tokens = cmd.slice(from + 2, to).match(/'(?:[^']|'')*'/g) || [];
+        if (!tokens.length) return 'массив аргументов пуст';
+        for (const raw of tokens) {
+            const val = raw.slice(1, -1).replace(/''/g, "'");
+            if (/\s/.test(val) && !(val.startsWith('"') && val.endsWith('"'))) {
+                return `аргумент с пробелом без двойных кавычек: ${raw} — приедет разорванным`;
+            }
+        }
+        // А вот -FilePath наоборот: двойных кавычек внутри быть НЕ должно, это параметр
+        // PowerShell, и они уехали бы в имя файла.
+        const fp = cmd.match(/-FilePath '([^']*)'/);
+        if (fp && /^"/.test(fp[1])) return `-FilePath взят в двойные кавычки: ${fp[1]}`;
+    }
+    return true;
+});
+
+t('элевация и переезд открывают HUB.bat, чтобы окно пережило падение', () => {
+    const H = require(path.join(ROOT, 'hub.js'));
+    const args = H.wtHubArgs('ABUSE HUB');
+    if (!has('HUB.bat')) return 'нет HUB.bat — не с чем сравнивать';
+    // node напрямую = вкладка закрывается вместе с процессом, и стек падения увидеть
+    // нельзя (владелец 25.08: «вылетал именно из внутрянки»). HUB.bat делает pause.
+    if (!args.some(a => /HUB\.bat$/i.test(a))) return 'wt запускает node напрямую — окно закроется вместе с ошибкой';
+    if (!args.includes('cmd.exe')) return 'bat запускается без cmd.exe';
+    if (args[0] !== '-w' || args[1] !== '-1') return 'потеряно новое окно (-w -1)';
+    return true;
+});
+
+t('падение хаба пишется в лог, а не теряется вместе с окном', () => {
+    const src = read('hub.js');
+    if (!/function installCrashLog/.test(src)) return 'нет обработчика падений';
+    for (const ev of ['uncaughtException', 'unhandledRejection']) {
+        if (!src.includes(ev)) return `не перехватывается ${ev}`;
+    }
+    if (!/hub-crash\.log/.test(src)) return 'стек никуда не пишется';
+    if (!/installCrashLog\(\);/.test(src)) return 'обработчик объявлен, но не установлен';
+    return true;
+});
+
+t('HUB.bat не выключает переезд в Windows Terminal', () => {
+    const src = read('HUB.bat');
+    // Строка `set "HUB_NO_WT=1"` тут появлялась 25.08 и отменяла ровно то, о чём просил
+    // владелец: окно администратора должно выглядеть как обычное. Защита от цепочки
+    // окон делается не здесь, а маркером HUB_IN_WT в окружении ребёнка.
+    const live = src.split('\n').filter(l => !/^\s*rem\b/i.test(l)).join('\n');
+    if (/HUB_NO_WT/.test(live)) return 'HUB.bat снова гасит переезд — двойной клик останется в conhost';
     return true;
 });
 

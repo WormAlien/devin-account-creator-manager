@@ -16,6 +16,13 @@ rem  every single start (restart-dashboard.bat, 2026-08-13) because taskkill
 rem  cannot kill an elevated node from a normal console - but the only reason
 rem  those processes were elevated is that the launcher elevated itself. Break
 rem  the loop: start plain, and let the hub offer elevation if it is needed.
+rem
+rem  HUB_NO_WT is NOT set here on purpose. The hub moves itself from the grey
+rem  conhost window into Windows Terminal, and that is exactly what a double
+rem  click (or right-click Run as administrator) needs. The loop guard is
+rem  HUB_IN_WT, which the hub itself puts into the child environment, plus
+rem  WT_SESSION from the terminal. Set HUB_NO_WT=1 outside if you want the
+rem  plain console.
 rem ===========================================================================
 setlocal
 cd /d "%~dp0"

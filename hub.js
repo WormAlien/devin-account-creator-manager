@@ -249,10 +249,15 @@ async function intro({ animate = true } = {}) {
 
     const artW = Math.max(...A.map(l => [...l].length));
     const blank = ' '.repeat(artW);
+    // Картинка прижата к НИЗУ шапки. Знак доллара выше её на две строки, и при
+    // выравнивании по верху он свисал ниже картинки — владелец провёл по этому месту
+    // линию на скриншоте («не ровно, не по линии»). Теперь нижние кромки совпадают,
+    // а лишние две строки уходят наверх, где у знака и так пустой купол.
+    const artTop = headerRows - A.length;
     const row = (artLine, panelLine) =>
         PAD + (TTY ? cyan(artLine) : artLine) + (panelLine ? GAP + panelLine : '');
-    const composed = Array.from({ length: headerRows }, (_, i) =>
-        row(A[i] === undefined ? blank : A[i], panel[i]));
+    const at = (src, i) => (i < artTop || src[i - artTop] === undefined ? blank : src[i - artTop]);
+    const composed = Array.from({ length: headerRows }, (_, i) => row(at(A, i), panel[i]));
 
     if (!TTY || !animate) {
         for (const l of composed) line(l);
@@ -268,7 +273,7 @@ async function intro({ animate = true } = {}) {
         up(headerRows);
         // Панель появляется только в финальном кадре: мигать вместе с картинкой ей
         // нельзя — цифра баланса, которая скачет, читается как «баланс скачет».
-        for (let i = 0; i < headerRows; i++) { eraseLine(); line(row(f.lines[i] === undefined ? blank : f.lines[i], '')); }
+        for (let i = 0; i < headerRows; i++) { eraseLine(); line(row(at(f.lines, i), '')); }
         if (f.done) break;
         await sleep(24);
     }
@@ -306,9 +311,12 @@ function startDrip(A, linesBelow, headerRows) {
     const AN = require('./internal/art-anim');
     const B = AN.create(A);
     const D = AN.drip(B);
-    // Считаем от ВЫСОТЫ ШАПКИ, а не картинки: с брайлевым долларом справа шапка на две
-    // строки выше, и капли рисовались бы по чужим строкам.
-    const top = linesBelow + (headerRows || A.length);
+    // Картинка прижата к низу шапки (см. intro), поэтому её строка cy лежит ровно на
+    // `linesBelow + A.length - cy` выше курсора — высота шапки в эту арифметику уже не
+    // входит. Аргумент headerRows оставлен для проверки: если он меньше картинки,
+    // раскладка развалилась и капель лучше не заводить.
+    if (headerRows && headerRows < A.length) return;
+    const top = linesBelow + A.length;
     let timer = null, paused = false;
 
     const tick = () => {
@@ -491,28 +499,48 @@ function findWt() {
 // Открываем в Windows Terminal, а не напрямую node: элевированный процесс, запущенный
 // через Start-Process, получает СВОЁ окно, и это старый conhost — серый, с другим
 // шрифтом и без темы. `wt.exe` уносит окно в нормальный терминал с профилем по
-// умолчанию. Порядок попыток, и каждая проверена на этой машине (без -Verb RunAs,
-// черновик `Downloads\wt-launch-probe.js`): сам wt → wt из-под cmd → прямой node.
-// Последняя даёт то самое серое окно, но она лучше, чем «ничего не произошло».
-function relaunchElevated(argv) {
-    if (!L.IS_WIN) return false;
-    const q = s => `'${String(s).replace(/'/g, "''")}'`;
+// умолчанию. Порядок попыток: сам wt → wt из-под cmd → прямой node. Последняя даёт то
+// самое серое окно, но она лучше, чем «ничего не произошло» — и такой хаб при старте
+// сам переедет в терминал (moveToWindowsTerminal).
+//
+// 🪤 Аргумент с ПРОБЕЛОМ надо обернуть в двойные кавычки ВНУТРИ значения. Start-Process
+// с любым `-Verb` идёт через ShellExecute, а тот принимает одну строку: PowerShell
+// склеивает элементы `-ArgumentList` пробелами и НЕ кавычит их сам. Замер (черновик
+// `Downloads\elevate-args-probe.js`, вариант с эхом argv): и запись через запятую, и
+// через `@(...)` дают `["--title","ABUSE","HUB","(админ)"]` — wt видит команду «HUB»
+// и падает; вариант с внутренними кавычками приезжает целым. Ломался не только
+// заголовок: `C:\Program Files\nodejs\node.exe` разрывался ровно так же.
+// 🪤 Шим на .cmd эту задачу решает, но кириллицу в нём коверкает консольная кодировка
+// (в замере заголовок приехал как «ABUSE HUB (04<8=)»), а .cmd у нас по правилу ASCII.
+function elevateCommands(argv = []) {
+    if (!L.IS_WIN) return [];
     const hubArgs = [__filename, ...argv];
     const wt = findWt();
-    // `-w -1` — новое окно, а не вкладка в уже открытом (иначе элевированная вкладка
-    // подсядет к обычному окну, чего Windows Terminal не разрешает).
-    const wtArgs = ['-w', '-1', 'new-tab', '--title', 'ABUSE HUB (админ)', process.execPath, ...hubArgs];
+    // Два разных квотирования, и путать их нельзя: `-FilePath` уходит параметром
+    // PowerShell (хватает одинарных кавычек), а элементы `-ArgumentList` склеиваются в
+    // одну строку для ShellExecute — им нужны ещё и внутренние двойные.
+    const psq = s => `'${String(s).replace(/'/g, "''")}'`;
+    const psArr = list => `@(${list.map(s => psq(/\s/.test(s) ? `"${s}"` : s)).join(',')})`;
 
     const tries = [];
     if (wt) {
-        tries.push(`Start-Process -FilePath ${q(wt)} -ArgumentList ${wtArgs.map(q).join(',')} -Verb RunAs`);
-        tries.push(`Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','start','""','wt.exe',`
-            + `${wtArgs.map(q).join(',')} -Verb RunAs`);
+        // `-w -1` — новое окно, а не вкладка в уже открытом (иначе элевированная вкладка
+        // подсядет к обычному окну, чего Windows Terminal не разрешает). Внутри окна
+        // запускается HUB.bat, а не node: при падении bat делает pause, и стек остаётся
+        // на экране вместо мгновенно закрывшейся вкладки.
+        const wtArgs = wtHubArgs('ABUSE HUB (админ)', argv);
+        tries.push(`$a = ${psArr(wtArgs)}; Start-Process -FilePath ${psq(wt)} -ArgumentList $a -Verb RunAs`);
+        tries.push(`$a = ${psArr(['/c', 'start', '""', 'wt.exe', ...wtArgs])}; `
+            + `Start-Process -FilePath 'cmd.exe' -ArgumentList $a -Verb RunAs`);
     }
-    tries.push(`Start-Process -FilePath ${q(process.execPath)} -ArgumentList ${hubArgs.map(q).join(',')} `
-        + `-Verb RunAs -WorkingDirectory ${q(L.ROOT)}`);
+    tries.push(`$a = ${psArr(hubArgs)}; Start-Process -FilePath ${psq(process.execPath)} `
+        + `-ArgumentList $a -Verb RunAs -WorkingDirectory ${psq(L.ROOT)}`);
+    return tries;
+}
 
-    for (const cmd of tries) {
+function relaunchElevated(argv) {
+    if (!L.IS_WIN) return false;
+    for (const cmd of elevateCommands(argv)) {
         const r = spawnSync('powershell', ['-NoProfile', '-Command', cmd], { stdio: 'ignore', windowsHide: true });
         if (r.status === 0) return true;
     }
@@ -1218,7 +1246,7 @@ function moveToWindowsTerminal() {
     if (process.env.TERM || process.env.TERM_PROGRAM) return false;
     const wt = findWt();
     if (!wt) return false;
-    const r = spawnSync(wt, ['-w', '-1', 'new-tab', '--title', 'ABUSE HUB', process.execPath, __filename], {
+    const r = spawnSync(wt, wtHubArgs('ABUSE HUB'), {
         cwd: L.ROOT,
         stdio: 'ignore',
         windowsHide: true,
@@ -1228,7 +1256,44 @@ function moveToWindowsTerminal() {
     return r.status === 0;
 }
 
+// Падение хаба обязано оставлять след. Раньше след терялся дважды: элевированное окно
+// закрывалось вместе с процессом (владелец 25.08: «вылетал именно из внутрянки» —
+// разбирать было нечего), а в не-TTY стек уходил в никуда. Теперь стек и в окно, и в
+// `logs/hub/hub-crash.log`, а окно, открытое через HUB.bat, само делает pause.
+function installCrashLog() {
+    const dump = (kind, err) => {
+        try { if (dripStop) dripStop(); } catch { /* уже снята */ }
+        showCursor();
+        const stack = (err && err.stack) || String(err);
+        try {
+            fs.mkdirSync(L.LOG_DIR, { recursive: true });
+            fs.appendFileSync(path.join(L.LOG_DIR, 'hub-crash.log'),
+                `\n=== ${new Date().toLocaleString('sv')} ${kind} · ${process.argv.slice(2).join(' ') || 'меню'}`
+                + ` · права ${L.IS_WIN && L.isElevated() ? 'администратор' : 'обычные'} ===\n${stack}\n`);
+        } catch { /* некуда писать — не повод молчать в окно */ }
+        line();
+        line(`  ${red('Хаб упал: ' + ((err && err.message) || err))}`);
+        line(`  ${dim('стек целиком — logs/hub/hub-crash.log')}`);
+        line();
+        process.exit(1);
+    };
+    process.on('uncaughtException', e => dump('uncaughtException', e));
+    process.on('unhandledRejection', e => dump('unhandledRejection', e));
+}
+
+// Аргументы для wt: запускаем не node напрямую, а HUB.bat. Разница не косметическая —
+// bat держит окно открытым при ненулевом коде (`pause`), поэтому падение видно, а не
+// «окно мигнуло и закрылось». Нет bat (запуск из клона без него) — зовём node.
+function wtHubArgs(title, argv = []) {
+    const bat = path.join(L.ROOT, 'HUB.bat');
+    const run = fs.existsSync(bat)
+        ? ['cmd.exe', '/c', bat, ...argv]
+        : [process.execPath, __filename, ...argv];
+    return ['-w', '-1', 'new-tab', '--title', title, ...run];
+}
+
 async function main() {
+    installCrashLog();
     const argv = process.argv.slice(2);
     const open = !argv.includes('--no-open');
     const verb = argv.find(a => !a.startsWith('-'));
@@ -1290,5 +1355,5 @@ if (require.main === module) {
 
 module.exports = {
     intro, statusBlock, menuItems, itemLine, art, artFits, layout, link, readArt,
-    balancePanel, findWt, WISPR_ART_FILE, DOLLAR_FILE,
+    balancePanel, findWt, elevateCommands, wtHubArgs, WISPR_ART_FILE, DOLLAR_FILE,
 };

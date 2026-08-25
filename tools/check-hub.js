@@ -468,6 +468,85 @@ t('хоткеи работают в русской раскладке', () => {
     return true;
 });
 
+t('брайлевый доллар на месте и это прямоугольник', () => {
+    // Владелец принёс его дважды (wiki/WORKSPACE/ART 1.md) — копия обязана лежать в
+    // репо: вики это другой репозиторий, у форка её нет вообще.
+    if (!has('internal/hub-dollar.txt')) return 'нет internal/hub-dollar.txt';
+    const lines = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n').filter(Boolean);
+    const w = [...lines[0]].length;
+    for (const l of lines) if ([...l].length !== w) return 'строки разной длины — знак поедет';
+    if (lines.length !== 11 || w !== 14) return `ожидались 14×11, а тут ${w}×${lines.length}`;
+    if (!/[⠀-⣿]/.test(lines[5])) return 'это не брайль';
+    // Уменьшать его нельзя: замер показал пятно вместо S. Значит в коде не должно
+    // появиться никакого «сжатия» знака — только полный размер или без знака.
+    const src = read('hub.js');
+    if (/DOLLAR.*shrink|shrinkDollar/.test(src)) return 'в коде появилось уменьшение знака — оно даёт пятно';
+    return true;
+});
+
+t('панель с большим знаком влезает в окно владельца и отступает на узком', () => {
+    const H = require(path.join(ROOT, 'hub.js'));
+    const plain = s => String(s).replace(/\x1b\]8;;[^\x1b]*\x1b\\/g, '').replace(/\x1b\[[0-9;]*m/g, '');
+    // 113×30 — окно владельца. Большой знак обязан влезать целиком, и ни одна строка
+    // шапки не должна упираться в правый край: перенос разорвал бы картинку.
+    const wide = H.layout({ cols: 113, rows: 30 });
+    if (wide.headerRows !== 11) return `на 113×30 шапка ${wide.headerRows} строк, а с большим знаком должно быть 11`;
+    const artW = Math.max(...wide.art.map(l => [...l].length));
+    for (let i = 0; i < wide.headerRows; i++) {
+        const a = wide.art[i] === undefined ? ' '.repeat(artW) : wide.art[i];
+        const len = [...('  ' + a + (wide.panel[i] ? '   ' + plain(wide.panel[i]) : ''))].length;
+        if (len > 113) return `строка шапки ${i} шириной ${len} — не влезает в 113`;
+    }
+    // Узкое окно: знак уходит, панель и картинка остаются.
+    const narrow = H.layout({ cols: 100, rows: 30 });
+    if (!narrow.withArt) return 'на 100 колонках выбросили картинку, а надо было знак';
+    if (narrow.headerRows !== 9) return `на 100 колонках шапка ${narrow.headerRows} строк — большой знак не отступил`;
+    if (!narrow.panel.length) return 'на 100 колонках панель исчезла целиком';
+    // Низкое окно: сперва жертвуем большим знаком, картинку держим до конца.
+    const low = H.layout({ cols: 113, rows: 24 });
+    if (!low.withArt) return 'на 24 строках выбросили картинку раньше знака';
+    if (low.headerRows > 9) return `на 24 строках шапка ${low.headerRows} строк — знак не отступил`;
+    return true;
+});
+
+t('Windows Terminal ищется НЕ через existsSync', () => {
+    const src = read('hub.js');
+    // 🪤 Причина серого окна администратора: wt.exe в WindowsApps — точка повторного
+    // разбора «алиас выполнения приложения», stat по ней не проходит, поэтому
+    // existsSync врёт FALSE, и хаб уходил на прямой запуск node = conhost.
+    const fn = src.slice(src.indexOf('function findWt'), src.indexOf('function relaunchElevated'));
+    if (!fn) return 'нет findWt()';
+    if (/existsSync/.test(fn)) return 'снова existsSync — на алиасе он отвечает false, окно будет серым';
+    if (!/where\.exe/.test(fn)) return 'wt не ищется через where.exe';
+    if (!/lstatSync/.test(fn)) return 'нет запасного пути через lstat';
+    // И сама элевация обязана иметь лестницу попыток, а не одну.
+    const re = src.slice(src.indexOf('function relaunchElevated'), src.indexOf('function relaunchElevated') + 2000);
+    if ((re.match(/tries\.push/g) || []).length < 3) return 'у элевации меньше трёх попыток — при отказе wt не будет ничего';
+    if (!/Verb RunAs/.test(re)) return 'элевация без -Verb RunAs';
+    return true;
+});
+
+t('wt.exe найден на этой машине', () => {
+    const H = require(path.join(ROOT, 'hub.js'));
+    const wt = H.findWt();
+    if (!wt) return 'Windows Terminal не найден — окно администратора будет серым (conhost)';
+    return /wt\.exe$/i.test(wt) ? true : `непохожий путь: ${wt}`;
+});
+
+t('переезд в Windows Terminal защищён от вечной цепочки окон', () => {
+    const src = read('hub.js');
+    const fn = src.slice(src.indexOf('function moveToWindowsTerminal'), src.indexOf('async function main'));
+    if (!fn) return 'нет moveToWindowsTerminal()';
+    for (const guard of ['WT_SESSION', 'HUB_IN_WT', 'HUB_NO_WT']) {
+        if (!fn.includes(guard)) return `нет проверки ${guard} — окна будут плодиться`;
+    }
+    // Элевацию тут просить нельзя: wt наследует права, а -Verb RunAs дал бы UAC на
+    // КАЖДЫЙ запуск хаба — ровно то, за что сняли старый restart-dashboard.bat.
+    if (/Verb RunAs/.test(fn)) return 'переезд просит UAC — этого быть не должно';
+    if (!/return r\.status === 0/.test(fn)) return 'результат запуска не проверяется — окно может закрыться в никуда';
+    return true;
+});
+
 t('логотип Wispr на месте и это прямоугольник', () => {
     if (!has('internal/wispr-art.txt')) return 'нет internal/wispr-art.txt';
     const lines = read('internal/wispr-art.txt').replace(/\r/g, '').split('\n').filter(Boolean);
@@ -505,8 +584,11 @@ t('панель запаса влезает рядом с картинкой, а
     try { H.intro(); } finally { process.stdout.write = real; }
 
     const lines = out.split('\n').filter(l => l.length);
-    const art = H.art();
-    if (lines.length !== art.length) return `строк ${lines.length}, а картинка ${art.length} — панель добавила свои`;
+    // Высота шапки берётся из раскладки, а не из картинки: с брайлевым долларом справа
+    // шапка выше картинки на две строки, и это норма, а не «панель добавила свои».
+    const head = H.layout({ cols: 113, rows: 30 }).headerRows;
+    if (lines.length !== head) return `строк ${lines.length}, а шапка обещала ${head}`;
+    if (lines.length < H.art().length) return 'шапка короче картинки — часть картинки потеряна';
     const tooWide = lines.filter(l => [...l.replace(/\x1b\[[0-9;]*m/g, '')].length > 113);
     if (tooWide.length) return `${tooWide.length} строк шире окна — картинка перенесётся и развалится`;
     if (!/ЗАПАС/.test(out)) return 'панели запаса нет вообще';
@@ -518,7 +600,8 @@ t('дефолтный набор вкладок дашборда — как на
     const m = src.match(/const DEFAULT_TABS_VISIBLE = \[([^\]]+)\]/);
     if (!m) return 'DEFAULT_TABS_VISIBLE не найден';
     const tabs = m[1].split(',').map(s => s.trim().replace(/['"]/g, ''));
-    const want = ['fin', 'github', 'agentrouter', 'gorouter', 'justwoker', 'tabi', 'custom', 'plugins', 'health', 'settings'];
+    // 25.08: добавился 'truesota' (седьмой шлюз, sub2api) — вкладка живая и в дефолте.
+    const want = ['fin', 'github', 'agentrouter', 'gorouter', 'justwoker', 'truesota', 'tabi', 'custom', 'plugins', 'health', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });
@@ -752,7 +835,9 @@ async function tui() {
         // скрывается по гейту, и тест ловил бы её отсутствие как поломку.
         // HUB_NO_DRIP — чтобы мерить точечную перерисовку: капель шлёт свои кадры сама,
         // и в дельте после стрелки они выглядели бы как перерисовка всего кадра.
-        cwd: ROOT, cols: 113, rows: 36, env: { ...process.env, HUB_NO_DRIP: '1' },
+        // HUB_NO_WT — чтобы хаб не уехал из pty в новое окно Windows Terminal: у pty нет
+        // ни WT_SESSION, ни TERM, и он честно принимает его за conhost.
+        cwd: ROOT, cols: 113, rows: 36, env: { ...process.env, HUB_NO_DRIP: '1', HUB_NO_WT: '1' },
     });
     let buf = '';
     term.onData(d => { buf += d; });
@@ -890,7 +975,9 @@ async function headerAnim() {
         console.log(`  \x1b[33m·\x1b[0m анимация пропущена: node-pty недоступен (${e.message.slice(0, 60)})`);
         return;
     }
-    const term = pty.spawn(process.execPath, [path.join(ROOT, 'hub.js')], { cwd: ROOT, cols: 113, rows: 36, env: process.env });
+    const term = pty.spawn(process.execPath, [path.join(ROOT, 'hub.js')], {
+        cwd: ROOT, cols: 113, rows: 36, env: { ...process.env, HUB_NO_WT: '1' },
+    });
     let buf = '';
     term.onData(d => { buf += d; });
     const kill = () => { try { term.kill(); } catch { /* уже мёртв */ } };
@@ -901,9 +988,11 @@ async function headerAnim() {
     })();
     if (!gotMenu) { bad('анимация: меню поднялось', 'за 12 с не дождались'); kill(); return; }
 
-    // Доллар — тем же полублочным шрифтом и ПОСЛЕ числа (пометка владельца 25.08).
-    /██▀▀/.test(buf) && /▄█▄█/.test(buf) ? ok('знак доллара нарисован шрифтом суммы')
-        : bad('знак доллара', 'глифа $ в выводе нет');
+    // Знак доллара — брайлевый арт владельца (internal/hub-dollar.txt), 14×11, справа
+    // от картинки. Ищем его характерную нижнюю строку: она есть только в нём.
+    const dollar = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n').filter(Boolean);
+    buf.includes(dollar[5]) ? ok('брайлевый знак доллара нарисован в шапке')
+        : bad('знак доллара', 'арта $ в выводе нет');
 
     // Капель идёт сама, без единого нажатия, и зелёная.
     let mark = buf.length;

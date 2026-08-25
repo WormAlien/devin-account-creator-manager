@@ -61,6 +61,11 @@ const sleep = L.sleep;
 // его второй раз незачем.
 const ART_FILE = path.join(__dirname, 'internal', 'hub-art.txt');
 const WISPR_ART_FILE = path.join(__dirname, 'internal', 'wispr-art.txt');
+// Отступ слева и зазор между картинкой и панелью — в одном месте: из них считается,
+// сколько колонок остаётся панели, и разъехавшиеся копии этой арифметики уже дважды
+// прятали панель целиком.
+const PAD = '  ';
+const GAP = '   ';
 
 function readArt(file) {
     try {
@@ -104,18 +109,23 @@ function bigNum(text) {
     return rows;
 }
 
-// Знак доллара тем же шрифтом, ПОСЛЕ числа — так его пометил владелец на скриншоте
-// 25.08. Четыре колонки, а не три: стержень должен стоять отдельной колонкой, иначе
-// он сливается с перекладинами S в кляксу. Перебрано 13 вариантов, черновик остался
-// в `Downloads\dollar-fonts.js`. Брайлевый доллар из `wiki/WORKSPACE/ART 1.md` тут не
-// годится: он 14×11 символов, а при уменьшении до трёх строк штрих S исчезает и
-// остаётся пятно (замер — `Downloads\dollar-shrink.js`).
-const DOLLAR = ['██▀▀', '▀█▀█', '▄█▄█'];
+// Знак доллара — брайлевый арт из `internal/hub-dollar.txt` (владелец принёс его в
+// `wiki/WORKSPACE/ART 1.md` и настоял дважды). 14×11 символов, то есть ВЫШЕ картинки:
+// шапка из-за него растёт с 9 строк до 11, и это учтено в layout().
+//
+// 🪤 Уменьшать его нельзя, и это замерено, а не на глаз: при сжатии до 3 строк (и даже
+// до 5–6) штрих S превращается в пятно из ⣿ — черновик `Downloads\dollar-shrink.js`,
+// семь порогов усреднения. Поэтому либо полный размер, либо совсем без знака: узкому
+// окну достаётся вариант без арта (см. balancePanel({ big: false })).
+const DOLLAR_FILE = path.join(__dirname, 'internal', 'hub-dollar.txt');
 
 // Правая колонка шапки: последний ИЗВЕСТНЫЙ запас пулов. Читается с диска, поэтому
 // цифра есть и когда дашборд лежит — как раз тогда её больше негде посмотреть.
 // Отсюда и подпись «последний известный», а не «баланс»: это кэш опроса.
-function balancePanel() {
+//
+// maxW — сколько колонок реально свободно справа от картинки. Панель обязана в них
+// уложиться: перенос строки разорвал бы картинку пополам.
+function balancePanel(maxW, { big = true } = {}) {
     let b;
     try { b = require('./internal/hub-balance').balance(); } catch { return []; }
     if (!b.keys) return [];
@@ -124,19 +134,53 @@ function balancePanel() {
     const whole = String(Math.round(b.available));
     const when = b.checkedAt ? new Date(b.checkedAt).toLocaleString('sv').slice(11, 16) : '—';
     const money = n => (n >= 1000 ? Math.round(n / 1000) + 'k' : String(Math.round(n)));
-    const pools = b.pools.filter(p => p.keys).map(p => `${p.id.toUpperCase()} ${money(p.available)}`).join(' · ');
+    const parts = b.pools.filter(p => p.keys).map(p => `${p.id.toUpperCase()} ${money(p.available)}`);
+    const digits = bigNum(whole);
+    const title = 'ПОСЛЕДНИЙ ИЗВЕСТНЫЙ ЗАПАС';
+    const sumText = '$' + b.available.toFixed(2) + '  опрошено ' + when;
+    const sum = `${bold('$' + b.available.toFixed(2))}${dim('  опрошено ' + when)}`;
+    // Пулы сжимаем, а не режем: сначала точки-разделители, потом пробелы, и только
+    // если и так не лезет — обрезаем. Потерять «TB 184» хуже, чем потерять точки.
+    const poolsFit = w => {
+        for (const sep of [' · ', ' ']) {
+            const s = parts.join(sep);
+            if (s.length <= w) return s;
+        }
+        const s = parts.join(' ');
+        return s.slice(0, Math.max(1, w - 1)) + '…';
+    };
 
-    // Не длиннее картинки (9 строк) и каждая строка в ~34 символа: рядом с
-    // 65-символьным артом на окне в 113 колонок больше не влезает, а перенос строки
-    // разорвал бы картинку пополам. С полублочным шрифтом выходит 8 строк — пустая
-    // строка перед суммой лучше, чем прижатые друг к другу цифры и подпись.
+    const D = big ? readArt(DOLLAR_FILE) : [];
+    if (D.length) {
+        const dw = Math.max(...D.map(l => [...l].length));
+        const digitsW = Math.max(...digits.map(l => [...l].length));
+        const need = Math.max(title.length, digitsW, sumText.length);
+        // Не влезаем в окно — отдаём вариант без арта, а не режем картинку.
+        if (maxW >= dw + 2 + need) {
+            // Правой колонке отдаём всё, что осталось: от её ширины зависит, влезут ли
+            // пулы целиком.
+            const rw = Math.max(need, Math.min(maxW - dw - 2, parts.join(' · ').length));
+            // Правая колонка сдвинута так, чтобы центр цифр совпал с центром знака
+            // (обе середины — строка 5 из 11). Иначе доллар «висит» выше суммы.
+            const right = Array.from({ length: D.length }, () => '');
+            right[1] = dim(title);
+            digits.forEach((l, i) => { right[4 + i] = green(l); });
+            right[8] = sum;
+            right[9] = dim(poolsFit(rw));
+            return D.map((l, i) => green(l) + '  ' + right[i]);
+        }
+    }
+
+    // Узкое окно: цифры, сумма и пулы без арта. Знак доллара тут только текстом — в
+    // трёх строках полублочного шрифта он читался кляксой (13 вариантов перебрано,
+    // черновик `Downloads\dollar-fonts.js`), а половинчатых глифов больше не держим.
     return [
-        dim('ПОСЛЕДНИЙ ИЗВЕСТНЫЙ ЗАПАС'),
+        dim(title),
         '',
-        ...bigNum(whole).map((l, i) => green(l + DOLLAR[i])),
+        ...digits.map(l => green(l)),
         '',
-        `${bold('$' + b.available.toFixed(2))}${dim('  опрошено ' + when)}`,
-        dim(pools),
+        sum,
+        dim(poolsFit(Math.max(20, maxW))),
     ];
 }
 
@@ -146,24 +190,41 @@ function balancePanel() {
 // 🪤 История трёх выброшенных вариантов надписи «ABUSE HUB» — в ARCHITECTURE.md.
 // Короткий вывод: я трижды решал за владельца, как должен выглядеть его инструмент,
 // и трижды был неправ. Больше блочных надписей тут нет.
-function layout() {
+// Размер окна принимаем аргументом: `process.stdout.columns` в Node только для чтения,
+// и регресс не мог проверить раскладку на семи размерах, не подменяя поток целиком.
+function layout({ cols = process.stdout.columns || 80, rows = process.stdout.rows || 24 } = {}) {
     const A = art();
-    const rows = process.stdout.rows || 24;
-    const cols = process.stdout.columns || 80;
     const artW = A.length ? Math.max(...A.map(l => [...l].length)) : 0;
     const artOk = A.length > 0 && cols >= artW + 4;
+    const room = cols - PAD.length - artW - GAP.length;
+
+    // Панель бывает двух размеров, и от этого зависит ВЫСОТА шапки: с брайлевым
+    // долларом она 11 строк, без него 8. Считаем оба варианта заранее — раскладка
+    // жертвует ими по очереди, а не решает за один проход.
+    const panels = artOk
+        ? [balancePanel(room, { big: true }), balancePanel(room, { big: false }), []]
+        : [[]];
 
     const items = menuItems().length;
-    // Строк в кадре: картинка + (отступ + дашборд + прочее + права) + пункты + подсказка.
-    const total = (withArt, compact) =>
-        (withArt ? A.length : 0)
-        + (compact ? 3 : 4)
-        + (compact ? items + 1 : items + 2);
+    // Строк в кадре: шапка + (отступ + дашборд + прочее + права) + пункты + подсказка.
+    const total = (head, compact) => head + (compact ? 3 : 4) + (compact ? items + 1 : items + 2);
 
-    for (const [withArt, compact] of [[artOk, false], [artOk, true], [false, false], [false, true]]) {
-        if (total(withArt, compact) <= rows) return { art: A, withArt, compact };
+    // Порядок жертв: сперва отступы, потом большой доллар, потом панель целиком, и
+    // только в конце картинка — её владелец просил в первую очередь.
+    if (artOk) {
+        for (const panel of panels) {
+            const head = Math.max(A.length, panel.length);
+            for (const compact of [false, true]) {
+                if (total(head, compact) <= rows) {
+                    return { art: A, panel, headerRows: head, withArt: true, compact };
+                }
+            }
+        }
     }
-    return { art: A, withArt: false, compact: true };
+    for (const compact of [false, true]) {
+        if (total(0, compact) <= rows) return { art: A, panel: [], headerRows: 0, withArt: false, compact };
+    }
+    return { art: A, panel: [], headerRows: 0, withArt: false, compact: true };
 }
 
 function artFits(lines) {
@@ -179,38 +240,41 @@ function artFits(lines) {
 // Проявление считается по точкам брайля, а не по строкам: одна ячейка это 2×4 точки,
 // и биты лежат в коде символа. Построчный вариант, стоявший тут до 25.08, выглядел
 // как открывающиеся жалюзи.
+//
+// Возвращает высоту шапки: она НЕ равна высоте картинки, когда справа стоит брайлевый
+// доллар (11 строк против 9), а капели эта цифра нужна, чтобы найти картинку курсором.
 async function intro({ animate = true } = {}) {
-    const pad = '  ';
-    const { art: A, withArt } = layout();
-    if (!withArt) return;
+    const { art: A, panel, headerRows, withArt } = layout();
+    if (!withArt) return 0;
 
     const artW = Math.max(...A.map(l => [...l].length));
-    // Ширину берём НАСТОЯЩУЮ, а не через W(): тот режет до 100 колонок для читаемости
-    // текста, и панель на окне в 113 колонок из-за этого не помещалась ни разу.
-    const cols = process.stdout.columns || 80;
-    const panel = cols >= artW + 3 + 34 ? balancePanel() : [];
-    const composed = A.map((l, i) => pad + (TTY ? cyan(l) : l) + (panel[i] ? '   ' + panel[i] : ''));
+    const blank = ' '.repeat(artW);
+    const row = (artLine, panelLine) =>
+        PAD + (TTY ? cyan(artLine) : artLine) + (panelLine ? GAP + panelLine : '');
+    const composed = Array.from({ length: headerRows }, (_, i) =>
+        row(A[i] === undefined ? blank : A[i], panel[i]));
 
     if (!TTY || !animate) {
         for (const l of composed) line(l);
-        return;
+        return headerRows;
     }
 
     const AN = require('./internal/art-anim');
     const B = AN.create(A);
     const R = AN.reveal(B);
-    line('\n'.repeat(A.length - 1));          // место под картинку
+    line('\n'.repeat(headerRows - 1));         // место под шапку
     for (;;) {
         const f = R.next();
-        up(A.length);
+        up(headerRows);
         // Панель появляется только в финальном кадре: мигать вместе с картинкой ей
         // нельзя — цифра баланса, которая скачет, читается как «баланс скачет».
-        for (const l of f.lines) { eraseLine(); line(pad + cyan(l)); }
+        for (let i = 0; i < headerRows; i++) { eraseLine(); line(row(f.lines[i] === undefined ? blank : f.lines[i], '')); }
         if (f.done) break;
         await sleep(24);
     }
-    up(A.length);
+    up(headerRows);
     for (const l of composed) { eraseLine(); line(l); }
+    return headerRows;
 }
 
 // ── Капель ───────────────────────────────────────────────────────────────────
@@ -237,12 +301,14 @@ let focusHook = null;
 // Курсор стоит под всем кадром; картинка — `linesBelow + A.length` строк выше.
 // Каждую ячейку рисуем от сохранённой позиции (ESC 7 / ESC 8): относительные
 // прыжки пришлось бы складывать, а любая ошибка в сумме уводит рисунок в текст.
-function startDrip(A, linesBelow) {
+function startDrip(A, linesBelow, headerRows) {
     if (!TTY || !A.length || process.env.HUB_NO_DRIP) return;
     const AN = require('./internal/art-anim');
     const B = AN.create(A);
     const D = AN.drip(B);
-    const top = linesBelow + A.length;
+    // Считаем от ВЫСОТЫ ШАПКИ, а не картинки: с брайлевым долларом справа шапка на две
+    // строки выше, и капли рисовались бы по чужим строкам.
+    const top = linesBelow + (headerRows || A.length);
     let timer = null, paused = false;
 
     const tick = () => {
@@ -400,25 +466,57 @@ function reporter() {
 // шрифтом и без темы (владелец 25.08: «серый интерфейс, некрасивый, а в терминале
 // Windows всё чёрное, красивое»). `wt.exe` уносит окно в нормальный терминал с
 // профилем по умолчанию. Нет wt (Windows 10 без него) — падаем на прямой запуск.
+// Где лежит Windows Terminal.
+//
+// 🪤 `fs.existsSync` на нём отвечает FALSE, и это была та самая причина серого окна:
+// `wt.exe` в `WindowsApps` — не файл и не обычная ссылка, а точка повторного разбора
+// «алиас выполнения приложения». `stat` по ней не проходит (значит `existsSync` = false),
+// а `lstat` проходит и показывает ссылку в 93 байта. Проверка через `existsSync` считала,
+// что терминала нет вовсе, и хаб честно уходил на прямой запуск node — то есть в conhost
+// (владелец 25.08: «когда от админа запускаю, оно такое серое становится»).
+// Правильных путей два, оба проверены: `where.exe` и `lstat`.
+function findWt() {
+    if (!L.IS_WIN) return null;
+    const r = spawnSync('where.exe', ['wt.exe'], { encoding: 'utf8', windowsHide: true });
+    const first = String(r.stdout || '').split(/\r?\n/).find(Boolean);
+    if (first) return first.trim();
+    const alias = path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'wt.exe');
+    try { fs.lstatSync(alias); return alias; } catch { return null; }
+}
+
+// Перезапустить себя с правами администратора. Нужно ровно в одном случае: старый
+// процесс поднят элевированным (так делал restart-dashboard.bat до 24.08, он просил
+// UAC на каждом запуске), и обычный taskkill его не берёт.
+//
+// Открываем в Windows Terminal, а не напрямую node: элевированный процесс, запущенный
+// через Start-Process, получает СВОЁ окно, и это старый conhost — серый, с другим
+// шрифтом и без темы. `wt.exe` уносит окно в нормальный терминал с профилем по
+// умолчанию. Порядок попыток, и каждая проверена на этой машине (без -Verb RunAs,
+// черновик `Downloads\wt-launch-probe.js`): сам wt → wt из-под cmd → прямой node.
+// Последняя даёт то самое серое окно, но она лучше, чем «ничего не произошло».
 function relaunchElevated(argv) {
     if (!L.IS_WIN) return false;
     const q = s => `'${String(s).replace(/'/g, "''")}'`;
     const hubArgs = [__filename, ...argv];
-
-    const wt = [
-        path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'wt.exe'),
-    ].find(p => p && fs.existsSync(p));
-
+    const wt = findWt();
     // `-w -1` — новое окно, а не вкладка в уже открытом (иначе элевированная вкладка
     // подсядет к обычному окну, чего Windows Terminal не разрешает).
-    const cmd = wt
-        ? `Start-Process -FilePath ${q(wt)} -ArgumentList '-w','-1','new-tab','--title','ABUSE HUB (админ)',`
-          + `${q(process.execPath)},${hubArgs.map(q).join(',')} -Verb RunAs`
-        : `Start-Process -FilePath ${q(process.execPath)} -ArgumentList ${hubArgs.map(q).join(',')} `
-          + `-Verb RunAs -WorkingDirectory ${q(L.ROOT)}`;
+    const wtArgs = ['-w', '-1', 'new-tab', '--title', 'ABUSE HUB (админ)', process.execPath, ...hubArgs];
 
-    const r = spawnSync('powershell', ['-NoProfile', '-Command', cmd], { stdio: 'ignore', windowsHide: true });
-    return r.status === 0;
+    const tries = [];
+    if (wt) {
+        tries.push(`Start-Process -FilePath ${q(wt)} -ArgumentList ${wtArgs.map(q).join(',')} -Verb RunAs`);
+        tries.push(`Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','start','""','wt.exe',`
+            + `${wtArgs.map(q).join(',')} -Verb RunAs`);
+    }
+    tries.push(`Start-Process -FilePath ${q(process.execPath)} -ArgumentList ${hubArgs.map(q).join(',')} `
+        + `-Verb RunAs -WorkingDirectory ${q(L.ROOT)}`);
+
+    for (const cmd of tries) {
+        const r = spawnSync('powershell', ['-NoProfile', '-Command', cmd], { stdio: 'ignore', windowsHide: true });
+        if (r.status === 0) return true;
+    }
+    return false;
 }
 
 // ── Мелочи платформы ─────────────────────────────────────────────────────────
@@ -1005,15 +1103,15 @@ async function menu() {
             if (dripStop) dripStop();
             clearScreen();
             const { art: A, withArt, compact } = layout();
-            await intro();                                // проявление по точкам
+            const headerRows = await intro();             // проявление по точкам
             const belowFrom = printedLines;
             statusBlock({ compact });
             if (!compact) line();
             for (const [i, it] of items.entries()) line(itemLine(it, i === sel));
             line(dim('  ↑↓ выбрать · Enter запустить · цифра — сразу · q выход'));
             needFull = false;
-            // Капель заводится ПОСЛЕ кадра: ей нужно знать, сколько строк под картинкой.
-            if (withArt) startDrip(A, printedLines - belowFrom);
+            // Капель заводится ПОСЛЕ кадра: ей нужно знать, сколько строк под шапкой.
+            if (withArt) startDrip(A, printedLines - belowFrom, headerRows);
         }
 
         const k = await readKey();
@@ -1098,6 +1196,38 @@ function usage() {
     line(dim('  флаги: --no-open (не открывать браузер), HUB_PLAIN=1 (без ANSI)'));
 }
 
+// Переехать в Windows Terminal, если хаб запустили в старом conhost. Именно так
+// выглядит «Запуск от имени администратора» из проводника: правый клик по HUB.bat даёт
+// серое окно с другим шрифтом, потому что для элевированных запусков система берёт
+// conhost, а не терминал по умолчанию (владелец 25.08 просил, чтобы окно администратора
+// выглядело так же, как обычное).
+//
+// Элевацию НЕ запрашиваем: wt наследует права текущего процесса, то есть админский
+// хаб останется админским, а обычный — обычным. Признак «мы уже в терминале» — переменная
+// WT_SESSION, её ставит сам wt; плюс свой маркер HUB_IN_WT на случай, если её не будет,
+// иначе вышла бы вечная цепочка окон. `HUB_NO_WT=1` выключает переезд совсем.
+//
+// 🪤 Переезжаем ТОЛЬКО из conhost, а не из любого не-WT терминала. Признак conhost —
+// пустые `TERM` и `TERM_PROGRAM`: их не ставит никто, кроме терминалов, которые человек
+// выбрал сам (git-bash, VS Code, WezTerm). Без этой проверки хаб выдёргивал бы себя из
+// встроенного терминала редактора — и, что нашлось сразу, из pty регресса: тесты меню
+// падали «за 12 с не увидели пунктов», потому что процесс честно уезжал в новое окно.
+function moveToWindowsTerminal() {
+    if (!L.IS_WIN || !TTY) return false;
+    if (process.env.WT_SESSION || process.env.HUB_IN_WT || process.env.HUB_NO_WT) return false;
+    if (process.env.TERM || process.env.TERM_PROGRAM) return false;
+    const wt = findWt();
+    if (!wt) return false;
+    const r = spawnSync(wt, ['-w', '-1', 'new-tab', '--title', 'ABUSE HUB', process.execPath, __filename], {
+        cwd: L.ROOT,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: { ...process.env, HUB_IN_WT: '1' },
+    });
+    // Не получилось — остаёмся здесь: серое окно лучше, чем закрывшееся.
+    return r.status === 0;
+}
+
 async function main() {
     const argv = process.argv.slice(2);
     const open = !argv.includes('--no-open');
@@ -1110,6 +1240,7 @@ async function main() {
         // Без TTY меню рисовать некому (запуск из планировщика, из дашборда,
         // перенаправление в файл) — печатаем состояние и уходим с нулём.
         if (!TTY) { printStatus(); return; }
+        if (moveToWindowsTerminal()) return;             // уехали в нормальный терминал
         return menu();
     }
 
@@ -1157,4 +1288,7 @@ if (require.main === module) {
     });
 }
 
-module.exports = { intro, statusBlock, menuItems, itemLine, art, artFits, layout, link, readArt, WISPR_ART_FILE };
+module.exports = {
+    intro, statusBlock, menuItems, itemLine, art, artFits, layout, link, readArt,
+    balancePanel, findWt, WISPR_ART_FILE, DOLLAR_FILE,
+};

@@ -468,29 +468,40 @@ t('хоткеи работают в русской раскладке', () => {
     return true;
 });
 
-t('брайлевый доллар на месте и это прямоугольник', () => {
-    // Владелец принёс его дважды (wiki/WORKSPACE/ART 1.md) — копия обязана лежать в
-    // репо: вики это другой репозиторий, у форка её нет вообще.
+t('знак доллара на месте, это прямоугольник и он размера суммы', () => {
+    // Копия обязана лежать в репо: вики это другой репозиторий, у форка её нет вообще.
+    // С 26.08 это не арт из вики, а глиф в шрифте цифр — владелец забраковал прежний
+    // размер («огромен»). 10×16 точек со сдвигом на 6 точек вниз = 5×6 символов.
     if (!has('internal/hub-dollar.txt')) return 'нет internal/hub-dollar.txt';
     const lines = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n').filter(Boolean);
     const w = [...lines[0]].length;
     for (const l of lines) if ([...l].length !== w) return 'строки разной длины — знак поедет';
-    if (lines.length !== 11 || w !== 14) return `ожидались 14×11, а тут ${w}×${lines.length}`;
-    if (!/[⠀-⣿]/.test(lines[5])) return 'это не брайль';
-    // Уменьшать его нельзя: замер показал пятно вместо S. Значит в коде не должно
-    // появиться никакого «сжатия» знака — только полный размер или без знака.
+    if (lines.length !== 6 || w !== 5) return `ожидались 5×6, а тут ${w}×${lines.length}`;
+    if (!/[⠁-⣿]/.test(lines[2])) return 'это не брайль';
+    // Знак обязан быть НЕ выше суммы больше чем на строку: ровно это и было претензией.
+    const H = require(path.join(ROOT, 'hub.js'));
+    const digits = (H.balancePanel(80, { big: true }).digitsAt || {}).rows || [];
+    if (lines.length > digits.length + 3) return `знак ${lines.length} строк против ${digits.length} у суммы — снова огромен`;
+    // Уменьшать арт на ходу нельзя: замер показал пятно вместо S. Значит в коде не
+    // должно появиться никакого «сжатия» знака — только готовый глиф из файла.
     const src = read('hub.js');
     if (/DOLLAR.*shrink|shrinkDollar/.test(src)) return 'в коде появилось уменьшение знака — оно даёт пятно';
     return true;
 });
 
-t('панель с большим знаком влезает в окно владельца и отступает на узком', () => {
+t('панель со знаком влезает в окно владельца и отступает на узком', () => {
     const H = require(path.join(ROOT, 'hub.js'));
     const plain = s => String(s).replace(/\x1b\]8;;[^\x1b]*\x1b\\/g, '').replace(/\x1b\[[0-9;]*m/g, '');
-    // 113×30 — окно владельца. Большой знак обязан влезать целиком, и ни одна строка
-    // шапки не должна упираться в правый край: перенос разорвал бы картинку.
+    // 113×30 — окно владельца. Знак обязан влезать целиком, и ни одна строка шапки не
+    // должна упираться в правый край: перенос разорвал бы картинку.
     const wide = H.layout({ cols: 113, rows: 30 });
-    if (wide.headerRows !== 11) return `на 113×30 шапка ${wide.headerRows} строк, а с большим знаком должно быть 11`;
+    const artH = wide.art.length;
+    // Высота шапки задаётся КАРТИНКОЙ: до 26.08 её раздувал большой знак (11 строк
+    // против 9), теперь знак мелкий и шапка не должна расти вообще.
+    if (wide.headerRows !== artH) return `на 113×30 шапка ${wide.headerRows} строк при картинке ${artH} — знак снова её раздувает`;
+    // Присутствие знака видно по смещению цифр: с ним колонка ненулевая (за знаком),
+    // без него цифры стоят с нуля. Это и есть признак, а не высота шапки.
+    if (!(wide.panel.digitsAt || {}).col) return 'на 113×30 знак не встал слева от суммы';
     const artW = Math.max(...wide.art.map(l => [...l].length));
     for (let i = 0; i < wide.headerRows; i++) {
         const a = wide.art[i] === undefined ? ' '.repeat(artW) : wide.art[i];
@@ -500,35 +511,37 @@ t('панель с большим знаком влезает в окно вла
     // Узкое окно: знак уходит, панель и картинка остаются.
     const narrow = H.layout({ cols: 100, rows: 30 });
     if (!narrow.withArt) return 'на 100 колонках выбросили картинку, а надо было знак';
-    if (narrow.headerRows !== 9) return `на 100 колонках шапка ${narrow.headerRows} строк — большой знак не отступил`;
+    if ((narrow.panel.digitsAt || {}).col) return 'на 100 колонках знак не отступил';
     if (!narrow.panel.length) return 'на 100 колонках панель исчезла целиком';
-    // Низкое окно: сперва жертвуем большим знаком, картинку держим до конца.
+    // Низкое окно: картинку держим до конца.
     const low = H.layout({ cols: 113, rows: 24 });
     if (!low.withArt) return 'на 24 строках выбросили картинку раньше знака';
-    if (low.headerRows > 9) return `на 24 строках шапка ${low.headerRows} строк — знак не отступил`;
+    if (low.headerRows > artH) return `на 24 строках шапка ${low.headerRows} строк — выросла`;
     return true;
 });
 
-t('нижние кромки картинки и знака совпадают', () => {
+t('центры знака и суммы соосны', () => {
+    // Владелец: «чтобы они были равно по центральной горизонтальной оси». Считаем в
+    // ТОЧКАХ, а не в строках: знак 16 точек, сумма 12, и совпадение центров попадает на
+    // половину строки — в строках такую проверку не выразить вообще.
     const H = require(path.join(ROOT, 'hub.js'));
-    Object.defineProperty(process.stdout, 'columns', { value: 113, configurable: true });
-    Object.defineProperty(process.stdout, 'rows', { value: 30, configurable: true });
-    let out = '';
-    const real = process.stdout.write.bind(process.stdout);
-    process.stdout.write = s => { out += s; return true; };
-    try { H.intro(); } finally { process.stdout.write = real; }
-
-    // Владелец провёл линию по низу картинки и показал, что знак свисает ниже
-    // («не ровно, не по линии»). Значит: последняя строка шапки обязана содержать И
-    // последнюю строку картинки, И последнюю строку знака.
-    const lines = out.split('\n').filter(l => l.length);
-    const artLast = H.art().slice(-1)[0];
-    const dollarLast = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n').filter(Boolean).slice(-1)[0];
-    const last = lines[lines.length - 1];
-    if (!last.includes(artLast)) return 'в последней строке шапки нет низа картинки';
-    if (!last.includes(dollarLast)) return 'в последней строке шапки нет низа знака — он снова свисает';
-    // И наоборот: первая строка шапки — только знак, картинка начинается ниже.
-    if (lines[0].includes(H.art()[0])) return 'картинка снова прижата к верху, кромки разъедутся';
+    const P = H.balancePanel(80, { big: true });
+    const at = P.digitsAt;
+    if (!at || !at.col) return 'знака в панели нет, центрировать нечего';
+    const lines = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n').filter(Boolean);
+    // Верхняя и нижняя ЗАКРАШЕННЫЕ точки глифа: пустые строки файла — это и есть сдвиг.
+    const BIT = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
+    let lo = Infinity, hi = -Infinity;
+    lines.forEach((line, r) => [...line].forEach(ch => {
+        const code = ch.codePointAt(0) - 0x2800;
+        for (let dy = 0; dy < 4; dy++) if (code & (BIT[dy][0] | BIT[dy][1])) { lo = Math.min(lo, r * 4 + dy); hi = Math.max(hi, r * 4 + dy); }
+    }));
+    if (!Number.isFinite(lo)) return 'знак пустой';
+    const dollarMid = (lo + hi) / 2;
+    const digitsMid = at.row * 4 + (at.rows.length * 4 - 1) / 2;
+    if (Math.abs(dollarMid - digitsMid) > 0.5) {
+        return `центр знака на точке ${dollarMid}, центр суммы на ${digitsMid} — разъехались на ${Math.abs(dollarMid - digitsMid)} точек`;
+    }
     return true;
 });
 
@@ -991,12 +1004,17 @@ async function tui() {
     /ПОСЛЕДНИЙ ИЗВЕСТНЫЙ ЗАПАС/.test(buf) ? ok('в шапке есть последний известный запас') : bad('запас в шапке', 'подписи панели нет');
     /опрошено/.test(buf) ? ok('у суммы стоит время опроса') : bad('время опроса', 'нет отметки «опрошено»');
     // Искать «брайль в выводе» бессмысленно: им же нарисованы картинка и доллар.
-    // Поэтому берём ровно те строки, которые набрал сам hub.js, и ищем их дословно —
-    // проверка переживёт смену шрифта и не позволит цифрам молча пропасть.
-    const dg = (require(path.join(ROOT, 'hub.js')).balancePanel(80, { big: true }).digitsAt || {}).rows || [];
+    // Поэтому набираем цифры тем же шрифтом, что и hub.js, и ищем их дословно.
+    // 🪤 Брать сумму из `balancePanel` НЕЛЬЗЯ: запас опрашивается фоном и за время теста
+    // успевает измениться (11302 → 11282 за сессию), проверка падала бы через раз. Сумму
+    // берём из САМОГО вывода — ту, которую видел терминал.
+    // 🪤 Сравнивать с ХВОСТОВЫМ пробелом нельзя: `bigNum` ставит его после каждой цифры,
+    // а ConPTY хвост строки не печатает — вместо него приезжает `ESC[K`. Поэтому trim.
+    const shown = (buf.match(/\$(\d+)\.(\d\d)/) || [])[0];
+    const dg = shown ? require(path.join(ROOT, 'hub.js')).bigNum(String(Math.round(Number(shown.slice(1))))).map(r => r.trimEnd()) : [];
     dg.length === 3 && dg.every(r => buf.includes(r))
-        ? ok('сумма набрана брайлевым шрифтом — все три строки цифр на экране')
-        : bad('шрифт суммы', dg.length ? 'строк цифр в выводе нет:\n' + JSON.stringify(dg) : 'balancePanel не отдал digitsAt');
+        ? ok(`сумма набрана брайлевым шрифтом — все три строки цифр на экране (${shown})`)
+        : bad('шрифт суммы', shown ? 'строк цифр в выводе нет:\n' + JSON.stringify(dg) : 'суммы в выводе нет вообще');
 
     // Русская раскладка: «о» это физическая клавиша j (вниз), «й» — q (выход). До 25.08
     // readline отдавал для кириллицы пустое имя, и на русском не работало ничего.
@@ -1104,11 +1122,12 @@ async function headerAnim() {
     })();
     if (!gotMenu) { bad('анимация: меню поднялось', 'за 12 с не дождались'); kill(); return; }
 
-    // Знак доллара — брайлевый арт владельца (internal/hub-dollar.txt), 14×11, справа
-    // от картинки. Ищем его характерную нижнюю строку: она есть только в нём.
-    const dollar = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n').filter(Boolean);
-    buf.includes(dollar[5]) ? ok('брайлевый знак доллара нарисован в шапке')
-        : bad('знак доллара', 'арта $ в выводе нет');
+    // Знак доллара — глиф из internal/hub-dollar.txt, 5×6, справа от картинки. Ищем все
+    // его непустые строки: одна распознаваемая строка ничего не доказывает, знак мелкий.
+    const dollar = read('internal/hub-dollar.txt').replace(/\r/g, '').split('\n')
+        .filter(l => l.length && /[⠁-⣿]/.test(l));
+    dollar.length && dollar.every(l => buf.includes(l)) ? ok(`знак доллара нарисован в шапке (${dollar.length} строк)`)
+        : bad('знак доллара', 'строк знака в выводе нет');
 
     // Капель идёт сама, без единого нажатия, и зелёная. Тем же таймером бежит волна
     // света по цифрам суммы, поэтому поток тут больше, чем у одной капели.

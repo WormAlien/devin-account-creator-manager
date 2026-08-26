@@ -113,14 +113,26 @@ function bigNum(text) {
     return rows;
 }
 
-// Знак доллара — брайлевый арт из `internal/hub-dollar.txt` (владелец принёс его в
-// `wiki/WORKSPACE/ART 1.md` и настоял дважды). 14×11 символов, то есть ВЫШЕ картинки:
-// шапка из-за него растёт с 9 строк до 11, и это учтено в layout().
+// Знак доллара — `internal/hub-dollar.txt`. С 26.08 это НЕ арт из вики, а глиф,
+// нарисованный тем же шрифтом, что цифры суммы (штрих 2 точки, бары по 2, боковины по 3
+// ряда): владелец забраковал прежний размер — «арт доллара бы по размеру баланса, потому
+// что огромен». Было 14×11 символов, стало 5×5, и шапка из-за этого сжалась с 11 строк до 9.
 //
-// 🪤 Уменьшать его нельзя, и это замерено, а не на глаз: при сжатии до 3 строк (и даже
-// до 5–6) штрих S превращается в пятно из ⣿ — черновик `Downloads\dollar-shrink.js`,
-// семь порогов усреднения. Поэтому либо полный размер, либо совсем без знака: узкому
-// окну достаётся вариант без арта (см. balancePanel({ big: false })).
+// 🪤 Уменьшить сам арт вики нельзя, и это замерено дважды: 28×44 точки в 12 — это 3.7×,
+// штрих S становится тоньше точки и рассыпается (черновики `Downloads\dollar-shrink.js`
+// и `dollar-small.js`, семь порогов усреднения на трёх высотах). Поэтому знак нарисован
+// заново. Оригинал арта не потерян — он лежит в вике, `wiki/WORKSPACE/ART 1.md`.
+//
+// 🪤 Ширина 10 точек, а не 8, ради перекладины: на 8 точках она встаёт на колонки 3–4 и
+// оказывается РАЗРЕЗАНА границей ячеек, а между ячейками в шрифте просвет — вблизи вместо
+// палки видны две чёрточки. На 10 точках перекладина целиком внутри одной ячейки.
+//
+// 🪤 В файле сверху пустая точечная строка и ещё две пустые точки во второй: глиф сдвинут
+// на 6 точек вниз. Сдвиг нужен, чтобы вертикальный центр знака сошёлся с центром цифр —
+// цифры стоят со строки 2 панели, то есть с точки 8, их центр точка 13.5, и знак высотой
+// 16 точек попадает в него только начавшись с точки 6. Владелец просил именно это:
+// «чтобы центры были соосны». Сдвиг в ТОЧКАХ, а не в строках — иначе в полстроки не попасть.
+// Пересобрать: `node Downloads\dollar-small.js --js 6 --offset 6`.
 const DOLLAR_FILE = path.join(__dirname, 'internal', 'hub-dollar.txt');
 
 // Правая колонка шапки: последний ИЗВЕСТНЫЙ запас пулов. Читается с диска, поэтому
@@ -164,19 +176,20 @@ function balancePanel(maxW, { big = true } = {}) {
             // Правой колонке отдаём всё, что осталось: от её ширины зависит, влезут ли
             // пулы целиком.
             const rw = Math.max(need, Math.min(maxW - dw - 2, parts.join(' · ').length));
-            // Правая колонка сдвинута так, чтобы центр цифр совпал с центром знака
-            // (обе середины — строка 5 из 11). Иначе доллар «висит» выше суммы.
-            const right = Array.from({ length: D.length }, () => '');
-            right[1] = dim(title);
-            digits.forEach((l, i) => { right[4 + i] = green(l); });
-            right[8] = sum;
-            right[9] = dim(poolsFit(rw));
-            const rows = D.map((l, i) => green(l) + '  ' + right[i]);
+            // Раскладка панели, и высоту задаёт теперь ПРАВАЯ колонка, а не знак: он
+            // 6 строк, а right — 8. Цифры со строки 2: тогда их центр (точка 13.5)
+            // совпадает с центром знака, у которого глиф сдвинут в файле на 6 точек вниз.
+            // Владелец просил именно это — «чтобы центры были соосны».
+            const right = [dim(title), '', ...digits.map(l => green(l)), '', sum, dim(poolsFit(rw))];
+            const n = Math.max(D.length, right.length);
+            const dBlank = '⠀'.repeat(dw);
+            const rows = Array.from({ length: n }, (_, i) =>
+                green((D[i] || dBlank).padEnd(dw, '⠀')) + '  ' + (right[i] || ''));
             // Где именно лежат цифры — нужно мерцанию (startDrip): оно перекрашивает
             // ровно эти три строки, не стирая их, потому что слева на тех же строках
             // стоит знак доллара. Метаданные висят на массиве, а не в возвращаемом
             // объекте: `balancePanel` отдаёт массив строк, на это опирается регресс.
-            rows.digitsAt = { row: 4, col: dw + 2, rows: digits };
+            rows.digitsAt = { row: 2, col: dw + 2, rows: digits };
             return rows;
         }
     }
@@ -228,7 +241,7 @@ function layout({ cols = process.stdout.columns || 80, rows = process.stdout.row
             const head = Math.max(A.length, panel.length);
             for (const compact of [false, true]) {
                 if (total(head, compact) <= rows) {
-                    return { art: A, panel, headerRows: head, withArt: true, compact };
+                    return { art: A, panel: centerPanel(panel, head), headerRows: head, withArt: true, compact };
                 }
             }
         }
@@ -237,6 +250,21 @@ function layout({ cols = process.stdout.columns || 80, rows = process.stdout.row
         if (total(0, compact) <= rows) return { art: A, panel: [], headerRows: 0, withArt: false, compact };
     }
     return { art: A, panel: [], headerRows: 0, withArt: false, compact: true };
+}
+
+// Панель короче картинки — центрируем её по вертикали. До 26.08 этого не требовалось:
+// панель со знаком доллара во всю высоту (11 строк) сама задавала высоту шапки. Знак стал
+// 6 строк, панель — 8, картинка осталась 9, и без центровки баланс висел бы у верхней
+// кромки, а под ним пустовала строка.
+//
+// Сдвиг цифр внутри панели обязан уехать вместе с ней: по `digitsAt.row` мерцание ищет
+// строки курсором, и ошибка на одну строку красит не цифры, а картинку.
+function centerPanel(panel, head) {
+    const pad = Math.floor((head - panel.length) / 2);
+    if (pad <= 0) return panel;
+    const out = Array.from({ length: pad }, () => '').concat(panel);
+    if (panel.digitsAt) out.digitsAt = { ...panel.digitsAt, row: panel.digitsAt.row + pad };
+    return out;
 }
 
 function artFits(lines) {
@@ -1474,5 +1502,5 @@ if (require.main === module) {
 
 module.exports = {
     intro, statusBlock, menuItems, itemLine, art, artFits, layout, link, readArt,
-    balancePanel, findWt, elevateCommands, wtHubArgs, WISPR_ART_FILE, DOLLAR_FILE,
+    balancePanel, bigNum, findWt, elevateCommands, wtHubArgs, WISPR_ART_FILE, DOLLAR_FILE,
 };

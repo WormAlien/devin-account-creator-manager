@@ -85,18 +85,22 @@ function link(url, text = url) {
 // Крупные цифры для суммы в шапке. Только цифры и пробел: буквы в блочном шрифте я
 // уже трижды рисовал неправильно, а цифры однозначны сами по себе.
 //
-// Шрифт полублочный, 3 строки — выбран владельцем 25.08 из восьми вариантов
-// (черновик остался в Downloads/balance-fonts.js, вне репо). Блочный на 5 строк,
-// стоявший тут до этого, отклонён как «некрасиво». Полублочный вдвое ниже при той
-// же ширине: цифры остаются различимыми, а панель перестаёт спорить с картинкой.
+// Шрифт брайлевый, 3 строки — выбран владельцем 26.08 из семи вариантов (черновик
+// `Downloads/digit-dots.js`, вне репо; он же печатает этот литерал по `--js`). Тем же
+// алфавитом нарисованы картинка в шапке и знак доллара, поэтому шапка стала однородной.
+// Полублочный шрифт, стоявший тут с 25.08, отклонён владельцем: «шрифт не нравится».
+//
+// Геометрия: ячейка брайля несёт 2×4 точки, значит цифра 6×12 точек = ровно 3×3 символа —
+// та же высота, что у полублочного, перекладывать панель не пришлось. Штрих 2 точки,
+// у единицы флажок и подставка (в семисегментном варианте она выглядела голой палкой).
 const DIGIT_ROWS = 3;
 const DIGITS = {
-    0: ['█▀█', '█ █', '█▄█'], 1: [' ▄█', '  █', '  █'],
-    2: ['▀▀█', '▄▀ ', '█▄▄'], 3: ['▀▀█', ' ▀█', '▄▄█'],
-    4: ['█ █', '█▄█', '  █'], 5: ['█▀▀', '▀▀█', '▄▄█'],
-    6: ['█▀▀', '█▀█', '█▄█'], 7: ['▀▀█', '  █', '  █'],
-    8: ['█▀█', '█▀█', '█▄█'], 9: ['█▀█', '▀▀█', '▄▄█'],
-    ' ': ['  ', '  ', '  '],
+    0: ['⣿⠛⣿', '⣿⠀⣿', '⣿⣤⣿'], 1: ['⠴⣿⠀', '⠀⣿⠀', '⣤⣿⣤'],
+    2: ['⠛⠛⣿', '⣶⠶⠿', '⣿⣤⣤'], 3: ['⠛⠛⣿', '⠶⠶⣿', '⣤⣤⣿'],
+    4: ['⣿⠀⣿', '⠿⠶⣿', '⠀⠀⣿'], 5: ['⣿⠛⠛', '⠿⠶⣶', '⣤⣤⣿'],
+    6: ['⣿⠛⠛', '⣿⠶⣶', '⣿⣤⣿'], 7: ['⠛⠛⣿', '⠀⠀⣿', '⠀⠀⣿'],
+    8: ['⣿⠛⣿', '⣿⠶⣿', '⣿⣤⣿'], 9: ['⣿⠛⣿', '⠿⠶⣿', '⣤⣤⣿'],
+    ' ': ['⠀⠀⠀', '⠀⠀⠀', '⠀⠀⠀'],
 };
 
 function bigNum(text) {
@@ -167,14 +171,20 @@ function balancePanel(maxW, { big = true } = {}) {
             digits.forEach((l, i) => { right[4 + i] = green(l); });
             right[8] = sum;
             right[9] = dim(poolsFit(rw));
-            return D.map((l, i) => green(l) + '  ' + right[i]);
+            const rows = D.map((l, i) => green(l) + '  ' + right[i]);
+            // Где именно лежат цифры — нужно мерцанию (startDrip): оно перекрашивает
+            // ровно эти три строки, не стирая их, потому что слева на тех же строках
+            // стоит знак доллара. Метаданные висят на массиве, а не в возвращаемом
+            // объекте: `balancePanel` отдаёт массив строк, на это опирается регресс.
+            rows.digitsAt = { row: 4, col: dw + 2, rows: digits };
+            return rows;
         }
     }
 
     // Узкое окно: цифры, сумма и пулы без арта. Знак доллара тут только текстом — в
     // трёх строках полублочного шрифта он читался кляксой (13 вариантов перебрано,
     // черновик `Downloads\dollar-fonts.js`), а половинчатых глифов больше не держим.
-    return [
+    const rows = [
         dim(title),
         '',
         ...digits.map(l => green(l)),
@@ -182,6 +192,8 @@ function balancePanel(maxW, { big = true } = {}) {
         sum,
         dim(poolsFit(Math.max(20, maxW))),
     ];
+    rows.digitsAt = { row: 2, col: 0, rows: digits };
+    return rows;
 }
 
 // ── Раскладка ────────────────────────────────────────────────────────────────
@@ -298,6 +310,45 @@ async function intro({ animate = true } = {}) {
 const DROP = '\x1b[38;5;46m';                 // ярко-зелёный, ярче картинки
 const FOCUS_ON = '\x1b[?1004h';
 const FOCUS_OFF = '\x1b[?1004l';
+
+// ── Мерцание суммы ───────────────────────────────────────────────────────────
+// По цифрам баланса слева направо бежит волна света, потом пауза — так в Claude Code
+// подсвечено слово `ultracode`, владелец попросил «как там» (26.08).
+//
+// Три вещи, из которых это дёшево:
+//   * перекрашиваются ТОЛЬКО три строки цифр, никакой другой части кадра;
+//   * не по символу, а прогонами одного цвета: в кадре 8 escape-последовательностей
+//     на строку вместо двадцати;
+//   * между проходами волны в поток не уходит ни байта, и таймер общий с капелью —
+//     значит при потере фокуса окна мерцание тоже встаёт.
+//
+// 🪤 `eraseLine` тут применять нельзя: на этих же строках слева стоит знак доллара, и
+// стирание съело бы его. Печатаем поверх, ровно той же видимой длиной.
+const SHINE = [
+    '\x1b[38;5;28m',   // тёмная кромка волны
+    '\x1b[92m',        // база — ровно то, чем красит green(), в покое цвет не меняется
+    '\x1b[38;5;46m',
+    '\x1b[38;5;83m',
+    '\x1b[38;5;120m',
+    '\x1b[38;5;231m',  // белое ядро
+];
+const SHINE_PROFILE = [5, 4, 3, 2];           // яркость по расстоянию от центра волны
+const SHINE_IDLE = 16;                        // кадров паузы между проходами (~1.4 с)
+
+// Одна строка цифр с волной в колонке `centre`. centre = null — базовый цвет целиком.
+function shineRow(text, centre) {
+    if (centre === null) return SHINE[1] + text + '\x1b[0m';
+    const ch = [...text];
+    let s = '', cur = -1;
+    for (let i = 0; i < ch.length; i++) {
+        const d = Math.abs(i - centre);
+        const k = d < SHINE_PROFILE.length ? SHINE_PROFILE[d] : 1;
+        if (k !== cur) { s += SHINE[k]; cur = k; }
+        s += ch[i];
+    }
+    return s + '\x1b[0m';
+}
+
 let dripStop = null;
 // Хук фокуса окна. Ставит его капель, дёргает readKey: последовательности ESC[I/ESC[O
 // приходят в тот же поток ввода, что и клавиши, поэтому разбираются там же.
@@ -306,7 +357,10 @@ let focusHook = null;
 // Курсор стоит под всем кадром; картинка — `linesBelow + A.length` строк выше.
 // Каждую ячейку рисуем от сохранённой позиции (ESC 7 / ESC 8): относительные
 // прыжки пришлось бы складывать, а любая ошибка в сумме уводит рисунок в текст.
-function startDrip(A, linesBelow, headerRows) {
+//
+// Здесь же живёт мерцание суммы: таймер один на оба эффекта, иначе они разошлись бы
+// по фазе и делили курсор через два независимых ESC 7 / ESC 8.
+function startDrip(A, linesBelow, headerRows, digitsAt = null) {
     if (!TTY || !A.length || process.env.HUB_NO_DRIP) return;
     const AN = require('./internal/art-anim');
     const B = AN.create(A);
@@ -319,14 +373,47 @@ function startDrip(A, linesBelow, headerRows) {
     const top = linesBelow + A.length;
     let timer = null, paused = false;
 
+    // Цифры адресуются от ВЕРХА шапки (панель выровнена по верху, картинка — по низу),
+    // поэтому своя арифметика: строка панели r стоит на `headerRows - r + linesBelow`
+    // выше курсора. Колонка — отступ, ширина картинки, зазор и смещение внутри панели.
+    const artW = Math.max(...A.map(l => [...l].length));
+    const shine = digitsAt && headerRows ? {
+        col: PAD.length + artW + GAP.length + digitsAt.col + 1,
+        rows: digitsAt.rows,
+        up: digitsAt.rows.map((_, r) => headerRows - (digitsAt.row + r) + linesBelow),
+        width: Math.max(...digitsAt.rows.map(l => [...l].length)),
+        phase: 0,
+    } : null;
+
+    // Кадр волны: `null` — покой, число — центр волны. Один раз после прохода красим
+    // базовым цветом и умолкаем до следующего прохода: последний кадр волны оставляет
+    // светлыми три последние колонки, и без сброса они бы так и застыли.
+    // Разгон и выбег — на полширины профиля: дальше него точки уже базовые, и кадр,
+    // в котором не светится ничего, отправлять незачем.
+    const shineFrame = () => {
+        const edge = SHINE_PROFILE.length - 1;
+        const span = shine.width + edge * 2;
+        const p = shine.phase++;
+        if (p < span) return p - edge;
+        if (p === span) return null;
+        if (p >= span + SHINE_IDLE) shine.phase = 0;
+        return false;                            // в поток не уходит ничего
+    };
+
     const tick = () => {
         timer = null;
         if (paused) return;
         const { paint, clear } = D.next();
-        if (paint.length || clear.length) {
+        const centre = shine ? shineFrame() : false;
+        if (paint.length || clear.length || centre !== false) {
             let s = '\x1b7';
             for (const c of clear) s += `\x1b8\x1b[${top - c.cy}A\x1b[${c.cx + 3}G${cyan(c.ch)}`;
             for (const c of paint) s += `\x1b8\x1b[${top - c.cy}A\x1b[${c.cx + 3}G${DROP}${c.ch}\x1b[0m`;
+            if (centre !== false) {
+                shine.rows.forEach((l, r) => {
+                    s += `\x1b8\x1b[${shine.up[r]}A\x1b[${shine.col}G${shineRow(l, centre)}`;
+                });
+            }
             out(s + '\x1b8');
         }
         timer = setTimeout(tick, 90);
@@ -1130,7 +1217,7 @@ async function menu() {
         if (needFull) {
             if (dripStop) dripStop();
             clearScreen();
-            const { art: A, withArt, compact } = layout();
+            const { art: A, panel, withArt, compact } = layout();
             const headerRows = await intro();             // проявление по точкам
             const belowFrom = printedLines;
             statusBlock({ compact });
@@ -1138,8 +1225,9 @@ async function menu() {
             for (const [i, it] of items.entries()) line(itemLine(it, i === sel));
             line(dim('  ↑↓ выбрать · Enter запустить · цифра — сразу · q выход'));
             needFull = false;
-            // Капель заводится ПОСЛЕ кадра: ей нужно знать, сколько строк под шапкой.
-            if (withArt) startDrip(A, printedLines - belowFrom, headerRows);
+            // Капель и мерцание суммы заводятся ПОСЛЕ кадра: им нужно знать, сколько
+            // строк под шапкой, а мерцанию — ещё и где именно стоят цифры.
+            if (withArt) startDrip(A, printedLines - belowFrom, headerRows, panel.digitsAt);
         }
 
         const k = await readKey();

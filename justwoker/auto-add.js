@@ -267,11 +267,57 @@ function watchRefresh(context) {
   return out;
 }
 
+// ──────────────── модалка панели, перехватывающая клик по входу ────────────────
+// 🪤 С 27.08 панель показывает на странице регистрации диалог «Объявления» (base-ui:
+// `data-slot="dialog-portal"` + оверлей `dialog-overlay` на весь экран, `z-50`). Кнопка
+// «Продолжить с GitHub» под ним видима, включена и стабильна — Playwright проверки
+// проходит, а клик не доезжает: «<div data-slot="dialog-footer"> … intercepts pointer
+// events». Прогон 27.08 21:12 умер кодом 2 «вход не подтвердился», хотя вход не начинался.
+// Замер DOM 28.08 живой страницей `/sign-up?aff=IFYf`: заголовок «Объявления», внутри три
+// выхода — ✕ (`data-slot="dialog-close"`), «Закрыть» и «Не показывать сегодня».
+// Профиль у каждого прогона чистый, «не показывать сегодня» на него не действует, значит
+// модалка будет вставать КАЖДЫЙ раз — закрываем сами.
+// Порядок средств — от независимых от локали к текстовым: панель переводится на четыре
+// языка, и матчить «Закрыть» первым значит зависеть от языка профиля.
+async function dismissPanelDialog(page, why = '') {
+  const dialog = page.locator('[role="dialog"][data-slot="dialog-content"]:visible').first();
+  if (!await dialog.count().catch(() => 0)) return false;
+  const title = await dialog.locator('[data-slot="dialog-title"]').first().innerText()
+    .then(t => t.replace(/\s+/g, ' ').trim().slice(0, 60)).catch(() => '');
+  // Вход мог переехать ВНУТРЬ модалки — тогда её надо не закрывать, а жать кнопку в ней.
+  // Иначе «лечение» перехвата снесло бы единственный путь входа и дало код 4.
+  if (await dialog.locator('button').filter({ hasText: /github/i }).count().catch(() => 0)) {
+    log(`   ▸ в модалке «${title}» есть вход через GitHub — не закрываю`);
+    return false;
+  }
+  const ways = [
+    ['✕', () => dialog.locator('[data-slot="dialog-close"]').first().click({ timeout: 3000 })],
+    ['Escape', () => page.keyboard.press('Escape')],
+    ['кнопка закрытия по тексту', () => dialog.locator('button')
+      .filter({ hasText: /закрыть|close|не показывать|dismiss|ок|ok/i }).first().click({ timeout: 3000 })],
+  ];
+  for (const [what, act] of ways) {
+    await act().catch(() => {});
+    const gone = await dialog.waitFor({ state: 'hidden', timeout: 3000 }).then(() => true).catch(() => false);
+    if (gone) {
+      log(`   ▸ закрыл модалку панели «${title}» (${what})${why ? ` — ${why}` : ''}`);
+      // Оверлей base-ui уезжает анимацией (`data-closed:fade-out`, 100 мс) и ещё успевает
+      // съесть клик, посланный в тот же кадр.
+      await page.waitForTimeout(250).catch(() => {});
+      return true;
+    }
+  }
+  log(`⚠️  модалка панели «${title}» не закрылась — клик по входу может не пройти`);
+  return false;
+}
+
 // ───────────────────────── клик по входу через GitHub ─────────────────────────
 // Берём только BUTTON: в подвале панели сидят ссылки на github.com, и `a[href*=github]`
 // увёл бы на профиль проекта вместо входа. Текст в UI русский («Продолжить с GitHub»),
 // но фильтр по /github/i переживает и смену локали, и правку формулировки.
 async function clickGithubLogin(page, seen = () => false) {
+  // Модалка объявлений прилетает вместе с первым кадром SPA — снимаем её до поиска кнопки.
+  await dismissPanelDialog(page, 'до поиска кнопки входа');
   const byText = page.locator('button').filter({ hasText: /github/i }).first();
   const byIcon = page.locator('button:has(svg)').filter({ hasText: /github/i }).first();
   let target = null;
@@ -309,7 +355,17 @@ async function clickGithubLogin(page, seen = () => false) {
     const navStarted = page
       .waitForRequest(r => /github\.com\/login\/oauth\/authorize/i.test(r.url()), { timeout: 20000 })
       .then(() => 'github').catch(() => null);
-    await target.click({ timeout: 5000 }).catch(e => log(`⚠️  клик не прошёл: ${e.message}`));
+    let clickErr = null;
+    await target.click({ timeout: 5000 }).catch(e => { clickErr = e.message; log(`⚠️  клик не прошёл: ${e.message}`); });
+    // Перехват клика чужим элементом = модалка панели, выросшая ПОСЛЕ первой проверки
+    // (объявления прилетают асинхронно, вторым кадром). Закрываем и жмём ещё раз в этой
+    // же попытке: гонка `navStarted` уже стоит и ждать её заново не нужно, а вторая
+    // попытка цикла ниже пойдёт только если вкладка вообще никуда не ушла.
+    if (clickErr && /intercept|not stable|not visible|outside of the viewport/i.test(clickErr)
+        && await dismissPanelDialog(page, 'клик был перехвачен')) {
+      await target.click({ timeout: 5000 })
+        .catch(e => log(`⚠️  клик не прошёл и после закрытия модалки: ${e.message}`));
+    }
     const moved = await Promise.race([
       navStarted,
       page.waitForURL(u => JW_DONE_RE.test(new URL(String(u)).pathname), { timeout: 20000 }).then(() => 'done'),
@@ -638,6 +694,21 @@ async function main() {
       return fail(10, '❌ github.com не открылся — навигация оборвалась, вкладка на странице ошибки Chrome.',
         '   Это сеть, а не аккаунт: вход даже не начался, согласие приложению не выдавалось.',
         '   Проверь, что github.com открывается с этой машины, и повтори тем же GitHub — снимок сессии цел.');
+    }
+    // Вкладка закрылась посреди входа (Chromium упал, профиль открыли вторым процессом,
+    // контекст убили снаружи). Колбэка от мёртвой страницы не будет никогда, а прежний код
+    // всё равно ждал его 90 с и печатал «вход не подтвердился» — вердикт про аккаунт на
+    // поломке браузера. Замер 27.08 21:12: gate='closed' через 11 с после клика, дальше
+    // 90 с ожидания в никуда.
+    // Код возврата оставлен 2, а не новый: таблица `JW_AUTO_ADD_FAIL` живёт в
+    // transparent-proxy.js, то есть в памяти дашборда, и незнакомый код превратился бы в
+    // пустое сообщение до его рестарта. Смысл кода 2 «повтори» тут и так верный, а причина
+    // теперь стоит в логе прогона отдельной строкой.
+    if (gate === 'closed') {
+      await context.close().catch(() => {});
+      return fail(2, '❌ вкладка закрылась посреди входа — браузер не дожил до колбэка.',
+        '   Это не про аккаунт: снимок GitHub-сессии и запись в пуле целы.',
+        '   Проверь, что профиль не открыт вторым окном (кнопка 🌐 на этой же записи), и повтори.');
     }
     log(`🔄 GitHub-часть: ${gate}`);
 

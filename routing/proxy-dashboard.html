@@ -12234,6 +12234,33 @@ function newapiSeedRender(data) {
          </div>`);
       continue;
     }
+    // JustWoker — единственный шлюз с ⚡ авто-заведением, и до 28.08 клик по чистой строке
+    // уводил в него ПРИНУДИТЕЛЬНО, без обхода. Пока сценарий авторега падает (панель
+    // добавила модалку `data-base-ui-portal`, её `dialog-footer` перехватывает клик по
+    // «Продолжить с GitHub» → вход не подтверждается за 90 с, код 2), это был тупик: 🐙
+    // создавала запись и снимок сессии, а дальше три минуты ожидания в никуда. Поэтому у
+    // jw строка целиком НЕ кликается, а даёт выбор двумя кнопками — как у засвеченных
+    // ников выше. «Вручную» ведёт общим путём остальных четырёх шлюзов (add-github →
+    // session/open в режиме `register`): запись, снимок GitHub-сессии в профиль, живой
+    // браузер на регистрации по рефке — человек жмёт «Продолжить с GitHub» сам.
+    if (ghSeedProv === 'jw') {
+      const jwTip = `сессия: ${src}${young(a) ? ` · ${ageTip}` : ''}`;
+      rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated ${young(a) ? 'border-amber/40' : 'border-line-soft'} transition" title="${esc(jwTip)}">
+           <span class="flex items-center gap-1.5 min-w-0">
+             <span class="text-xs text-ink truncate max-w-[14ch]">🐙 ${esc(a.nickname)}</span>
+             ${ageMark}
+           </span>
+           <span class="flex items-center gap-1 shrink-0">
+             <button onclick='newapiAddGithub(${idJ}, { mode: "register" })'
+               title="Вручную: завести запись, влить GitHub-сессию в профиль и открыть браузер на регистрации по рефке. «Продолжить с GitHub» жмёшь сам — работает, когда авторег падает на вёрстке панели."
+               class="text-[10px] px-1.5 py-px rounded border bg-azure/15 border-azure/50 text-azure hover:bg-azure/25 transition">🌐 вручную</button>
+             <button onclick='newapiAddGithub(${idJ})'
+               title="Авторег: скрипт сам входит через GitHub и снимает ключ, браузер не открывается (20–60 с). С 27.08 падает на модалке панели — если не вышло, бери «вручную»."
+               class="text-[10px] px-1.5 py-px rounded border bg-white/5 border-white/15 text-muted hover:border-emerald/60 hover:text-emerald transition">⚡ авто</button>
+           </span>
+         </div>`);
+      continue;
+    }
     rows.push(`<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border bg-elevated ${young(a) ? 'border-amber/40' : 'border-line-soft'} hover:border-azure/60 cursor-pointer transition"
              onclick='newapiAddGithub(${idJ})'${young(a) ? ` title="${esc(ageTip)}"` : ''}>
            <span class="flex items-center gap-1.5 min-w-0">
@@ -12255,6 +12282,7 @@ function newapiSeedRender(data) {
       ? `чистых нет${warned ? `, но ${warned} засвеченных доступны: «вход», если аккаунт у провайдера есть, иначе «рег»` : ''}`
       : `свободных нет: все ${list.length} либо уже в пуле, либо без живой сессии`)
     + (monthly ? ` · ${monthly} месячных (AgentRouter такие не пропускает)` : '')
+    + (ghSeedProv === 'jw' && free ? ' · 🌐 вручную = браузер с GitHub-сессией, ⚡ авто = без человека' : '')
     + (data.building ? ' · индекс обновляется в фоне, список обновится сам' : '');
   $('gh-seed-list').innerHTML = rows.join('') || '<div class="text-xs text-faint px-1 py-3">хранилище GitHub пусто — добавь аккаунты во вкладке GitHub</div>';
 }

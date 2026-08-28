@@ -5728,7 +5728,7 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
               <input id="jw-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
             </label>
             <button onclick="jwAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
-            <button onclick="newapiAddPickGithub('jw')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🐙 из менеджера</button>
+            <button onclick="newapiAddPickGithub('jw')" title="выбор из менеджера гитхабов. У ника с готовой сессией две кнопки: 🌐 вручную — завести запись, влить сессию и открыть браузер на регистрации; ⚡ авто — скрипт входит и снимает ключ сам. Без сессии — один клик: запись, регистрация и креды окном у строки" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🐙 из менеджера</button>
             <button onclick="jwShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
           </div>
           <div id="jw-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
@@ -11985,6 +11985,28 @@ function newapiAddPickRender(prov, data, err) {
             ? `<span class="text-[10px] text-amber whitespace-nowrap" title="профиль этого ника на хосте есть, а живой сессии нет: аккаунт у провайдера скорее всего создан. Заведу запись и открою регистрацию по рефке — если сайт ответит «уже создан», войди через GitHub в том же окне">⚠ засвечен</span>`
             : `<span class="text-[10px] text-faint whitespace-nowrap" title="сессии на диске нет — создам запись, открою регистрацию и покажу креды окном">🆕 первый вход</span>`)
         : '';
+    // JustWoker с готовой сессией — единственный случай, где путей ДВА, и выбор отдан
+    // человеку кнопками, как у засвеченных ников выше. Клика по строке тут нет намеренно:
+    // скрытый выбор по умолчанию — ровно то, из-за чего ⚡ запускался, когда его не звали.
+    // ⚡ дают только сессионным строкам: авторег входит снимком GitHub-сессии, без неё
+    // ему нечем заменить пароль и 2FA.
+    if (prov === 'jw' && seedable) {
+      return `<div class="${ROW} bg-elevated ${a && ghRowYoung(a) ? 'border-amber/40' : 'border-line-soft'} transition" title="${esc(g.login)}">
+        <span class="${COL_NICK} text-xs text-ink">🐙 ${nick}</span>
+        <span class="${COL_AGE}">${ghAgeBadge(g.regAge)}</span>
+        <span class="${COL_MARK}">${mark}</span>
+        <span class="${COL_USE}">${ghPickBadges(g.id, prov)}</span>
+        <span class="w-[9rem] shrink-0 flex items-center gap-1 justify-end">
+          <button onclick='newapiAddSeedPick(${pJs}, ${gJs}, null)'
+            title="Вручную: завести запись, влить GitHub-сессию в профиль и открыть браузер на регистрации по рефке. «Продолжить с GitHub» жмёшь сам."
+            class="text-[10px] px-1.5 py-px rounded border bg-azure/15 border-azure/50 text-azure hover:bg-azure/25 transition whitespace-nowrap">🌐 вручную</button>
+          <button onclick='newapiAddSeedPick(${pJs}, ${gJs}, null, true)'
+            title="Авторег: скрипт сам входит через GitHub и снимает ключ, браузер не открывается (20–60 с)."
+            class="text-[10px] px-1.5 py-px rounded border bg-white/5 border-white/15 text-muted hover:border-emerald/60 hover:text-emerald transition whitespace-nowrap">⚡ авто</button>
+        </span>
+        <span class="${COL_ST}"><span class="text-[10px] px-1 py-px rounded border whitespace-nowrap ${st.badge}">${st.label}</span></span>
+      </div>`;
+    }
     return `<div class="${ROW} bg-elevated ${
       a && ghRowYoung(a) ? 'border-amber/40' : 'border-line-soft'} ${
       seedable ? 'hover:border-azure/60' : 'hover:border-teal/60'} cursor-pointer transition"
@@ -12003,7 +12025,7 @@ function newapiAddPickRender(prov, data, err) {
   const seeds = list.filter(g => ghAddRows[g.id] && !ghRowSeedBlock(ghAddRows[g.id])).length;
   const blocked = list.filter(g => ghAddRows[g.id] && ghRowPickBlock(ghAddRows[g.id])).length;
   $('gh-bind-modal-subtitle').textContent = data
-    ? `новая запись · клик = создать и начать · 🍪 ${seeds} с готовой сессией · ${
+    ? `новая запись · ${prov === 'jw' ? 'выбор кнопками: 🌐 вручную или ⚡ авто' : 'клик = создать и начать'} · 🍪 ${seeds} с готовой сессией · ${
         Math.max(0, list.length - seeds - blocked)} через ручной вход · ${blocked} занято здесь`
       + (data.building ? ' · индекс обновляется, список поправится сам' : '')
     : `новая запись · индекса профилей нет (${err || 'ошибка'}): про сессии не знаю, клик заведёт запись и откроет регистрацию`;
@@ -12026,14 +12048,15 @@ function newapiAddTakeGh(prov, ghId) {
 // Заселение, начатое из пикера. Прогресс рисует модалка заселения — харвест это запуск
 // Chromium, до минуты молчания, — поэтому окна переключаем: иначе клик снова выглядел бы
 // как «ничего не произошло», ровно та грабля, которую лечили 22.08.
-async function newapiAddSeedPick(prov, ghId, mode) {
+async function newapiAddSeedPick(prov, ghId, mode, auto) {
   const meta = NEWAPI_SEED_PROV[prov];
   if (!meta) return;
   closeGhBindModal();
   ghSeedProv = prov;                 // newapiAddGithub читает провайдера отсюда
   $('gh-seed-provider').textContent = meta.label;
   $('gh-seed-modal').classList.remove('hidden');
-  const ok = await newapiAddGithub(ghId, mode ? { force: true, mode } : {});
+  // `auto` — явное «да, авторегом» кнопкой ⚡; без него путь ручной у всех провайдеров.
+  const ok = await newapiAddGithub(ghId, mode ? { force: true, mode } : auto ? { auto: true } : {});
   // 🪤 «Сессия есть» — это факт с диска, а не проверка живости: она бывает погашенной, и
   // тогда харвест возвращает «сессия мертва». Список после этого по-прежнему покажет 🍪,
   // поэтому выход из петли называем прямо, а не оставляем догадываться.

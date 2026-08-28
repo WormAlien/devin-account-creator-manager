@@ -12254,7 +12254,7 @@ function newapiSeedRender(data) {
              <button onclick='newapiAddGithub(${idJ}, { mode: "register" })'
                title="Вручную: завести запись, влить GitHub-сессию в профиль и открыть браузер на регистрации по рефке. «Продолжить с GitHub» жмёшь сам — работает, когда авторег падает на вёрстке панели."
                class="text-[10px] px-1.5 py-px rounded border bg-azure/15 border-azure/50 text-azure hover:bg-azure/25 transition">🌐 вручную</button>
-             <button onclick='newapiAddGithub(${idJ})'
+             <button onclick='newapiAddGithub(${idJ}, { auto: true })'
                title="Авторег: скрипт сам входит через GitHub и снимает ключ, браузер не открывается (20–60 с). С 27.08 падает на модалке панели — если не вышло, бери «вручную»."
                class="text-[10px] px-1.5 py-px rounded border bg-white/5 border-white/15 text-muted hover:border-emerald/60 hover:text-emerald transition">⚡ авто</button>
            </span>
@@ -12293,6 +12293,13 @@ async function newapiAddGithub(ghId, opts) {
   if (!p) return;
   const force = !!(opts && opts.force);
   const mode = opts && opts.mode;
+  // ⚡ авторег JustWoker — ТОЛЬКО по явному запросу. До 28.08 условием было «mode не
+  // задан», то есть авторег включался сам на КАЖДОМ пути, где режим не указан, — а таких
+  // путей два, и основной (➕ Добавить → пикер гитхабов → клик по строке,
+  // `newapiAddSeedPick(prov, ghId, null)`) шлёт именно пустые опции. Правка одной модалки
+  // владельцу поэтому ничего не изменила: он заводит аккаунты пикером. Опт-ин вместо
+  // опт-аута закрывает оба входа сразу и любой третий, который появится позже.
+  const auto = !!(opts && opts.auto);
   $('gh-seed-list').innerHTML = '<div class="text-xs text-faint px-1 py-3">снимаю GitHub-сессию (запускаю браузер headless, до минуты)…</div>';
   $('gh-seed-hint').textContent = 'не закрывай окно';
   try {
@@ -12305,12 +12312,10 @@ async function newapiAddGithub(ghId, opts) {
     closeGhSeedModal();
     toast(`🐙 ${data.ghLogin}: аккаунт создан, сессия из ${data.from} (${data.cookieCount} кук)`, 'success', 4000);
 
-    // JustWoker доводит дело до конца сам: вход через GitHub и снятие ключа, без
-    // открытого браузера и без кнопки 🔑. Только на чистом пути (mode не задан) —
-    // «→ вход» для засвеченного ника ведёт в УЖЕ существующий аккаунт, там заводить
-    // нечего. Остальным провайдерам сценарий не переносится: у них вход уезжает в
-    // попап, и ключа в ответе колбэка нет (замер рекордером 2026-08-22).
-    if (prov === 'jw' && !mode) {
+    // JustWoker умеет довести дело сам: вход через GitHub и снятие ключа, без открытого
+    // браузера и без кнопки 🔑. Остальным провайдерам сценарий не переносится: у них вход
+    // уезжает в попап, и ключа в ответе колбэка нет (замер рекордером 2026-08-22).
+    if (prov === 'jw' && auto && !mode) {
       const done = await jwAutoAdd(data.id, data.ghLogin);
       await p.reload();
       // Ключ в пуле — креды GitHub не понадобились, окно с паролем только мешало бы.

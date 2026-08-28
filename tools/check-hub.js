@@ -30,6 +30,50 @@ const t = (name, fn) => { try { const r = fn(); if (r === true || r === undefine
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const has = p => fs.existsSync(path.join(ROOT, p));
 
+// Самопроба кадра: тот же файл с `--frame-probe` печатает JSON и выходит. Отдельный
+// процесс нужен именно потому, что набор глифов не переключается внутри уже загруженного
+// hub.js — а проверять надо оба.
+//
+// 🪤 Развилка стоит ВЫШЕ прибивания режима: иначе строка ниже перетирала бы
+// `HUB_SAFE_GLYPHS=1`, которым эту самопробу и зовут, и безопасный набор проверялся бы
+// сам на себе — тест зеленел бы, ничего не проверив.
+if (process.argv.includes('--frame-probe')) { frameProbe(); return; }
+
+// Набор глифов шапки (`SAFE` в hub.js) считается ОДИН раз при загрузке модуля, и в
+// conhost он включается сам. Регресс от этого зависеть не должен: запущенный из cmd.exe
+// он видел бы упрощённую шапку и валил проверки анимации, а из Windows Terminal —
+// проходил. Поэтому здесь режим прибит явно, а безопасный набор проверяется отдельным
+// процессом с `HUB_SAFE_GLYPHS=1` (см. ниже). Дети наследуют process.env, включая pty.
+process.env.HUB_SAFE_GLYPHS = '0';
+
+async function frameProbe() {
+    const H = require(path.join(ROOT, 'hub.js'));
+    const real = process.stdout.write.bind(process.stdout);
+    const res = [];
+    for (const [cols, rows] of [[113, 30], [80, 24], [70, 50]]) {
+        Object.defineProperty(process.stdout, 'rows', { value: rows, configurable: true });
+        Object.defineProperty(process.stdout, 'columns', { value: cols, configurable: true });
+        let buf = '';
+        process.stdout.write = s => { buf += s; return true; };
+        let lay;
+        try {
+            lay = H.layout();
+            await H.intro();
+            H.statusBlock({ compact: lay.compact });
+            if (!lay.compact) buf += '\n';
+            for (const it of H.menuItems()) buf += H.itemLine(it, false) + '\n';
+            buf += 'подсказка\n';
+            if (lay.tip) buf += H.safeHint() + '\n';
+        } finally { process.stdout.write = real; }
+        const clean = buf.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+        res.push({
+            cols, rows, used: clean.split('\n').length - 1,
+            art: !!lay.withArt, tip: !!lay.tip, text: clean,
+        });
+    }
+    real(JSON.stringify({ safe: H.SAFE, res }));
+}
+
 console.log('\n\x1b[1m1. Ядро и таблица портов\x1b[0m');
 
 t('lifecycle.js экспортирует то, на что опираются хаб и dashboard-api', () => {
@@ -313,6 +357,78 @@ t('картинка на месте и это прямоугольник', () =>
     for (const l of lines) if ([...l].length !== w) return `строки разной длины (${w} и ${[...l].length}) — картинка поедет`;
     if (w > 76) return `ширина ${w} — в 80 колонках не влезет с отступом`;
     return true;
+});
+
+// Второй файл картинки — для старого conhost. В Consolas и Lucida Console (единственные
+// два шрифта, которые он предлагает) нет ни брайля, ни `✓`/`✗`/`❯` — замерено по таблицам
+// глифов самих файлов шрифтов. Размеры обязаны совпадать с оригиналом: раскладка шапки
+// считает ширину картинки и вычитает её из окна, а высоту складывает с панелью баланса.
+t('вторая картинка шапки — глифами старого conhost и тех же размеров', () => {
+    if (!has('internal/hub-art-blocks.txt')) return 'нет internal/hub-art-blocks.txt — в conhost шапка будет квадратами';
+    const dims = f => {
+        const lines = read(f).replace(/\r/g, '').split('\n').filter(Boolean);
+        return { rows: lines.length, cols: Math.max(...lines.map(l => [...l].length)), lines };
+    };
+    const a = dims('internal/hub-art.txt');
+    const b = dims('internal/hub-art-blocks.txt');
+    if (a.rows !== b.rows || a.cols !== b.cols) {
+        return `размеры разошлись: брайль ${a.cols}×${a.rows}, полублоки ${b.cols}×${b.rows}`;
+    }
+    const allowed = new Set([...' ░▒▓█▀▄']);
+    const bad = new Set([...b.lines.join('')].filter(c => !allowed.has(c)));
+    if (bad.size) {
+        return `глифы, которых нет в шрифтах conhost: ${[...bad].map(c => 'U+' + c.codePointAt(0).toString(16).toUpperCase()).join(' ')}`;
+    }
+    return true;
+});
+
+// Картинку легко «поправить руками» и получить расхождение с оригиналом, которое никто
+// не заметит: обе версии выглядят правдоподобно. Поэтому вторая версия обязана быть
+// ровно тем, что печатает генератор из первой — и это же ловит забытую пересборку после
+// правки оригинала владельцем.
+t('вторая картинка пересобирается генератором байт в байт', () => {
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'make-art-blocks.js'), '--stdout'],
+        { cwd: ROOT, encoding: 'utf8' });
+    if (r.status !== 0) return `генератор упал: ${String(r.stderr || '').trim().slice(0, 200)}`;
+    if (r.stdout.replace(/\r/g, '') !== read('internal/hub-art-blocks.txt').replace(/\r/g, '')) {
+        return 'файл разошёлся с генератором: либо правили руками, либо не пересобрали после правки оригинала '
+            + '(node tools/make-art-blocks.js)';
+    }
+    return true;
+});
+
+// Главная проверка безопасного набора: в кадре не должно остаться НИ ОДНОГО глифа, которого
+// нет в шрифтах conhost'а. Отдельным процессом, потому что набор считается при загрузке
+// hub.js. Заодно проверяется порядок жертв: подсказка про упрощённую шапку уходит раньше
+// самой картинки — иначе на 80×24 она стоила бы картинки, которую владелец просил хранить
+// до последнего.
+t('в безопасном наборе кадр рисуется только «дешёвыми» глифами', () => {
+    const r = spawnSync(process.execPath, [__filename, '--frame-probe'],
+        { cwd: ROOT, encoding: 'utf8', env: { ...process.env, HUB_SAFE_GLYPHS: '1' } });
+    if (r.status !== 0) return `самопроба кадра упала: ${String(r.stderr || '').trim().slice(0, 200)}`;
+    let probe;
+    try { probe = JSON.parse(r.stdout); } catch { return `самопроба вернула не JSON: ${r.stdout.slice(0, 120)}`; }
+    if (!probe.safe) return 'HUB_SAFE_GLYPHS=1 не включил безопасный набор';
+
+    // ASCII, кириллица и вот эти: ░▒▓█▀▄ √ • ○ · ─ — – … ↑ ↓ → « » × §.
+    const extra = new Set([0x2591, 0x2592, 0x2593, 0x2588, 0x2580, 0x2584, 0x221A, 0x2022, 0x25CB,
+        0x00B7, 0x2500, 0x2014, 0x2013, 0x2026, 0x2191, 0x2193, 0x2192, 0x00AB, 0x00BB, 0x00D7, 0x00A7]);
+    const problems = [];
+    for (const s of probe.res) {
+        const bad = new Set();
+        for (const ch of s.text) {
+            const n = ch.codePointAt(0);
+            if (n < 0x80 || (n >= 0x400 && n <= 0x4FF) || extra.has(n)) continue;
+            bad.add('U+' + n.toString(16).toUpperCase());
+        }
+        if (bad.size) problems.push(`${s.cols}x${s.rows}: ${[...bad].join(' ')}`);
+        if (s.used > s.rows) problems.push(`${s.cols}x${s.rows}: занято ${s.used} строк`);
+        if (s.tip && !s.art) problems.push(`${s.cols}x${s.rows}: подсказка осталась, а картинку выбросили`);
+        if (s.cols === 113 && s.rows === 30 && !(s.art && s.tip)) {
+            problems.push(`113x30: ожидались и картинка, и подсказка (картинка ${s.art}, подсказка ${s.tip})`);
+        }
+    }
+    return problems.length ? problems.join('; ') : true;
 });
 
 // Надпись собирается из глифов, а не пишется руками. До 25.08 она была строкой в

@@ -28,6 +28,39 @@ const L = require('./routing/lifecycle');
 const TTY = !!process.stdout.isTTY && !process.env.HUB_PLAIN;
 const W = () => Math.max(52, Math.min(process.stdout.columns || 80, 100));
 
+// ── Безопасные глифы (старый conhost) ────────────────────────────────────────
+// Шапка нарисована брайлем (U+2800…28FF), метки — `✓` / `✗` / `❯`. Старый conhost
+// предлагает ровно два шрифта, Consolas и Lucida Console, и НИ В ОДНОМ из них этих
+// символов нет: замерено по `CharacterToGlyphMap` самих файлов шрифтов, а не на глаз
+// (`✗` отсутствует даже в Cascadia Mono — там его рисует фолбэк терминала, которого
+// у conhost'а нет). Человек без Windows Terminal видит вместо шапки стену одинаковых
+// квадратов и считает, что хаб сломан — так это и приехало 28.08 скриншотом от друга.
+// В conhost рисуем то же самое глифами, которые есть в ОБОИХ его шрифтах:
+// картинку ` ░▒▓█▀▄` (`internal/hub-art-blocks.txt`), метки `√ x > •`.
+//
+// Признак — ровно тот, которым moveToWindowsTerminal() узнаёт conhost, и это
+// сознательно: два разных определения «плохого терминала» разъехались бы при первой
+// же правке. Пустые TERM и TERM_PROGRAM = терминал человек не выбирал; git-bash,
+// VS Code и WezTerm их ставят и шрифт подбирают сами.
+//
+// 🪤 Вид в Windows Terminal не меняется НИ НА СИМВОЛ — решение владельца 28.08.
+// Это фолбэк, а не новый стиль: брайлевый шрифт цифр он выбирал из семи вариантов,
+// а полублочный тогда же забраковал словами «шрифт не нравится».
+// 🪤 Не-TTY (кнопка перезапуска в дашборде, перенаправление в файл) — НЕ conhost:
+// там текст читает браузер или редактор, со своими шрифтами. Иначе владелец увидел
+// бы упрощённую картинку в логе дашборда, то есть ровно то, чего просил не делать.
+//
+// `HUB_SAFE_GLYPHS=1` включает набор принудительно (регресс, терминал с плохим
+// шрифтом), `=0` выключает даже в conhost.
+const SAFE = (() => {
+    const force = process.env.HUB_SAFE_GLYPHS;
+    if (force === '1') return true;
+    if (force === '0') return false;
+    if (!L.IS_WIN || !process.stdout.isTTY) return false;
+    if (process.env.WT_SESSION || process.env.HUB_IN_WT) return false;
+    return !(process.env.TERM || process.env.TERM_PROGRAM);
+})();
+
 // ── ANSI ─────────────────────────────────────────────────────────────────────
 // В не-TTY (кнопка перезапуска в дашборде, перенаправление в файл, CI) все
 // украшения обязаны исчезнуть: иначе в логе оказывается каша из escape-кодов, а
@@ -59,7 +92,7 @@ const sleep = L.sleep;
 // владельца — он его перебрал в трёх вариантах и ни один не понравился («уберём вот
 // это»). Название и так стоит в заголовке окна (`title ABUSE HUB` в HUB.bat), рисовать
 // его второй раз незачем.
-const ART_FILE = path.join(__dirname, 'internal', 'hub-art.txt');
+const ART_FILE = path.join(__dirname, 'internal', SAFE ? 'hub-art-blocks.txt' : 'hub-art.txt');
 const WISPR_ART_FILE = path.join(__dirname, 'internal', 'wispr-art.txt');
 // Отступ слева и зазор между картинкой и панелью — в одном месте: из них считается,
 // сколько колонок остаётся панели, и разъехавшиеся копии этой арифметики уже дважды
@@ -94,7 +127,7 @@ function link(url, text = url) {
 // та же высота, что у полублочного, перекладывать панель не пришлось. Штрих 2 точки,
 // у единицы флажок и подставка (в семисегментном варианте она выглядела голой палкой).
 const DIGIT_ROWS = 3;
-const DIGITS = {
+const DIGITS_BRAILLE = {
     0: ['⣿⠛⣿', '⣿⠀⣿', '⣿⣤⣿'], 1: ['⠴⣿⠀', '⠀⣿⠀', '⣤⣿⣤'],
     2: ['⠛⠛⣿', '⣶⠶⠿', '⣿⣤⣤'], 3: ['⠛⠛⣿', '⠶⠶⣿', '⣤⣤⣿'],
     4: ['⣿⠀⣿', '⠿⠶⣿', '⠀⠀⣿'], 5: ['⣿⠛⠛', '⠿⠶⣶', '⣤⣤⣿'],
@@ -102,6 +135,24 @@ const DIGITS = {
     8: ['⣿⠛⣿', '⣿⠶⣿', '⣿⣤⣿'], 9: ['⣿⠛⣿', '⠿⠶⣿', '⣤⣤⣿'],
     ' ': ['⠀⠀⠀', '⠀⠀⠀', '⠀⠀⠀'],
 };
+
+// Полублочная таблица — фолбэк для conhost (см. SAFE). Это ровно тот шрифт, что стоял
+// здесь до 26.08: он уже был нарисован и выверен, а глифы `█▀▄` есть в обоих шрифтах
+// conhost'а. Владельцу он не понравился, поэтому живёт только там, где брайль
+// физически не рисуется — заново такое рисовать незачем, а выбрасывать было бы жаль.
+//
+// 🪤 Пробел здесь ТРИ символа, а не два, как было в оригинале 25.08: ширина ячейки
+// задаёт шаг центровки всего блока, и цифра-пробел на символ короче уводила бы сумму
+// на треть ячейки влево. В брайлевой таблице пробел тоже трёхсимвольный.
+const DIGITS_SAFE = {
+    0: ['█▀█', '█ █', '█▄█'], 1: [' ▄█', '  █', '  █'],
+    2: ['▀▀█', '▄▀ ', '█▄▄'], 3: ['▀▀█', ' ▀█', '▄▄█'],
+    4: ['█ █', '█▄█', '  █'], 5: ['█▀▀', '▀▀█', '▄▄█'],
+    6: ['█▀▀', '█▀█', '█▄█'], 7: ['▀▀█', '  █', '  █'],
+    8: ['█▀█', '█▀█', '█▄█'], 9: ['█▀█', '▀▀█', '▄▄█'],
+    ' ': ['   ', '   ', '   '],
+};
+const DIGITS = SAFE ? DIGITS_SAFE : DIGITS_BRAILLE;
 
 function bigNum(text) {
     const rows = Array.from({ length: DIGIT_ROWS }, () => '');
@@ -134,6 +185,11 @@ function bigNum(text) {
 // с ней и шапку — то есть вернула бы ту самую претензию, с которой всё началось. Вариант
 // с перекладиной, торчащей выше и ниже цифр, отвергнут именно поэтому: он давал 11 строк.
 // Пересобрать: `node Downloads\dollar-small.js --js 4`.
+//
+// В безопасном наборе (SAFE, старый conhost) знак не рисуется вообще: он тоже брайлевый,
+// а второй его вариант полублоками — это чужая работа ради окна, в котором и так стоит
+// текстовая строка `$594.27` под цифрами. Панель просто отдаёт знак, как отдаёт его при
+// нехватке ширины — путь уже есть и проверен.
 const DOLLAR_FILE = path.join(__dirname, 'internal', 'hub-dollar.txt');
 
 // Правая колонка шапки: последний ИЗВЕСТНЫЙ запас пулов. Читается с диска, поэтому
@@ -174,7 +230,7 @@ function balancePanel(maxW, { big = true } = {}) {
     //
     // «Знак + сумма» — ОДИН элемент на три строки, поэтому центрируется целиком, а не
     // построчно: иначе строки знака разъехались бы между собой.
-    const D = big ? readArt(DOLLAR_FILE) : [];
+    const D = big && !SAFE ? readArt(DOLLAR_FILE) : [];
     const dw = D.length ? Math.max(...D.map(l => [...l].length)) : 0;
     const digitsW = Math.max(...digits.map(l => [...l].length));
     const blockW = (dw ? dw + 2 : 0) + digitsW;
@@ -243,24 +299,39 @@ function layout({ cols = process.stdout.columns || 80, rows = process.stdout.row
 
     const items = menuItems().length;
     // Строк в кадре: шапка + (отступ + дашборд + прочее + права) + пункты + подсказка.
-    const total = (head, compact) => head + (compact ? 3 : 4) + (compact ? items + 1 : items + 2);
+    // extra — строка про упрощённую шапку в безопасном наборе. Она обязана попасть в
+    // арифметику, а не «просто печататься»: кадр, не влезающий в окно, уводит верх за
+    // экран, и картинки не видно — так уже было дважды, при 33 строках и при 30.
+    const total = (head, compact, extra = 0) => head + extra
+        + (compact ? 3 : 4) + (compact ? items + 1 : items + 2);
 
     // Порядок жертв: сперва отступы, потом большой доллар, потом панель целиком, и
     // только в конце картинка — её владелец просил в первую очередь.
+    //
+    // Подсказка про упрощённую шапку уходит РАНЬШЕ всего остального, и порядок циклов
+    // это ровно и означает: для каждой раскладки сначала пробуем с ней, и если не лезет —
+    // тот же вариант без неё, а к следующей (более урезанной) раскладке переходим уже
+    // потом. Иначе на 80×24 подсказка стоила бы картинки: она её объясняет, значит без
+    // картинки не нужна вообще.
     if (artOk) {
         for (const panel of panels) {
             const head = Math.max(A.length, panel.length);
             for (const compact of [false, true]) {
-                if (total(head, compact) <= rows) {
-                    return { art: A, panel: centerPanel(panel, head), headerRows: head, withArt: true, compact };
+                for (const tip of (SAFE ? [true, false] : [false])) {
+                    if (total(head, compact, tip ? 1 : 0) <= rows) {
+                        return {
+                            art: A, panel: centerPanel(panel, head), headerRows: head,
+                            withArt: true, compact, tip,
+                        };
+                    }
                 }
             }
         }
     }
     for (const compact of [false, true]) {
-        if (total(0, compact) <= rows) return { art: A, panel: [], headerRows: 0, withArt: false, compact };
+        if (total(0, compact) <= rows) return { art: A, panel: [], headerRows: 0, withArt: false, compact, tip: false };
     }
-    return { art: A, panel: [], headerRows: 0, withArt: false, compact: true };
+    return { art: A, panel: [], headerRows: 0, withArt: false, compact: true, tip: false };
 }
 
 // Панель короче картинки — центрируем её по вертикали. До 26.08 этого не требовалось:
@@ -310,7 +381,10 @@ async function intro({ animate = true } = {}) {
     const at = (src, i) => (i < artTop || src[i - artTop] === undefined ? blank : src[i - artTop]);
     const composed = Array.from({ length: headerRows }, (_, i) => row(at(A, i), panel[i]));
 
-    if (!TTY || !animate) {
+    // 🪤 Безопасный набор печатается ОДНИМ плоским кадром: проявление считает точки по
+    // коду символа (`code - 0x2800`), и на полублочной картинке это дало бы не анимацию,
+    // а мусор из случайного брайля поверх шапки. То же и с капелью — см. startDrip().
+    if (!TTY || !animate || SAFE) {
         for (const l of composed) line(l);
         return headerRows;
     }
@@ -401,9 +475,14 @@ let focusHook = null;
 // по фазе и делили курсор через два независимых ESC 7 / ESC 8.
 function startDrip(A, linesBelow, headerRows, digitsAt = null) {
     if (!TTY || !A.length || process.env.HUB_NO_DRIP) return;
-    const AN = require('./internal/art-anim');
-    const B = AN.create(A);
-    const D = AN.drip(B);
+    // 🪤 Капель в безопасном наборе не заводится, а мерцание суммы — заводится, и это
+    // не половинчатость. Капель ЧИТАЕТ картинку как битмап (`art-anim.js`: код символа
+    // минус 0x2800) и дописывает в ячейку точки — на полублочной картинке она печатала
+    // бы поверх шапки случайный брайль, то есть ровно те квадраты, от которых мы уходим.
+    // Мерцание же только перекрашивает уже напечатанные строки цифр и от алфавита не
+    // зависит вообще: волна по сумме остаётся и в старом conhost.
+    const AN = SAFE ? null : require('./internal/art-anim');
+    const D = AN ? AN.drip(AN.create(A)) : null;
     // Картинка прижата к низу шапки (см. intro), поэтому её строка cy лежит ровно на
     // `linesBelow + A.length - cy` выше курсора — высота шапки в эту арифметику уже не
     // входит. Аргумент headerRows оставлен для проверки: если он меньше картинки,
@@ -423,6 +502,9 @@ function startDrip(A, linesBelow, headerRows, digitsAt = null) {
         width: Math.max(...digitsAt.rows.map(l => [...l].length)),
         phase: 0,
     } : null;
+    // Ни капели, ни цифр — заводить таймер незачем: он бы тикал каждые 90 мс впустую.
+    // Достижимо только в безопасном наборе без панели баланса (узкое окно conhost).
+    if (!D && !shine) return;
 
     // Кадр волны: `null` — покой, число — центр волны. Один раз после прохода красим
     // базовым цветом и умолкаем до следующего прохода: последний кадр волны оставляет
@@ -442,7 +524,7 @@ function startDrip(A, linesBelow, headerRows, digitsAt = null) {
     const tick = () => {
         timer = null;
         if (paused) return;
-        const { paint, clear } = D.next();
+        const { paint, clear } = D ? D.next() : { paint: [], clear: [] };
         const centre = shine ? shineFrame() : false;
         if (paint.length || clear.length || centre !== false) {
             let s = '\x1b7';
@@ -501,9 +583,18 @@ class Spin {
         line(`  ${mark} ${text}`);
     }
 }
-const OK = () => green('✓');
-const NO = () => red('✗');
-const SKIP = () => grey('·');
+// Метки статуса. Правые части — безопасный набор для conhost (см. SAFE): `√` (U+221A)
+// есть и в Consolas, и в Lucida Console, `•` (U+2022) тоже, а вот `●` (U+25CF) есть
+// только в Consolas — поэтому в фолбэке именно `•`, иначе на Lucida Console получился бы
+// второй квадрат вместо первого. Знак ошибки в обычном виде остаётся `✗` (решение
+// владельца 28.08), подменяется только здесь.
+const G = (rich, safe) => (SAFE ? safe : rich);
+const OK = () => green(G('✓', '√'));
+const NO = () => red(G('✗', 'x'));
+const SKIP = () => grey('·');                  // U+00B7 есть везде, подменять нечего
+const DOT_ON = G('●', '•');
+const DOT_OFF = '○';                           // U+25CB есть в обоих шрифтах conhost'а
+const CURSOR = G('❯', '>');
 
 // ── Табло состояния ──────────────────────────────────────────────────────────
 // Один снимок портов на всю отрисовку. Дети дашборда идут отдельной строкой и
@@ -525,14 +616,14 @@ function statusBlock({ compact = false } = {}) {
     if (!compact) line();
 
     const url = 'http://localhost:8200/__switch';
-    line(`  ${bold('Дашборд')}  ${dash.up ? green('● живой') : red('○ лежит')}` +
+    line(`  ${bold('Дашборд')}  ${dash.up ? green(DOT_ON + ' живой') : red(DOT_OFF + ' лежит')}` +
         (dash.up ? dim(`  pid ${dash.pids.join(',')}  `) + link(url, cyan(url)) : dim('  ' + url)));
 
     const alive = rest.filter(r => r.up);
     const downSvc = rest.filter(r => !r.up && r.role === 'service');
     const names = alive.map(r => r.name.replace(' keepalive', '')).join(' · ') || 'никого';
     const room = Math.max(20, W() - (compact ? 34 : 24));
-    line(`  ${dim('живы:')} ${alive.length ? green('●') + ' ' : ''}` +
+    line(`  ${dim('живы:')} ${alive.length ? green(DOT_ON) + ' ' : ''}` +
         (names.length > room ? names.slice(0, room - 1) + '…' : names) +
         dim(`  ${alive.length}/${rest.length}`) +
         (downSvc.length ? '  ' + red('лежат: ' + downSvc.map(r => `${r.name} :${r.port}`).join(', ')) : ''));
@@ -956,7 +1047,7 @@ async function doDictationFix() {
     const draw = () => {
         clearScreen();
         const s = D.state();
-        const mark = ok => (ok ? OK() : grey('○'));
+        const mark = ok => (ok ? OK() : grey(DOT_OFF));
 
         // Правая колонка — состояние. Четыре независимых признака, поэтому и экран, а
         // не галочка: «выключено» ничего не объясняет, когда диктовка снова теряется.
@@ -1234,9 +1325,23 @@ function menuItems() {
 // Одна строка пункта. Вынесена, потому что печатается из двух мест: при полной
 // отрисовке кадра и при точечной перерисовке двух строк на стрелку.
 function itemLine(it, on) {
-    const mark = on ? cyan('❯') : ' ';
+    const mark = on ? cyan(CURSOR) : ' ';
     const label = on ? bold(e(97, it.label)) : it.label;
     return `  ${mark} ${dim('[' + it.key + ']')} ${label}${it.hint ? dim('  — ' + it.hint) : ''}`;
+}
+
+// Строка под меню в безопасном наборе: человек обязан узнать, ПОЧЕМУ шапка не такая, как
+// на скриншотах в README, и что с этим делать. Без неё упрощённая картинка читается как
+// собственная поломка — «у меня почему-то по-другому», а именно с этого вопроса всё и
+// началось. В Windows Terminal строки нет вообще.
+//
+// 🪤 Форма зависит от ширины: перенос строки добавил бы кадру высоту, которой layout()
+// не считал, а он считает подсказку одной строкой.
+function safeHint() {
+    if (!SAFE) return null;
+    return dim(W() >= 96
+        ? '  шапка упрощена: в шрифте окна нет брайля · winget install Microsoft.WindowsTerminal'
+        : '  шапка упрощена: в шрифте окна нет брайля · нужен Windows Terminal');
 }
 
 async function menu() {
@@ -1251,18 +1356,26 @@ async function menu() {
     // клике происходит переотрисовка»). Плюс каждая перерисовка звала netstat — 112 мс
     // на стрелку впустую.
     let needFull = true;
+    // Сколько строк напечатано ПОД меню. Обычно одна — подсказка по клавишам; в
+    // безопасном наборе вместе с картинкой ещё одна, про упрощённую шапку. Это число
+    // нужно точечной перерисовке: она поднимается курсором на нужную строку, и ошибка
+    // на единицу стирает не пункт меню, а подсказку.
+    let below = 1;
 
     for (;;) {
         if (needFull) {
             if (dripStop) dripStop();
             clearScreen();
-            const { art: A, panel, withArt, compact } = layout();
+            const { art: A, panel, withArt, compact, tip: wantTip } = layout();
             const headerRows = await intro();             // проявление по точкам
             const belowFrom = printedLines;
             statusBlock({ compact });
             if (!compact) line();
             for (const [i, it] of items.entries()) line(itemLine(it, i === sel));
             line(dim('  ↑↓ выбрать · Enter запустить · цифра — сразу · q выход'));
+            const tip = wantTip ? safeHint() : null;
+            if (tip) line(tip);
+            below = 1 + (tip ? 1 : 0);
             needFull = false;
             // Капель и мерцание суммы заводятся ПОСЛЕ кадра: им нужно знать, сколько
             // строк под шапкой, а мерцанию — ещё и где именно стоят цифры.
@@ -1280,7 +1393,7 @@ async function menu() {
             sel = (sel + dir + items.length) % items.length;
             if (!TTY) return;
             for (const i of [prev, sel]) {
-                const upBy = items.length - i + 1;      // +1 — строка подсказки
+                const upBy = items.length - i + below;   // строки под меню: подсказка (+ упрощение)
                 out(`\x1b[${upBy}A`);
                 eraseLine();
                 out(itemLine(items[i], i === sel));
@@ -1323,7 +1436,7 @@ function printStatus() {
     const rows = L.status();
     const w = Math.max(...rows.map(r => r.name.length));
     for (const r of rows) {
-        const mark = r.up ? green('●') : grey('○');
+        const mark = r.up ? green(DOT_ON) : grey(DOT_OFF);
         const role = r.role === 'service' ? 'сервис' : (r.respawn ? 'ребёнок (сам встанет)' : 'ребёнок');
         line(`  ${mark} ${r.name.padEnd(w)} ${dim((':' + r.port).padEnd(7))} ${dim(role.padEnd(22))}${r.up ? dim('pid ' + r.pids.join(',')) : ''}`);
     }
@@ -1348,7 +1461,8 @@ function usage() {
     line('  node hub.js doctor       полный отчёт окружения в файл (для отправки)');
     line('  node hub.js share        отдать свою версию репы веткой и PR');
     line();
-    line(dim('  флаги: --no-open (не открывать браузер), HUB_PLAIN=1 (без ANSI)'));
+    line(dim('  флаги: --no-open (не открывать браузер), HUB_PLAIN=1 (без ANSI),'));
+    line(dim('         HUB_SAFE_GLYPHS=1 (шапка глифами старого conhost), =0 (выключить подмену)'));
 }
 
 // Переехать в Windows Terminal, если хаб запустили в старом conhost. Именно так
@@ -1514,4 +1628,5 @@ if (require.main === module) {
 module.exports = {
     intro, statusBlock, menuItems, itemLine, art, artFits, layout, link, readArt,
     balancePanel, bigNum, findWt, elevateCommands, wtHubArgs, WISPR_ART_FILE, DOLLAR_FILE,
+    SAFE, safeHint, ART_FILE, DIGITS,
 };

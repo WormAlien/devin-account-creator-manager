@@ -137,6 +137,12 @@ routing/keepalive-config-*.json
 routing/keepalive-config-*.json.v*.bak
 # Суточная история времени ответа (минутные бакеты, у каждого своя)
 routing/keepalive-latency-*.json
+# Архивы логов прокси: имя со временем, поэтому под `routing/*.log` не попадают
+routing/*.log.*
+# Журнал настоящих токенов (usage-tap во фронт-дворе) — локальные данные расхода
+routing/token-usage.jsonl
+# Отметки «когда открывали ЛК аккаунта» — локальное состояние стража балансового кеша
+routing/newapi-lk-opened.json
 # Логи вложенных модулей (в tr_debug.log лежал абсолютный путь прежней папки репо)
 routing/**/*.log
 

@@ -1057,7 +1057,19 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     const cookie = effectiveCookieHeader(host, profileDir, jar);
     if (!cookie) return { ok: false, error: cookieFailReason(profileDir, host) };
 
-    if (kind === 'jwt') {
+    // 🪤 Панель может переехать на jwt, а таблица AUTH об этом не узнает — и тогда classic-путь
+    // обречён на вечный 401. Ровно это случилось с `gorouter.app` (разбор 29.08): в профиле
+    // лежал `new_api_refresh`, обновлённый браузером минуту назад, а `session` — **от 20.08**,
+    // девятидневный. Причина в природе куки: у `session` нет expires, то есть она session-only,
+    // и Chromium её на диск не пишет вовсе — на диске навсегда остаётся снимок от того дня,
+    // когда профиль последний раз завершался «правильно». Classic читает именно его, получает
+    // 401, и никакое «открой ЛК и войди» этого не лечит: браузеру-то хорошо, он держит свежую
+    // копию в памяти. Признак берём из самого профиля, а не из таблицы: есть refresh-кука —
+    // значит панель умеет jwt, и идти надо этим путём. Заодно снимает тот же класс поломки с
+    // будущих хостов, которые обновят New-API.
+    const kindEff = kind !== 'jwt' && /(?:^|;\s*)new_api_refresh=/.test(cookie) ? 'jwt' : kind;
+
+    if (kindEff === 'jwt') {
         const rt = await refreshAccessToken(host, cookie, jar, jarK);
         if (!rt.ok) {
             const expired = rt.status === 401 || rt.status === 403;

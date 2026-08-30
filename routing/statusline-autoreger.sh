@@ -138,6 +138,8 @@ case "$helper" in
     *xpeach-active-key.txt*)         raw_target="xpeach" ;;
     *justwoker-active-key.txt*)      raw_target="justwoker" ;;
     *seekai-active-key.txt*)         raw_target="seekai" ;;
+    *truesota-active-key.txt*)       raw_target="truesota" ;;
+    *kktoken-active-key.txt*)        raw_target="kktoken" ;;
     *custom-active-key.txt*)         raw_target="custom" ;;
 esac
 if [ -z "$raw_target" ]; then
@@ -159,11 +161,17 @@ if [ -z "$raw_target" ]; then
         *127.0.0.1:20158*)        raw_target="justwoker" ;;
         *localhost:20159*)        raw_target="seekai" ;;
         *127.0.0.1:20159*)        raw_target="seekai" ;;
+        *localhost:20160*)        raw_target="truesota" ;;
+        *127.0.0.1:20160*)        raw_target="truesota" ;;
+        *localhost:20161*)        raw_target="kktoken" ;;
+        *127.0.0.1:20161*)        raw_target="kktoken" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
         *justwoker.icu*)          raw_target="justwoker" ;;
         *seekai.cc*)              raw_target="seekai" ;;
+        *true-sota.com*)          raw_target="truesota" ;;
+        *kktoken.cc*)             raw_target="kktoken" ;;
         *localhost:8190*)         raw_target="notion" ;;
         *agentrouter.org*)        raw_target="agentrouter" ;;
         *cc.freemodel.dev*)       raw_target="apihelper" ;;
@@ -189,6 +197,8 @@ case "$raw_target" in
     xpeach)                      provider="xpeach" ;;
     justwoker)                   provider="justwoker" ;;
     seekai)                      provider="seekai" ;;
+    truesota)                    provider="truesota" ;;
+    kktoken)                     provider="kktoken" ;;
     custom)                      provider="Custom🧪" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
@@ -212,7 +222,7 @@ balance_age_s=-1   # возраст цифры баланса в секунда�
 balance_err=""     # непустая = последняя проверка баланса не удалась (таймаут/dead)
 active_name=""
 
-# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker/seekai):
+# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker/seekai/truesota/kktoken):
 # дашборд держит там balance/granted/balanceCheckedAt активного ключа. Читаем блок активного
 # ключа bash-native (0 форков), avail_sum = balance как есть (дашборд уже посчитал точную
 # цифру из /api/user/self либо вывел из вписанного анкера), pct = balance/granted. Ленивый
@@ -390,6 +400,13 @@ elif [ "$provider" = "justwoker" ] && [ -f "$ROUTING/justwoker-sessions.json" ];
     gauge_from_balance_cache "$ROUTING/justwoker-sessions.json" "$PROF/.claude/justwoker-active-key.txt" "jw/balance" 90
 elif [ "$provider" = "seekai" ] && [ -f "$ROUTING/seekai-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/seekai-sessions.json" "$PROF/.claude/seekai-active-key.txt" "sk/balance" 90
+# TrueSOTA: тот же кеш, но цифра там — остаток КВОТЫ ПОДПИСКИ (или лимита ключа), а не
+# кошелька, и её может не быть вовсе (у аккаунта без лимитов balance = null). Пустой
+# balance gauge просто не покажет — это штатно, а не «баланс не прочитался».
+elif [ "$provider" = "truesota" ] && [ -f "$ROUTING/truesota-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/truesota-sessions.json" "$PROF/.claude/truesota-active-key.txt" "ts/balance" 90
+elif [ "$provider" = "kktoken" ] && [ -f "$ROUTING/kktoken-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/kktoken-sessions.json" "$PROF/.claude/kktoken-active-key.txt" "kk/balance" 90
 fi
 
 # ---- render ----------------------------------------------------------------
@@ -539,7 +556,7 @@ fi
 # ложной тревогой. Это отличает блок от 🎁, который считается всегда намеренно
 # (бонус лежит на пуле и важен, даже когда сидишь на другом провайдере).
 case "$provider" in
-    agentrouter|tabi|gorouter|xpeach|justwoker|seekai)
+    agentrouter|tabi|gorouter|xpeach|justwoker|seekai|truesota|kktoken)
         rot_raw=""
         [ -f "$LOGS/.money_autorotate.json" ] && rot_raw="$(<"$LOGS/.money_autorotate.json")"
         if [[ "$rot_raw" =~ \"enabled\"[[:space:]]*:[[:space:]]*true ]]; then

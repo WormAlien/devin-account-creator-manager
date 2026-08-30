@@ -23,6 +23,7 @@ const POOLS = {
     // Ключ = имя провайдера в поле `p` истории (то же, что в pools вкладки «Финансы»),
     // а не префикс вкладки: там `justwoker`, а не `jw`.
     justwoker: 'justwoker-sessions.json',
+    kktoken: 'kktoken-sessions.json',
 };
 const dry = process.argv.includes('--dry-run');
 const midnight = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };

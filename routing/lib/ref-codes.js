@@ -26,6 +26,9 @@ const SHAPES = {
     agentrouter: { host: 'agentrouter.org',   path: '/register?aff=', label: 'AgentRouter' },
     gorouter:    { host: 'gorouter.app',      path: '/sign-up?aff=',  label: 'GoRouter' },
     justwoker:   { host: 'api.justwoker.icu', path: '/sign-up?aff=',  label: 'JustWoker' },
+    // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
+    // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
+    kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
     // 🪤 SeekAi — ЛЕГАСИ с 2026-08-24, в день заведения вкладки (решение владельца).
     // Причина не в регистрации, а в самом шлюзе: `seekai.cc` — реселл веб-Клода под
     // видом Anthropic API. Свой системный промпт (~200 токенов, набор инструментов
@@ -37,6 +40,13 @@ const SHAPES = {
     // Резолв оставляем: `seekai/open-session.js` просит `url()`. В списки UI не пускаем.
     seekai:      { host: 'seekai.cc',         path: '/sign-up?aff=',  label: 'SeekAi', legacy: true },
     tabi:        { host: 'tabitoken.com',     path: '/sign-up?aff=',  label: 'Tabi Token' },
+    // 🪤 TrueSOTA — НЕ New-API, а sub2api: форма регистрации у него `/register?aff=`
+    // (Vue-роут читает `aff`/`aff_code` из query и кладёт в localStorage `aff`, оттуда
+    // код уезжает в `POST /auth/oauth/github/complete-registration` полем `aff_code`).
+    // Дефолтного кода владельца тут НЕТ намеренно: аккаунта на шлюзе ещё не было, а
+    // выдуманный код — это молча потерянный реф. Появится свой — вписать через 💩 в
+    // «Настройках» (ref-codes.json), тогда url() начнёт отдавать ссылку с `?aff=`.
+    truesota:    { host: 'true-sota.com',     path: '/register?aff=', label: 'TrueSOTA' },
     // 🪤 XPeach — ЛЕГАСИ (решение владельца 2026-08-22): все ключи `403 banned`,
     // регистрация не проходит, вкладка живёт в скрытой группе «Чтим память».
     // Из резолва его не убираем — `xpeach/open-session.js` по-прежнему просит url(),

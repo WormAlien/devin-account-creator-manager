@@ -404,3 +404,12 @@ truesota/profiles/
 truesota/sessions/
 truesota/gh-sessions/
 routing/truesota-sessions.json
+
+# ── KKtoken (вкладка дашборда): приватные данные ──────────────────────────────
+# Восьмой шлюз, заводится 31.08. Папки закрываем ДО первого прогона сессии: там
+# профили браузера и ЖИВЫЕ куки GitHub (kktoken/gh-sessions/acct_*.json).
+# kktoken-modelmap.json — безопасный конфиг маппинга, его коммитим.
+kktoken/profiles/
+kktoken/sessions/
+kktoken/gh-sessions/
+routing/kktoken-sessions.json

@@ -41,7 +41,28 @@ const { PassThrough } = require('stream');
 const PORT = Number(process.env.PORT || 8787);
 const UPSTREAM = process.env.UPSTREAM || 'https://agentrouter.org';
 const IDLE_MS = Number(process.env.IDLE_MS || 5000);
-const LOG_FILE = process.env.LOG_FILE || '';
+// Файл лога ЭТОГО инстанса — всегда по порту. Это не косметика, а две разные поломки.
+// 🪤 До 29.08 путь брался из `LOG_FILE`, и получалось ровно наоборот от задуманного:
+//   1) кому переменную не передали — тот не писал НИКУДА. Дашборд поднимает keepalive
+//      шлюзов (jw/go/tb/xp/sk/ts) с `stdio: 'ignore'` и без `LOG_FILE`, поэтому от них
+//      оставалось только кольцо в памяти дашборда, которое сам же keepalive забивает
+//      пингами за секунды (transparent-proxy.js § /api/logs) и которое умирает вместе с
+//      рестартом — а рестарт это первое, что делают, когда шлюз залагал. То есть лога не
+//      было именно там и тогда, где он нужен;
+//   2) а кому передали — писали в ОДИН файл. `LOG_FILE` наследуется дочерними процессами
+//      (childEnv отдаёт весь process.env), поэтому достаточно одного экспорта в оболочке,
+//      из которой поднят дашборд, чтобы все инстансы слились в `keepalive-proxy.log` без
+//      единой пометки, чей это шлюз. Так и вырос тот файл на 18 МБ, по которому «не
+//      разбирается, какой провайдер» — замечено живьём 29.08.
+// Поэтому `LOG_FILE` здесь сознательно НЕ участвует: имя считает сам процесс, который
+// единственный точно знает свой порт. Явный override оставлен под отдельным именем,
+// которое ничего не наследует случайно.
+const IS_SELFTEST = process.argv[2] === 'selftest';
+const LOG_FILE = process.env.KEEPALIVE_LOG_FILE
+  || (IS_SELFTEST ? '' : path.join(__dirname, `keepalive-${PORT}.log`));
+// Ротация: до этого лог не крутился вообще и дорос до 18 МБ. Порог и правило те же, что
+// у lifecycle.rotateLog — переименовать в `.1`, глубина истории один файл.
+const LOG_MAX = Number(process.env.LOG_MAX || 5 * 1024 * 1024);
 const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 1500);
 const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
 // UPSTREAM_TIMEOUT_MS переехал в cfg (см. DEFAULT_CFG.upstreamTimeoutMs): он стал
@@ -146,6 +167,64 @@ const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 16);
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const agentFor = requester => (requester === https.request ? httpsAgent : httpAgent);
+// ── Трассировка исходящего соединения: почему первый запрос после простоя тормозит ──
+// Симптом (28.08): после АФК активный шлюз «не раздупляет», и лечит только перезапуск
+// процесса — значит портится состояние ЗДЕСЬ, а не у шлюза (Cloudflare и квота от
+// рестарта не чинятся). Улика при этом живёт только до рестарта, а рестарт — первое,
+// что делает человек. Поэтому пишем её в лог на каждом запросе, а не ловим живьём.
+// Три причины разводятся тремя цифрами одной строки:
+//   • `в очереди N` > 0 — сокеты выедены зависшими запросами: свободных нет, и новый
+//     запрос ЖДЁТ в очереди агента, не отправив ещё ни байта. Единственная из трёх, что
+//     объясняет, почему помогает только рестарт: он рвёт все сокеты разом.
+//   • `сокет из пула` + огромный «первый байт» при пустых dns/tcp/tls — взяли соединение,
+//     которое апстрим (или NAT/туннель) закрыл молча: пишем в мёртвую трубу и ждём до
+//     upstreamTimeoutMs, а это 300с.
+//   • большие `dns`/`tcp`/`tls` — тормозит сам канал, прокси не при чём.
+const CONN_TRACE = process.env.CONN_TRACE !== '0';
+// `agent.requests` — очередь запросов, которым не досталось сокета; `sockets` — занятые,
+// `freeSockets` — живые простаивающие. Все три объекта вида {хост: [...]}, поэтому счёт
+// идёт по длинам массивов, а не по числу ключей.
+function poolSnapshot(requester) {
+  const a = agentFor(requester || upRequester);
+  const cnt = o => Object.values(o || {}).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0);
+  return { active: cnt(a.sockets), free: cnt(a.freeSockets), queued: cnt(a.requests), max: MAX_SOCKETS };
+}
+// Простой считаем от ПРЕДЫДУЩЕЙ отправки, а не от времени ответа: интересен разрыв между
+// обращениями, за который сокет успевает отмереть незамеченным.
+let lastUpAt = 0;
+function traceConn(upReq, requester) {
+  const t0 = Date.now();
+  const tr = {
+    t0, idleMs: lastUpAt ? t0 - lastUpAt : -1, pool: poolSnapshot(requester),
+    reused: null, socketMs: null, dnsMs: null, tcpMs: null, tlsMs: null,
+  };
+  lastUpAt = t0;
+  upReq.on('socket', (s) => {
+    tr.socketMs = Date.now() - t0;
+    // Свежий сокет на момент события ещё соединяется, взятый из пула — уже нет.
+    // `__kaSeen` — страховка: если Node изменит момент выдачи события, флаг переживёт.
+    tr.reused = s.connecting === false && s.__kaSeen === true;
+    s.__kaSeen = true;
+    if (tr.reused) return;
+    s.once('lookup', () => { tr.dnsMs = Date.now() - t0; });
+    s.once('connect', () => { tr.tcpMs = Date.now() - t0; });
+    s.once('secureConnect', () => { tr.tlsMs = Date.now() - t0; });
+  });
+  return tr;
+}
+function fmtConn(tr) {
+  const p = tr.pool;
+  const ms = v => (v === null ? '—' : `${v}мс`);
+  const born = tr.reused === null
+    ? 'сокета не дождался'
+    : tr.reused
+      ? 'сокет из пула'
+      : `сокет новый (dns ${ms(tr.dnsMs)}, tcp ${ms(tr.tcpMs)}, tls ${ms(tr.tlsMs)})`;
+  return `${p.queued > 0 ? '⚠ ' : ''}простой ${tr.idleMs < 0 ? '—' : Math.round(tr.idleMs / 1000) + 'с'}`
+    + ` · ${born} за ${ms(tr.socketMs)}`
+    + ` · пул ${p.active}/${p.max} занято, ${p.free} свободно, ${p.queued} в очереди`
+    + ` · первый байт ${Date.now() - tr.t0}мс`;
+}
 const gptProxy = new URL(HAIKU_GPT_PROXY);
 const gptRequester = gptProxy.protocol === 'https:' ? https.request : http.request;
 const gptBase = gptProxy.pathname.replace(/\/+$/, '');
@@ -165,11 +244,42 @@ const KEEPALIVE_COMMENT = ': keepalive\n';
 const { createLogger } = require('./proxy-logger.js');
 const { logLine } = createLogger('keepalive');
 
+// Крутим по размеру, а не по дате: инстансы живут от минут до недель, и «файл за сутки»
+// у неактивного шлюза был бы пустым. Проверка не на каждой строке — statSync на каждый
+// ping это лишний сисколл; раз в 2000 строк при пороге 5 МБ даёт перебег максимум на
+// пару сотен килобайт. Первая же строка после старта попадает на проверку (счётчик с 0).
+const LOG_KEEP = Number(process.env.LOG_KEEP || 5);
+let logWrites = 0;
+function rotateLogIfBig() {
+  try {
+    if (fs.statSync(LOG_FILE).size <= LOG_MAX) return;
+  } catch (e) { return; }            // файла нет — первый запуск, крутить нечего
+  // 🪤 Имя архива со ВРЕМЕНЕМ, а не один слот `.1`. Слот стоил живой истории 29.08:
+  // проверка размера идёт на первой строке КАЖДОГО процесса, поэтому два коротких
+  // запуска подряд дают две ротации — и вторая переименовывает поверх архива первой.
+  // Так 18 МБ лога :20133 уехали в `.1`, а следующий инстанс затёр этот `.1` своими
+  // двумя килобайтами. С временной меткой перезаписать чужой архив невозможно.
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  try { fs.renameSync(LOG_FILE, `${LOG_FILE}.${stamp}`); } catch (e) { return; }
+  // Оставляем последние LOG_KEEP архивов — иначе на долгоживущем прокси они копятся без
+  // предела. Под нож идут только файлы, которые создала эта же ротация: узнаём их по
+  // своему префиксу И по формату метки, чужого рядом не тронем.
+  try {
+    const dir = path.dirname(LOG_FILE);
+    const base = path.basename(LOG_FILE) + '.';
+    const olds = fs.readdirSync(dir)
+      .filter(f => f.startsWith(base) && /\.\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/.test(f))
+      .sort();
+    for (const f of olds.slice(0, Math.max(0, olds.length - LOG_KEEP))) fs.unlinkSync(path.join(dir, f));
+  } catch (e) { /* уборка не критична */ }
+}
+
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
   process.stderr.write(line);
   if (LOG_FILE) {
     try {
+      if ((logWrites++ % 2000) === 0) rotateLogIfBig();
       fs.appendFileSync(LOG_FILE, line);
     } catch (e) {
       /* ignore */
@@ -250,7 +360,16 @@ const DEFAULT_CFG = {
 // (`claude-sonnet-5`, 205 in / 6 out) сняли 3.38¢ и 3.16¢ по
 // `/dashboard/billing/usage`. Токенами такой ответ стоит доли цента, то есть шлюз
 // берёт почти фиксированную ставку за вызов — мульти-запрос удвоил бы счёт без ускорения.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc']);
+// true-sota.com (sub2api) добавлен 2026-08-25 по той же причине, но обоснование другое:
+// тариф там ПОДПИСОЧНЫЙ (квота плана, а не токены), плюс шлюз приклеивает к каждому
+// запросу свой префикс 4.1–6.9к токенов — дубль съедает окно плана целиком, а
+// ускорения не даёт.
+// kktoken.cc (2026-08-31) — тариф у него НЕ плоский (считает по токенам), но хост здесь
+// намеренно: шлюз ИГНОРИРУЕТ `max_tokens`, поэтому брошенный на 20-й секунде дубль
+// апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
+// увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
+// (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -372,6 +491,10 @@ function publicState() {
     // Время последнего ответа — в /__state, чтобы панель показывала цифру тем же
     // поллингом, что и счётчики, не дёргая график.
     latency: { last_ms: lat.lastMs, last_at: lat.lastAt },
+    // Пул исходящих сокетов ПРЯМО СЕЙЧАС. `queued` > 0 = запросам не хватает сокетов и
+    // они стоят в очереди агента — та самая цифра, которую иначе пришлось бы ловить
+    // netstat'ом в момент лага, до перезапуска (см. traceConn).
+    pool: poolSnapshot(),
   };
 }
 // Счётчики «с момента старта процесса»: показываются в дашборде на вкладке
@@ -627,6 +750,8 @@ const GW_BY_HOST = {
   // и опечатка в этой строке выглядит не ошибкой, а молча выключенной авторотацией.
   'api.justwoker.icu': 'jw',
   'seekai.cc': 'sk',
+  'true-sota.com': 'ts',
+  'kktoken.cc': 'kk',
 };
 const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
 // ROTATE_PROVIDER — только для тестов (routing/test-rotate.js прогоняет весь путь
@@ -1240,6 +1365,9 @@ const server = http.createServer((req, res) => {
     // Клиентский `accept-encoding: zstd` не пробрасываем: если шлюз всё же сожмёт,
     // тело уйдёт клиенту байт-в-байт (isCompressedBody), но уже без эха модели.
     headers['accept-encoding'] = 'identity';
+    // Заполняется traceConn сразу после создания запроса (событие `socket` Node отдаёт
+    // через nextTick, поэтому успеваем подписаться). Нужен внутри колбэка ответа.
+    let ctrace = null;
     const upReq = t.requester({
       hostname: t.hostname,
       port: t.port,
@@ -1250,6 +1378,7 @@ const server = http.createServer((req, res) => {
       timeout: cfg.upstreamTimeoutMs,
     }, (upRes) => {
       const status = upRes.statusCode;
+      if (CONN_TRACE && ctrace) log(`${req.method} ${reqPath} ${status} conn: ${fmtConn(ctrace)}`);
       const headers = upRes.headers;
       const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
       const jsonLike = !isSSE && /application\/json|text\/plain/i.test(String(headers['content-type'] || ''));
@@ -1318,17 +1447,24 @@ const server = http.createServer((req, res) => {
       forward(status, headers, upRes);
     });
 
+    ctrace = traceConn(upReq, t.requester);
     activeSet.add(upReq);
     upReq.__attempt = attempt;
     upReq.__kind = kindLabel;
     upReq.on('timeout', () => {
       if (finished || aborted) return;
-      log(`${req.method} ${reqPath} upstream timeout ${cfg.upstreamTimeoutMs}ms (attempt ${attempt})`);
+      // Трассировку печатаем и здесь: висящий запрос до колбэка ответа не доходит, а
+      // именно он и есть симптом «после простоя не раздупляет».
+      log(`${req.method} ${reqPath} upstream timeout ${cfg.upstreamTimeoutMs}ms (attempt ${attempt})`
+        + (CONN_TRACE && ctrace ? ` · conn: ${fmtConn(ctrace)}` : ''));
       upReq.destroy(new Error('upstream timeout'));
     });
     upReq.on('error', (err) => {
       if (finished || aborted || res.destroyed) { activeSet.delete(upReq); return; }
-      log(`${req.method} ${reqPath} upstream error (attempt ${attempt}): ${err.message}`);
+      // Обрыв на сокете ИЗ ПУЛА — подпись отмершего keep-alive соединения: апстрим закрыл
+      // его молча, пока мы простаивали, и узнали мы об этом только записью в трубу.
+      log(`${req.method} ${reqPath} upstream error (attempt ${attempt}): ${err.message}`
+        + (CONN_TRACE && ctrace ? ` · conn: ${fmtConn(ctrace)}` : ''));
       attemptDone(upReq, err.message, 0);
     });
     upReq.end(body);

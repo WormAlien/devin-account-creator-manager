@@ -183,6 +183,18 @@ const BACKENDS = {
         // Активация через handleGoActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
         // ключ живёт в gorouter-active-key.txt и инжектится прокси на каждый запрос.
     },
+    kktoken: {
+        label: 'KKtoken',
+        base_url: 'http://localhost:20161',
+        api_key: 'dummy',           // real key keepalive reads from kktoken-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20161) → kktoken.cc (БЕЗ /v1).
+        // Активация через handleKkActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в kktoken-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
     xpeach: {
         label: 'XPeach',
         base_url: 'http://localhost:20157',
@@ -215,6 +227,20 @@ const BACKENDS = {
         // Активация через handleSkActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
         // ключ живёт в seekai-active-key.txt и инжектится прокси на каждый запрос.
         // 🪤 Корень без /v1 обязателен: `/v1/v1/messages` отдаёт 404 (замер 24.08).
+    },
+    truesota: {
+        label: 'TrueSOTA',
+        base_url: 'http://localhost:20160',
+        api_key: 'dummy',           // real key keepalive reads from truesota-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20160) → true-sota.com (БЕЗ /v1).
+        // 🪤 ГЛАВНОЕ про этот шлюз: рабочих моделей ДВЕ — `claude-opus-5` и
+        // `claude-opus-5-thinking`. Остальные 16 из каталога подменяют системный промпт
+        // агента промптом Kiro (~4.1–6.9к токенов префикса) и на `system` не реагируют:
+        // замер 25.08 на `system: "тебя зовут NAIL-7"` даёт «My name is Kiro», причём
+        // даже когда та же инструкция уехала в сообщение пользователя. Поэтому тир-карта
+        // truesota-modelmap.json — opus-only во ВСЕХ тирах, включая haiku.
     },
 };
 
@@ -288,6 +314,8 @@ const CC_MODEL_PREFIX = {
     xpeach: 'xpeach',
     justwoker: 'justwoker',
     seekai: 'seekai',
+    truesota: 'truesota',
+    kktoken: 'kktoken',
     ourtoken: 'ot',
     cun: 'cun',
     conduit: 'cdt',
@@ -963,13 +991,15 @@ function makeKeepaliveHandlers(port) {
 }
 
 // Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156, XPeach :20157,
-// JustWoker :20158, SeekAi :20159.
+// JustWoker :20158, SeekAi :20159, TrueSOTA :20160, KKtoken :20161.
 const keepaliveAr = makeKeepaliveHandlers(Number(process.env.AR_KEEPALIVE_PORT || 20133));
 const keepaliveTb = makeKeepaliveHandlers(Number(process.env.TB_KEEPALIVE_PORT || 20155));
 const keepaliveGo = makeKeepaliveHandlers(Number(process.env.GO_KEEPALIVE_PORT || 20156));
 const keepaliveXp = makeKeepaliveHandlers(Number(process.env.XP_KEEPALIVE_PORT || 20157));
 const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT || 20158));
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
+const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
+const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
 
 
 // ---- /__switch/api/whoami --------------------------------------------------
@@ -3860,6 +3890,8 @@ async function handleHealth(res) {
         { name: 'Keepalive XPeach',   port: Number(process.env.XP_KEEPALIVE_PORT || 20157), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive JustWoker', port: Number(process.env.JW_KEEPALIVE_PORT || 20158), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -5676,7 +5708,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -5765,12 +5797,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -6168,6 +6200,9 @@ function handleArAddGithub(req, res) {
 function handleGoAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'gorouter', host: 'gorouter.app', prefix: 'go_', load: goLoad, save: goSave, sessionsDir: GO_SESSIONS_DIR });
 }
+function handleKkAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'kktoken', host: 'kktoken.cc', prefix: 'kk_', load: kkLoad, save: kkSave, sessionsDir: KK_SESSIONS_DIR });
+}
 function handleTbAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'tabi', host: 'tabitoken.com', prefix: 'tb_', load: tbLoad, save: tbSave, sessionsDir: TB_SESSIONS_DIR });
 }
@@ -6179,6 +6214,12 @@ function handleJwAddGithub(req, res) {
 }
 function handleSkAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'seekai', host: 'seekai.cc', prefix: 'sk_', load: skLoad, save: skSave, sessionsDir: SK_SESSIONS_DIR });
+}
+// TrueSOTA: механика заселения GitHub от панели не зависит (это про куки github.com),
+// поэтому общий обработчик подходит без правок — нужен лишь хост в PROFILE_ROOTS
+// (routing/lib/github-session.js) и профили в truesota/profiles.
+function handleTsAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'truesota', host: 'true-sota.com', prefix: 'ts_', load: tsLoad, save: tsSave, sessionsDir: TS_SESSIONS_DIR });
 }
 
 // ───── Svrtr — пул ТГ-аккаунтов, активация через API Helper ─────
@@ -6892,6 +6933,13 @@ const NEWAPI_PROFILE_DIRS = {
     'api.justwoker.icu': path.join(__dirname, '..', 'justwoker', 'profiles'),
     // У SeekAi панель и API на одном `seekai.cc` — поддомена нет, ключ = сам домен.
     'seekai.cc':       path.join(__dirname, '..', 'seekai', 'profiles'),
+    // TrueSOTA: панель и шлюз на одном `true-sota.com`. 🪤 Из всей newapi-механики этому
+    // хосту подходит ТОЛЬКО сопоставление профилей по GitHub-логину (newapiMapProfiles):
+    // квота и токен у sub2api читаются своим модулем (routing/lib/truesota-account.js),
+    // а куки панели там нет вовсе — вход держится на localStorage.
+    'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
+    // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
+    'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
 };
 
 function newapiLib() {
@@ -6975,8 +7023,23 @@ function newapiWarmProfileKeys(reason, force = false) {
 // чек-ина на +$25 дашборд ещё 15 минут показывал прежние $175 с бейджем «точный»,
 // а сервер уже отдавал $200 — и вписанные вручную $200 этой же стряпнёй перебивались.
 const NEWAPI_LK_OPENED = new Map();   // label → ts
+// 🪤 Карта обязана переживать рестарт дашборда. Пока она жила только в памяти, страж
+// слепнул ровно тогда, когда нужен: после перезапуска все визиты в ЛК забывались, ветвь
+// 4а считала «в кабинет не заходили» и выдавала старую цифру как «точный». Поймано
+// 29.08 на GoRouter: панель 1752.52, дашборд 1505.02 «точный», расход у обоих 427.31 —
+// разница приехала бонусом мимо расхода, а рестарт в 01:14 стёр отметку о визите.
+const NEWAPI_LK_FILE = path.join(__dirname, 'newapi-lk-opened.json');
+try {
+    const raw = JSON.parse(fs.readFileSync(NEWAPI_LK_FILE, 'utf8'));
+    for (const [k, v] of Object.entries(raw || {})) if (Number(v) > 0) NEWAPI_LK_OPENED.set(String(k), Number(v));
+} catch (e) { /* нет файла — первый запуск, отметок и не было */ }
 function newapiLkVisited(label) {
-    if (label) NEWAPI_LK_OPENED.set(String(label), Date.now());
+    if (!label) return;
+    NEWAPI_LK_OPENED.set(String(label), Date.now());
+    // Пишем сразу и синхронно: событие редкое (открытие ЛК руками), а потеря отметки
+    // стоит дороже — она возвращает ту самую ложную «точную» цифру.
+    try { fs.writeFileSync(NEWAPI_LK_FILE, JSON.stringify(Object.fromEntries(NEWAPI_LK_OPENED)), 'utf8'); }
+    catch (e) { logLine(`отметка визита в ЛК ${label}: не записалась (${e.message})`); }
 }
 function newapiLkOpenedAt(label) {
     return NEWAPI_LK_OPENED.get(String(label || '')) || 0;
@@ -7098,6 +7161,11 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     // проверки кеш 20 минут врал на величину бонуса (ловил $175 против живых $200).
     // Явный клик по цифре приходит с force — он всегда спрашивает сервер.
     const SELF_REUSE_MS = 20 * 60_000;
+    // Дольше этого возраста цифра остаётся ЛУЧШИМ, что у нас есть (альтернативы — анкер и
+    // прикидка, обе хуже), но называть её «точной» уже нельзя: наливка мимо расхода
+    // накапливается молча. 29.08 так висела трёхдневная цифра GoRouter с бейджем «точный»
+    // при разнице 247.50 — на экране она ничем не отличалась от снятой минуту назад.
+    const SELF_EXACT_MAX_AGE_MS = 24 * 3600_000;
     const prof = newapiResolveProfile(host, target);
     const selfAt = target.selfCheckedAt ? new Date(target.selfCheckedAt).getTime() : 0;
     // Кеш точной цифры лежит в ОТДЕЛЬНОМ поле selfBalance, а не в target.balance: у
@@ -7168,7 +7236,39 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         }
     }
 
-    if (!self && lib && (profileDir || target.accessToken)) {
+    // 🪤 Браузер профиля ОТКРЫТ — точную цифру взять нечем, и попытка не просто пустая, а
+    // вредная. Chromium держит БД куки исключительно (EBUSY на чтение) и свою актуальную
+    // версию хранит в памяти, а refresh-кука на этих панелях одноразовая: открыв ЛК, браузер
+    // её прокрутил, и наша копия в jar уже погашена. Запрос с ней приносит `401`, который
+    // выглядит как «сессия профиля недействительна» — то есть как умерший вход, хотя вход
+    // живой и виден владельцу на экране. Ровно на это 29.08 упёрся `WA git gorouter`: в
+    // панели 1752.52, в дашборде 1505.02 с бейджем «точный».
+    // Спрашиваем не файловый замок, а карту pid'ов (newapiLkBusy) — она отвечает про факт
+    // «окно открыто», а не про симптом, и не зависит от того, успел ли Chromium сбросить
+    // файл. Ветвь пропускаем, если вход держится на токене: ему куки профиля не нужны.
+    // 🪤 Одной карты pid'ов мало: она в памяти процесса, и рестарт дашборда её обнуляет —
+    // браузер, открытый ДО перезапуска, для неё не существует вовсе (проверено 29.08:
+    // после рестарта в 17:4x `newapiLkBusy` вернул false при живом окне). Вторым признаком
+    // берём файловый замок БД куки: Chromium держит её исключительно, пока окно открыто, и
+    // этот признак не зависит ни от того, кто окно запустил, ни от нашего аптайма.
+    const lkBusy = !target.accessToken && prof.label
+        ? (newapiLkBusy(prof.label)
+            || !!(profileDir && lib && lib.cookieDbLocked && lib.cookieDbLocked(profileDir)))
+        : false;
+    // Возраст кешированной цифры и вердикт «точной называть нельзя» — ОДИН на все ветви,
+    // которые её отдают. 🪤 Сначала это лежало только в ветви 4а, и владелец 29.08 увидел
+    // ровно последствие: открыл ЛК по совету, отметка визита запретила 4а, ответ пришёл из
+    // ветви 4б — и тост опять сказал «точный, из кеша», потому что новых полей там не было.
+    const cachedAgeMs = selfAt ? Math.max(0, Date.now() - selfAt) : 0;
+    const cachedAgeTxt = cachedAgeMs >= 3600_000
+        ? `${Math.round(cachedAgeMs / 3600_000)} ч назад`
+        : `${Math.round(cachedAgeMs / 60_000)} мин назад`;
+    const cachedStale = lkBusy || cachedAgeMs > SELF_EXACT_MAX_AGE_MS;
+    if (!self && lkBusy) {
+        selfError = 'браузер этого аккаунта ОТКРЫТ — Chromium запер куки, а нашу копию сессии он уже прокрутил.'
+            + ' Закрой окно ЛК и повтори чек — цифра станет точной';
+        logLine(`баланс ${host}: профиль ${prof.label} открыт в браузере — точный чек пропущен, чтобы не жечь сессию`);
+    } else if (!self && lib && (profileDir || target.accessToken)) {
         // Ключи профилей — ДО первого сетевого запроса self. Здесь блокировка событийного
         // цикла безопасна (в воздухе ничего нет), а внутри accountSelf она обрывала бы
         // соседние fetch'и пачки по таймауту. Холодный кеш — один процесс на все профили,
@@ -7308,6 +7408,9 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         && newapiLkOpenedAt(prof.label) < selfAt) {
         const cachedGranted = target.grantedSelf != null ? Number(target.grantedSelf)
             : (typeof target.granted === 'number' ? Number(target.granted) : null);
+        // Возраст цифры и признак «называть точной нельзя» считаются выше, одни на все
+        // ветви кеша: раньше они жили только здесь, и ветвь 4б отдавала цифру без пометки.
+        const ageTxt = cachedAgeTxt;
         const cached = {
             reused: true,
             balance: cachedSelf,
@@ -7318,12 +7421,17 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             selfCheckedAt: target.selfCheckedAt,   // НЕ обновляем: иначе TTL перезапустится и к шлюзу мы больше не пойдём
         };
         logLine(`баланс ${host}: свежий self не дался (${selfError || 'без причины'}),`
-            + ` расход не сдвинулся ($${usageSpent.toFixed(2)}) — держу последнюю точную цифру $${cachedSelf.toFixed(2)}`);
+            + ` расход не сдвинулся ($${usageSpent.toFixed(2)}) — держу цифру $${cachedSelf.toFixed(2)},`
+            + ` снятую ${ageTxt}${cachedStale ? ' (устарела — показываю как неточную)' : ''}`);
         return {
             status: 'live',
             balanceSource: 'self',
             reused: true,
             selfCached: true,          // цифра точная, но не переспрошенная — UI помечает и объясняет
+            // Отдельный флаг для UI и решений: «точная, но старая» — не то же самое, что
+            // «точная». Источник не меняем (`self`), чтобы не задеть ротацию и сортировки.
+            selfStale: cachedStale,
+            selfAgeMs: cachedAgeMs,
             balance: cached.balance,
             spent: cached.spent,
             usageSpent,
@@ -7331,7 +7439,11 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             newApiUserId: cached.newApiUserId,
             newApiUsername: cached.newApiUsername,
             selfCheckedAt: cached.selfCheckedAt,
-            selfError,
+            // Возраст ДОПИСЫВАЕМ к причине, а не заменяем её: «почему свежая не далась» и
+            // «насколько стара показанная» — два разных факта, и человеку нужны оба.
+            selfError: cachedStale
+                ? `${selfError ? `${selfError}; ` : ''}показана цифра, снятая ${ageTxt}`
+                : selfError,
             self: cached,
         };
     }
@@ -7373,6 +7485,12 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 balanceSource: 'self',
                 reused: true,
                 selfCached: true,
+                // Эта ветвь работает ИМЕННО тогда, когда 4а отказала: сдвинулся расход или
+                // заходили в ЛК. Второе — прямой признак, что деньги могли прийти мимо
+                // расхода, то есть «точной» цифру называть тем более нельзя. Плюс она здесь
+                // ещё и производная: из памятной вычтен расход с того чека.
+                selfStale: true,
+                selfAgeMs: cachedAgeMs,
                 balance: left,
                 spent: usageSpent,
                 usageSpent,
@@ -7380,7 +7498,8 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 newApiUserId: target.newApiUserId,
                 newApiUsername: target.newApiUsername,
                 selfCheckedAt: target.selfCheckedAt,   // НЕ обновляем: TTL не должен перезапуститься
-                selfError: selfError || 'свежую цифру взять не удалось — показана последняя, что называл шлюз',
+                selfError: `${selfError || 'свежую цифру взять не удалось'}; показана последняя, что называл шлюз`
+                    + ` (снята ${cachedAgeTxt}${drawnSince ? `, минус расход $${drawnSince.toFixed(2)}` : ''})`,
                 self: (anchorResult && anchorResult.self) || null,
             };
         }
@@ -7678,6 +7797,8 @@ async function handleFinanceHistory(req, res) {
         try { const a = xpLoad(); pools.xpeach      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = jwLoad(); pools.justwoker   = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = skLoad(); pools.seekai      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = tsLoad(); pools.truesota    = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = kkLoad(); pools.kktoken     = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         const totals = Object.values(pools).reduce((a, p) => ({
             spent: a.spent + p.spent, balance: a.balance + p.balance, keys: a.keys + p.keys,
         }), { spent: 0, balance: 0, keys: 0 });
@@ -8044,6 +8165,9 @@ function handleArMapProfiles(req, res) {
 function handleGoMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'gorouter', host: 'gorouter.app', load: goLoad, save: goSave });
 }
+function handleKkMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'kktoken', host: 'kktoken.cc', load: kkLoad, save: kkSave });
+}
 function handleTbMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'tabi', host: 'tabitoken.com', load: tbLoad, save: tbSave });
 }
@@ -8055,6 +8179,11 @@ function handleJwMapProfiles(req, res) {
 }
 function handleSkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'seekai', host: 'seekai.cc', load: skLoad, save: skSave });
+}
+// Сопоставление профилей идёт по GitHub-логину из кук профиля, а не по панели —
+// поэтому общий обработчик годится и для sub2api.
+function handleTsMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'truesota', host: 'true-sota.com', load: tsLoad, save: tsSave });
 }
 
 // POST /__switch/api/{ar,go,tb,xp}/set-github { api_key, ghId } → привязать/сменить/отвязать
@@ -8101,6 +8230,9 @@ function handleArSetGithub(req, res) {
 function handleGoSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'gorouter', load: goLoad, save: goSave });
 }
+function handleKkSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
 function handleTbSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'tabi', load: tbLoad, save: tbSave });
 }
@@ -8112,6 +8244,9 @@ function handleJwSetGithub(req, res) {
 }
 function handleSkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'seekai', load: skLoad, save: skSave });
+}
+function handleTsSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'truesota', load: tsLoad, save: tsSave });
 }
 
 // POST /__switch/api/ar/session/open { id } → открыть консоль agentrouter под GitHub-сессией
@@ -9634,6 +9769,668 @@ async function handleGoModelMap(req, res) {
 function goReadModelMap() {
     try {
         const raw = fs.readFileSync(GO_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
+// ───── KKtoken — автономная вкладка (New API, GitHub-вход) ────────────────
+// Восьмой шлюз, структурная копия вкладки GoRouter: `kktoken.cc` — тот же New API
+// (проверено 2026-08-31: `x-oneapi-request-id` на каждом 200, `/api/status` отдаёт
+// `system_name: "KKtoken AI"`, `version: v1.0.0-rc.25`, `quota_per_unit: 500000`).
+// Апстрим — Amazon Kiro: в `usage` приходит `kiro_credits`, `cost = kiro_credits × 0.02`.
+// Свой пул (kktoken-sessions.json), свой активный ключ/модель, свой keepalive :20161.
+//
+// Каталог токена — РОВНО четыре модели, все Opus: claude-opus-5, claude-opus-5-thinking,
+// claude-opus-4-8, claude-opus-4-8-thinking. `claude-sonnet-5` и `gpt-5` отдают 403 в
+// шести попытках из шести, их здесь физически нет → тир-карта opus-only во всех трёх
+// тирах (kktoken-modelmap.json), пустой тир = «model not supported» без ретрая.
+//
+// ✅ Наш системный промпт шлюз ИСПОЛНЯЕТ (метка NAIL-7 вернулась, в роли CLI-агента
+// зовёт тулзу) — в отличие от SeekAi и TrueSOTA, где промпт агента выбрасывался.
+// Тулзы работают полностью: tool_use, round-trip с tool_result, два вызова в одном
+// ходу, тулзы в стриме. 🪤 Кроме `tool_choice` — он молча выбрасывается.
+// 🪤 `max_tokens` шлюз игнорирует: на 5 приходит 681 токен и `stop_reason: end_turn`.
+const KK_SESSIONS_FILE = path.join(__dirname, 'kktoken-sessions.json');
+const KK_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'kktoken-active-key.txt');
+const KK_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'kktoken-active-model.txt');
+const KK_BASE_URL = 'https://kktoken.cc/v1';
+// SSE keepalive proxy для kktoken (как у tabi :20155): форвардит напрямую в
+// kktoken.cc, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Здесь keepalive нужен не только за паузы: у kktoken КАЖДЫЙ ЧЕТВЁРТЫЙ
+// `POST /v1/messages` отдаёт пустой 403 от кромки Cloudflare (замер 31.08: отказы на
+// позициях 4/8/12/16/20 из 20, пауза 6 с не помогает, параллельно 2 из 8). Ретрай
+// лечит это полностью — 12/12 с четырьмя лишними попытками, — а `shouldRetryStatus`
+// в keepalive-proxy.js уже включает 403. Без keepalive каждый четвёртый запрос CC
+// умирал бы в лицо.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const KK_UPSTREAM = 'https://kktoken.cc';
+const KK_KEEPALIVE_PORT = 20161;
+const KK_KEEPALIVE_URL = `http://localhost:${KK_KEEPALIVE_PORT}`;
+const KK_MODELMAP_FILE = path.join(__dirname, 'kktoken-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У kktoken гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const KK_GRANT_STEP = 5;
+const KK_DEFAULT_GRANT = 5;
+const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const KK_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function kkLoad() {
+    try {
+        const raw = fs.readFileSync(KK_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'kk_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { kkSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function kkSave(arr) {
+    fs.writeFileSync(KK_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function kkReadActiveModel() {
+    try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function kkReadActiveKey() {
+    try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для kktoken: второй экземпляр keepalive-proxy.js на :20161.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с agentrouter
+// :20133 и tabi :20155. UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages.
+async function kkKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(KK_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(KK_KEEPALIVE_PORT),
+                UPSTREAM: KK_UPSTREAM,
+                KEY_FILE: KK_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: KK_MODELMAP_FILE,
+                ...(process.env.KK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.KK_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive KKtoken', KK_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`kktoken keepalive proxy spawn: :${KK_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+// ✅ Проверено 31.08: пустой 403 kktoken на ЭТОТ путь не приходит — 16/16 отдали 200,
+// а битый ключ 8/8 отдал честный 401. То есть живой ключ мёртвым здесь не пометим.
+async function kkProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${KK_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...KK_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс: usage endpoint у kktoken живёт ПОД /v1 (проверено 31.08:
+// `GET /v1/dashboard/billing/usage` → `{"total_usage": 181.0114}`, центы), в отличие
+// от gorouter, где он на корне. Это только РАСХОД — остатка ключом не отдают вовсе
+// (`/api/user/self` с Bearer от sk → 401, `/v1/credits` → 404). Точная цифра — из
+// /api/user/self куками профиля; резервы (анкер, угадывание) см. newapiBalance.
+async function kkBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'kktoken.cc',
+        ccHeaders: KK_CC_HEADERS,
+        usageUrl: 'https://kktoken.cc/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+
+function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+
+async function handleKkSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = kkLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await kkProbe(s.api_key); }));
+            }
+            kkSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => kkApplyBalance(s, await kkBalance(s))));
+            }
+            kkSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: kkReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleKkPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await kkProbe(api_key);
+        const sessions = kkLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; kkSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleKkBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = kkLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await kkBalance(target || { api_key }, { force });
+            if (target) { kkApplyBalance(target, bal); kkSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleKkSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
+}
+
+const kkLkPids = new Map();
+function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleKkSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kkLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = kkLkPids.get(label);
+        if (kkPidAlive(prevPid)) {
+            logLine(`kktoken session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'kktoken', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('kktoken.cc', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`kktoken session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`kktoken session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`kktoken session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            kkLkPids.delete(label);
+            logLine(`kktoken session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('kk', id);
+        });
+        proc.unref();
+        kkLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            kkLkPids.delete(label);
+            logLine(`kktoken session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── KKtoken: share/import (передать аккаунт другу и принять чужой) ────────
+// Формат: base64url(JSON { v:1, provider:'kktoken', email, name, api_key,
+// meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// «Живая» часть (GitHub + kktoken) — storageState
+// из kktoken/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
+
+const KK_SHARE_SCRIPT = path.join(__dirname, '..', 'kktoken', 'share-session.js');
+const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+
+function kkB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/kk/share { id } → снять storageState профиля и собрать строку.
+async function handleKkShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kkLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = kkLkPids.get(label);
+        if (kkPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(KK_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [KK_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`kktoken share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'kktoken',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = kkB64UrlEncode(JSON.stringify(payload));
+        logLine(`kktoken share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/kk/import { share } → разобрать строку и добавить аккаунт.
+async function handleKkImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(kkB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'kktoken' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не kktoken-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = kkLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'kk_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        kkSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(KK_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(KK_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleKkAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = kkLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'kk_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        kkSave(sessions);
+        logLine(`kktoken add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
+// в консоли kktoken). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
+async function handleKkSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = kkLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(KK_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        kkSave(sessions);
+        logLine(`kktoken set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переименовать аккаунт (подпись) — меняем name и/или email. id и профиль браузера
+// не трогаем, поэтому привязка профиля/сессии сохраняется.
+async function handleKkRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kkLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        kkSave(sessions);
+        logLine(`kktoken rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleKkDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kkLoad();
+        const target = sessions.find(s => s.id === idKey);
+        kkSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === kkReadActiveKey()) {
+            try { fs.rmSync(KK_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(KK_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`kktoken delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ЧЕРЕЗ keepalive :20161, а не прямым baseUrl: шлюз Anthropic-совместим
+// нативно, но каждый четвёртый его ответ — пустой 403, и без ретраев keepalive это
+// доехало бы до Claude Code как отказ. `/v1` дописывает сам keepalive.
+async function handleKkActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в kktoken-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = kkLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(KK_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        kkSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-kk');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = KK_KEEPALIVE_URL;   // keepalive :20161 → kktoken.cc напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — kktoken-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const kkCurModel = kkReadActiveModel() || '';
+            if (kkCurModel) settings.model = kkCurModel;
+            else { delete settings.model; logLine('kktoken activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из kktoken-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`kktoken activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20161, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const kkKa = await keepaliveBring(KK_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!kkKa.ok) logLine(`kktoken activate: keepalive :${KK_KEEPALIVE_PORT} НЕ поднялся — ${kkKa.error || '?'}`);
+        logLine(`kktoken activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${KK_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleKkModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (KK_MODELS_CACHE.data && Date.now() - KK_MODELS_CACHE.ts < KK_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: KK_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${KK_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...KK_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        KK_MODELS_CACHE.data = models;
+        KK_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (KK_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: KK_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет kktoken-active-model.txt + settings.model (+ env модели).
+async function handleKkSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(KK_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-kk-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = KK_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`kktoken set-model: settings.json FAILED: ${e.message}`);
+        }
+        const kkKaM = await keepaliveBring(KK_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!kkKaM.ok) logLine(`kktoken set-model: keepalive :${KK_KEEPALIVE_PORT} НЕ поднялся — ${kkKaM.error || '?'}`);
+        logLine(`kktoken set-model: ${m} (base ${KK_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Настраиваемый маппинг claude-тиров → kktoken-модели (как в Custom). Живёт в сессиях.
+// 🪤 Единственный писатель тир-карты — эта ручка. Файл руками не править.
+async function handleKkModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = {
+            opus: String(body.opus || '').trim() || null,
+            sonnet: String(body.sonnet || '').trim() || null,
+            haiku: String(body.haiku || '').trim() || null,
+        };
+        fs.writeFileSync(KK_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        logLine(`kktoken modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function kkReadModelMap() {
+    try {
+        const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -11190,6 +11987,744 @@ function skReadModelMap() {
     } catch { return {}; }
 }
 
+// ───── TrueSOTA (ts) — автономная вкладка (sub2api, GitHub-вход) ───────────
+// Седьмой шлюз. Структурно — копия вкладки GoRouter/SeekAi, но панель ДРУГАЯ, и это
+// главное, что нужно помнить: `true-sota.com` работает на открытом **sub2api**
+// (github.com/Wei-Shaw/sub2api, LGPL-3.0) — Go+Vue шлюз, раздающий квоту ПОДПИСОК
+// (Claude, Codex, Gemini, Grok, Antigravity) как API-ключи. Замеры 2026-08-25:
+//   • `GET /api/status` → 404, `/api/user/self` → 404 — вся New-API механика мимо;
+//   • `GET /api/v1/settings/public` → `site_name: "TrueSOTA"`, `github_oauth_enabled: true`,
+//     `registration_enabled: true`, `turnstile_enabled: true`, `invitation_code_enabled: false`;
+//   • вход держится на JWT в localStorage (`auth_token`/`refresh_token`), НЕ на куке;
+//   • ключи: `GET/POST /api/v1/keys`, квота: `GET /api/v1/subscriptions/summary`.
+// Поэтому баланс и токены живут в своём модуле — routing/lib/truesota-account.js.
+//
+// 🪤 РАБОЧИХ МОДЕЛЕЙ ДВЕ: `claude-opus-5` и `claude-opus-5-thinking`. Остальные 16 из
+// каталога — реселл Kiro: шлюз подставляет СВОЙ системный промпт (префикс 4.1–6.9к
+// токенов) и наш `system` не исполняет. Замер: `system: "тебя зовут NAIL-7"` →
+// «My name is Kiro» на sonnet-4-6/sonnet-5/opus-4-5/4-6/4-7/4-8/haiku-4-5, и то же
+// самое когда инструкция уехала в сообщение пользователя. На opus-5 тот же запрос
+// даёт «NAIL-7», работает `tools`/`tool_use` (id вида `toolu_bdrk_…` — канал через
+// Bedrock). Отсюда тир-карта truesota-modelmap.json = opus-only во всех трёх тирах:
+// пустой нижний тир роняет запрос без ретрая, а sonnet-тир выбросил бы промпт агента.
+//
+// Мульти-запрос (hedges) выключен, как у остальных форков: тариф подписочный, дубль
+// стоит полный запрос и ускорения не даёт (FLAT_RATE_HOSTS в keepalive-proxy.js).
+// Авто-заведения (⚡) НЕТ намеренно: на регистрации капча Turnstile, а почтовая
+// регистрация ограничена белым списком доменов — путь один, GitHub-вход руками.
+const TS_SESSIONS_FILE = path.join(__dirname, 'truesota-sessions.json');
+const TS_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'truesota-active-key.txt');
+const TS_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'truesota-active-model.txt');
+// /v1 — только для листинга моделей. Для запросов keepalive сам добавляет /v1/messages
+// к корню, поэтому UPSTREAM без /v1 (та же грабля, что у JustWoker и SeekAi).
+const TS_BASE_URL = 'https://true-sota.com/v1';
+const TS_UPSTREAM = 'https://true-sota.com';
+const TS_KEEPALIVE_PORT = Number(process.env.TS_KEEPALIVE_PORT || 20160);
+const TS_KEEPALIVE_URL = `http://localhost:${TS_KEEPALIVE_PORT}`;
+const TS_MODELMAP_FILE = path.join(__dirname, 'truesota-modelmap.json');
+const TS_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+const TS_SHARE_SCRIPT = path.join(__dirname, '..', 'truesota', 'share-session.js');
+const TS_SESSIONS_DIR = path.join(__dirname, '..', 'truesota', 'sessions');
+
+const TS_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function tsLib() {
+    try { return require('./lib/truesota-account'); }
+    catch (e) { logLine(`truesota-account недоступен: ${e.message}`); return null; }
+}
+
+function tsLoad() {
+    try {
+        const raw = fs.readFileSync(TS_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                s.id = 'ts_' + Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) { try { tsSave(arr); } catch {} }
+        return arr;
+    } catch { return []; }
+}
+function tsSave(arr) {
+    fs.writeFileSync(TS_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function tsReadActiveModel() {
+    try { return fs.readFileSync(TS_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function tsReadActiveKey() {
+    try { return fs.readFileSync(TS_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function tsReadModelMap() {
+    try {
+        const raw = fs.readFileSync(TS_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
+// SSE keepalive proxy для truesota: седьмой экземпляр keepalive-proxy.js, :20160.
+async function tsKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(TS_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(TS_KEEPALIVE_PORT),
+                UPSTREAM: TS_UPSTREAM,
+                KEY_FILE: TS_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: TS_MODELMAP_FILE,
+                ...(process.env.TS_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.TS_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive TrueSOTA', TS_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`truesota keepalive proxy spawn: :${TS_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`truesota keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models → 200 = LIVE, 401/403 = DEAD.
+async function tsProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';
+    try {
+        const r = await fetch(`${TS_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...TS_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс. Тут вкладка расходится с пятью New-API-шлюзами полностью: цифру считает
+// routing/lib/truesota-account.js, а не newapiBalance. Приоритет — лимит самого ключа
+// (`/keys`), потом самое узкое окно подписки (`/subscriptions/summary`); если токена
+// панели нет, честно отдаём живость без цифры (balance: null) и причину в quotaError.
+// «Угадать грант», как у New-API, тут не делаем осознанно: у подписочного тарифа
+// выдумывать остаток нечем — прикидка от расхода врала бы в обе стороны.
+async function tsBalance(target, opts = {}) {
+    const rec = typeof target === 'string' ? { api_key: target } : (target || {});
+    const lib = tsLib();
+    if (!lib) return { status: 'unknown', error: 'модуль truesota-account не загружается' };
+    const label = rec.id ? 'acct_' + rec.id : null;
+    const profileDir = label ? path.join(__dirname, '..', 'truesota', 'profiles', label) : null;
+    try {
+        return await lib.balance({ target: rec, label: label || 'anon', profileDir, force: !!opts.force });
+    } catch (e) {
+        return { status: 'unknown', error: e.message };
+    }
+}
+
+function tsApplyBalance(target, bal) {
+    const out = newapiApplyBalance(target, bal, { provider: 'truesota' });
+    // Причина отсутствия цифры и окно, по которому она считалась, нужны в UI — иначе
+    // «$—» выглядит как поломка вкладки, хотя это «у аккаунта нет лимита» или
+    // «браузер аккаунта открыт, токен не прочитать».
+    if (bal && bal.quotaError) target.quotaError = bal.quotaError; else if (target) delete target.quotaError;
+    if (bal && bal.window) target.quotaWindow = bal.window; else if (target) delete target.quotaWindow;
+    if (bal && bal.groupName) target.groupName = bal.groupName;
+    return out;
+}
+
+async function handleTsSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = tsLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await tsProbe(s.api_key); }));
+            }
+            tsSave(sessions);
+        }
+        if (balance) {
+            // По ОДНОМУ, а не пачкой по три: чек может поднять headless-Chromium ради
+            // токена панели, и три браузера разом на слабой машине — это минуты и своп.
+            for (const s of sessions) tsApplyBalance(s, await tsBalance(s));
+            tsSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: tsReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleTsPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await tsProbe(api_key);
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; tsSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTsBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = tsLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await tsBalance(target || { api_key }, { force });
+            if (target) { tsApplyBalance(target, bal); tsSave(sessions); }
+            return bal;
+        };
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('ts:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleTsSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'truesota', load: tsLoad, save: tsSave, balanceFn: tsBalance, applyFn: tsApplyBalance });
+}
+
+const tsLkPids = new Map();
+function tsPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleTsSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = tsLkPids.get(label);
+        if (tsPidAlive(prevPid)) {
+            logLine(`truesota session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        // 🪤 newapiSyncProfile здесь НЕ звоним, в отличие от New-API-вкладок: ротировать
+        // в профиль нечего — сессия панели живёт в localStorage самого профиля, а не в
+        // нашей банке кук. Лишний вызов только путал бы лог.
+        const script = path.join(__dirname, '..', 'truesota', 'open-session.js');
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`truesota session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`truesota session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`truesota session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            tsLkPids.delete(label);
+            logLine(`truesota session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Окно закрылось → профиль отпущен, токен панели снова читается.
+            newapiRecheckAfterLk('ts', id);
+        });
+        proc.unref();
+        tsLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            tsLkPids.delete(label);
+            logLine(`truesota session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);
+        logLine(`truesota session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// share/import: кодек тот же, что у SeekAi (skB64UrlEncode/Decode) — намеренно
+// переиспользуем, а не копируем: это чистая base64url, и вторая копия только
+// разъезжалась бы. Различает форматы поле `provider` внутри payload.
+async function handleTsShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        if (tsPidAlive(tsLkPids.get(label))) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        const stateFile = path.join(TS_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [TS_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 60000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`truesota share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+        // Токен панели — единственное, что реально переносит вход у sub2api. Считаем
+        // его отдельно и говорим прямо: снимок без токена получателю бесполезен.
+        const panelOrigin = (session.origins || []).find(o => /true-sota\.com$/i.test(String(o.origin || '').replace(/^https?:\/\//, '')));
+        const hasToken = !!(panelOrigin && (panelOrigin.localStorage || []).some(e => e.name === 'auth_token' && e.value));
+
+        const payload = {
+            v: 1,
+            provider: 'truesota',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = skB64UrlEncode(JSON.stringify(payload));
+        logLine(`truesota share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, токен ${hasToken ? 'есть' : 'НЕТ'}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount, hasToken });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTsImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(skB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'truesota' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не truesota-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = tsLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'ts_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        tsSave(sessions);
+
+        try {
+            fs.mkdirSync(TS_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(TS_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`truesota import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`truesota import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''})`);
+        jsonRes(res, 200, {
+            ok: true, id, email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTsAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = tsLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'ts_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        tsSave(sessions);
+        logLine(`truesota add: ${mail} (${noKey ? 'без ключа — вход через GitHub, потом 🔑➕' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTsSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) fs.writeFileSync(TS_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        tsSave(sessions);
+        logLine(`truesota set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ts/key-create { id, name?, activate? }
+// 🔑➕ на вкладке: снять токен панели с профиля аккаунта → создать ключ её же API →
+// вписать в пул. Это замена «зайди в ЛК, скопируй ключ, вставь кнопкой 🔑»: у sub2api
+// ключ отдаётся в ответе `POST /api/v1/keys` полем `key` целиком, поэтому копировать
+// глазами нечего. Ручной путь (🔑) при этом остался — он нужен, когда ключ уже создан.
+//
+// 🪤 Профиль обязан быть ЗАКРЫТ: пока окно ЛК живо, Chromium держит профиль, и снять
+// localStorage нельзя. Поэтому проверяем pid до всякой работы и говорим это прямо,
+// а не «токен не найден» — иначе владелец идёт открывать ЛК ещё раз и держит замок.
+async function handleTsKeyCreate(req, res) {
+    const stopKeepalive = jsonKeepalive(res);   // headless-запуск = десятки секунд молчания
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+        if (tsPidAlive(tsLkPids.get(label))) {
+            return jsonRes(res, 409, { error: 'Браузер этого аккаунта открыт — закрой окно ЛК и повтори: пока оно живо, токен панели не прочитать.' });
+        }
+        const lib = tsLib();
+        if (!lib) return jsonRes(res, 500, { error: 'модуль truesota-account не загружается' });
+
+        const profileDir = path.join(__dirname, '..', 'truesota', 'profiles', label);
+        const t = await lib.tokenFor(label, profileDir, { force: !!body.force });
+        if (!t.ok) return jsonRes(res, 409, { error: t.error });
+
+        const name = String(body.name || '').trim() || `claude-code ${new Date().toISOString().slice(0, 10)}`;
+        const created = await lib.createKey(t.token, name);
+        if (!created.ok) return jsonRes(res, 502, { error: `панель не создала ключ: ${created.error}` });
+
+        if (sessions.some(s => s.api_key === created.key && s.id !== id)) {
+            return jsonRes(res, 409, { error: 'панель отдала ключ, который уже есть в пуле у другой записи' });
+        }
+        target.api_key = created.key;
+        target.status = 'unknown';
+        target.keyId = created.id != null ? created.id : undefined;
+        target.keyName = created.name || name;
+        target.keyCreatedAt = new Date().toISOString();
+        if (target.active) fs.writeFileSync(TS_ACTIVE_KEY_FILE, created.key, { encoding: 'utf-8', flag: 'w' });
+        tsSave(sessions);
+        logLine(`truesota key-create: ${target.email} → ***${created.key.slice(-6)} (id ${created.id}, токен из ${t.from})`);
+
+        // Сразу считаем квоту: токен в руках, второй раз браузер поднимать не придётся.
+        try {
+            const bal = await tsBalance(target);
+            const fresh = tsLoad();
+            const again = fresh.find(s => s.id === id);
+            if (again) { tsApplyBalance(again, bal); tsSave(fresh); }
+        } catch {}
+
+        jsonRes(res, 200, {
+            ok: true, id, key: created.key, mask: '***' + created.key.slice(-6),
+            keyId: created.id || null, name: created.name || name, tokenFrom: t.from,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+// GET /__switch/api/ts/token?id=… — диагностика входа: есть ли живой токен панели,
+// откуда он взялся, что говорит `/auth/me`. Отдельная кнопка нужна потому, что у
+// sub2api «аккаунт залогинен» и «ключ жив» — два независимых факта: ключ может
+// работать, когда токен давно истёк, и наоборот.
+async function handleTsToken(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const id = String(q.searchParams.get('id') || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const target = tsLoad().find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+        if (tsPidAlive(tsLkPids.get(label))) {
+            return jsonRes(res, 409, { error: 'браузер аккаунта открыт — профиль заперт, токен не прочитать' });
+        }
+        const lib = tsLib();
+        if (!lib) return jsonRes(res, 500, { error: 'модуль truesota-account не загружается' });
+        const profileDir = path.join(__dirname, '..', 'truesota', 'profiles', label);
+        const t = await lib.tokenFor(label, profileDir, { force: q.searchParams.get('force') === '1' });
+        if (!t.ok) return jsonRes(res, 200, { ok: false, error: t.error });
+        const who = await lib.me(t.token);
+        const subs = await lib.subscriptionSummary(t.token);
+        const keys = await lib.listKeys(t.token);
+        jsonRes(res, 200, {
+            ok: true,
+            from: t.from,
+            user: who.ok ? { id: who.user && who.user.id, email: who.user && who.user.email, username: who.user && who.user.username } : null,
+            userError: who.ok ? null : who.error,
+            subscriptions: subs.ok ? { activeCount: subs.activeCount, totalUsedUsd: subs.totalUsedUsd, items: subs.subscriptions } : null,
+            subscriptionsError: subs.ok ? null : subs.error,
+            keys: keys.ok ? keys.keys.length : null,
+            keysError: keys.ok ? null : keys.error,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleTsRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        tsSave(sessions);
+        logLine(`truesota rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTsDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.id === idKey);
+        tsSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === tsReadActiveKey()) {
+            try { fs.rmSync(TS_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(TS_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        // Токены удалённой записи из банки тоже убираем: это живой доступ к аккаунту,
+        // и держать его после удаления записи незачем.
+        try {
+            const lib = tsLib();
+            if (lib) {
+                const jar = lib.loadJar();
+                if (jar['acct_' + idKey]) { delete jar['acct_' + idKey]; lib.saveJar(jar); }
+            }
+        } catch {}
+        logLine(`truesota delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ЧЕРЕЗ keepalive :20160: в settings.json уезжает TS_KEEPALIVE_URL, а
+// реальный ключ прокси подставляет сам из truesota-active-key.txt.
+async function handleTsActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — войди через GitHub (🌐), закрой окно и нажми 🔑➕' });
+        const sessions = tsLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(TS_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        tsSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-truesota');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = TS_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            // Модель: источник правды — truesota-active-model.txt. Если не выбрана, пинить
+            // нечего вслепую, НО у этого шлюза дефолт очевиден и безопасен — тир-карта
+            // opus-only, а `claude-opus-5` единственная модель, которая не подменяет
+            // системный промпт. Поэтому пустую модель заполняем ею, а не снимаем.
+            const tsCurModel = tsReadActiveModel() || 'claude-opus-5';
+            settings.model = normalizeCcModel(tsCurModel);
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`truesota activate: settings.json FAILED: ${e.message}`);
+        }
+        const tsKa = await keepaliveBring(TS_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!tsKa.ok) logLine(`truesota activate: keepalive :${TS_KEEPALIVE_PORT} НЕ поднялся — ${tsKa.error || '?'}`);
+        logLine(`truesota activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${TS_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: tsKa.ok, port: TS_KEEPALIVE_PORT, error: tsKa.ok ? null : (tsKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+// 🪤 Каталог отдаёт 18 моделей, но пригодны ДВЕ (opus-5 и opus-5-thinking) — остальные
+// подменяют системный промпт. Поэтому в ответе помечаем каждую модель полем
+// `systemHonored`, и вкладка рисует непригодные приглушённо: список без метки
+// выглядел бы как «выбирай что хочешь» и однажды увёл бы вкладку на sonnet.
+const TS_SYSTEM_HONORED = new Set(['claude-opus-5', 'claude-opus-5-thinking']);
+async function handleTsModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (TS_MODELS_CACHE.data && Date.now() - TS_MODELS_CACHE.ts < TS_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: TS_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${TS_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...TS_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            display_name: m.display_name,
+            systemHonored: TS_SYSTEM_HONORED.has(m.id),
+        }));
+        TS_MODELS_CACHE.data = models;
+        TS_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (TS_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: TS_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+async function handleTsSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        // Предупреждение, а не запрет: выбор модели — решение владельца, но молча
+        // ставить модель, которая выбрасывает системный промпт, нельзя.
+        const warn = TS_SYSTEM_HONORED.has(m) ? null
+            : `модель ${m} НЕ исполняет системный промпт (шлюз подставляет свой, Kiro) — для Claude Code годятся только ${[...TS_SYSTEM_HONORED].join(' и ')}`;
+        if (warn) logLine(`truesota set-model: ⚠️ ${warn}`);
+        fs.writeFileSync(TS_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-truesota-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || normalizeCcModel(m);
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = TS_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`truesota set-model: settings.json FAILED: ${e.message}`);
+        }
+        const tsKaM = await keepaliveBring(TS_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!tsKaM.ok) logLine(`truesota set-model: keepalive :${TS_KEEPALIVE_PORT} НЕ поднялся — ${tsKaM.error || '?'}`);
+        logLine(`truesota set-model: ${m} (base ${TS_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, model: m, settingsModel: normalizeCcModel(m), settingsUpdated: settingsOk,
+            modelFile: TS_ACTIVE_MODEL_FILE, base: TS_KEEPALIVE_URL, needRestart: true, warn,
+            keepalive: { up: tsKaM.ok, port: TS_KEEPALIVE_PORT, error: tsKaM.ok ? null : (tsKaM.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleTsModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = {
+            opus: String(body.opus || '').trim() || null,
+            sonnet: String(body.sonnet || '').trim() || null,
+            haiku: String(body.haiku || '').trim() || null,
+        };
+        fs.writeFileSync(TS_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        const bad = ['opus', 'sonnet', 'haiku'].filter(t => mm[t] && !TS_SYSTEM_HONORED.has(mm[t]));
+        if (bad.length) logLine(`truesota modelmap: ⚠️ тиры ${bad.join('/')} смотрят на модель, которая выбрасывает системный промпт`);
+        if (['opus', 'sonnet', 'haiku'].some(t => !mm[t])) logLine('truesota modelmap: ⚠️ пустой тир — запрос этого тира упадёт без ретрая');
+        logLine(`truesota modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm, warnTiers: bad });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // ───── Tabi (tb) — автономная вкладка (NewAPI, GitHub-вход) ────────────
 // tabitoken.com: Anthropic-совместимый шлюз (прямой /v1/messages жив), но модели
 // -thinking → длинные паузы → watchdog CC рвёт поток. Поэтому активация как у
@@ -11380,6 +12915,8 @@ function keepaliveInstances() {
         [XP_KEEPALIVE_PORT]: { name: 'XPeach', spawn: xpKeepaliveSpawn },
         [JW_KEEPALIVE_PORT]: { name: 'JustWoker', spawn: jwKeepaliveSpawn },
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
+        [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
+        [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
         // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
         [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
@@ -12754,13 +14291,29 @@ const MONEY_GW = {
     // поддомене, и ровно эту строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима.
     jw: { tag: 'justwoker',   label: 'JustWoker',   host: 'api.justwoker.icu', keyFile: JW_ACTIVE_KEY_FILE, load: jwLoad, save: jwSave, balanceFn: jwBalance, applyFn: jwApplyBalance },
     sk: { tag: 'seekai',      label: 'SeekAi',      host: 'seekai.cc',      keyFile: SK_ACTIVE_KEY_FILE, load: skLoad, save: skSave, balanceFn: skBalance, applyFn: skApplyBalance },
+    // 🪤 TrueSOTA — единственный в реестре НЕ New-API (это sub2api): баланс считает
+    // routing/lib/truesota-account.js, а не newapiBalance. Для реестра это неважно —
+    // ему нужны только load/save/balanceFn/applyFn одинаковой формы, — но помнить надо:
+    // «почини как у остальных» тут не сработает.
+    ts: { tag: 'truesota',    label: 'TrueSOTA',    host: 'true-sota.com',  keyFile: TS_ACTIVE_KEY_FILE, load: tsLoad, save: tsSave, balanceFn: tsBalance, applyFn: tsApplyBalance },
+    // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
+    // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
+    kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
 };
 
 const MONEY_AUTO_FILE = path.join(__dirname, '..', 'logs', '.money_autorotate.json');
 // Минимум, ниже которого аккаунт бесполезен даже как «самый маленький»: у New-API
 // предоплата под запрос — в пойманной ошибке $0.80, у длинного запроса больше.
 // Кандидат дешевле этого не берётся, пока в тексте отказа не сказано точное «нужно».
-const MONEY_MIN_BAL = 1.0;
+// 🪤 Поднято 1.0 → 2.0 (31.08, решение владельца: «$1 порог, и автопереключение иногда
+// не срабатывает, надо хотя бы $2»). Причина не в самой планке, а в её запасе: при
+// пороге $1 ротация уходила на аккаунт с $1.05, тот умирал на следующем же запросе —
+// и человек видел не «переключилось», а «переключается и всё равно не работает».
+// $2 при предоплате $0.80 даёт запас на два-три запроса, то есть подмена держится.
+// Обратная сторона честная: аккаунты с $1–2 объявляются негодными раньше, чем
+// доедены. На плоском тарифе (~50¢ за запрос) это 2–4 потерянных запроса на аккаунт;
+// владелец выбрал устойчивость подмены, а не выскабливание огрызков.
+const MONEY_MIN_BAL = 2.0;
 // Сколько кандидатов проверяем живым чеком за одну ротацию. Чек ~1.5с, а на другом
 // конце ждёт запрос Claude Code — обход всего пула превратился бы в таймаут.
 const MONEY_MAX_PROBES = 3;
@@ -12819,14 +14372,22 @@ function moneyUsable(s) {
     return !!s && isRealKey(s.api_key) && typeof s.balance === 'number'
         && s.status !== 'dead' && s.status !== 'no_key' && !s.banned;
 }
-// Порядок кандидатов: сначала «самый маленький, которому хватает» (доедаем огрызки,
-// жирные аккаунты держим в резерве — решение владельца), потом остальные по
-// убыванию как последний шанс. need — сколько шлюз запросил предоплатой.
+// Порядок кандидатов: «самый маленький, которому хватает» (доедаем огрызки, жирные
+// аккаунты держим в резерве — решение владельца). need — сколько шлюз запросил
+// предоплатой; планка = максимум из него и MONEY_MIN_BAL.
+//
+// 🪤 Хвост «остальные по убыванию как последний шанс» убран 31.08. Он выглядел страховкой
+// от врущего кеша, а на деле был достижим ТОЛЬКО за лимитом живых проверок
+// (MONEY_MAX_PROBES) — то есть ровно там, где цифру никто не подтверждал. Разбор на Tabi:
+// в пуле 32 аккаунта по $0.59–0.77 при предоплате $0.80, три кандидата проверены живьём и
+// отвергнуты, а четвёртым ротация молча взяла **$0.59** и получила тот же отказ; через пять
+// ротаций он уехал клиенту (`用户剩余额度: ＄0.596928` в его тексте — этот самый аккаунт).
+// Ставка на «кеш врёт в минус» без проверки — не страховка, а трата ротации и времени
+// человека. Кеш трёх самых вероятных кандидатов и так обновляется живым чеком; если после
+// этого не годится никто, честный ответ — `pool-dry`, чтобы владелец увидел «пополни».
 function moneyRank(list, need) {
     const bar = Math.max(MONEY_MIN_BAL, Number(need) || 0);
-    const enough = list.filter(s => s.balance >= bar).sort((a, b) => a.balance - b.balance);
-    const rest = list.filter(s => s.balance < bar).sort((a, b) => b.balance - a.balance);
-    return enough.concat(rest);
+    return list.filter(s => s.balance >= bar).sort((a, b) => a.balance - b.balance);
 }
 
 // Переключение активного аккаунта = ровно два действия, как в handleGoActivate:
@@ -13877,10 +15438,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/map-profiles') return handleArMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/set-github') return handleTbSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/set-github') return handleXpSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/set-github') return handleJwSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/sk/set-github') return handleSkSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/set-github') return handleTsSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/models')) return handleArModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/active-model') return jsonRes(res, 200, { model: arReadActiveModel() || null });
@@ -13903,19 +15466,25 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tb/keepalive/config') return keepaliveTb.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/xp/keepalive/state')  return keepaliveXp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/keepalive/config') return keepaliveXp.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/jw/keepalive/state')  return keepaliveJw.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/keepalive/config') return keepaliveJw.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/sk/keepalive/state')  return keepaliveSk.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/sk/keepalive/config') return keepaliveSk.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ts/keepalive/state')  return keepaliveTs.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/keepalive/config') return keepaliveTs.config(req, res);
     // История времени ответа (график) — startsWith: у запроса есть ?window=<сек>.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/keepalive/latency'))    return keepaliveAr.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/keepalive/latency')) return keepaliveXp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/keepalive/latency')) return keepaliveJw.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/keepalive/latency')) return keepaliveSk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ts/keepalive/latency')) return keepaliveTs.latency(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
@@ -13936,6 +15505,25 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/session/open') return handleGoSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/share')    return handleGoShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
+    // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/map-profiles') return handleKkMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
 
     // ---- Tabi (tb) — автономная вкладка, keepalive :20155 → tabitoken.com ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/sessions')) return handleTbSessions(req, res);
@@ -14017,6 +15605,31 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/sk/share')    return handleSkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/sk/import')   return handleSkImport(req, res);
 
+    // ---- TrueSOTA (ts) — автономная вкладка, keepalive :20160 → true-sota.com ----
+    // Панель sub2api, поэтому две ручки, которых нет у New-API-вкладок:
+    //   POST key-create — сама создаёт API-ключ через панель (токен снимается с профиля);
+    //   GET  token      — диагностика входа: живой ли токен, что говорит /auth/me.
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ts/sessions')) return handleTsSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ts/ping'))     return handleTsPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ts/balance'))  return handleTsBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ts/models'))   return handleTsModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ts/token'))    return handleTsToken(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ts/active-model') return jsonRes(res, 200, { model: tsReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ts/modelmap') return jsonRes(res, 200, { ok: true, modelMap: tsReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/add')        return handleTsAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/key')        return handleTsSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/key-create') return handleTsKeyCreate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/rename')     return handleTsRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/delete')     return handleTsDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/activate')   return handleTsActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/set-model')  return handleTsSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/set-balance') return handleTsSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/map-profiles') return handleTsMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/modelmap')   return handleTsModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/session/open') return handleTsSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/share')      return handleTsShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/import')     return handleTsImport(req, res);
+
     // ---- OmniRoute (om) — ручной пул, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/om/sessions')) return handleOmSessions(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/om/add')       return handleOmAdd(req, res);
@@ -14051,10 +15664,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/gh/available')) return handleGhAvailable(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kk/add-github')       return handleKkAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/add-github')       return handleTbAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/add-github')       return handleXpAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/add-github')       return handleJwAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/sk/add-github')       return handleSkAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ts/add-github')       return handleTsAddGithub(req, res);
     // ⚡ Авто-заведение: то же, что 🐙 + 🌐 + 🔑, но без человека. Только у JustWoker —
     // сценарий снят рекордером именно с этой панели, у ar/go/tb вход уезжает в попап.
     if (req.method === 'POST' && req.url === '/__switch/api/jw/auto-add')          return handleJwAutoAdd(req, res);
@@ -14128,7 +15743,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
     // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

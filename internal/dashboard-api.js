@@ -825,11 +825,25 @@ function launchBatFile(batName) {
         // прав поднимает элевированную копию и делает `exit /b` — тот завершает
         // скрипт, но не консоль, и окно-запускалка висело в промпте навсегда. По
         // одному на каждый клик «перезапустить» — они копились десятками.
-        spawn('cmd.exe', ['/c', 'start', `"${batName.replace(/\.bat$/i, '')}"`, 'cmd.exe', '/c', runPath], {
+        //
+        // 🪤 Командная строка собирается ОДНОЙ строкой с windowsVerbatimArguments, а не
+        // массивом. Массив здесь ломался молча: Node экранирует аргумент, в котором есть
+        // кавычки или пробел, поэтому заголовок `"ABUSE HUB"` уезжал в cmd как
+        // `"\"ABUSE HUB\""`. `start` берёт первую кавычку за начало заголовка, дальше вся
+        // строка разъезжается — и запускалось либо не то, либо ничего: пустое окно cmd
+        // вместо хаба, либо хаб с чужим первым аргументом (`verb` = `ABUSE`) → печать
+        // usage и `exited with code 2`. Проверено 29.08: тот же спавн массивом пробник не
+        // запускает вообще, строкой — доносит `restart --no-open` дословно.
+        // `start` при этом обязателен: он даёт ребёнку СВОЮ консоль с живыми хендлами,
+        // поэтому виден вывод и работает `pause`. Убрать его (detached без start) значит
+        // получить окно, привязанное к `stdio: 'ignore'`, то есть пустое.
+        const title = String(batName).replace(/\.bat$/i, '').replace(/[^\w.-]/g, '_');
+        spawn('cmd.exe', [`/c start "${title}" cmd.exe /c "${runPath}"`], {
             cwd: PROJECT_ROOT,
             detached: true,
             stdio: 'ignore',
             windowsHide: false,
+            windowsVerbatimArguments: true,
         }).unref();
     } else {
         // Вывод в лог, а не в /dev/null: отсоединённый процесс больше никому не
@@ -855,9 +869,14 @@ function launchHub(verb) {
         throw new Error('hub.js не найден — обнови репо (в нём живёт вся механика запуска)');
     }
     if (process.platform === 'win32') {
-        spawn('cmd.exe', ['/c', 'start', '"ABUSE HUB"', 'cmd.exe', '/c',
-            path.join(PROJECT_ROOT, 'HUB.bat'), verb, '--no-open'], {
+        // Одной строкой + windowsVerbatimArguments — см. разбор в launchBatFile выше:
+        // массивом Node экранирует заголовок с пробелом, `start` разбирает строку не так,
+        // и кнопка «перезапустить» открывала окно, в котором хаб печатал usage и уходил с
+        // кодом 2 (или вообще пустую консоль). Это и есть «рестарт с панели не работает».
+        const bat = path.join(PROJECT_ROOT, 'HUB.bat');
+        spawn('cmd.exe', [`/c start "ABUSE HUB" cmd.exe /c "${bat}" ${verb} --no-open`], {
             cwd: PROJECT_ROOT, detached: true, stdio: 'ignore', windowsHide: false,
+            windowsVerbatimArguments: true,
         }).unref();
     } else {
         fs.mkdirSync(path.join(PROJECT_ROOT, 'logs', 'hub'), { recursive: true });

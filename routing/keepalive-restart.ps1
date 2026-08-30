@@ -1,7 +1,7 @@
 # Recreates the keepalive-proxy.js process on the given port (default :20133).
 #   powershell -NoProfile -ExecutionPolicy Bypass -File keepalive-restart.ps1 -Port 20155
 # Instances: 20133 = AgentRouter, 20155 = Tabi, 20156 = GoRouter, 20157 = XPeach,
-#            20158 = JustWoker, 20159 = SeekAi.
+#            20158 = JustWoker, 20159 = SeekAi, 20160 = TrueSOTA, 20161 = KKtoken.
 #
 # Normal path is the dashboard button (Health tab -> POST /__switch/api/keepalive/restart).
 # This script is the fallback for when the dashboard itself is down.
@@ -47,9 +47,18 @@ $perPort = @{
   # SeekAi: same trap - bare root, /v1 is for model listing only.
   20159 = @{ UPSTREAM = 'https://seekai.cc'; KEY_FILE = "$profileDir\.claude\seekai-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'seekai-modelmap.json') }
+  # TrueSOTA (sub2api): bare root as well. Only claude-opus-5 / -thinking honour our
+  # system prompt on this gateway, so truesota-modelmap.json is opus-only in all tiers.
+  20160 = @{ UPSTREAM = 'https://true-sota.com'; KEY_FILE = "$profileDir\.claude\truesota-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'truesota-modelmap.json') }
+  # KKtoken (New API): bare root here too. KK_BASE_URL in transparent-proxy.js keeps the
+  # /v1 suffix for model listing only - putting it here would send /v1/v1/messages and
+  # the gateway answers 404 on every request.
+  20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161)"; exit 1
 }
 
 # Kill the current listener

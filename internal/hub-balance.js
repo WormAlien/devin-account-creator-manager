@@ -24,6 +24,8 @@ const POOLS = [
     { id: 'go', file: 'gorouter-sessions.json', name: 'GoRouter' },
     { id: 'jw', file: 'justwoker-sessions.json', name: 'JustWoker' },
     { id: 'tb', file: 'tabi-sessions.json', name: 'Tabi Token' },
+    // KKtoken (31.08) — восьмой шлюз, деньги живые, значит идёт в сумму шапки.
+    { id: 'kk', file: 'kktoken-sessions.json', name: 'KKtoken' },
 ];
 
 function readPool(p) {

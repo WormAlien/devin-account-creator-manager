@@ -143,30 +143,78 @@ const nameByKey = (w, key) => (w.pool.find(s => s.api_key === key) || {}).email 
 async function main() {
     // 1. Кандидат — самый маленький, которому хватает. Огрызок ниже порога не берём:
     //    на нём предоплата под запрос не пройдёт, и мы бы вернулись сюда же.
+    //    🪤 Суммы подняты 31.08 вместе с порогом (1.0 → 2.0): прежний «small $1.85» был
+    //    рассчитан на порог $1 и с новым перестал быть достаточным — на нём тест и
+    //    покраснел, что правильно. Смысл проверки не изменился: берём самый маленький
+    //    ИЗ ГОДНЫХ, а не самый маленький вообще.
     {
         const w = makeWorld({
             pool: [
                 { name: 'active', balance: -0.16, active: true },
                 { name: 'fat', balance: 1338.48 },
                 { name: 'crumb', balance: 0.11 },
-                { name: 'small', balance: 1.85 },
+                { name: 'belowBar', balance: 1.85 },
+                { name: 'small', balance: 2.40 },
                 { name: 'mid', balance: 77.16 },
             ],
         });
         w.api.moneyState('go').enabled = true;
         const r = await w.api.moneyRotate('go', { reason: 'out-of-balance', fromKey: 'sk-active' });
         check(r.ok && nameByKey(w, activeKeyOf(w)) === 'small',
-            `выбран самый маленький достаточный: ${r.email} (ждали small $1.85)`);
+            `выбран самый маленький достаточный: ${r.email} (ждали small $2.40)`);
+        check(nameByKey(w, activeKeyOf(w)) !== 'belowBar',
+            'аккаунт ниже порога ($1.85 при пороге $2) не берётся, хотя он «самый маленький»');
         check(w.pool.filter(s => s.active).length === 1 && w.pool.find(s => s.active).email === 'small',
             'флаг active переставлен ровно на одного');
         check(w.probes.length === 1, `живой чек только у выбранного кандидата (было ${w.probes.length})`);
     }
 
-    // 2. Порог из кода, а не из головы: 0.11 не годится, 1.85 годится.
+    // 1б. Шлюз назвал нужную сумму — кандидатов ниже неё НЕ берём вовсе.
+    //     Разбор 31.08 на Tabi: 32 аккаунта по $0.59–0.77 при предоплате $0.80, ротация
+    //     уходила на $0.59 «последним шансом», отказ повторялся, и через пять ротаций та
+    //     же ошибка уезжала клиенту. Честный `pool-dry` вместо этого — чтобы человек
+    //     увидел «пополни», а не пять подмен подряд.
+    {
+        const w = makeWorld({
+            pool: [
+                { name: 'active', balance: 0.13, active: true },
+                { name: 'crumb1', balance: 0.77 },
+                { name: 'crumb2', balance: 0.60 },
+                { name: 'crumb3', balance: 0.59 },
+            ],
+        });
+        w.api.moneyState('go').enabled = true;
+        const r = await w.api.moneyRotate('go', { reason: 'out-of-balance', fromKey: 'sk-active', needUsd: 0.80 });
+        check(!r.ok && r.error === 'pool-dry',
+            `сухой пул при известном «нужно $0.80» → pool-dry, а не подмена на $0.59 (получили ${JSON.stringify(r)})`);
+        check(nameByKey(w, activeKeyOf(w)) === 'active',
+            'активный ключ не переставлен: менять на заведомо недостаточный незачем');
+    }
+
+    // 1в. И без названной суммы кандидат ниже порога тоже не берётся. Раньше на это был
+    //     «последний шанс» — но он срабатывал только ЗА лимитом живых проверок, то есть
+    //     подмена шла на непроверенную цифру. Ставка на «кеш врёт в минус» стоила ровно
+    //     того случая на Tabi, поэтому её больше нет: три вероятных кандидата и так
+    //     переспрашиваются живьём, а если не годится никто — честный pool-dry.
+    {
+        const w = makeWorld({
+            pool: [
+                { name: 'active', balance: 0.13, active: true },
+                { name: 'maybe', balance: 0.90 },
+            ],
+        });
+        w.api.moneyState('go').enabled = true;
+        const r = await w.api.moneyRotate('go', { reason: 'out-of-balance', fromKey: 'sk-active' });
+        check(!r.ok && r.error === 'pool-dry',
+            `без «нужно» кандидат ниже порога тоже не берётся: ${JSON.stringify(r)}`);
+        check(nameByKey(w, activeKeyOf(w)) === 'active', 'активный ключ остался на месте');
+    }
+
+    // 2. Порог из кода, а не из головы: огрызок не годится, запас на пару запросов — годится.
     {
         const w = makeWorld({ pool: [{ name: 'a', balance: 5 }] });
-        check(w.api.MONEY_MIN_BAL >= 0.8,
-            `порог годности ${w.api.MONEY_MIN_BAL} покрывает предоплату шлюза ($0.80 в пойманной ошибке)`);
+        check(w.api.MONEY_MIN_BAL >= 1.6,
+            `порог годности ${w.api.MONEY_MIN_BAL} даёт запас минимум на две предоплаты ($0.80 в пойманной ошибке)`);
     }
 
     // 3. Шлюз сказал, сколько нужно ($5) — маленькие мимо, берём самого маленького из

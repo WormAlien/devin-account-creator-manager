@@ -39,6 +39,16 @@ const PROFILE_ROOTS = [
     // адресе, `justwoker.icu` не резолвится. Строка обязана совпадать с NEWAPI_PROFILE_DIRS
     // и HOST_AUTH буквально, иначе hostToTag вернёт null и профиль выпадет из индекса.
     { tag: 'jw', dir: path.join(ROOT, 'justwoker', 'profiles'), host: 'api.justwoker.icu' },
+    // TrueSOTA (2026-08-25). Хост без поддомена: панель и шлюз на одном `true-sota.com`.
+    // 🪤 Панель тут НЕ New-API (это sub2api), но в этом индексе панель ни при чём — он
+    // про GitHub-куки в профилях, а они одинаковы у любого провайдера. Без строки
+    // hostToTag('true-sota.com') вернул бы null, и заселение GitHub отвечало бы
+    // «неизвестный хост» (ровно так и осталось у seekai, которого здесь нет).
+    { tag: 'ts', dir: path.join(ROOT, 'truesota', 'profiles'), host: 'true-sota.com' },
+    // KKtoken (2026-08-31), по образцу go: New API, хост без поддомена — панель и шлюз
+    // оба на `kktoken.cc`. Без строки hostToTag('kktoken.cc') вернул бы null, и заселение
+    // GitHub-сессии отвечало бы «неизвестный хост».
+    { tag: 'kk', dir: path.join(ROOT, 'kktoken', 'profiles'), host: 'kktoken.cc' },
 ];
 
 const SESSIONS_DIR = path.join(ROOT, 'github', 'sessions');

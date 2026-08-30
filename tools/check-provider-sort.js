@@ -100,7 +100,7 @@ async function main() {
             const el = document.getElementById(id);
             return el ? [...el.options].map((o) => o.value) : null;
         };
-        return { ar: get('ar-sort'), go: get('go-sort'), tb: get('tb-sort'), xp: get('xp-sort'), jw: get('jw-sort') };
+        return { ar: get('ar-sort'), go: get('go-sort'), tb: get('tb-sort'), xp: get('xp-sort'), jw: get('jw-sort'), kk: get('kk-sort') };
     });
     const BASE = ['date-desc', 'date-asc', 'bal-desc', 'bal-asc', 'status', 'email'];
     eq(JSON.stringify(opts.ar), JSON.stringify([...BASE, 'gift']), 'AgentRouter: 6 режимов + 🎁 подарок');
@@ -111,6 +111,9 @@ async function main() {
     // намеренно: `checkin_enabled: true`, но бонус случайный (мин/макс квота), поэтому
     // колонки «+N» на вкладке нет и сортировать по ней нечего.
     eq(JSON.stringify(opts.jw), JSON.stringify(BASE), 'JustWoker: 6 режимов, без 🎁 (бонус чек-ина случайный)');
+    // KKtoken (31.08) — восьмая вкладка, структурная копия GoRouter: тот же селект,
+    // 🎁 нет (чек-ина у шлюза нет вовсе).
+    eq(JSON.stringify(opts.kk), JSON.stringify(BASE), 'KKtoken: 6 режимов, без 🎁 (чек-ина у шлюза нет)');
 
 
     // --- 2. порядок по режимам -------------------------------------------------------

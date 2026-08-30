@@ -70,7 +70,8 @@ check(/setTimeout/.test(reBody), 'пауза на флаш SQLite есть (за
 check(/logLine\(/.test(reBody), 'итог перечёта виден в логе — иначе молчаливая магия');
 
 // Все пять шлюзов зовут перечёт из своего обработчика 'exit'.
-for (const [gw, tag] of [['ar', 'agentrouter'], ['go', 'gorouter'], ['jw', 'justwoker'], ['tb', 'tabi'], ['xp', 'xpeach']]) {
+// KKtoken (kk, 31.08) — восьмой шлюз, структурная копия GoRouter, значит и хвост тот же.
+for (const [gw, tag] of [['ar', 'agentrouter'], ['go', 'gorouter'], ['jw', 'justwoker'], ['tb', 'tabi'], ['xp', 'xpeach'], ['kk', 'kktoken']]) {
     check(new RegExp(`newapiRecheckAfterLk\\('${gw}', id\\)`).test(PROXY), `${tag}: перечёт вызван после закрытия ЛК`);
 }
 // У AgentRouter путь чек-ина свой (снимок из браузера) — второй чек к шлюзу там не нужен.

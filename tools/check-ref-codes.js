@@ -38,7 +38,7 @@ let rc = null;
 try { rc = require(path.join(ROOT, 'routing', 'lib', 'ref-codes.js')); } catch (e) { /* ниже */ }
 chk(!!rc, 'модуль загружается', rc ? '' : 'require упал');
 if (rc) {
-    chk(rc.PROVIDERS.length === 6, 'провайдеров шесть', 'нашлось ' + rc.PROVIDERS.length);
+    chk(rc.PROVIDERS.length === 8, 'провайдеров восемь', 'нашлось ' + rc.PROVIDERS.length);
     for (const p of Object.keys(WAS)) {
         chk(rc.PROVIDERS.includes(p), 'провайдер ' + p + ' в списке');
         chk(rc.url(p) === WAS[p], 'url(' + p + ') совпадает с прежним хардкодом', rc.url(p));
@@ -52,10 +52,28 @@ if (rc) {
         'XPeach НЕ в живом наборе — легаси, в настройках ему места нет');
     chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('seekai'),
         'SeekAi НЕ в живом наборе — легаси с 24.08');
-    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 4,
-        'живых провайдеров четыре (ar/go/jw/tb)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
+    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 6,
+        'живых провайдеров шесть (ar/go/jw/tb/truesota/kktoken)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
+    // TrueSOTA заведён 2026-08-25 БЕЗ дефолтного кода: аккаунта на шлюзе ещё не было.
+    // Поэтому url() обязан отдавать корень, а не ссылку с пустым `aff=` — иначе панель
+    // примет битый параметр за код, и реф-кредит потеряется вообще (см. ref-codes.js § url).
+    chk(rc.PROVIDERS.includes('truesota'), 'провайдер truesota в списке');
+    chk(rc.url('truesota') === 'https://true-sota.com/',
+        'url(truesota) без кода = корень сайта', rc.url('truesota'));
+    chk(rc.SHAPES && rc.SHAPES.truesota && rc.SHAPES.truesota.path === '/register?aff=',
+        'форма регистрации truesota — /register?aff= (sub2api, не /sign-up как у New-API)');
     chk(rc.url('xpeach') === WAS.xpeach, 'url(xpeach) всё ещё резолвится — легаси-скрипт им пользуется');
     chk(rc.url('seekai') === WAS.seekai, 'url(seekai) всё ещё резолвится — легаси-скрипт им пользуется');
+    // KKtoken заведён 2026-08-31 — восьмой шлюз, New API, реф-код владельца есть сразу.
+    // В WAS его нет намеренно: WAS — эталон «прежнего хардкода», а этого провайдера до
+    // рефакторинга не существовало, и цикл по WAS требует `<prov>/open-session.js`.
+    chk(rc.PROVIDERS.includes('kktoken'), 'провайдер kktoken в списке');
+    chk(rc.url('kktoken') === 'https://kktoken.cc/sign-up?aff=Sog2',
+        'url(kktoken) собирается из кода владельца Sog2', rc.url('kktoken'));
+    chk(rc.SHAPES && rc.SHAPES.kktoken && rc.SHAPES.kktoken.path === '/sign-up?aff=',
+        'форма регистрации kktoken — /sign-up?aff= (New API, как у go/tb/jw)');
+    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.includes('kktoken'),
+        'kktoken в живом наборе — шлюз рабочий, рефку настраивать есть смысл');
     const saved = rc.user();
     chk(Object.keys(saved).length === 0 || true, 'user() читается');
 }
@@ -67,6 +85,8 @@ chk(!!def, 'файл дефолтов парсится');
 if (def) for (const p of Object.keys(WAS)) {
     chk(/^[A-Za-z0-9_-]{2,32}$/.test(String(def[p] || '')), 'дефолт ' + p + ' задан и валиден', String(def[p]));
 }
+// kktoken мимо цикла по WAS (см. выше), но дефолт у него есть и он обязан быть валиден.
+if (def) chk(def.kktoken === 'Sog2', 'дефолт kktoken = Sog2', String(def.kktoken));
 
 console.log('\n── <prov>/open-session.js: литералов больше нет ──');
 for (const p of Object.keys(WAS)) {

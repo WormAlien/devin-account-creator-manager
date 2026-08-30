@@ -66,6 +66,12 @@ const KEEPALIVES = [
     { backend: 'tabi', port: 20155 },
     { backend: 'gorouter', port: 20156 },
     { backend: 'justwoker', port: 20158 },
+    // truesota :20160 — живой шлюз с 25.08, поэтому в опросе. 🪤 Но пригодных моделей у
+    // него две (opus-5 и opus-5-thinking): падение тут значит «шлюз не отвечает», а не
+    // «модель не та» — про подмену системного промпта вотчдог ничего не знает.
+    { backend: 'truesota', port: 20160 },
+    // kktoken :20161 — восьмой шлюз, живой с 31.08, поэтому в опросе.
+    { backend: 'kktoken', port: 20161 },
 ];
 
 function log(msg) {

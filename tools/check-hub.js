@@ -844,7 +844,8 @@ t('дефолтный набор вкладок дашборда — как на
     if (!m) return 'DEFAULT_TABS_VISIBLE не найден';
     const tabs = m[1].split(',').map(s => s.trim().replace(/['"]/g, ''));
     // 25.08: добавился 'truesota' (седьмой шлюз, sub2api) — вкладка живая и в дефолте.
-    const want = ['fin', 'github', 'agentrouter', 'gorouter', 'justwoker', 'truesota', 'tabi', 'custom', 'plugins', 'health', 'settings'];
+    // 31.08: добавился 'kktoken' (восьмой шлюз, New API + Kiro) — тоже живой и в дефолте.
+    const want = ['fin', 'github', 'agentrouter', 'gorouter', 'justwoker', 'truesota', 'kktoken', 'tabi', 'custom', 'plugins', 'health', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });

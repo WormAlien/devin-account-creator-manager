@@ -92,10 +92,15 @@ function makeWorld(opts = {}) {
                 return opts.selfAnswer || { ok: false, error: 'заглушка: сюда заходить не должны' };
             },
             warmAesKeys: () => ({ warmed: 0, failed: 0 }),
+            // Замок БД куки — второй признак «браузер открыт», не зависящий от карты pid'ов.
+            cookieDbLocked: () => !!opts.cookieLocked,
         }),
         newapiWarmProfileKeys: () => { world.warmCalls += 1; },
         newapiResolveProfile: () => ({ label: 'acct_test', dir: opts.noProfile ? null : 'C:/fake/profile' }),
         newapiLkOpenedAt: () => world.lkOpened,
+        // Открыт ли ПРЯМО СЕЙЧАС браузер профиля. Отдельно от newapiLkOpenedAt: тот про
+        // «когда заходили», этот про «окно висит сейчас», и второе запрещает точный чек.
+        newapiLkBusy: () => !!opts.lkBusy,
         newapiSyncProfile: () => { world.syncCalls += 1; },
         // usage: живость ключа + легаси-расход. Отдаём центы, как настоящий эндпоинт.
         fetch: async (url) => {
@@ -110,7 +115,7 @@ function makeWorld(opts = {}) {
     };
     const factory = new Function('deps', `
         const { logLine, isRealKey, round2, newapiLib, newapiWarmProfileKeys,
-                newapiResolveProfile, newapiLkOpenedAt, newapiSyncProfile, fetch, AbortSignal } = deps;
+                newapiResolveProfile, newapiLkOpenedAt, newapiLkBusy, newapiSyncProfile, fetch, AbortSignal } = deps;
         ${body}
         return newapiBalance;
     `);
@@ -450,6 +455,83 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
         check(/if \(!snap\) await new Promise/.test(finish), 'паузу на флаш кук платим только без снимка');
         const status = cutFn(src, 'function handleArCheckinStatus(');
         check(/state !== 'running'/.test(status), 'идущий прогон не выбрасывается по TTL (ручной ждёт человека 10 мин)');
+    }
+
+    // Окно ЛК открыто: точный чек не идёт вовсе, а кешированная цифра честно помечена
+    // старой. Разбор 29.08 (GoRouter 1505.02 «точный» против 1752.52 в панели).
+    {
+        const w = makeWorld({ usageSpent: 0, lkBusy: true });
+        const target = {
+            api_key: KEY, balanceSource: 'self', balance: 1505.02, selfBalance: 1505.02,
+            usageSpentAtSelf: 0, selfCheckedAt: new Date(Date.now() - 72 * 3600_000).toISOString(),
+        };
+        const bal = await w.run(target, {});
+        check(w.selfCalls === 0, 'при открытом браузере профиля accountSelf не зовётся — сессию не жжём');
+        check(/браузер этого аккаунта ОТКРЫТ/i.test(String(bal.selfError || '')),
+            `причина названа честно, а не «сессия недействительна»: получили «${bal.selfError}»`);
+        check(bal.balance === 1505.02 && bal.balanceSource === 'self',
+            'цифру всё равно показываем — она лучше анкера и прикидки');
+        check(bal.selfStale === true, 'цифра помечена устаревшей (selfStale), а не выдана за свежую');
+        check(Number(bal.selfAgeMs) > 71 * 3600_000, `возраст цифры доезжает в ответ: ${bal.selfAgeMs}`);
+        check(w.logs.some(l => /открыт в браузере/.test(l)), 'в логе видно, почему точный чек пропущен');
+    }
+
+    // Возраст сам по себе: браузер закрыт, но цифре трое суток — «точной» её называть нельзя.
+    {
+        const w = makeWorld({ usageSpent: 0, selfAnswer: { ok: false, error: 'шлюз молчит' } });
+        const target = {
+            api_key: KEY, balanceSource: 'self', balance: 100, selfBalance: 100,
+            usageSpentAtSelf: 0, selfCheckedAt: new Date(Date.now() - 72 * 3600_000).toISOString(),
+        };
+        const bal = await w.run(target, {});
+        check(bal.selfStale === true, 'цифра старше суток помечена устаревшей даже при закрытом браузере');
+        check(/ч назад/.test(String(bal.selfError || '')), `в причине указан возраст: «${bal.selfError}»`);
+    }
+
+    // Свежая цифра из кеша устаревшей НЕ считается — иначе метка обесценится.
+    {
+        const w = makeWorld({ usageSpent: 0, selfAnswer: { ok: false, error: 'шлюз молчит' } });
+        const target = {
+            api_key: KEY, balanceSource: 'self', balance: 50, selfBalance: 50,
+            usageSpentAtSelf: 0, selfCheckedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+        };
+        const bal = await w.run(target, {});
+        check(bal.selfCached === true && bal.selfStale === false,
+            'цифра получасовой давности — из кеша, но не устаревшая');
+    }
+
+    // Карта pid'ов пуста (рестарт дашборда), а окно живо — ловим по замку файла куки.
+    // Без этого признака фикс молча не срабатывал бы ровно после перезапуска.
+    {
+        const w = makeWorld({ usageSpent: 0, lkBusy: false, cookieLocked: true });
+        const target = {
+            api_key: KEY, balanceSource: 'self', balance: 42, selfBalance: 42,
+            usageSpentAtSelf: 0, selfCheckedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+        };
+        const bal = await w.run(target, {});
+        check(w.selfCalls === 0, 'замок БД куки один, без карты pid, тоже запрещает точный чек');
+        check(/браузер этого аккаунта ОТКРЫТ/i.test(String(bal.selfError || '')),
+            'причина та же — окно открыто, хотя карта pid пуста после рестарта');
+        check(bal.selfStale === true, 'при открытом окне цифра помечена устаревшей независимо от возраста');
+    }
+
+    // Ветвь 4б («памятная цифра»): срабатывает, когда 4а отказала — заходили в ЛК или
+    // сдвинулся расход. Она тоже отдаёт кеш, и до 29.08 отдавала его БЕЗ пометки, из-за
+    // чего тост снова говорил «точный, из кеша» после того, как владелец открыл ЛК.
+    {
+        const w = makeWorld({ usageSpent: 0, lkOpenedAt: Date.now(), selfAnswer: { ok: false, error: 'HTTP 401' } });
+        const target = {
+            api_key: KEY, balanceSource: 'self', balance: 1505.02, selfBalance: 1505.02,
+            usageSpentAtSelf: 0, grantedSelf: 1932.33,
+            selfCheckedAt: new Date(Date.now() - 81 * 3600_000).toISOString(),
+        };
+        const bal = await w.run(target, {});
+        check(bal.balanceSource === 'self' && bal.balance === 1505.02,
+            `памятная цифра показана (ветвь 4б): получили ${bal.balance}`);
+        check(bal.selfStale === true, 'ветвь 4б тоже помечает цифру устаревшей, а не «точной»');
+        check(Number(bal.selfAgeMs) > 80 * 3600_000, `возраст доезжает и из 4б: ${bal.selfAgeMs}`);
+        check(/снята 81 ч назад/.test(String(bal.selfError || '')),
+            `в причине из 4б указан возраст: «${bal.selfError}»`);
     }
 
     console.log(`\n✅ ${ok.length} проверок пройдено`);

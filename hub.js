@@ -1420,6 +1420,7 @@ async function doPostUpdate({ interactive }) {
 // ── Ввод ─────────────────────────────────────────────────────────────────────
 function confirm(question, def = false) {
     if (!TTY) return Promise.resolve(def);
+    keysRelease();          // вопрос читает readline — наш слушатель должен уйти
     return new Promise(resolve => {
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
         rl.question(`  ${bold(question)} ${dim(def ? '[Y/n] ' : '[y/N] ')}`, ans => {
@@ -1432,37 +1433,69 @@ function confirm(question, def = false) {
 
 function pause(text = 'Enter — вернуться в меню') {
     if (!TTY) return Promise.resolve();
+    keysRelease();          // то же, что в confirm: дальше читает readline
     return new Promise(resolve => {
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
         rl.question(`\n  ${dim(text)}`, () => { rl.close(); resolve(); });
     });
 }
 
-// Одна нажатая клавиша. Raw-режим включаем только на время ожидания и снимаем
-// перед запуском операций: пока он включён, дочерние процессы со stdio inherit
-// (doctor.sh, установщик) не получают нормальный ввод, а Ctrl+C не прерывает их.
+// Одна нажатая клавиша. Raw-режим снимаем перед запуском операций: пока он включён,
+// дочерние процессы со stdio inherit (doctor.sh, установщик) не получают нормальный
+// ввод, а Ctrl+C не прерывает их. Но НЕ после каждого нажатия — см. ниже.
 //
 // 🪤 Сюда же приходят события фокуса окна (ESC[I / ESC[O от DECSET 1004) — их нужно
 // отдать капели и ПРОДОЛЖИТЬ ждать клавишу, а не вернуть как нажатие: иначе щелчок
 // мышью по другому окну выглядел бы для меню как нажатая кнопка.
+//
+// 🪤 Слушатель ПОСТОЯННЫЙ, нажатия складываются в очередь. Раньше readKey() ставил
+// одноразовый слушатель и на первом же событии снимал его вместе с raw-режимом и
+// `pause()`. Пачка стрелок приезжает в поток ОДНИМ куском, и readline разбирает её
+// в несколько событий подряд — первое доставалось нам, остальные падали в никуда.
+// Замер до правки: 24 нажатия → 1 перерисовка курсора. Снаружи это ровно «полистал
+// резко, и меню зависло» (владелец). Очередь + постоянный слушатель = ни одного
+// потерянного нажатия; отпускаем поток только вокруг операций (keysRelease).
+const KEYQ = [];
+let keyWaiter = null;
+let keysHeld = false;
+
+function onKeyPress(str, key) {
+    const seq = (key && key.sequence) || str || '';
+    if (seq === '\x1b[I' || seq === '\x1b[O') {
+        if (focusHook) focusHook(seq === '\x1b[I');
+        return;                                       // событие фокуса — не нажатие
+    }
+    const k = key || { name: str };
+    if (keyWaiter) { const w = keyWaiter; keyWaiter = null; w(k); }
+    else KEYQ.push(k);
+}
+
+function keysHold() {
+    if (keysHeld) return;
+    keysHeld = true;
+    readline.emitKeypressEvents(process.stdin);
+    if (process.stdin.isTTY) process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on('keypress', onKeyPress);
+}
+
+// Отпустить ввод: перед операцией, перед readline-вопросом и на выходе. Очередь
+// чистим — нажатия, сделанные до вопроса или во время рестарта, не должны потом
+// отработать как команды меню.
+function keysRelease() {
+    if (!keysHeld) return;
+    keysHeld = false;
+    process.stdin.removeListener('keypress', onKeyPress);
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    process.stdin.pause();
+    KEYQ.length = 0;
+    keyWaiter = null;
+}
+
 function readKey() {
-    return new Promise(resolve => {
-        readline.emitKeypressEvents(process.stdin);
-        if (process.stdin.isTTY) process.stdin.setRawMode(true);
-        process.stdin.resume();
-        const onKey = (str, key) => {
-            const seq = (key && key.sequence) || str || '';
-            if (seq === '\x1b[I' || seq === '\x1b[O') {
-                if (focusHook) focusHook(seq === '\x1b[I');
-                return;                                   // ждём дальше
-            }
-            process.stdin.removeListener('keypress', onKey);
-            if (process.stdin.isTTY) process.stdin.setRawMode(false);
-            process.stdin.pause();
-            resolve(key || { name: str });
-        };
-        process.stdin.on('keypress', onKey);
-    });
+    keysHold();
+    if (KEYQ.length) return Promise.resolve(KEYQ.shift());
+    return new Promise(resolve => { keyWaiter = resolve; });
 }
 
 // Русская раскладка. readline для кириллицы отдаёт `key.name === undefined` — то есть
@@ -1541,7 +1574,7 @@ function safeHint() {
 
 async function menu() {
     hideCursor();
-    process.on('exit', () => { showCursor(); if (TTY) out(FOCUS_OFF); });
+    process.on('exit', () => { showCursor(); keysRelease(); if (TTY) out(FOCUS_OFF); });
     let sel = 0;
     const items = menuItems();
 
@@ -1607,7 +1640,10 @@ async function menu() {
         // Капель гасим до операции: она рисует по абсолютной позиции кадра, а вывод
         // операции этот кадр сдвинет. Плюс на время дочерних процессов со stdio inherit
         // снимается focus reporting — иначе ESC[I/ESC[O улетали бы им в ввод.
+        // Ввод отпускаем по той же причине: в raw-режиме дочерний процесс не получает
+        // нормальный stdin, а Ctrl+C его не прерывает.
         if (dripStop) dripStop();
+        keysRelease();
         showCursor();
         clearScreen();
         await intro({ animate: false });        // шапка над выводом операции — без проявления

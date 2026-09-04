@@ -1221,6 +1221,61 @@ function macReady() {
         : bad('exec-бит в индексе', notExec.join(', ') + ' — двойной клик на маке упрётся в права');
 }
 
+// ── 14. Пачка нажатий не теряется ────────────────────────────────────────────
+//
+// Быстрое листание стрелками приезжает в поток ОДНИМ куском, и readline разбирает
+// его в несколько событий подряд. Пока readKey() ставил одноразовый слушатель и
+// снимал его на первом же событии, остальные нажатия падали в никуда: замер на
+// живом коде — 5 нажатий одним куском, доставлено 1. Снаружи это «полистал резко,
+// и меню зависло, перестало реагировать» (владелец 04.09).
+//
+// Проверяем машинку клавиш НАПРЯМУЮ, подменив stdin обычным потоком: через node-pty
+// это не воспроизводится — ConPTY по-своему обрабатывает escape-последовательности,
+// записанные во ввод, и залп доезжает как одно нажатие независимо от нашего кода.
+async function keyBurst() {
+    const { PassThrough } = require('stream');
+    const readline = require('readline');
+    const src = read('hub.js');
+    const i = src.indexOf('const KEYQ = [];');
+    const j = src.indexOf('// Русская раскладка');
+    if (i < 0 || j < 0) { bad('машинка клавиш', 'блок KEYQ/readKey в hub.js не найден'); return; }
+
+    const fake = new PassThrough();
+    fake.isTTY = false;
+    let M;
+    try {
+        M = new Function('readline', 'process', 'focusHook',
+            src.slice(i, j) + '; return { readKey, keysRelease, KEYQ };')(readline, { stdin: fake }, null);
+    } catch (e) { bad('машинка клавиш исполняется', e.message); return; }
+
+    const seq = ['down', 'down', 'up', 'down', 'up'];
+    fake.write('\x1b[B\x1b[B\x1b[A\x1b[B\x1b[A');
+    await L.sleep(100);
+    const got = [];
+    for (let n = 0; n < seq.length; n++) {
+        got.push((await Promise.race([
+            M.readKey(),
+            L.sleep(300).then(() => ({ name: 'ПОТЕРЯНО' })),
+        ])).name);
+    }
+    got.join(',') === seq.join(',')
+        ? ok(`залп из ${seq.length} нажатий одним куском доехал целиком`)
+        : bad('залп нажатий', `получено ${got.join(',')}, ожидалось ${seq.join(',')}`);
+
+    // Очередь обязана чиститься на keysRelease(): нажатия, сделанные во время
+    // рестарта или перед вопросом, не должны потом отработать как команды меню.
+    fake.write('\x1b[B\x1b[B');
+    await L.sleep(100);
+    M.keysRelease();
+    M.KEYQ.length === 0 ? ok('keysRelease чистит очередь — нажатия во время операции не выстрелят')
+        : bad('keysRelease', `в очереди осталось ${M.KEYQ.length} нажатий`);
+
+    // Слушатель после release снят: иначе дочерний процесс со stdio inherit делил бы
+    // ввод с хабом (и Ctrl+C не прерывал бы его).
+    fake.listenerCount('keypress') === 0 ? ok('после release слушатель ввода снят')
+        : bad('release слушателя', `на потоке осталось ${fake.listenerCount('keypress')} слушателей`);
+}
+
 // ── 13. Анимация шапки: проявление, капель, фокус ─────────────────────────────
 // Отдельная сессия pty, потому что предыдущая идёт с HUB_NO_DRIP=1. Здесь наоборот:
 // капель должна капать сама, а при потере фокуса — замолчать полностью.
@@ -1315,6 +1370,8 @@ async function headerAnim() {
     macReady();
     console.log('\x1b[1m\n13. Анимация шапки: проявление, капель, фокус\x1b[0m');
     await headerAnim();
+    console.log('\x1b[1m\n14. Пачка нажатий не теряется\x1b[0m');
+    await keyBurst();
     console.log(`\n\x1b[1mИтого: ${pass} проверок пройдено, ${fails.length} провалено\x1b[0m`);
     if (fails.length) {
         for (const f of fails) console.log(`  \x1b[31m✗\x1b[0m ${f}`);

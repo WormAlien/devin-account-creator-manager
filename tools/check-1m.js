@@ -97,6 +97,9 @@ if (src) {
                 ['opus-4.8', 'opus-4.8'],                     // notion: не claude-*
                 ['opus[1m]', 'opus[1m]'],
                 ['gpt-5.6-sol', 'gpt-5.6-sol'],               // у gpt своё окно
+                ['glm-5.3', 'glm-5.3[1m]'],                   // 04.09: glm-5.3 — окно 1M
+                ['glm-5.3[1m]', 'glm-5.3[1m]'],               // идемпотентность
+                ['glm-5.2', 'glm-5.2'],                       // старые glm — окно не заявлено
                 ['claude-haiku-4-5', 'claude-haiku-4-5'],     // у haiku 200k штатно
                 ['', ''],
                 [null, ''],
@@ -136,6 +139,9 @@ if (src) {
         if (ctxFor) {
             const cases = [
                 ['gpt-5.6-sol', 1050000],
+                ['glm-5.3', 1050000],           // 04.09: единственный glm в таблице
+                ['glm-5.3[1m]', 1050000],       // суффикс срезается до lookup
+                ['glm-5.2', null],              // старые glm — не переопределяем
                 ['claude-opus-5', null],
                 ['claude-opus-5[1m]', null],   // claude любой формы — не переопределяем
                 ['ComboWombo', null],          // виртуальная модель шлюза

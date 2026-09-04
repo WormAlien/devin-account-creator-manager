@@ -273,10 +273,14 @@ function readSettings() {
 // Контекст 1M — свойство ID модели, а не апстрима; прокси суффикс срезают
 // перед форвардом (keepalive-proxy.js:369), поэтому шлюзу он не мешает.
 const CC_DEFAULT_MODEL = 'claude-opus-5[1m]';
+// glm-5.3 — единственная не-claude модель с окном 1M (04.09, владелец): без [1m]
+// CC режет её до 200k так же, как опусы. Прочие glm-* и gpt-* не трогаем: у gpt
+// окно доезжает через model-windows.json, а у старых glm оно не заявлено.
+// Regex живёт ВНУТРИ функции: check-1m.js исполняет её в песочнице вырезкой.
 function normalizeCcModel(m) {
     const s = String(m || '').trim();
     if (!s) return s;
-    return /^claude-(opus|sonnet)-/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
+    return /^(claude-(opus|sonnet)-|glm-5\.3(?:$|-))/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
 }
 
 // ---- Отсутствие модели = 200k, поэтому пустой `model` тоже чиним здесь -------
@@ -8886,8 +8890,9 @@ function arTargetFor(model) {
 // грабля, что в FreeModel-ветке на :2093). agentrouter отдаёт claude-* с 1M, поэтому
 // дотягиваем суффикс; gpt-* не трогаем — у них своё окно.
 function arSettingsModel(model) {
-    const m = String(model || '').trim();
-    return /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+    // Правило суффикса — одно на весь файл (см. normalizeCcModel), здесь только
+    // делегируем: раньше была копия regex, и glm-5.3 кликом вкладки лишался [1m].
+    return normalizeCcModel(model);
 }
 
 // Поднимаем ОБА прокси независимо от модели: keepalive (:20133) стоит спереди, а

@@ -1,8 +1,9 @@
 {
   "_comment": "Окно контекста для моделей, которых Claude Code не знает (gpt-*). Ключ — имя модели ровно как оно попадает в settings.model, значение — токены. Читается writeSettings() → CLAUDE_CODE_MAX_CONTEXT_TOKENS. Для claude-* НЕ заполнять: CC знает их сам, а лишний override соврёт.",
   "_source": "https://openrouter.ai/api/v1/models (context_length)",
-  "_updated": "2026-08-18",
+  "_updated": "2026-09-04",
   "windows": {
+    "glm-5.3": 1050000,
     "gpt-3.5-turbo": 16385,
     "gpt-3.5-turbo-0613": 4095,
     "gpt-3.5-turbo-16k": 16385,

@@ -35,6 +35,7 @@
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const net = require('net');
 const path = require('path');
 const { PassThrough } = require('stream');
 
@@ -64,6 +65,20 @@ const LOG_FILE = process.env.KEEPALIVE_LOG_FILE
 // у lifecycle.rotateLog — переименовать в `.1`, глубина истории один файл.
 const LOG_MAX = Number(process.env.LOG_MAX || 5 * 1024 * 1024);
 const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 1500);
+// ── Удержание запроса при обрыве пути (2026-09-03) ───────────────────────────
+// Сколько раз максимум переспросить шлюз за окно cfg.holdMs и с какими отступами.
+// Потолок нужен ровно из-за плоского тарифа: kktoken игнорирует `max_tokens` и
+// досчитывает брошенную генерацию до конца, выставляя полный счёт, — значит попытка,
+// успевшая дойти до генерации, платная независимо от нас. Гейт по достижимости
+// (probePath) убирает большинство таких попыток — в мёртвый путь мы не стреляем вовсе, —
+// а потолок страхует от патологии вроде шлюза, который рвёт соединение на первом байте.
+const HOLD_MAX_LAUNCHES = Number(process.env.HOLD_MAX_LAUNCHES || 6);
+const HOLD_BACKOFF_MS = [2000, 4000, 8000, 10000];
+const HOLD_PROBE_TIMEOUT_MS = Number(process.env.HOLD_PROBE_TIMEOUT_MS || 3000);
+// Сколько раз переигрывать ПУСТОЙ поток (заголовки пришли, содержимого нет). Два —
+// потому что это уже не «сеть мигнула», а поведение шлюза: третий заход в тот же
+// молчащий шлюз только жжёт запрос.
+const EMPTY_MAX_RETRIES = Number(process.env.EMPTY_MAX_RETRIES || 2);
 const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
 // UPSTREAM_TIMEOUT_MS переехал в cfg (см. DEFAULT_CFG.upstreamTimeoutMs): он стал
 // такой же крутилкой, как мульти-запрос и пре-коммит, и правится на живом процессе через
@@ -117,12 +132,25 @@ const TIER_RE = [{ tier: 'opus', re: /(^|[-_.\/])?opus([-\/]|$)/i }, { tier: 'so
 function tierTargetFor(model) {
     const mm = readModelMap();
     for (const { tier, re } of TIER_RE) {
-        if (mm[tier] && re.test(String(model || ''))) return { tier, target: mm[tier] };
+        if (mm[tier] && re.test(String(model || ''))) {
+            const target = mm[tier];
+            // Карта — пожелание, каталог шлюза — факт. Если цели у шлюза нет, берём
+            // живую замену: иначе запрос гарантированно умрёт на 503 model_not_found
+            // (03.09: justwoker убрал claude-opus-4-8, и 255 запросов сабагентов легли).
+            const alt = availableTarget(tier, target, model, mm);
+            if (alt) return { tier, target: alt, from: target, substituted: true };
+            return { tier, target };
+        }
     }
     return null;
 }
 function isGptLike(model) {
     return /gpt|o[0-9]|davinci|chatgpt/i.test(String(model || ''));
+}
+// Какая модель реально лежит в теле запроса — нужно, чтобы сравнить «что послали» с
+// «что получилось после подмены» и не повторять запрос той же самой моделью.
+function modelInBody(buf) {
+    try { return String(JSON.parse((buf || Buffer.alloc(0)).toString('utf8') || '{}').model || ''); } catch { return ''; }
 }
 
 // ── Имя модели в ОТВЕТЕ: возвращаем клиенту то, что он просил ──
@@ -342,6 +370,61 @@ const DEFAULT_CFG = {
   // Рекомендация того же документа — минимум 300с. Берём её: она стоит на 529
   // наблюдениях против моих двадцати.
   upstreamTimeoutMs: 300000,
+  // Окно УДЕРЖАНИЯ запроса, пока лежит путь до шлюза. Считается отдельно от maxAttempts
+  // намеренно: попытки измеряют, сколько раз мы спросили шлюз, а держать клиента надо
+  // столько, сколько лежит СЕТЬ. Замер 03.09: три попытки с отступами 1500 и 3000 мс
+  // исчерпываются за ~5 с, а переключение VPN на станции роняет путь на 5–30 с — то есть
+  // попытки кончались раньше простоя, и запрос умирал в момент, когда чинить было ещё
+  // нечего. Цена смерти несоразмерна: подагент Claude Code от одной ошибки API умирает
+  // целиком, а ошибок за сутки 246 на 3376 запросов (7.3%) на justwoker и 47 на 1583 на
+  // kktoken. 120с покрывают наблюдавшиеся простои с запасом. 0 = удержание выключено.
+  // Разбор — вики, «Обрывы пути к шлюзам — план удержания запроса».
+  holdMs: 120000,
+  // Сколько ждать СОДЕРЖИМОГО после того, как поток уже открылся. Отдельная болезнь и
+  // отдельная ручка: 03.09 в 21:13 kktoken принял запрос на 564k контекста, отдал
+  // заголовки — и молчал **пять минут**, пока прокси честно кормил клиента пингами
+  // (60 пингов, ноль байт содержимого), после чего оборвал соединение сам. Claude Code
+  // увидел `Stream idle timeout - no chunks received`: пинги для него не содержимое.
+  // Таких обрывов у kktoken за сутки 55.
+  // 🪤 Наш собственный таймаут сокета (upstreamTimeoutMs) в этой сцене НЕ срабатывает:
+  // после прихода заголовков стоит `finished`, а обработчик `timeout` под этим флагом
+  // выходит молча — то есть молчащий поток жил бы неограниченно долго.
+  // 180с выбраны с запасом над честным максимумом (по хендоффу автора апстрима худший
+  // наблюдённый ответ 159.6с): живой медленный шлюз не обрываем, мёртвый не ждём вечно.
+  // 0 = выключить.
+  emptyStreamMs: 180000,
+  // Как часто перечитывать каталог моделей шлюза — и он же выключатель подмены.
+  // **0 = каталога нет вовсе**: маппинг работает строго по карте, ровно как до 04.09.
+  // Ручка нужна не для тюнинга, а для отката: если шлюз в `/v1/models` СОВРЁТ (не покажет
+  // модель, которую на самом деле отдаёт), подмена заменит рабочую цель на другую — и
+  // выключить это надо будет на живом процессе, без рестарта.
+  catalogTtlMs: 600000,
+  // ── Удержание НЕ-стримового запроса (2026-09-04) ────────────────────────────
+  // Пре-коммит и пинги применимы только к потоку: пинг это событие SSE, и в ответ,
+  // который клиент ждёт обычным JSON, его не вставить — клиент попытается разобрать
+  // `event: ping` как JSON и упадёт с мусором вместо таймаута. Поэтому не-стримовый
+  // запрос до сих пор не получал НИ ОДНОГО байта, пока шлюз не закончит генерацию, а
+  // Claude Code сдаётся на ~20 с тишины: так падал `/compact`
+  // (`Stream idle timeout - no chunks received`). Замер 03.09: 216 не-стримовых
+  // ответов за сутки, 78 из них дольше 20 с, максимум 245 с.
+  // Лечение: через jsonHoldMs тишины открываем `200 application/json` чанками и капаем
+  // ПРОБЕЛ каждые IDLE_MS. Ведущие пробелы — легальный JSON (RFC 8259 § 2), парсер
+  // клиента их игнорирует, а байтовый таймер не срабатывает.
+  // 🪤 Плата: после коммита 200 честный код ошибки уже не отдать — останется обрыв
+  // соединения (его клиент читает как повторяемый). Поэтому порог не маленький: быстрые
+  // отказы шлюза (400/403/model_not_found) приходят за секунды и до коммита не доживают,
+  // то есть платим только за те запросы, которые и так уже долго считаются.
+  // 0 = выключить, тогда поведение ровно прежнее.
+  jsonHoldMs: 15000,
+  // Поток ВСТАЛ посреди ответа: содержимое уже пошло, потом байты кончились и не
+  // возобновились. Переиграть такое нельзя (клиенту ушла часть ответа), но и висеть
+  // вечно нельзя — а именно вечно оно и висело: наш таймаут сокета после прихода
+  // заголовков не работает (`if (finished || aborted) return` в обработчике timeout).
+  // Для вызывающей стороны бесконечное ожидание хуже ошибки: сессия, ждущая подагента,
+  // не узнаёт об этом никогда. Поэтому рвём и даём клиенту увидеть обрыв.
+  // 180с — тот же запас, что у пустого потока: живой thinking такие паузы не делает.
+  // 0 = выключить.
+  stallMs: 180000,
 };
 // Шлюзы с ПЛОСКИМ тарифом за запрос — там мульти-запрос выключен из коробки.
 // Замер 21.08: tabitoken списывает 50¢, gorouter 20¢ — одинаково за полный ответ на
@@ -385,6 +468,11 @@ const cfg = {
   // Старое имя переменной сохранено: им уже запускают процессы в bat/ps1 и в спавне
   // дашборда, ломать совместимость ради красоты нельзя.
   upstreamTimeoutMs: Number(process.env.UPSTREAM_TIMEOUT_MS || DEFAULT_CFG.upstreamTimeoutMs),
+  holdMs: Number(process.env.HOLD_MS || DEFAULT_CFG.holdMs),
+  emptyStreamMs: Number(process.env.EMPTY_STREAM_MS || DEFAULT_CFG.emptyStreamMs),
+  catalogTtlMs: Number(process.env.CATALOG_TTL_MS || DEFAULT_CFG.catalogTtlMs),
+  jsonHoldMs: Number(process.env.JSON_HOLD_MS || DEFAULT_CFG.jsonHoldMs),
+  stallMs: Number(process.env.STALL_MS || DEFAULT_CFG.stallMs),
 };
 
 // Числовая ручка из патча: мусор игнорируем, дурь зажимаем (иначе опечатка
@@ -404,7 +492,12 @@ function patchNum(v, min, max, allowZero) {
 // 600с). Версию поднимаем ровно по правилу выше — иначе у того, кто однажды нажал
 // «Применить», в json нет этого поля, cfg остался бы на дефолте кода, а вот прежние
 // мульти-запрос/пре-коммит из файла применились бы: полусостояние, которое не отладить.
-const CFG_VERSION = 3;
+// v5 (2026-09-04): добавлены emptyStreamMs, catalogTtlMs и jsonHoldMs — правило то же.
+// v4 (2026-09-03): в DEFAULT_CFG добавлен holdMs — окно удержания запроса, пока лежит
+// путь до шлюза. Правило то же: без поднятия версии у тех, кто однажды нажал «Применить»,
+// в json нет нового поля, удержание осталось бы на дефолте кода, а старые цифры доехали
+// бы из файла — полусостояние, в котором непонятно, что именно работает.
+const CFG_VERSION = 5;
 // Платный мульти-запрос: на плоскотарифных шлюзах дубль стоит полную цену запроса, поэтому там
 // его нельзя включить ни из json, ни из панели, ни curl'ом — только осознанным
 // ALLOW_PAID_HEDGE=1 при запуске процесса. Гвоздь прибит НАД конфигом намеренно:
@@ -444,6 +537,19 @@ function loadConfig() {
   // него превратил бы таймаут из страховки в генератор лишних платных ретраев.
   const ut = patchNum(c.upstreamTimeoutMs, 20000, 600000, false);
   if (ut !== null) cfg.upstreamTimeoutMs = ut;
+  // 0 выключает удержание целиком. Нижняя граница 5с: окно короче этого не покрывает
+  // даже самый быстрый флап и только создаёт иллюзию защиты. Верхняя 600с — дальше
+  // клиент уйдёт сам, держать его дольше бессмысленно.
+  const hm = patchNum(c.holdMs, 5000, 600000, true);
+  if (hm !== null) cfg.holdMs = hm;
+  const es = patchNum(c.emptyStreamMs, 30000, 600000, true);
+  if (es !== null) cfg.emptyStreamMs = es;
+  const ct = patchNum(c.catalogTtlMs, 60000, 3600000, true);
+  if (ct !== null) cfg.catalogTtlMs = ct;
+  const jh = patchNum(c.jsonHoldMs, 3000, 60000, true);
+  if (jh !== null) cfg.jsonHoldMs = jh;
+  const sm = patchNum(c.stallMs, 30000, 900000, true);
+  if (sm !== null) cfg.stallMs = sm;
 }
 function saveConfig() {
   try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({ v: CFG_VERSION }, cfg), null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
@@ -469,9 +575,29 @@ function applyPatch(p) {
     const ut = patchNum(p.upstreamTimeoutMs, 20000, 600000, false);
     if (ut !== null) cfg.upstreamTimeoutMs = ut;
   }
+  if ('holdMs' in p) {
+    const hm = patchNum(p.holdMs, 5000, 600000, true);
+    if (hm !== null) cfg.holdMs = hm;
+  }
+  if ('emptyStreamMs' in p) {
+    const es = patchNum(p.emptyStreamMs, 30000, 600000, true);
+    if (es !== null) cfg.emptyStreamMs = es;
+  }
+  if ('catalogTtlMs' in p) {
+    const ct = patchNum(p.catalogTtlMs, 60000, 3600000, true);
+    if (ct !== null) cfg.catalogTtlMs = ct;
+  }
+  if ('jsonHoldMs' in p) {
+    const jh = patchNum(p.jsonHoldMs, 3000, 60000, true);
+    if (jh !== null) cfg.jsonHoldMs = jh;
+  }
+  if ('stallMs' in p) {
+    const sm = patchNum(p.stallMs, 30000, 900000, true);
+    if (sm !== null) cfg.stallMs = sm;
+  }
   const clamped = clampPaidHedge('патч конфига');
   saveConfig();
-  log(`config updated: мульти-запрос ${hedgeOff(cfg) ? 'выкл' : `${cfg.hedgeMs}ms`}, копий максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'выкл'}, таймаут апстрима ${cfg.upstreamTimeoutMs}ms`);
+  log(`config updated: мульти-запрос ${hedgeOff(cfg) ? 'выкл' : `${cfg.hedgeMs}ms`}, копий максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'выкл'}, таймаут апстрима ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? `${cfg.holdMs}ms` : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? `${cfg.emptyStreamMs}ms` : 'выкл'}, каталог ${cfg.catalogTtlMs ? `${cfg.catalogTtlMs}ms` : 'выкл'}, JSON-удержание ${cfg.jsonHoldMs ? `${cfg.jsonHoldMs}ms` : 'выкл'}, вставший поток ${cfg.stallMs ? `${cfg.stallMs}ms` : 'выкл'}`);
   return clamped;
 }
 function publicState() {
@@ -503,7 +629,7 @@ function publicState() {
 // winBy — КТО принёс ответ: `первый` / `мульти-запрос` / `ретрай`. Это единственная цифра,
 // по которой можно настраивать hedgeMs не наугад: если `мульти-запрос` почти нулевой, дубли
 // только грузят шлюз (его WAF чувствителен к пачкам) и hedgeMs надо ПОДНИМАТЬ.
-const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, rotations: 0, byStatus: {}, byModel: {}, winBy: {} };
+const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, holds: 0, rotations: 0, byStatus: {}, byModel: {}, winBy: {} };
 const startedAt = Date.now();
 
 // ── История времени ответа: минутные бакеты за сутки ────────────────────────
@@ -611,6 +737,123 @@ function handleControl(req, res, reqPath) {
   res.end('not found\n');
 }
 
+// Жив ли путь до шлюза. Дешёвая проба: TCP-connect и сразу разрыв — ни запроса, ни тела,
+// ни денег. Нужна для удержания: пока путь лежит, повторять бессмысленно, а на плоском
+// тарифе ещё и платно.
+// 🪤 На рабочей станции под happ-tun проба может СОВРАТЬ «путь жив»: туннель завершает
+// handshake локально для любого адреса (та же ловушка, из-за которой пробы портов на
+// нодах врут). Удержание от этого не ломается, потому что гейт здесь — оптимизация, а не
+// механизм: соврала в плюс — повторим сразу, как было до правки; сказала «лежит» —
+// сэкономили платную попытку в мёртвую сеть.
+function probePath(hostname, port, cb) {
+  let done = false;
+  const finish = (ok) => { if (!done) { done = true; cb(ok); } };
+  let s;
+  try {
+    s = net.connect({ host: hostname, port: Number(port) });
+  } catch (e) {
+    finish(false);
+    return;
+  }
+  s.setTimeout(HOLD_PROBE_TIMEOUT_MS);
+  s.once('connect', () => { finish(true); s.destroy(); });
+  s.once('timeout', () => { finish(false); s.destroy(); });
+  s.once('error', () => finish(false));
+}
+
+// ── Каталог моделей шлюза: чем маппинг проверяет себя ────────────────────────
+// Зачем. Карта тиров (`*-modelmap.json`) — это НАШЕ пожелание, а не факт. Шлюзы
+// меняют ассортимент без предупреждения: 03.09 justwoker убрал `claude-opus-4-8`, на
+// который у нас указывали тиры `sonnet` и `haiku`, и каждый запрос сабагента стал
+// умирать (`503 model_not_found: No available channel`). Замер того дня: 255 запросов
+// `sonnet→claude-opus-4-8` — все мёртвые, при 256 живых `opus→claude-opus-5`; шлюз при
+// этом отдавал по `/v1/models` ровно две модели: `claude-opus-5` и `-thinking`.
+// Поэтому спрашиваем у шлюза его список и, если цель тира в нём отсутствует, берём
+// живую замену вместо гарантированной ошибки.
+//
+// Каталог НИКОГДА не блокирует запрос: пустой или устаревший — работаем по карте как
+// раньше, а обновление идёт в фоне. Точный момент, когда он нужен, — ответ
+// `model_not_found`: там мы обновляем список принудительно и повторяем запрос уже с
+// живой моделью (см. ROUTE_MISS_RE в makeUpstream).
+const catalog = { ids: null, at: 0, fetching: false };
+
+// Каталог выключен ручкой → ведём себя ровно как до его появления: подмен нет,
+// решает только карта тиров.
+function catalogOff() {
+  return !(cfg.catalogTtlMs > 0);
+}
+function catalogStale() {
+  if (catalogOff()) return false;
+  return catalog.ids === null || Date.now() - catalog.at > cfg.catalogTtlMs;
+}
+// null = каталога нет (или он выключен), судить не берёмся. true/false = модель есть/нет.
+function catalogHas(id) {
+  if (catalogOff() || !catalog.ids) return null;
+  return catalog.ids.has(String(id || ''));
+}
+function refreshCatalog(force, cb) {
+  const done = (ok) => { catalog.fetching = false; if (cb) cb(ok); };
+  if (catalogOff()) { if (cb) cb(false); return; }
+  if (catalog.fetching) { if (cb) cb(false); return; }
+  if (!force && !catalogStale()) { if (cb) cb(true); return; }
+  catalog.fetching = true;
+  let key = '';
+  try { key = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { /* ключ инжектит не всегда мы */ }
+  const headers = Object.assign({ accept: 'application/json', 'accept-encoding': 'identity' }, CC_FALLBACK_HEADERS);
+  if (key) { headers.authorization = `Bearer ${key}`; headers['x-api-key'] = key; }
+  const req = upRequester({
+    hostname: upstream.hostname,
+    port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80),
+    method: 'GET',
+    path: `${upBase}/v1/models`,
+    headers,
+    agent: agentFor(upRequester),
+    timeout: 15000,
+  }, (res) => {
+    const chunks = [];
+    res.on('data', (c) => chunks.push(c));
+    res.on('end', () => {
+      try {
+        const doc = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const list = Array.isArray(doc.data) ? doc.data : (Array.isArray(doc.models) ? doc.models : []);
+        const ids = list.map((x) => String((x && (x.id || x.name)) || x || '')).filter(Boolean);
+        if (!ids.length) throw new Error('пустой список');
+        catalog.ids = new Set(ids);
+        catalog.at = Date.now();
+        log(`каталог ${upstream.host}: ${ids.length} моделей (${ids.slice(0, 6).join(', ')}${ids.length > 6 ? ', …' : ''})`);
+        done(true);
+      } catch (e) {
+        // 404/HTML/мусор — у шлюза может не быть этого эндпоинта. Молчим и работаем
+        // по карте: отсутствие каталога не должно менять поведение.
+        log(`каталог ${upstream.host} недоступен (${res.statusCode}: ${e.message}) — маппинг работает по карте`);
+        done(false);
+      }
+    });
+    res.on('error', () => done(false));
+  });
+  req.on('timeout', () => { req.destroy(new Error('timeout')); });
+  req.on('error', (e) => { log(`каталог ${upstream.host}: ${e.message}`); done(false); });
+  req.end();
+}
+
+// Живая замена мёртвой цели тира. null = менять не надо или нечем.
+// Порядок кандидатов: цели соседних тиров из той же карты (их владелец уже выбрал
+// осознанно) → то, что просил клиент → модель каталога с тем же словом тира →
+// любая claude-модель каталога. Первый кандидат, который есть у шлюза, побеждает.
+function availableTarget(tier, target, clientModel, mm) {
+  if (catalogHas(target) !== false) return null;
+  const order = tier === 'haiku' ? ['sonnet', 'opus'] : (tier === 'sonnet' ? ['opus', 'haiku'] : ['sonnet', 'haiku']);
+  const cands = [];
+  for (const t of order) if (mm[t] && mm[t] !== target) cands.push(mm[t]);
+  cands.push(String(clientModel || '').replace(/\s*\[[^\]]*\]\s*$/, ''));
+  const ids = Array.from(catalog.ids || []);
+  const tierRe = new RegExp(tier, 'i');
+  for (const id of ids) if (tierRe.test(id)) cands.push(id);
+  for (const id of ids) if (/claude/i.test(id)) cands.push(id);
+  for (const c of cands) if (c && c !== target && catalogHas(c) === true) return c;
+  return null;
+}
+
 function shouldRetryStatus(status) {
   return status === 401 || status === 403 || status === 429 || (status >= 500 && status <= 599);
 }
@@ -632,6 +875,19 @@ const RETRY_NO_CONTENT = /sensitive words|content-blocked/i;
 // просроченный токен, нет средств/квоты, модель/канал не существует.
 const RETRY_NO_ZH = /无权|权限|无效|过期|余额|额度|欠费|不存在|认证|封禁|禁用/;
 const RETRY_OK = /unauthorized client detected|overloaded|too many|rate limit|internal|upstream|temporar|busy|unavailable/i;
+// ── Промах МАРШРУТА, а не сбой шлюза ─────────────────────────────────────────
+// Шлюз отвечает 503, но означает это «такой модели у меня нет ни на одном канале».
+// Повтор канала не создаёт: 03.09 на justwoker это дало **179 смертей из 220** —
+// тир `sonnet`/`haiku` указывает на `claude-opus-4-8`, группа `g` шлюза её не отдаёт,
+// и прокси трижды спрашивал одно и то же, прежде чем убить вызывающего.
+// 🪤 Ни один словарь эту формулировку не ловил, и промах был неочевиден: в теле стоит
+// `No available channel`, а в RETRY_OK — `unavailable`; подстроки разные, поэтому решал
+// fallback `status >= 500` → «транзиентно». Классическая цена угадывания класса ошибки
+// по прозе (тот же род ошибки, что `owner_action_required` на 522, см. RETRY_NO).
+// Почему отдать сразу лучше, чем ретраить: отказ успевает уйти ДО пре-коммита, то есть
+// обычным HTTP-кодом, который клиент умеет повторить, а не `event: error` внутрь уже
+// открытого потока — начатый поток Claude Code повторить не может и убивает подагента.
+const ROUTE_MISS_RE = /model_not_found|no available channel|no channel available|无可用渠道|渠道不存在/i;
 
 // ── Структурный ответ вместо угадывания по прозе ──────────────────────────────
 // Cloudflare и часть шлюзов СООБЩАЮТ класс ошибки полями, а не текстом:
@@ -682,6 +938,9 @@ function isTransientBody(status, buf) {
     if (ra) log(`тело ответа: retryable=${structured}, шлюз просит ${ra}с (ждать столько не будем)`);
     return structured;
   }
+  // Промах маршрута — постоянная ошибка, но проверяем ПОСЛЕ структурного вердикта:
+  // если шлюз сам сказал `retryable: true`, это его утверждение, а наше — догадка.
+  if (ROUTE_MISS_RE.test(s)) return false;
   if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s) || RETRY_NO_CONTENT.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
@@ -752,6 +1011,10 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  // api.hcnsec.cn — ключ С ПОДДОМЕНОМ, как у justwoker: панель и API на одном хосте,
+  // `hcnsec.cn` без `api.` не наш адрес вовсе. 🪤 Забыть эту строку = молча выключенная
+  // авторотация: прокси просто не знает, в какой пул звонить, и ошибки в логе нет.
+  'api.hcnsec.cn': 'hn',
 };
 const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
 // ROTATE_PROVIDER — только для тестов (routing/test-rotate.js прогоняет весь путь
@@ -901,7 +1164,9 @@ function remapHaiku(method, reqPath, body) {
       return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
     }
     newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
-    label = `${tm.tier}→${target} (map, claude)`;
+    label = tm.substituted
+      ? `${tm.tier}→${target} (map, claude; ПОДМЕНА: ${tm.from} нет у шлюза)`
+      : `${tm.tier}→${target} (map, claude)`;
     log(`${method} ${reqPath} ${label} via ${upstream.host}`);
     return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
   }
@@ -931,6 +1196,13 @@ const server = http.createServer((req, res) => {
   let keepalives = 0;
   let aborted = false;
   let clientSSE = false;          // мы уже открыли SSE-ответ клиенту (ранний SSE)
+  // То же для НЕ-стримового запроса: заголовки `200 application/json` уже отданы, и
+  // тело дописывается пробелами, пока шлюз считает. См. DEFAULT_CFG.jsonHoldMs.
+  let clientJSON = false;
+  let jsonTimer = null;           // таймер отложенного коммита JSON
+  let jsonTick = null;            // таймер капания пробела
+  let jsonDrips = 0;
+  let stallTimer = null;          // страховка от потока, который встал посреди ответа
   let tail = Buffer.alloc(0);     // последние ≤4 байта отправленного клиенту (для формата keepalive)
   let activeSet = new Set();      // все живые попытки (ретраи + мульти-дубли)
   let winner = null;              // победитель гонки
@@ -944,9 +1216,21 @@ const server = http.createServer((req, res) => {
   let rotations = 0;
   let bonusAttempts = 0;
   let rotating = false;           // ждём ответа дашборда — новых попыток не пускаем
+  // Удержание запроса, пока лежит путь до шлюза (см. DEFAULT_CFG.holdMs). Бюджет свой,
+  // отдельно и от maxAttempts, и от ротации: он мерит не «сколько раз спросили», а
+  // «сколько ждали сеть», и подаренные им попытки не должны выедать ретраи на 500.
+  let holdLaunches = 0;
+  let holdProbing = false;        // ждём, пока путь оживёт — сдаваться и пускать попытки нельзя
+  // Пустой поток: заголовки от шлюза пришли, содержимое — нет. Пока `contentSent` false,
+  // наружу ушли максимум пинги, значит попытку ещё можно переиграть незаметно для клиента.
+  let contentSent = false;
+  let emptyTimer = null;
+  let emptyRetries = 0;
   let hedgeTimer = null;          // таймер мульти-дубля
   let preTimer = null;            // таймер отложенного пре-коммита (preCommitMs)
   let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
+  let rawBody = Buffer.alloc(0);  // тело КАК ПРИШЛО: нужно, чтобы переиграть ремап на другую модель
+  let routeFixTried = false;      // подмену модели по ответу «нет такой модели» пробуем один раз
   let tgt = null;                 // результат remapHaiku
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
   let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
@@ -986,6 +1270,13 @@ const server = http.createServer((req, res) => {
       clearTimeout(preTimer);
       preTimer = null;
     }
+    if (emptyTimer !== null) {
+      clearTimeout(emptyTimer);
+      emptyTimer = null;
+    }
+    if (jsonTimer !== null) { clearTimeout(jsonTimer); jsonTimer = null; }
+    if (jsonTick !== null) { clearTimeout(jsonTick); jsonTick = null; }
+    if (stallTimer !== null) { clearTimeout(stallTimer); stallTimer = null; }
   };
 
   // keepalive-тик на уровне запроса — работает и ДО прихода заголовков upstream,
@@ -1041,6 +1332,49 @@ const server = http.createServer((req, res) => {
     res.flushHeaders();
     armTimer();
     log(`${req.method} ${reqPath} пре-коммит SSE (${cfg.preCommitMs}ms тишины)`);
+  };
+
+  // ── То же для НЕ-стримового запроса: капаем пробел вместо пинга ───────────────
+  // Пинг — событие SSE, в JSON-ответ его не вставить. Но ведущие пробелы перед
+  // значением JSON легальны (RFC 8259 § 2), поэтому клиенту можно капать ' ' сколько
+  // угодно: его байтовый таймер сбрасывается, а `JSON.parse` пробелы съедает.
+  // Отдаём `Transfer-Encoding: chunked` (просто не ставим content-length) — иначе длину
+  // пришлось бы знать заранее, а мы её ещё не знаем.
+  const armJsonTick = () => {
+    if (jsonTick !== null) clearTimeout(jsonTick);
+    jsonTick = setTimeout(() => {
+      jsonTick = null;
+      if (aborted || res.writableEnded || !clientJSON) return;
+      res.write(' ');
+      jsonDrips += 1;
+      if (jsonDrips === 1 || jsonDrips % 12 === 0) {
+        log(`${req.method} ${reqPath} держу JSON пробелами, капель ${jsonDrips}`);
+      }
+      armJsonTick();
+    }, IDLE_MS);
+  };
+  const commitJson = () => {
+    jsonTimer = null;
+    if (aborted || res.writableEnded || res.headersSent) return;
+    clientJSON = true;
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+    });
+    if (res.socket) res.socket.setNoDelay(true);
+    res.flushHeaders();
+    res.write(' ');
+    jsonDrips = 1;
+    armJsonTick();
+    log(`${req.method} ${reqPath} пре-коммит JSON (${cfg.jsonHoldMs}ms тишины) — дальше пробелы, пока шлюз считает`);
+  };
+  // Отказ, когда JSON-ответ уже открыт: статус сменить нельзя, а писать объект ошибки с
+  // кодом 200 нельзя тем более — клиент разберёт его как сообщение модели. Единственный
+  // честный выход — обрыв: его Claude Code читает как сетевую ошибку и повторяет сам.
+  const jsonHoldFail = (why) => {
+    stopTimer();
+    log(`${req.method} ${reqPath} JSON уже открыт (${jsonDrips} капель), отдать код ошибки нельзя: ${why} — рву соединение`);
+    if (!res.writableEnded && !res.destroyed) res.destroy();
   };
 
   // Ошибка, когда клиенту уже отправлены SSE-заголовки: отдаём in-band `event: error`.
@@ -1114,9 +1448,12 @@ const server = http.createServer((req, res) => {
       // сырые байты в SSE-канале = "malformed response (HTTP 200)". Отдаём in-band.
       if (status >= 200 && status < 300 && isSSE && !compressed) {
         if (res.socket) res.socket.setNoDelay(true);
+        armEmptyGuard(stream);
         stream.on('data', (chunk) => {
           const out = patchSseChunk(chunk);
           if (out === null) return;          // придержали до границы события
+          if (!contentSent) { contentSent = true; clearEmptyGuard(); }
+          armStall(stream);
           res.write(out);
           noteBytes(out);
           armTimer();
@@ -1128,6 +1465,9 @@ const server = http.createServer((req, res) => {
           if (!res.writableEnded) res.end();
         });
         stream.on('error', (err) => {
+          // Обрыв ДО первого байта содержимого — не поломка ответа, а неудавшаяся
+          // попытка: клиент видел только пинги, значит запрос можно переиграть.
+          if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
           stopTimer();
           log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
           if (!res.writableEnded && !res.destroyed) res.destroy(err);
@@ -1174,24 +1514,51 @@ const server = http.createServer((req, res) => {
           if (patched.length !== body.length) hdrs = Object.assign({}, hdrs, { 'content-length': String(patched.length) });
           body = patched;
         }
+        // JSON-ответ уже открыт пробелами — заголовки писать нельзя, дописываем тело.
+        // Пробелы перед значением легальны, поэтому клиент разберёт это как обычный JSON.
+        if (clientJSON) {
+          if (status < 200 || status >= 300 || isCompressedBody(hdrs)) {
+            return jsonHoldFail(`апстрим ответил ${status}${isCompressedBody(hdrs) ? ' сжатым телом' : ''}`);
+          }
+          stopTimer();
+          log(`${req.method} ${reqPath} дописываю тело в открытый JSON (${jsonDrips} капель, ${body.length}Б)`);
+          res.end(body);
+          return;
+        }
         res.writeHead(status, hdrs);
         res.end(body);
       });
       stream.on('error', (err) => {
+        if (clientJSON) return jsonHoldFail(`обрыв тела: ${err.message}`);
         log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
         if (!res.writableEnded && !res.destroyed) res.destroy(err);
       });
       return;
     }
 
+    // 🪤 Зеркальный случай: клиент просил JSON, мы уже открыли его пробелами, а шлюз
+    // ответил `text/event-stream`. Дальше стоит writeHead — второй раз его звать нельзя,
+    // это `ERR_HTTP_HEADERS_SENT`, а обработчика uncaughtException в файле нет, то есть
+    // упал бы весь прокси. Отдаём обрыв: сырые SSE-байты в JSON-канале клиент всё равно
+    // не разберёт.
+    if (clientJSON) {
+      return jsonHoldFail('шлюз ответил потоком на не-стримовый запрос');
+    }
     res.writeHead(status, hdrs);
     if (res.socket) res.socket.setNoDelay(true);
     res.flushHeaders();
     armTimer();
+    // Заголовки SSE ушли клиенту — с этого момента канал открыт ровно так же, как после
+    // пре-коммита. Отмечаем это явно: иначе переигровка пустого потока попыталась бы
+    // писать заголовки второй раз, а отказ ушёл бы обрывом сокета вместо in-band ошибки.
+    clientSSE = true;
+    armEmptyGuard(stream);
 
     stream.on('data', (chunk) => {
       const out = patchSseChunk(chunk);
       if (out === null) return;            // придержали до границы события
+      if (!contentSent) { contentSent = true; clearEmptyGuard(); }
+      armStall(stream);
       res.write(out);
       noteBytes(out);
       armTimer();
@@ -1203,6 +1570,7 @@ const server = http.createServer((req, res) => {
       res.end();
     });
     stream.on('error', (err) => {
+      if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
       stopTimer();
       log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
       if (!res.writableEnded && !res.destroyed) res.destroy(err);
@@ -1239,14 +1607,114 @@ const server = http.createServer((req, res) => {
     }
     activeSet.clear();
     log(`${req.method} ${reqPath} все попытки исчерпаны: ${why}`);
-    if (clientSSE) {
+    if (clientJSON) {
+      jsonHoldFail(why);
+    } else if (clientSSE) {
       inbandError(502, Buffer.from(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: `upstream: ${why}` } })));
     } else if (!res.headersSent) {
-      res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: `upstream: ${why}` } }));
+      // Форма отказа важнее его текста. `502 proxy_error` Claude Code читает как
+      // окончательную поломку и убивает подагента на месте; `529 overloaded_error` —
+      // как «шлюз занят», повторяет сам с отступом и переживает простой длиннее нашего
+      // окна удержания. Смысл тела не меняется: причина остаётся в message.
+      // Денег это не стоит: сюда мы попадаем, только когда ни одна попытка не дала байт,
+      // то есть повторять клиенту предлагается запрос, за который никто не платил.
+      res.writeHead(529, { 'content-type': 'application/json; charset=utf-8', 'retry-after': '5' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: `upstream: ${why}` } }));
     } else if (!res.writableEnded) {
       res.destroy();
     }
+  };
+  // ── Удержание запроса, пока лежит путь ───────────────────────────────────────
+  // Работает ТОЛЬКО в зоне «клиенту не ушло ни байта содержимого». Отдельного флага для
+  // этого не нужно: как только победитель выбран, стоит `finished`, а attemptDone
+  // из-под `finished` не зовётся вообще — значит сюда попадают лишь запросы, у которых
+  // наружу ушли максимум SSE-заголовки пре-коммита и пинги. Такой запрос можно переиграть
+  // незаметно для клиента. Поток, в который уже уехали дельты, переиграть нельзя: пришлось
+  // бы дописывать чужую генерацию, а при включённом thinking там ещё и подпись блока.
+  const holdLeftMs = () => cfg.holdMs - (Date.now() - started);
+  const canHold = () => cfg.holdMs > 0 && !finished && !aborted && !rotating
+    && holdLaunches < HOLD_MAX_LAUNCHES && holdLeftMs() > 1000;
+  const holdRetry = (why) => {
+    const t = tgt || {
+      hostname: upstream.hostname,
+      port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80),
+    };
+    const wait = HOLD_BACKOFF_MS[Math.min(holdLaunches, HOLD_BACKOFF_MS.length - 1)];
+    holdLaunches += 1;
+    stats.holds += 1;
+    holdProbing = true;
+    log(`${req.method} ${reqPath} удержание #${holdLaunches}: ${why} — жду путь до ${t.hostname}, `
+      + `в запасе ${Math.round(holdLeftMs() / 1000)}с`);
+    const attempt = () => {
+      if (finished || aborted) { holdProbing = false; return; }
+      probePath(t.hostname, t.port, (alive) => {
+        if (finished || aborted) { holdProbing = false; return; }
+        if (!alive) {
+          if (holdLeftMs() <= 1000) {
+            holdProbing = false;
+            giveUp(`${why} (путь до ${t.hostname} не ожил за ${cfg.holdMs}мс удержания)`);
+            return;
+          }
+          setTimeout(attempt, 1500);
+          return;
+        }
+        holdProbing = false;
+        bonusAttempts += 1;
+        log(`${req.method} ${reqPath} путь до ${t.hostname} жив — повторяю (удержание #${holdLaunches})`);
+        makeUpstream('удержание');
+      });
+    };
+    setTimeout(attempt, wait);
+  };
+  // ── Пустой поток: заголовки есть, содержимого нет ────────────────────────────
+  // Отдельно от удержания, потому что и симптом другой: путь жив, шлюз ответил, но
+  // ничего не генерирует. Пока наружу ушли только пинги, попытку можно переиграть —
+  // для этого приходится «расстраховаться»: победитель, не давший ни байта, победителем
+  // не является, и гонка продолжается с чистого листа.
+  const clearEmptyGuard = () => {
+    if (emptyTimer !== null) { clearTimeout(emptyTimer); emptyTimer = null; }
+  };
+  const retryEmptyStream = (why, stream) => {
+    clearEmptyGuard();
+    if (contentSent || aborted || cfg.emptyStreamMs <= 0) return false;
+    if (emptyRetries >= EMPTY_MAX_RETRIES) return false;
+    emptyRetries += 1;
+    try { if (stream && !stream.destroyed) stream.destroy(); } catch (e) { /* уже мёртв */ }
+    for (const x of activeSet) { try { x.destroy(); } catch (e) { /* уже мёртв */ } }
+    activeSet.clear();
+    finished = false;          // победителя не было: то, что пришло, содержимого не несёт
+    winner = null;
+    bonusAttempts += 1;        // переигровка пустого потока не съедает бюджет ретраев
+    stats.retries += 1;
+    log(`${req.method} ${reqPath} пустой поток #${emptyRetries}: ${why} — переигрываю запрос`);
+    makeUpstream('пустой поток');
+    return true;
+  };
+  // Поток встал посреди ответа: переиграть нельзя, но висеть вечно — хуже, чем ошибка.
+  // Взводится и перевзводится на КАЖДОМ байте содержимого, поэтому живой поток его не
+  // видит вообще.
+  const armStall = (stream) => {
+    if (cfg.stallMs <= 0) return;
+    if (stallTimer !== null) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stallTimer = null;
+      if (aborted || res.writableEnded) return;
+      stopTimer();
+      log(`${req.method} ${reqPath} поток встал: ${cfg.stallMs}мс без байт после начала ответа — рву, иначе вызывающий ждёт вечно`);
+      try { if (stream && !stream.destroyed) stream.destroy(); } catch (e) { /* уже мёртв */ }
+      if (!res.writableEnded && !res.destroyed) res.destroy();
+    }, cfg.stallMs);
+  };
+  const armEmptyGuard = (stream) => {
+    if (cfg.emptyStreamMs <= 0) return;
+    clearEmptyGuard();
+    emptyTimer = setTimeout(() => {
+      emptyTimer = null;
+      if (contentSent || aborted || finished === false) return;
+      if (!retryEmptyStream(`${cfg.emptyStreamMs}мс без единого байта содержимого`, stream)) {
+        log(`${req.method} ${reqPath} пустой поток: переигрывать больше нечем (лимит ${EMPTY_MAX_RETRIES}) — жду шлюз как есть`);
+      }
+    }, cfg.emptyStreamMs);
   };
   const attemptDone = (r, why, delayMs) => {
     activeSet.delete(r);
@@ -1257,7 +1725,15 @@ const server = http.createServer((req, res) => {
       setTimeout(() => { if (!aborted && !finished) makeUpstream('ретрай'); }, delayMs);
       return;
     }
-    if (activeSet.size === 0) giveUp(why);
+    if (activeSet.size === 0) {
+      // Удержание уже идёт (его начала другая попытка) — она же и доведёт запрос.
+      if (holdProbing) return;
+      // Бюджет попыток кончился — но, возможно, кончился он не потому, что шлюз отказал, а
+      // потому что лежал путь. Держим клиента пингами и ждём сеть, вместо того чтобы
+      // убивать сессию через пять секунд.
+      if (canHold()) { holdRetry(why); return; }
+      giveUp(why);
+    }
   };
 
   // Подмена аккаунта и повтор запроса. Зовётся только из ветки ответа шлюза, когда
@@ -1322,7 +1798,12 @@ const server = http.createServer((req, res) => {
   const makeUpstream = (kind) => {
     if (finished || aborted) return;
     if (launched >= cfg.maxAttempts + bonusAttempts) {
-      if (activeSet.size === 0) giveUp('попытки исчерпаны');
+      // Тот же выбор, что в attemptDone: прежде чем сдаваться, проверить, не лежит ли
+      // просто путь. Сюда попадаем, когда бюджет выели параллельные дубли.
+      if (activeSet.size === 0 && !holdProbing) {
+        if (canHold()) holdRetry('попытки исчерпаны');
+        else giveUp('попытки исчерпаны');
+      }
       return;
     }
     launched += 1;
@@ -1434,6 +1915,36 @@ const server = http.createServer((req, res) => {
             }
             log(`${req.method} ${reqPath} ${status} «${reason}»: лимит ротаций ${MAX_ROTATIONS} на запрос исчерпан — отдаю ошибку клиенту`);
           }
+          // ── «Нет такой модели» — лечится подменой модели, а не повтором ──────────
+          // Шлюз сказал, что модели из карты у него нет ни на одном канале. Повтор
+          // канал не создаст, но и умирать рано: у шлюза почти наверняка есть другая
+          // модель того же класса. Обновляем каталог принудительно (карта могла
+          // устареть минуту назад — 03.09 justwoker снял claude-opus-4-8 на ходу),
+          // пересобираем ремап и, если цель сменилась, повторяем запрос уже живой
+          // моделью. Клиент видит только успешный ответ.
+          if (ROUTE_MISS_RE.test(buf.toString('utf8')) && !routeFixTried) {
+            routeFixTried = true;
+            activeSet.delete(upReq);
+            const wasModel = modelInBody(body);
+            log(`${req.method} ${reqPath} ${status} «нет модели ${wasModel}» — обновляю каталог шлюза и ищу замену`);
+            refreshCatalog(true, () => {
+              if (finished || aborted) return;
+              const again = remapHaiku(req.method, reqPath, rawBody);
+              const nextBody = again ? again.body : rawBody;
+              const nextModel = modelInBody(nextBody);
+              if (nextModel && nextModel !== wasModel) {
+                reqBody = nextBody;
+                tgt = again;
+                bonusAttempts += 1;   // подмена модели не должна съедать бюджет ретраев
+                log(`${req.method} ${reqPath} подмена модели: ${wasModel} → ${nextModel}, повторяю`);
+                makeUpstream('другая модель');
+                return;
+              }
+              log(`${req.method} ${reqPath} замены нет: у ${upstream.host} нет ни одной подходящей модели — отдаю ошибку клиенту`);
+              forwardBuffered(buf, headers);
+            });
+            return;
+          }
           if (isTransientBody(status, buf)) {
             attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
@@ -1477,10 +1988,14 @@ const server = http.createServer((req, res) => {
     bodySize += c.length;
   });
   req.on('end', () => {
-    const rawBody = Buffer.concat(bodyChunks, bodySize);
+    const rawBody0 = Buffer.concat(bodyChunks, bodySize);
+    rawBody = rawBody0;
+    // Каталог моделей шлюза освежаем в фоне, НЕ дожидаясь: этот запрос уедет по той
+    // карте, что есть. Точный момент, когда каталог нужен, — ответ model_not_found.
+    if (catalogStale()) refreshCatalog(false);
     // Модель ДО ремапа — её ждёт клиент в ответе (см. rewriteModelJson).
-    try { clientModel = String(JSON.parse(rawBody.toString('utf8') || '{}').model || ''); } catch (e) { clientModel = ''; }
-    const remapped = remapHaiku(req.method, reqPath, rawBody);
+    try { clientModel = String(JSON.parse(rawBody0.toString('utf8') || '{}').model || ''); } catch (e) { clientModel = ''; }
+    const remapped = remapHaiku(req.method, reqPath, rawBody0);
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
     if (remapped) stats.remaps += 1;
@@ -1489,6 +2004,13 @@ const server = http.createServer((req, res) => {
     // тишины от upstream, не сразу. 0 = отложенный пре-коммит выключен.
     if (streaming && cfg.preCommitMs > 0 && preTimer === null) {
       preTimer = setTimeout(commitSSE, cfg.preCommitMs);
+    }
+    // Не-стримовый запрос за сообщением (`/compact` и всё, что просит готовый JSON):
+    // пингов там быть не может, поэтому через jsonHoldMs начинаем капать пробел.
+    // count_tokens сюда не попадает — на него прокси отвечает локально и мгновенно.
+    if (!streaming && cfg.jsonHoldMs > 0 && jsonTimer === null
+        && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath) && !isCountTokens(req.method, reqPath)) {
+      jsonTimer = setTimeout(commitJson, cfg.jsonHoldMs);
     }
     makeUpstream();
     scheduleHedge();
@@ -1696,6 +2218,8 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(GW_BY_HOST['api.justwoker.icu'], 'jw', 'api.justwoker.icu (с поддоменом!) → пул jw');
   assert.strictEqual(GW_BY_HOST['seekai.cc'], 'sk', 'seekai.cc → пул sk');
   assert.ok(FLAT_RATE_HOSTS.has('seekai.cc'), 'seekai.cc в плоских тарифах — мульти-запрос выключен (замер 24.08: ~3.2¢ за вызов)');
+  assert.strictEqual(GW_BY_HOST['api.hcnsec.cn'], 'hn', 'api.hcnsec.cn (с поддоменом!) → пул hn');
+  assert.ok(!FLAT_RATE_HOSTS.has('api.hcnsec.cn'), 'hcnsec тарифицируется по токенам, не за запрос — в плоских его быть не должно');
   assert.strictEqual(GW_BY_HOST['api.anthropic.com'], undefined, 'чужой хост → ротации нет');
 
   // publicState отдаёт апстрим и пре-коммит, без сюрпризов
@@ -1745,6 +2269,172 @@ if (process.argv[2] === 'selftest') {
   applyPatch({ preCommitMs: 0 });
   assert.strictEqual(cfg.preCommitMs, 0, '0 выключает пре-коммит');
 
+  // ── Промах маршрута и удержание (2026-09-03) ────────────────────────────────
+  // Живое тело с justwoker за 03.09: 179 смертей из 220 пришлись ровно на него.
+  const ROUTE_MISS_BODY = '{"error":{"code":"model_not_found","message":"No available channel for model claude-opus-4-8 under group g"}}';
+  assert.strictEqual(isTransientBody(503, Buffer.from(ROUTE_MISS_BODY)), false,
+    'model_not_found — промах маршрута, повтор канала не создаёт');
+  assert.strictEqual(isTransientBody(503, Buffer.from('{"error":{"message":"当前分组下无可用渠道"}}')), false,
+    'та же ошибка по-китайски (无可用渠道) тоже постоянная');
+  // 🪤 Регресс на причину бага: раньше решал fallback `status >= 500`, потому что в теле
+  // `No available channel`, а в словаре RETRY_OK — `unavailable`. Подстроки разные.
+  assert.ok(!RETRY_OK.test(ROUTE_MISS_BODY) && !RETRY_NO.test(ROUTE_MISS_BODY),
+    'ни один словарь эту формулировку не ловит — ловить её обязан отдельный класс');
+  assert.strictEqual(isTransientBody(503, Buffer.from('{"retryable":true,"error":{"code":"model_not_found"}}')), true,
+    'явный retryable:true шлюза сильнее нашей догадки про промах маршрута');
+
+  applyPatch({ holdMs: 90000 });
+  assert.strictEqual(cfg.holdMs, 90000, 'holdMs применился');
+  applyPatch({ holdMs: 10 });
+  assert.strictEqual(cfg.holdMs, 5000, 'holdMs зажат по нижней границе (окно короче 5с — иллюзия защиты)');
+  applyPatch({ holdMs: 9999999 });
+  assert.strictEqual(cfg.holdMs, 600000, 'holdMs зажат по верхней границе');
+  applyPatch({ holdMs: 'нет' });
+  assert.strictEqual(cfg.holdMs, 600000, 'мусор в holdMs игнорируется');
+  applyPatch({ holdMs: 0 });
+  assert.strictEqual(cfg.holdMs, 0, '0 выключает удержание — откат без рестарта процесса');
+  assert.strictEqual(DEFAULT_CFG.holdMs, 120000, 'поставочное окно удержания 120с');
+  applyPatch({ emptyStreamMs: 90000 });
+  assert.strictEqual(cfg.emptyStreamMs, 90000, 'emptyStreamMs применился');
+  applyPatch({ emptyStreamMs: 1000 });
+  assert.strictEqual(cfg.emptyStreamMs, 30000, 'emptyStreamMs зажат по нижней границе');
+  applyPatch({ emptyStreamMs: 0 });
+  assert.strictEqual(cfg.emptyStreamMs, 0, '0 выключает страховку от пустого потока');
+  assert.strictEqual(DEFAULT_CFG.emptyStreamMs, 180000,
+    'поставочные 180с — с запасом над честным максимумом ответа 159.6с из хендоффа');
+  assert.ok(CFG_VERSION >= 4, 'версия конфига поднята под holdMs (иначе поле не доедет до тех, кто нажимал «Применить»)');
+
+  // Инварианты удержания — проверяем по исходнику: сцену с живым обрывом гоняет
+  // tools/check-hold-window.js, а здесь фиксируем то, что нельзя нарушить правкой.
+  const holdSrc = fs.readFileSync(__filename, 'utf8');
+  // Главный инвариант: переигрывать можно только пока клиенту не ушло содержимое.
+  // Признак этого — `!finished`: после settle() стоит finished, и attemptDone не зовётся.
+  assert.ok(/const canHold = \(\) => cfg\.holdMs > 0 && !finished/.test(holdSrc),
+    'удержание разрешено только до выбора победителя (!finished = клиенту не ушло дельт)');
+  assert.ok(/holdLaunches < HOLD_MAX_LAUNCHES/.test(holdSrc),
+    'у удержания есть потолок повторов — на плоском тарифе каждая дошедшая попытка платная');
+  assert.ok(/probePath\(t\.hostname, t\.port/.test(holdSrc),
+    'перед повтором проверяем путь, а не стреляем в мёртвую сеть');
+  assert.ok(/bonusAttempts \+= 1;\n\s*log\(`\$\{req\.method\} \$\{reqPath\} путь до/.test(holdSrc),
+    'подаренная удержанием попытка не съедает бюджет ретраев на транзиентную 500');
+  // Форма отказа: 529 overloaded_error, а не 502 proxy_error — иначе подагент умирает
+  // вместо того, чтобы повторить сам.
+  assert.ok(/res\.writeHead\(529, \{ 'content-type': 'application\/json; charset=utf-8', 'retry-after': '5' \}\)/.test(holdSrc),
+    'сдаёмся до пре-коммита с 529 и retry-after');
+  assert.ok(/type: 'overloaded_error'/.test(holdSrc), 'тело отказа — overloaded_error (повторяемый класс)');
+
+  // ── Умный маппинг: карта это пожелание, каталог шлюза — факт (2026-09-03) ────
+  // Живой случай: justwoker снял `claude-opus-4-8`, на который смотрели тиры
+  // sonnet/haiku, и отдавал по /v1/models только две модели.
+  const JW_MAP = { opus: 'claude-opus-5', sonnet: 'claude-opus-4-8', haiku: 'claude-opus-4-8' };
+  catalog.ids = null; catalog.at = 0;
+  assert.strictEqual(catalogHas('что угодно'), null, 'без каталога не судим о моделях вообще');
+  assert.strictEqual(availableTarget('sonnet', 'claude-opus-4-8', 'claude-sonnet-5[1m]', JW_MAP), null,
+    'нет каталога — карту не трогаем (иначе подменяли бы наугад)');
+  catalog.ids = new Set(['claude-opus-5', 'claude-opus-5-thinking']);
+  catalog.at = Date.now();
+  assert.strictEqual(availableTarget('sonnet', 'claude-opus-4-8', 'claude-sonnet-5[1m]', JW_MAP), 'claude-opus-5',
+    'мёртвая цель тира заменяется на живую цель соседнего тира из той же карты');
+  assert.strictEqual(availableTarget('opus', 'claude-opus-5', 'claude-opus-5[1m]', JW_MAP), null,
+    'живую цель не подменяем');
+  // Замена берётся из каталога и когда соседние тиры тоже мертвы.
+  assert.strictEqual(availableTarget('haiku', 'claude-opus-4-8', 'claude-haiku-4-5', { opus: 'нет-такой', sonnet: '', haiku: 'claude-opus-4-8' }), 'claude-opus-5',
+    'все цели карты мертвы — берём claude-модель из каталога шлюза');
+  // Клиентская модель — тоже кандидат, если шлюз её знает.
+  assert.strictEqual(availableTarget('sonnet', 'нет-такой', 'claude-opus-5[1m]', { opus: '', sonnet: 'нет-такой', haiku: '' }), 'claude-opus-5',
+    'суффикс окна срезается, и модель клиента годится в кандидаты');
+  // Каталог без единой claude-модели: подменять нечем, и выдумывать нельзя.
+  // 🪤 Соблазн «взять что угодно из каталога» отвергнут намеренно: gpt-модель в ответ на
+  // claude-тир поедет через конвертер и может сломать tool use, а карта тиров у владельца
+  // осознанная. Честная ошибка лучше молчаливой подмены семейства.
+  catalog.ids = new Set(['gpt-5.6-sol']);
+  assert.strictEqual(availableTarget('sonnet', 'claude-opus-4-8', 'claude-sonnet-5', { opus: '', sonnet: 'claude-opus-4-8', haiku: '' }), null,
+    'нечем заменить внутри семейства — не подменяем вовсе');
+  catalog.ids = null; catalog.at = 0;   // не оставляем каталог селфтеста живому процессу
+  // Выключатель: `catalogTtlMs: 0` возвращает поведение «строго по карте», как до 04.09.
+  catalog.ids = new Set(['claude-opus-5']);
+  catalog.at = Date.now();
+  applyPatch({ catalogTtlMs: 0 });
+  assert.strictEqual(cfg.catalogTtlMs, 0, '0 выключает каталог');
+  assert.strictEqual(catalogHas('claude-opus-4-8'), null, 'с выключенным каталогом о моделях не судим');
+  assert.strictEqual(availableTarget('sonnet', 'claude-opus-4-8', 'claude-sonnet-5', JW_MAP), null,
+    'с выключенным каталогом подмен нет вообще — откат без рестарта');
+  assert.strictEqual(catalogStale(), false, 'выключенный каталог не пытается обновляться');
+  applyPatch({ catalogTtlMs: 600000 });
+  assert.strictEqual(cfg.catalogTtlMs, 600000, 'ручка возвращается');
+  catalog.ids = null; catalog.at = 0;
+  const routeSrc = holdSrc;
+  assert.ok(/if \(ROUTE_MISS_RE\.test\(buf\.toString\('utf8'\)\) && !routeFixTried\)/.test(routeSrc),
+    'на «нет такой модели» пробуем подмену, и ровно один раз за запрос');
+  assert.ok(/refreshCatalog\(true, \(\) => \{/.test(routeSrc),
+    'каталог перед подменой обновляется принудительно (модель могли снять минуту назад)');
+  assert.ok(/if \(catalogStale\(\)\) refreshCatalog\(false\)/.test(routeSrc),
+    'в обычном пути каталог освежается в фоне и запрос не блокирует');
+
+  // ── Пустой поток: заголовки есть, содержимого нет (2026-09-03, 21:13 kktoken) ──
+  // Инварианты переигровки: только пока содержимого не было, с потолком, и со снятием
+  // «победителя» — иначе makeUpstream упрётся в finished и повтор не стартует.
+  assert.ok(/if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
+    'переигрываем пустой поток только пока клиенту не ушло содержимое');
+  assert.ok(/if \(emptyRetries >= EMPTY_MAX_RETRIES\) return false;/.test(holdSrc),
+    'у переигровки пустого потока есть потолок');
+  assert.ok(/finished = false;.*\n\s*winner = null;/.test(holdSrc),
+    'пустой победитель снимается, иначе повтор не стартует');
+  assert.ok(/if \(!contentSent\) \{ contentSent = true; clearEmptyGuard\(\); \}/.test(holdSrc),
+    'первый байт содержимого закрывает страховку — дальше поток неприкосновенен');
+  assert.strictEqual((holdSrc.match(/armEmptyGuard\(stream\);/g) || []).length, 2,
+    'страховка ставится на обеих SSE-ветках: и после пре-коммита, и на прямом ответе');
+  assert.ok(/clientSSE = true;\n\s*armEmptyGuard\(stream\);/.test(holdSrc),
+    'на прямой SSE-ветке канал помечается открытым — иначе повтор полез бы писать заголовки заново');
+  // ── Удержание не-стримового запроса пробелами (2026-09-04) ──────────────────
+  applyPatch({ jsonHoldMs: 20000 });
+  assert.strictEqual(cfg.jsonHoldMs, 20000, 'jsonHoldMs применился');
+  applyPatch({ jsonHoldMs: 100 });
+  assert.strictEqual(cfg.jsonHoldMs, 3000, 'jsonHoldMs зажат по нижней границе');
+  applyPatch({ jsonHoldMs: 0 });
+  assert.strictEqual(cfg.jsonHoldMs, 0, '0 выключает JSON-удержание (поведение как до 04.09)');
+  assert.strictEqual(DEFAULT_CFG.jsonHoldMs, 15000,
+    'поставочные 15с — по замеру 137 не-стримовых ответов: быстрее 15с только 24 из них, '
+    + 'а путь giveUp успевает отдать честный 529 до коммита');
+  assert.strictEqual(CFG_VERSION, 5, 'версия конфига поднята под три новых поля');
+  // Ведущие пробелы перед значением — легальный JSON, на этом стоит весь приём.
+  assert.deepStrictEqual(JSON.parse('   {"type":"message"}'), { type: 'message' },
+    'JSON.parse съедает ведущие пробелы — иначе капать было бы нельзя');
+  // Взвод только на POST /v1/messages без stream и не на count_tokens.
+  assert.ok(/if \(!streaming && cfg\.jsonHoldMs > 0 && jsonTimer === null/.test(holdSrc),
+    'JSON-удержание взводится только для не-стримового запроса');
+  assert.ok(/!isCountTokens\(req\.method, reqPath\)\)[\s\S]{0,40}?jsonTimer = setTimeout\(commitJson/.test(holdSrc),
+    'count_tokens под удержание не попадает — на него отвечаем локально и мгновенно');
+  // Коммит НЕ ставит content-length: длину тела мы в этот момент не знаем.
+  const commitJsonSrc = (holdSrc.match(/const commitJson = \(\) => \{[\s\S]*?\n  \};/) || [''])[0];
+  assert.ok(/res\.writeHead\(200, \{[\s\S]*?\}\);/.test(commitJsonSrc), 'коммит JSON пишет заголовки');
+  assert.ok(!/content-length/i.test(commitJsonSrc),
+    'при коммите JSON content-length не выставляется (тело дописывается позже)');
+  assert.ok(/res\.write\(' '\)/.test(commitJsonSrc), 'первая капля уходит сразу при коммите');
+  // После коммита 200 объект ошибки с кодом 200 отдавать нельзя — только обрыв.
+  assert.ok(/const jsonHoldFail = \(why\) => \{[\s\S]*?res\.destroy\(\);/.test(holdSrc),
+    'отказ после коммита JSON — обрыв, а не 200 с телом ошибки');
+  assert.ok(/if \(clientJSON\)[\s\S]{0,30}?jsonHoldFail\(why\);/.test(holdSrc),
+    'giveUp знает про открытый JSON');
+
+  // Вставший посреди ответа поток: переигрывать нельзя, но и висеть вечно нельзя.
+  applyPatch({ stallMs: 240000 });
+  assert.strictEqual(cfg.stallMs, 240000, 'stallMs применился');
+  applyPatch({ stallMs: 1000 });
+  assert.strictEqual(cfg.stallMs, 30000, 'stallMs зажат по нижней границе');
+  applyPatch({ stallMs: 0 });
+  assert.strictEqual(cfg.stallMs, 0, '0 выключает страховку от вставшего потока');
+  assert.strictEqual(DEFAULT_CFG.stallMs, 180000, 'поставочные 180с');
+  assert.strictEqual((holdSrc.match(/armStall\(stream\);/g) || []).length, 2,
+    'страховка перевзводится на обеих SSE-ветках, то есть на каждом байте содержимого');
+  assert.ok(/armStall = \(stream\) => \{[\s\S]*?res\.destroy\(\);/.test(holdSrc),
+    'вставший поток рвётся: вызывающий увидит ошибку вместо бесконечного ожидания');
+
+  // 🪤 Наш таймаут сокета в этой сцене бесполезен: после заголовков стоит finished, а
+  // обработчик timeout под этим флагом выходит молча. Значит страховка обязана быть своя.
+  assert.ok(/upReq\.on\('timeout', \(\) => \{\s*\n\s*if \(finished \|\| aborted\) return;/.test(holdSrc),
+    'upstreamTimeoutMs не спасает начатый поток — это и есть причина отдельной страховки');
+
   // ВОССТАНОВЛЕНИЕ — строго последним: любой applyPatch выше пишет в CONFIG_FILE,
   // и если восстановить раньше, прогон затрёт живую настройку дашборда.
   if (savedCfg === null) {
@@ -1771,6 +2461,10 @@ server.on('clientError', (err, socket) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, мульти-запрос ${hedgeOff(cfg) ? 'выкл' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${cfg.upstreamTimeoutMs}ms)`);
+  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, мульти-запрос ${hedgeOff(cfg) ? 'выкл' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? cfg.holdMs + 'ms (≤' + HOLD_MAX_LAUNCHES + ' повторов)' : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? cfg.emptyStreamMs + 'ms (≤' + EMPTY_MAX_RETRIES + ')' : 'выкл'}, каталог моделей ${cfg.catalogTtlMs ? cfg.catalogTtlMs + 'ms' : 'выкл (строго по карте)'}, JSON-удержание ${cfg.jsonHoldMs ? cfg.jsonHoldMs + 'ms' : 'выкл'}, вставший поток ${cfg.stallMs ? cfg.stallMs + 'ms' : 'выкл'})`);
+
   log(`gpt-конвертер: ${GPT_PROXY_ENABLED ? HAIKU_GPT_PROXY : 'off (чужой шлюз — gpt остаётся на ' + upstream.host + ')'}`);
+  // Каталог моделей шлюза греем на старте: тогда первый же запрос с мёртвой целью тира
+  // уедет уже подменённым, без круга через 503.
+  refreshCatalog(true);
 });

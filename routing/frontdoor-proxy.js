@@ -195,9 +195,15 @@ function remapForRemote(method, reqPath, body, mm) {
 
 // Ошибка в форме Anthropic: Claude Code печатает message как есть, иначе юзер
 // видит только «unknown error» и лезет искать причину в CC, а не у нас.
+// 🪤 Если заголовки уже ушли, `res.end()` ОТМЫВАЕТ обрыв в чистое завершение: клиент
+// получает корректно закрытый ответ с недописанным телом и падает на разборе, а не
+// повторяет запрос. Особенно больно с удержанием keepalive, где тело до отказа состоит
+// из одних пробелов (`jsonHoldMs`) или из одних пингов: `JSON.parse` даёт SyntaxError
+// вместо повторяемой сетевой ошибки. Поэтому здесь именно `destroy()` — обрыв должен
+// доехать до клиента обрывом. Найдено чтением кода 2026-09-04.
 function apiError(res, code, message) {
     const body = JSON.stringify({ type: 'error', error: { type: 'api_error', message } });
-    if (res.headersSent) { try { res.end(); } catch { /* ignore */ } return; }
+    if (res.headersSent) { try { res.destroy(); } catch { /* ignore */ } return; }
     res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
     res.end(body);
 }
@@ -298,7 +304,10 @@ function forward(req, res, state, reqBody, reqPath) {
             upRes.on('aborted', tap.end);       // клиент ушёл — считаем то, что успело прийти
         }
         upRes.pipe(res);
-        upRes.on('error', () => { try { res.end(); } catch { /* ignore */ } });
+        // Тот же принцип, что в apiError: недописанный ответ обязан выглядеть
+        // недописанным. `res.end()` здесь закрывал бы поток штатно, и клиент считал бы
+        // обрезанный ответ полным — вместо повторяемой транспортной ошибки.
+        upRes.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
     });
 
     upReq.on('timeout', () => {
@@ -435,6 +444,17 @@ if (process.argv[2] === 'selftest') {
         'у req сторож — !req.complete (close приходит по дочитанному телу)');
     assert.ok(/res\.on\('close', \(\) => \{ if \(!res\.writableEnded\)/.test(src),
         'у res сторож — !res.writableEnded');
+
+    // 5a. Обрыв должен доезжать обрывом: `res.end()` при уже отправленных заголовках
+    //     превращает недописанный ответ в «успешный», и клиент падает на разборе тела
+    //     вместо повтора. Критично для удержания keepalive, где до отказа наружу ушли
+    //     только пробелы или пинги.
+    assert.ok(/if \(res\.headersSent\) \{ try \{ res\.destroy\(\); \} catch/.test(src),
+        'apiError при отправленных заголовках рвёт соединение, а не закрывает его штатно');
+    assert.ok(/upRes\.on\('error', \(\) => \{ try \{ res\.destroy\(\); \} catch/.test(src),
+        'ошибка тела апстрима тоже рвёт ответ клиенту');
+    assert.strictEqual((src.match(/try \{ res\.end\(\); \} catch/g) || []).length, 0,
+        'ни одного пути, где обрыв отмывается в res.end()');
 
     // 5. Ошибки в форме Anthropic.
     let captured = null;

@@ -1183,6 +1183,26 @@ async function doVersions() {
     // Список держим здесь, а не в замыкании draw(): по нему навигация и Enter, и
     // читать его надо тем же, что нарисовано на экране.
     const state = { list: { commits: [] } };
+    // Сколько строк напечатано ПОД списком коммитов. Нужно точечной перерисовке:
+    // она поднимается курсором на нужную строку, и ошибка на единицу стирает не
+    // коммит, а подсказку. Обычно 2 (пустая + подсказка), с результатом действия —
+    // плюс сам результат и пустая перед ним.
+    let below = 2;
+
+    // Одна строка коммита. Вынесена, потому что печатается из двух мест: при полной
+    // отрисовке кадра и при точечной перерисовке двух строк на стрелку.
+    const commitLine = (c, on) => {
+        const L2 = state.list;
+        const mark = on ? cyan(CURSOR) : ' ';
+        // Маркеры: где стоим сейчас и что лежит на GitHub. Без них после отката
+        // непонятно, куда возвращаться — ровно та потерянность, что была 04.09.
+        const tags = [];
+        if (c.sha === L2.headFull) tags.push(green('◀ сейчас'));
+        if (c.sha === L2.originFull) tags.push(cyan('на GitHub'));
+        const subj = c.subject.length > 58 ? c.subject.slice(0, 57) + '…' : c.subject;
+        return `  ${mark} ${dim(c.date)} ${yellow(c.short)} ${on ? bold(e(97, subj)) : subj}`
+            + (tags.length ? '  ' + tags.join(' ') : '');
+    };
 
     const draw = () => {
         clearScreen();
@@ -1211,27 +1231,41 @@ async function doVersions() {
         }
         if (dirtyState.length || dirtyCode.length) line();
 
-        for (const [i, c] of L2.commits.entries()) {
-            const on = i === sel;
-            const mark = on ? cyan(CURSOR) : ' ';
-            // Маркеры: где стоим сейчас и что лежит на GitHub. Без них после отката
-            // непонятно, куда возвращаться — ровно та потерянность, что была 04.09.
-            const tags = [];
-            if (c.sha === L2.headFull) tags.push(green('◀ сейчас'));
-            if (c.sha === L2.originFull) tags.push(cyan('на GitHub'));
-            const subj = c.subject.length > 58 ? c.subject.slice(0, 57) + '…' : c.subject;
-            line(`  ${mark} ${dim(c.date)} ${yellow(c.short)} ${on ? bold(e(97, subj)) : subj}`
-                + (tags.length ? '  ' + tags.join(' ') : ''));
-        }
+        for (const [i, c] of L2.commits.entries()) line(commitLine(c, i === sel));
 
         if (info) { line(); for (const l of info) line('  ' + l); }
         line();
         line(dim('  ↑↓ выбрать · Enter откатиться на выбранный · o вернуться на свежий с GitHub · q назад'));
+        below = 2 + (info ? 1 + info.length : 0);
+    };
+
+    // Перерисовка ровно двух строк: снятой и надетой. Курсор поднимается на нужную
+    // строку, стирает её и печатает БЕЗ перевода строки, потом возвращается вниз —
+    // поэтому кадр не дёргается.
+    //
+    // 🪤 Стрелка НЕ имеет права звать draw(): тот чистит экран и заново дёргает
+    // `git log` + пачку `rev-parse` — это чёрный экран на каждое нажатие и есть
+    // (владелец: «нажимаю вниз, чёрный экран, потом текст, очень лагуче»). Ровно
+    // эту болезнь уже лечили в главном меню и на экране диктовки 25.08; здесь она
+    // приехала снова, потому что экран писался с нуля.
+    const move = dir => {
+        const items = state.list.commits || [];
+        if (!items.length) return;
+        const prev = sel;
+        sel = (sel + dir + items.length) % items.length;
+        if (!TTY) return;
+        for (const i of [prev, sel]) {
+            const upBy = items.length - i + below;
+            out(`\x1b[${upBy}A`);
+            eraseLine();
+            out(commitLine(items[i], i === sel));
+            out(`\r\x1b[${upBy}B`);
+        }
     };
 
     // Одно действие на оба пути (Enter и «o»): текст подтверждения разный, механика
     // одна. Грязный код блокирует — предлагаем stash, как кнопка обновления.
-    const move = async (sha, what) => {
+    const apply = async (sha, what) => {
         line();
         if (!(await confirm(`Переставить код на ${what}?`, false))) return ['остановился, ничего не тронул'].map(dim);
 
@@ -1277,12 +1311,12 @@ async function doVersions() {
         const name = keyName(k);
         const items = state.list.commits || [];
 
-        if (name === 'up' || name === 'k') { if (items.length) { sel = (sel - 1 + items.length) % items.length; needFull = true; } continue; }
-        if (name === 'down' || name === 'j') { if (items.length) { sel = (sel + 1) % items.length; needFull = true; } continue; }
+        if (name === 'up' || name === 'k') { move(-1); continue; }
+        if (name === 'down' || name === 'j') { move(1); continue; }
         if (name === 'q' || name === 'escape' || (name === 'c' && k.ctrl)) return true;
 
         if (name === 'o') {
-            info = await move('origin/master', 'последний коммит с GitHub');
+            info = await apply('origin/master', 'последний коммит с GitHub');
             await pause('Enter — вернуться к списку версий');
             needFull = true;
             continue;
@@ -1290,7 +1324,7 @@ async function doVersions() {
         if (name === 'return' || name === 'enter' || name === 'space') {
             const c = items[sel];
             if (!c) continue;
-            info = await move(c.sha, `${c.short} «${c.subject}»`);
+            info = await apply(c.sha, `${c.short} «${c.subject}»`);
             await pause('Enter — вернуться к списку версий');
             needFull = true;
             continue;

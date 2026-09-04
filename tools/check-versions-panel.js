@@ -32,6 +32,10 @@ const fails = [];
 const ok = (n) => { pass++; console.log(`  \x1b[32m✓\x1b[0m ${n}`); };
 const bad = (n, why) => { fails.push(`${n} — ${why}`); console.log(`  \x1b[31m✗\x1b[0m ${n}\n      ${why}`); };
 const t = (n, fn) => { try { const r = fn(); if (r === true || r === undefined) ok(n); else bad(n, String(r)); } catch (e) { bad(n, e.message); } };
+// Асинхронные проверки собираются здесь и гоняются в конце: файл на CommonJS,
+// top-level await в нём недоступен, а «прогнать экран вслепую» иначе не проверить.
+const ASYNC = [];
+const ta = (n, fn) => ASYNC.push([n, fn]);
 
 // Клон делаем из живого репо, но правки берём с диска (cp), иначе тест проверял бы
 // закоммиченную версию модуля, а не ту, которую сейчас пишут.
@@ -182,6 +186,52 @@ t('moveTo("origin/master") возвращает на свежую версию',
     return true;
 });
 
+// Экран крутится вслепую: readKey подменён сценарием нажатий, вывод — в массив.
+// Так ловится то, чего статическая проверка не видит: перерисовка кадра на стрелку.
+// Возвращает { gitCalls, cursorUps, printed }.
+function driveVersionsScreen(keys) {
+    const src = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
+    const i = src.indexOf('async function doVersions(');
+    const j = src.indexOf('\n// ── Обновление', i);
+    if (i < 0 || j < 0) throw new Error('doVersions() в hub.js не найдена');
+    const G = require(path.join(ROOT, 'tools', 'git-pull-safe'));
+    let gitCalls = 0;
+    const spy = Object.assign({}, G, { listCommits: (n) => { gitCalls++; return G.listCommits(n); } });
+    const printed = [], raw = [];
+    let ki = 0;
+    const id = s => s, tag = (_, s) => s;
+    const fn = new Function('require', 'line', 'dim', 'bold', 'red', 'green', 'yellow', 'cyan', 'e',
+        'clearScreen', 'CURSOR', 'readKey', 'keyName', 'confirm', 'pause', 'gitHead', 'doRestart',
+        'process', 'out', 'eraseLine', 'TTY', src.slice(i, j) + '; return doVersions;')(
+        (p) => (p === './tools/git-pull-safe' ? spy : require(p)),
+        (s = '') => printed.push(String(s)), id, id, id, id, id, id, tag,
+        () => { }, '>', async () => ({ name: keys[ki++] || 'q' }), k => k.name,
+        async () => false, async () => { }, () => 'head', async () => { }, process,
+        s => raw.push(s), () => { }, true);
+    return fn().then(() => ({
+        gitCalls, printed,
+        cursorUps: raw.filter(s => /\x1b\[\d+A/.test(s)).length,
+    }));
+}
+
+ta('экран рисуется и отдаёт список с маркерами', async () => {
+    const r = await driveVersionsScreen(['q']);
+    if (!r.printed.some(l => l.includes('Версии кода'))) return 'нет шапки экрана';
+    if (!r.printed.some(l => l.includes('◀ сейчас'))) return 'нет маркера «сейчас» — непонятно, где стоим';
+    if (!r.printed.some(l => l.includes('на GitHub'))) return 'нет маркера «на GitHub» — непонятно, куда возвращаться';
+    return true;
+});
+
+ta('стрелка НЕ перерисовывает кадр и НЕ дёргает git', async () => {
+    // Ровно та болезнь, что лечили в главном меню 25.08 и снова получили здесь:
+    // draw() чистит экран и заново зовёт `git log` + пачку `rev-parse` — владелец
+    // видит чёрный экран на каждое нажатие. Стрелка обязана перерисовать ДВЕ строки.
+    const r = await driveVersionsScreen(['down', 'down', 'up', 'q']);
+    if (r.gitCalls !== 1) return `listCommits вызван ${r.gitCalls} раз — кадр перерисовывается на стрелку`;
+    if (r.cursorUps !== 6) return `точечных подъёмов курсора ${r.cursorUps}, ожидалось 6 (3 стрелки × 2 строки)`;
+    return true;
+});
+
 t('откат заведён в меню хаба рядом с «Обновить»', () => {
     // Механика без точки входа мертва, а пункт легко потерять при мерже. Плюс место
     // важно само по себе: откатываются, когда дашборд сломан, и в вебе кнопки не
@@ -240,9 +290,18 @@ t('механика не пушит на GitHub', () => {
     return true;
 });
 
-// Клон свой, созданный этой же сессией → удаляем напрямую (правило корзины на
-// временные артефакты не распространяется).
-try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { }
+(async () => {
+    for (const [n, fn] of ASYNC) {
+        try { const r = await fn(); if (r === true || r === undefined) ok(n); else bad(n, String(r)); }
+        catch (e) { bad(n, e.message); }
+    }
 
-console.log(`\n${fails.length ? '\x1b[31m[FAIL]\x1b[0m' : '\x1b[32m[OK]\x1b[0m'} проверок ${pass}, ошибок ${fails.length}`);
-if (fails.length) { for (const f of fails) console.error(`  · ${f}`); process.exit(1); }
+    // Клон свой, созданный этой же сессией -> удаляем напрямую (правило корзины на
+    // временные артефакты не распространяется).
+    try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { }
+
+    const head = fails.length ? '[31m[FAIL][0m' : '[32m[OK][0m';
+    console.log(`
+${head} проверок ${pass}, ошибок ${fails.length}`);
+    if (fails.length) { for (const f of fails) console.error(`  · ${f}`); process.exit(1); }
+})();

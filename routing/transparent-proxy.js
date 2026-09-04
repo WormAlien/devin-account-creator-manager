@@ -14991,54 +14991,6 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Панель «Версии» — список коммитов и перестановка рабочей копии на любой из
-    // них (откат и возврат на свежую — одна операция). Механика в
-    // tools/git-pull-safe.js (listCommits/moveTo): те же гарантии, что у
-    // update-pull — state-файлы спасены, грязный код — 409 + can_stash, untracked
-    // не трогаем, GitHub не пушим. Кейс-родитель: ручной git reset 04.09.
-    if (req.method === 'GET' && req.url.split('?')[0] === '/__switch/api/dashboard/commits') {
-        try {
-            const qi = req.url.indexOf('?');
-            const n = qi >= 0 ? parseInt(new URLSearchParams(req.url.slice(qi + 1)).get('n') || '30', 10) : 30;
-            const { listCommits } = require('../tools/git-pull-safe');
-            return jsonRes(res, 200, { ok: true, ...listCommits(n) });
-        } catch (e) {
-            return jsonRes(res, 500, { error: (e.message || 'git log failed').toString() });
-        }
-    }
-
-    // {sha, stash, fetch}: sha — коммит или 'origin/master' (с fetch:true —
-    // сначала git fetch, потом перестановка; кнопка «Вернуться на последнюю»).
-    if (req.method === 'POST' && req.url === '/__switch/api/dashboard/checkout') {
-        let body = '';
-        req.on('data', c => body += c);
-        req.on('end', () => {
-            try {
-                const { sha, stash, fetch: wantFetch } = JSON.parse(body || '{}');
-                if (!sha) return jsonRes(res, 400, { error: 'sha обязателен' });
-                const { moveTo } = require('../tools/git-pull-safe');
-                const r = moveTo(sha, { stashBlocking: !!stash, fetch: !!wantFetch });
-                if (!r.ok && r.blocking && r.blocking.length) {
-                    return jsonRes(res, 409, {
-                        error: 'Откату мешают правки кода в рабочей копии:\n  ' + r.blocking.join('\n  '),
-                        dirty: r.blocking,
-                        can_stash: true,
-                    });
-                }
-                if (!r.ok) return jsonRes(res, 500, { error: r.error || 'checkout failed' });
-                if (r.already) return jsonRes(res, 200, { ok: true, already: true });
-                if (r.backupRef) logLine(`dashboard checkout: незапушенные коммиты спрятаны в тег ${r.backupRef} — откат обратим`);
-                if (r.preserved && r.preserved.length) logLine(`dashboard checkout: локальные настройки возвращены (${r.preserved.join(', ')})`);
-                if (r.stashed && r.stashed.length) logLine(`dashboard checkout: правки кода в git stash (${r.stashed.join(', ')}) — вернуть: git stash pop`);
-                logLine(`dashboard checkout:\n${r.output}`);
-                jsonRes(res, 200, { ok: true, ...r, restart_required: true });
-            } catch (e) {
-                return jsonRes(res, 500, { error: (e.message || 'checkout failed').toString() });
-            }
-        });
-        return;
-    }
-
     if (req.method === 'POST' && req.url === '/__switch/api/switch') {
         let body = '';
         req.on('data', c => body += c);

@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-//  check-versions-panel.js — регресс на панель «Версии» (04.09).
+//  check-versions-panel.js — регресс на механику отката версий (04.09).
 //
-//  Панель делает `git reset --hard` по клику из UI, поэтому проверять её на живом
-//  репо нельзя: одна ошибка = снесённая работа. Тест поднимает ОДНОРАЗОВЫЙ клон
-//  в temp, гоняет listCommits/moveTo на нём и удаляет. Живой репо не трогается.
+//  Откат делает `git reset --hard`, поэтому проверять его на живом репо нельзя:
+//  одна ошибка = снесённая работа. Тест поднимает ОДНОРАЗОВЫЙ клон в temp, гоняет
+//  listCommits/moveTo на нём и удаляет. Живой репо не трогается.
+//
+//  Потребитель механики — меню хаба (`hub.js`), НЕ веб-дашборд: когда дашборд
+//  сломан, его же UI для откта недоступен, а хаб работает всегда.
 //
 //  Кейс-родитель: 04.09 владелец откатился руками (`git reset`), снёс два
 //  незапушенных коммита агента, push молча упал. Инварианты отсюда:
@@ -53,7 +56,7 @@ try {
     process.exit(1);
 }
 
-console.log('\nПанель «Версии» — откат и выбор коммита из дашборда\n');
+console.log('\nОткат версий — механика listCommits/moveTo\n');
 
 // Две точки истории клона: HEAD и что-то заведомо старше.
 const HEAD_SHA = git('rev-parse', 'HEAD');
@@ -179,28 +182,13 @@ t('moveTo("origin/master") возвращает на свежую версию',
     return true;
 });
 
-t('ручки панели зарегистрированы в transparent-proxy.js', () => {
-    // Механика без ручек мертва, а ручку легко потерять при мерже.
-    const src = fs.readFileSync(path.join(ROOT, 'routing', 'transparent-proxy.js'), 'utf8');
-    for (const route of ['/__switch/api/dashboard/commits', '/__switch/api/dashboard/checkout']) {
-        if (!src.includes(route)) return `нет ручки ${route}`;
-    }
-    if (!/moveTo\(sha, \{ stashBlocking/.test(src)) return 'checkout не передаёт stashBlocking — кнопка «спрятать и откатить» не сработает';
-    return true;
-});
-
-t('панель не пушит на GitHub', () => {
+t('механика не пушит на GitHub', () => {
     // Решение владельца 04.09: люди скачивают с GitHub, плохая версия у них
     // лечится коммитом-фиксом вперёд, а не стиранием истории. Никакого push
-    // (тем более force) из ручек панели быть не должно.
-    const src = fs.readFileSync(path.join(ROOT, 'routing', 'transparent-proxy.js'), 'utf8');
-    const i = src.indexOf("/__switch/api/dashboard/checkout");
-    const seg = src.slice(i, i + 2500);
-    if (/push/i.test(seg)) return 'в обработчике checkout появился push — панель не должна трогать remote';
+    // (тем более force) в moveTo() быть не должно.
     const mod = fs.readFileSync(path.join(ROOT, 'tools', 'git-pull-safe.js'), 'utf8');
-    if (/git\((\s*)'push'/.test(mod) || /'push'/.test(mod.slice(mod.indexOf('function moveTo')))) {
-        return 'moveTo() пушит — панель не должна трогать remote';
-    }
+    const seg = mod.slice(mod.indexOf('function moveTo'));
+    if (/'push'/.test(seg)) return 'moveTo() пушит — откат не должен трогать remote';
     return true;
 });
 

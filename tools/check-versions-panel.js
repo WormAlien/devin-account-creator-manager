@@ -182,6 +182,54 @@ t('moveTo("origin/master") возвращает на свежую версию',
     return true;
 });
 
+t('откат заведён в меню хаба рядом с «Обновить»', () => {
+    // Механика без точки входа мертва, а пункт легко потерять при мерже. Плюс место
+    // важно само по себе: откатываются, когда дашборд сломан, и в вебе кнопки не
+    // будет — 04.09 панель из дашборда убрали именно поэтому.
+    const src = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
+    if (!/async function doVersions\(/.test(src)) return 'нет функции doVersions()';
+    if (!/require\('\.\/tools\/git-pull-safe'\)/.test(src)) return 'doVersions не берёт механику из tools/git-pull-safe';
+    const m = src.match(/function menuItems\(\) \{[\s\S]*?\n\}/);
+    if (!m) return 'menuItems() не найдена';
+    // Считаем по строкам, а не по офсетам: сама строка пункта «Версии» начинается с
+    // `{ key:`, и поиск этого маркера «между пунктами» по срезу ловил её же.
+    const lines = m[0].split('\n');
+    const iUpd = lines.findIndex(l => l.includes("label: 'Обновить'"));
+    const iVer = lines.findIndex(l => l.includes("label: 'Версии'"));
+    if (iVer < 0) return 'в меню нет пункта «Версии»';
+    if (iVer < iUpd) return 'пункт «Версии» стоит ВЫШЕ «Обновить» — просили рядом, ниже';
+    const between = lines.slice(iUpd + 1, iVer).filter(l => /\{\s*key:/.test(l.replace(/\/\/.*$/, '')));
+    if (between.length) return `между «Обновить» и «Версии» ещё ${between.length} пункт(ов) — соседство потеряно`;
+    if (!/label: 'Версии'[^}]*noPause: true/.test(m[0])) return 'у «Версий» нет noPause — «q назад» упрётся в «Enter — вернуться»';
+    return true;
+});
+
+t('в веб-дашборде отката НЕТ', () => {
+    // Обратная сторона решения 04.09: панель в UI была снята намеренно. Если она
+    // вернётся, вернётся и исходная беда — сломанный дашборд не может предложить
+    // свой же UI для починки.
+    const html = fs.readFileSync(path.join(ROOT, 'routing', 'proxy-dashboard.html'), 'utf8');
+    for (const token of ['dashCheckout', 'loadDashCommits', 'dash-commits-box']) {
+        if (html.includes(token)) return `в дашборде снова есть ${token} — откат должен жить только в хабе`;
+    }
+    const proxy = fs.readFileSync(path.join(ROOT, 'routing', 'transparent-proxy.js'), 'utf8');
+    for (const route of ['dashboard/commits', 'dashboard/checkout']) {
+        if (proxy.includes(route)) return `в проксе снова есть ручка ${route}`;
+    }
+    return true;
+});
+
+t('после отката хаб предлагает перезапуск стека', () => {
+    // Файлы на диске уже другие, а в памяти процессов прежний код: без рестарта
+    // откат виден только в git и читается как «откат не сработал».
+    const src = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
+    const i = src.indexOf('async function doVersions(');
+    const seg = src.slice(i, src.indexOf('\n// ── Обновление', i));
+    if (!/doRestart\(/.test(seg)) return 'doVersions не зовёт doRestart — откат останется только в git';
+    if (!/backupRef/.test(seg)) return 'doVersions не показывает backup-тег — срезанные коммиты нечем найти';
+    return true;
+});
+
 t('механика не пушит на GitHub', () => {
     // Решение владельца 04.09: люди скачивают с GitHub, плохая версия у них
     // лечится коммитом-фиксом вперёд, а не стиранием истории. Никакого push

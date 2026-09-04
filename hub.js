@@ -1160,6 +1160,144 @@ async function doDictationFix() {
     }
 }
 
+// ── Версии кода ──────────────────────────────────────────────────────────────
+//
+// Откат на выбранный коммит. Живёт В ХАБЕ, а не в веб-дашборде, и это не вкусовщина:
+// откатываются ровно тогда, когда дашборд сломан — а сломанный дашборд не может
+// предложить свой же UI для починки. Хаб работает всегда.
+//
+// Кейс-родитель (04.09): владелец решил, что дашборд сломался (упали провайдеры),
+// откатился руками `git reset`, снёс два незапушенных коммита агента, push молча
+// упал, разбор доехал только по reflog. Механика — tools/git-pull-safe.js
+// (listCommits/moveTo), та же, что спасает настройки при обновлении.
+//
+// На GitHub экран НЕ пушит: люди скачивают код с него, и плохая версия у них
+// лечится коммитом-фиксом вперёд, а не стиранием истории (решение владельца).
+async function doVersions() {
+    const G = require('./tools/git-pull-safe');
+    // Сколько коммитов показать: экран — это шапка (~4) + список + подсказки (~5).
+    // Меньше 5 не показываем даже в коротком окне: список из двух строк бесполезен.
+    const N = Math.max(5, Math.min(15, (process.stdout.rows || 24) - 11));
+    let sel = 0;
+    let info = null;      // текст результата последнего действия, печатается под списком
+    // Список держим здесь, а не в замыкании draw(): по нему навигация и Enter, и
+    // читать его надо тем же, что нарисовано на экране.
+    const state = { list: { commits: [] } };
+
+    const draw = () => {
+        clearScreen();
+        let L2;
+        try { L2 = G.listCommits(N); } catch (e) { L2 = { commits: [], dirty: [], error: e.message }; }
+        state.list = L2;
+
+        line();
+        line(`  ${bold('Версии кода')} ${dim('— откатиться на любой коммит и вернуться обратно')}`);
+        line(`  ${dim('настройки (тир-карты, front-door) откат переживают · на GitHub ничего не уходит')}`);
+        line();
+
+        if (L2.error) line(`  ${red('git не ответил: ' + L2.error)}`);
+        // Грязь делим на две кучи: настройки уедут и вернутся молча, про КОД спросим.
+        // Одной строкой «незакоммиченные правки: 4» экран пугал тир-картами, которые
+        // трогать никто и не собирался.
+        const dirtyState = (L2.dirty || []).filter(f => G.isStateFile(f));
+        const dirtyCode = (L2.dirty || []).filter(f => !G.isStateFile(f));
+        if (dirtyState.length) {
+            line(`  ${dim('своих настроек на месте: ' + dirtyState.length)} ${dim('— сохраню и верну (' + dirtyState.map(f => f.split('/').pop()).join(', ') + ')')}`);
+        }
+        if (dirtyCode.length) {
+            line(`  ${yellow('незакоммиченный код: ' + dirtyCode.length)} ${dim('— спрошу, прятать ли в stash')}`);
+            for (const f of dirtyCode.slice(0, 3)) line(`    ${dim(f)}`);
+            if (dirtyCode.length > 3) line(`    ${dim('…и ещё ' + (dirtyCode.length - 3))}`);
+        }
+        if (dirtyState.length || dirtyCode.length) line();
+
+        for (const [i, c] of L2.commits.entries()) {
+            const on = i === sel;
+            const mark = on ? cyan(CURSOR) : ' ';
+            // Маркеры: где стоим сейчас и что лежит на GitHub. Без них после отката
+            // непонятно, куда возвращаться — ровно та потерянность, что была 04.09.
+            const tags = [];
+            if (c.sha === L2.headFull) tags.push(green('◀ сейчас'));
+            if (c.sha === L2.originFull) tags.push(cyan('на GitHub'));
+            const subj = c.subject.length > 58 ? c.subject.slice(0, 57) + '…' : c.subject;
+            line(`  ${mark} ${dim(c.date)} ${yellow(c.short)} ${on ? bold(e(97, subj)) : subj}`
+                + (tags.length ? '  ' + tags.join(' ') : ''));
+        }
+
+        if (info) { line(); for (const l of info) line('  ' + l); }
+        line();
+        line(dim('  ↑↓ выбрать · Enter откатиться на выбранный · o вернуться на свежий с GitHub · q назад'));
+    };
+
+    // Одно действие на оба пути (Enter и «o»): текст подтверждения разный, механика
+    // одна. Грязный код блокирует — предлагаем stash, как кнопка обновления.
+    const move = async (sha, what) => {
+        line();
+        if (!(await confirm(`Переставить код на ${what}?`, false))) return ['остановился, ничего не тронул'].map(dim);
+
+        let r = G.moveTo(sha, { fetch: sha === 'origin/master' });
+        if (!r.ok && r.can_stash) {
+            line();
+            line(`  ${yellow('мешают незакоммиченные правки в коде:')}`);
+            for (const f of r.blocking) line(`    ${f}`);
+            if (!(await confirm('Спрятать их в git stash и продолжить? (вернуть: git stash pop)', false))) {
+                return [dim('остановился, правки на месте')];
+            }
+            r = G.moveTo(sha, { stashBlocking: true, fetch: sha === 'origin/master' });
+        }
+        if (!r.ok) return [red('не получилось: ') + (r.error || '?')];
+        if (r.already) return [dim('уже стоим на этом коммите — ничего не делал')];
+
+        const out2 = [green('готово: ') + gitHead()];
+        if (r.preserved && r.preserved.length) out2.push(dim('настройки сохранены: ' + r.preserved.map(f => f.split('/').pop()).join(', ')));
+        if (r.stashed && r.stashed.length) out2.push(dim('правки в стэше, вернуть: git stash pop'));
+        // Тег — страховка ровно от того, что случилось 04.09: reset срезает коммиты,
+        // которых нет на origin, и reflog после чистки их уже не отдаёт.
+        if (r.backupRef) out2.push(yellow('срезанные коммиты помечены тегом ' + r.backupRef) + dim('  (вернуться: git reset --hard ' + r.backupRef + ')'));
+
+        // Файлы на диске уже другие, а в памяти процессов — прежний код. Без рестарта
+        // откат виден только в git, и это читается как «откат не сработал».
+        line();
+        for (const l of out2) line('  ' + l);
+        line();
+        if (await confirm('Перезапустить стек на этом коде? (без этого в работе останется прежний)', true)) {
+            await doRestart({ open: false });
+            out2.push(dim('стек перезапущен'));
+        } else {
+            out2.push(yellow('стек НЕ перезапущен — в работе прежний код, пункт [2]'));
+        }
+        return out2;
+    };
+
+    let needFull = true;
+    for (;;) {
+        if (needFull) { draw(); needFull = false; }
+
+        const k = await readKey();
+        const name = keyName(k);
+        const items = state.list.commits || [];
+
+        if (name === 'up' || name === 'k') { if (items.length) { sel = (sel - 1 + items.length) % items.length; needFull = true; } continue; }
+        if (name === 'down' || name === 'j') { if (items.length) { sel = (sel + 1) % items.length; needFull = true; } continue; }
+        if (name === 'q' || name === 'escape' || (name === 'c' && k.ctrl)) return true;
+
+        if (name === 'o') {
+            info = await move('origin/master', 'последний коммит с GitHub');
+            await pause('Enter — вернуться к списку версий');
+            needFull = true;
+            continue;
+        }
+        if (name === 'return' || name === 'enter' || name === 'space') {
+            const c = items[sel];
+            if (!c) continue;
+            info = await move(c.sha, `${c.short} «${c.subject}»`);
+            await pause('Enter — вернуться к списку версий');
+            needFull = true;
+            continue;
+        }
+    }
+}
+
 // ── Обновление ───────────────────────────────────────────────────────────────
 
 // Две фазы, и это не украшение: pull может обновить сам hub.js, и продолжать в
@@ -1318,6 +1456,11 @@ function menuItems() {
         { key: '2', label: 'Перезапустить', hint: 'погасить и поднять заново на свежем коде', run: () => doRestart() },
         { key: '3', label: 'Остановить', hint: 'погасить всё, включая front-door', run: () => doStop({ ask: true }) },
         { key: '4', label: 'Обновить', hint: 'git pull → зависимости → перезапуск', run: () => doUpdate({ interactive: true }) },
+        // Обратный путь к «Обновить» — и стоит рядом с ним. Клавиша буквенная (как
+        // [a] и [q]) НАМЕРЕННО: цифра сдвинула бы номера четырёх привычных пунктов
+        // ниже, а в списке соседство и так видно. Своё меню со своим выходом,
+        // поэтому noPause — иначе «q назад» упирается в «Enter — вернуться».
+        { key: 'v', label: 'Версии', hint: 'откатиться на любой коммит и вернуться обратно', noPause: true, run: () => doVersions() },
         { key: '5', label: 'Проверка', hint: 'всё ли в порядке — список вердиктов, ничего не меняет', run: () => doCheck() },
         { key: '6', label: 'Отчёт для отправки', hint: 'окружение целиком в файл, чтобы прислать', run: () => doDoctor() },
         { key: '7', label: 'Поделиться', hint: 'своя версия репы веткой и PR', run: () => doShare() },

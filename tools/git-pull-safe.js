@@ -249,7 +249,141 @@ function pullSafe(opts = {}) {
     }
 }
 
-module.exports = { REPO, LOCAL_STATE_FILES, isStateFile, pullSafe };
+// Грязь для moveTo (панель «Версии»): только `git diff --name-only HEAD`, без
+// union с diff-files. Разница против dirtyFiles(): diff-files ловит фантомную
+// CRLF-грязь свежего checkout'а (нормализация `.gitattributes`), и для `git pull`
+// это честно — pull об неё ДЕЙСТВИТЕЛЬНО спотыкается. Для `reset --hard` фантом
+// безвреден: реальных правок в файле нет, reset просто перепишет его. Считать
+// такой файл «мешающими правками» = пугать человека списком файлов, которые он
+// не трогал (живой случай — свежий клон, тест 04.09).
+function dirtyRealFiles() {
+    let raw = '';
+    try { raw = git('diff', '--name-only', 'HEAD'); } catch { return []; }
+    return raw.split('\n').map(f => f.trim()).filter(Boolean);
+}
+
+// ─── Панель «Версии» (04.09): список коммитов и перестановка на выбранный ────
+//
+// Кейс, из которого это выросло: владелец откатился руками (`git reset`), снёс два
+// незапушенных коммита агента, «запушил» — push молча упал. Откат стал кнопкой в
+// дашборде, и у кнопки те же гарантии, что у pullSafe: state-файлы спасены и
+// вписаны назад, грязный код — блокер (или stash по подтверждению), untracked
+// не трогаем. GitHub панель не трогает: люди с него скачивают, и плохая версия
+// у них лечится коммитом-фиксом вперёд, а не стиранием истории.
+
+// Список для UI. Референс origin/master — ЛОКАЛЬНЫЙ ref (обновляется fetch'ем):
+// сеть здесь не трогаем, «Проверить обновление» обновляет ref само.
+// Лог берём по ДВУМ точкам (HEAD + origin/master): после отката HEAD позади, и
+// лог только по нему прятал бы от человека новые коммиты, которые он срезал.
+function listCommits(n = 30) {
+    n = Math.max(1, Math.min(100, parseInt(n, 10) || 30));
+    const fmt = '%H%x1f%h%x1f%ad%x1f%an%x1f%s%x1e';
+    const logArgs = ['log', '-n', String(n), '--date-order', '--date=short', `--pretty=format:${fmt}`];
+    let raw = '';
+    try { raw = git(...logArgs, 'HEAD', 'origin/master'); }
+    catch { try { raw = git(...logArgs, 'HEAD'); } catch { } }
+    const commits = raw.split('\x1e').map(r => r.replace(/^\s+/, '')).filter(Boolean).map(rec => {
+        const [sha, short, date, author, subject] = rec.split('\x1f');
+        return { sha, short, date, author, subject };
+    });
+    const refShort = (ref) => { try { return git('rev-parse', '--short', ref); } catch { return ''; } };
+    return {
+        commits,
+        head: refShort('HEAD'),
+        headFull: (() => { try { return git('rev-parse', 'HEAD'); } catch { return ''; } })(),
+        origin: refShort('origin/master'),
+        originFull: (() => { try { return git('rev-parse', 'origin/master'); } catch { return ''; } })(),
+        dirty: dirtyRealFiles(),
+    };
+}
+
+// Переставить рабочую копию на коммит — откат и «вперёд до origin/master» одна
+// операция: reset --hard до sha. Возвращает { ok, output, preserved, blocking,
+// stashed, stashRef, backupRef, already, error }.
+//
+// backupRef — страховка главного грабля 04.09: если reset срезает коммиты,
+// которых нет на origin (существуют в единственной копии), перед операцией
+// ставим тег backup/pre-rollback-<ts> (конвенция тега backup/pre-dashboard-dedup).
+// Тег локальный: наружу не уезжает, но git reflog после чистки уже не спасает,
+// а тег — да.
+function moveTo(sha, opts = {}) {
+    const empty = { ok: false, output: '', preserved: [], blocking: [], stashed: [] };
+    let full = '';
+    try { full = git('rev-parse', '--verify', `${String(sha).trim()}^{commit}`); }
+    catch { return { ...empty, error: `коммит не найден: ${sha}` }; }
+    if (opts.fetch) {
+        try { git('fetch', 'origin'); }
+        catch (e) { return { ...empty, error: `git fetch не прошёл (сеть?): ${(e.stderr || e.message || '').toString().trim()}` }; }
+    }
+    let cur = '';
+    try { cur = git('rev-parse', 'HEAD'); } catch { }
+    if (full === cur) return { ...empty, ok: true, already: true };
+
+    // Грязь та же, что у pullSafe, но меряем «честно» (dirtyRealFiles — без
+    // CRLF-фантомов, см. комментарий там): state-файлы спасём, код — блокер или
+    // stash. Untracked reset --hard не трогает в принципе, в списке блокеров их
+    // быть не может — не как у pull, где merge спотыкается и о них.
+    const dirty = dirtyRealFiles();
+    const resettable = dirty.filter(isStateFile);
+    const blocking = dirty.filter(f => !isStateFile(f));
+    let stashed = [], stashRef = '';
+    if (blocking.length) {
+        if (!opts.stashBlocking) {
+            return { ...empty, blocking, can_stash: true };
+        }
+        const label = `git-pull-safe pre-checkout stash ${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}`;
+        const st = stashPaths(blocking, label, false);
+        if (!st.ok) return { ...empty, blocking, error: st.error || 'git stash не удался' };
+        stashed = blocking.slice();
+        stashRef = st.ref;
+    }
+
+    // Незапушенные коммиты, которые срежет reset: пометить до операции.
+    // Тег переиспользуем, если он уже смотрит на этот же коммит — иначе три клика
+    // «откатить» подряд оставляют три тега на одну и ту же работу и список тегов
+    // превращается в мусор.
+    let backupRef = '';
+    try {
+        const doomed = git('log', '--oneline', `${full}..HEAD`, '--not', 'origin/master');
+        if (doomed.trim()) {
+            const headSha = git('rev-parse', 'HEAD');
+            let existing = '';
+            for (const tag of git('tag', '-l', 'backup/pre-rollback-*').split('\n').map(s => s.trim()).filter(Boolean)) {
+                try { if (git('rev-parse', `${tag}^{commit}`) === headSha) { existing = tag; break; } } catch { }
+            }
+            if (existing) backupRef = existing;
+            else {
+                const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-');
+                backupRef = `backup/pre-rollback-${ts}`;
+                git('tag', '-f', backupRef, 'HEAD');
+            }
+        }
+    } catch { /* origin/master нет — проверку пропускаем, reset всё равно пойдёт */ }
+
+    const backup = new Map();
+    for (const f of resettable) {
+        try { backup.set(f, fs.readFileSync(path.join(REPO, f), 'utf8')); } catch { }
+    }
+    let output;
+    try {
+        if (resettable.length) git('checkout', '--', ...resettable);
+        output = git('reset', '--hard', full);
+    } catch (e2) {
+        const m2 = (e2.stderr || e2.stdout || e2.message || '').toString().trim();
+        const restored = [];
+        for (const [f, content] of backup) {
+            try { fs.writeFileSync(path.join(REPO, f), content, 'utf8'); restored.push(f); } catch { }
+        }
+        return { ...empty, preserved: restored, stashed, stashRef, backupRef, error: m2 };
+    }
+    const preserved = [];
+    for (const [f, content] of backup) {
+        try { fs.writeFileSync(path.join(REPO, f), content, 'utf8'); preserved.push(f); } catch { }
+    }
+    return { ok: true, output, preserved, blocking: [], stashed, stashRef, backupRef };
+}
+
+module.exports = { REPO, LOCAL_STATE_FILES, isStateFile, pullSafe, listCommits, moveTo };
 
 if (require.main === module) {
     // --stash: правки кода не блокируют, а уходят в git stash. Тот же режим, что

@@ -4332,6 +4332,26 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
             <button id="dash-update-btn" onclick="pullDashboardUpdate()" disabled
               class="px-4 py-2 bg-emerald text-sm font-medium rounded-lg hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">⬇ Обновить дашборд</button>
           </div>
+
+          <!-- Панель «Версии» (04.09): откат и возврат коммитами, без терминала.
+               Родилась из ручного git reset владельца, снёсшего незапушенные
+               коммиты агента. GitHub не трогает: люди скачивают с него, плохая
+               версия у них лечится фиксом вперёд, а не стиранием истории. -->
+          <div class="pt-3 border-t border-line-soft/40 space-y-2">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-semibold">📜 Версии кода</h3>
+                <p class="text-xs text-muted mt-0.5">Откатиться на любой коммит или вернуться на свежий — кликом, без git. Настройки (тир-карты и пр.) переживают откат. После — перезапусти прокси.</p>
+              </div>
+              <div class="flex gap-2 shrink-0">
+                <button onclick="loadDashCommits()" class="px-3 py-1.5 bg-elevated border border-line-soft text-xs rounded-lg hover:border-emerald/60 transition">📜 Версии</button>
+                <button onclick="dashCheckout('origin/master', {fetch:true}, event)" title="git fetch + перестановка на свежий коммит с GitHub"
+                  class="px-3 py-1.5 bg-elevated border border-line-soft text-xs rounded-lg hover:border-emerald/60 transition">⏪ Вернуться на последнюю</button>
+              </div>
+            </div>
+            <div id="dash-commits-box" class="hidden rounded-lg border border-line-soft bg-elevated p-2 max-h-72 overflow-y-auto text-xs"></div>
+          </div>
+
           <div class="text-xs text-muted pt-1">
             Репозиторий и история обновлений:
             <a href="https://github.com/WormAlien/hub-cc" target="_blank" rel="noopener" class="text-emerald hover:underline font-mono">github.com/WormAlien/hub-cc</a>
@@ -22444,6 +22464,86 @@ async function pullDashboardUpdate(stash) {
 }
 
 // Поп-ап «дашборд обновлён» → кнопка перезапуска прокси (restart-dashboard.bat).
+// ─── Панель «Версии»: список коммитов + клик-перестановка ────────────────────
+// Бэки: GET /__switch/api/dashboard/commits, POST /__switch/api/dashboard/checkout.
+// Подтверждение перед каждым действием — reset --hard осознанный, и в тексте
+// предупреждения честно перечислены последствия (какие коммиты срежутся, что с
+// правками, что нужен рестарт).
+async function loadDashCommits() {
+  const box = $('dash-commits-box');
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="text-faint p-2">загружаю…</div>';
+  try {
+    const res = await fetch('/__switch/api/dashboard/commits?n=30');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || '?');
+    state.dashCommits = d;
+    const marker = (c) => {
+      const tags = [];
+      if (c.sha === d.headFull) tags.push('<span class="px-1.5 py-0.5 rounded bg-emerald/15 border border-emerald/50 text-emerald">сейчас</span>');
+      if (c.sha === d.originFull) tags.push('<span class="px-1.5 py-0.5 rounded bg-sky/15 border border-sky/50 text-sky" title="эта версия у тех, кто обновился с GitHub">на GitHub</span>');
+      return tags.join(' ');
+    };
+    box.innerHTML = d.commits.map(c => `
+      <div class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface transition cursor-pointer" onclick='dashCheckout(${JSON.stringify(c.sha)})'
+        title="клик = переставить дашборд на этот коммит">
+        <span class="font-mono text-faint shrink-0">${esc(c.date)}</span>
+        <span class="font-mono text-violet shrink-0">${esc(c.short)}</span>
+        <span class="truncate flex-1">${esc(c.subject)}</span>
+        ${marker(c)}
+      </div>`).join('')
+      + (d.commits.length >= 30 ? '<div class="text-faint px-2 py-1">показаны последние 30 — более старые ищи в git log</div>' : '');
+  } catch (e) {
+    box.innerHTML = '<div class="text-crimson p-2">✗ ' + esc(e.message) + '</div>';
+  }
+}
+
+async function dashCheckout(sha, opts = {}, ev) {
+  if (ev) ev.stopPropagation();
+  try {
+    const list = state.dashCommits || {};
+    const target = (list.commits || []).find(c => c.sha === sha || sha === 'origin/master');
+    const label = target ? `${target.short} «${target.subject}»` : sha;
+    if (!confirm(`Переставить дашборд на ${sha === 'origin/master' ? 'последний коммит с GitHub' : 'коммит ' + label}?\n\n`
+      + '· Настройки (тир-карты, frontdoor) сохранятся\n'
+      + '· Незапушенные коммиты не потеряются — спрячутся в backup-тег\n'
+      + '· После перестановки нужен перезапуск прокси (restart-dashboard.bat)\n'
+      + '· На GitHub ничего не уходит')) return;
+    let res = await fetch('/__switch/api/dashboard/checkout', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sha, fetch: !!opts.fetch }),
+    });
+    let d = await res.json();
+    // 409 + can_stash: мешают правки кода — тот же разговор, что у «Обновить».
+    if (res.status === 409 && d.can_stash) {
+      if (confirm('Перестановке мешают правки в рабочей копии:\n\n  ' + (d.dirty || []).join('\n  ')
+          + '\n\nСпрятать их в git stash и продолжить?\nНичего не пропадёт. Вернуть:  git stash pop')) {
+        res = await fetch('/__switch/api/dashboard/checkout', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sha, stash: true, fetch: !!opts.fetch }),
+        });
+        d = await res.json();
+      } else return;
+    }
+    if (!res.ok) throw new Error(d.error || 'fail');
+    if (d.already) return toast('Уже стоим на этом коммите — ничего не делал', 'info');
+    if (Array.isArray(d.preserved) && d.preserved.length) {
+      toast('Твои настройки сохранены: ' + d.preserved.map(f => f.split('/').pop()).join(', '), 'success', 6000);
+    }
+    if (Array.isArray(d.stashed) && d.stashed.length) {
+      toast('Правки кода спрятаны в git stash · вернуть: git stash pop', 'info', 9000);
+    }
+    if (d.backupRef) {
+      toast('Незапушенные коммиты спрятаны в тег ' + d.backupRef + ' — ничего не потеряно', 'info', 9000);
+    }
+    toast('✓ Переставлено — нужен перезапуск прокси', 'success', 6000);
+    openDashRestartModal();
+    loadDashCommits();   // перерисовать маркеры «сейчас»/«на GitHub»
+  } catch (e) {
+    toast('Версии: ' + e.message, 'error', 7000);
+  }
+}
+
 function openDashRestartModal() {
   const m = $('dash-restart-modal');
   if (m) m.classList.remove('hidden');

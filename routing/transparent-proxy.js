@@ -6508,20 +6508,12 @@ async function handleOlMark(req, res) {
         const id = String(body.id || '').trim();
         const tag = String(body.tag || '').trim();
         if (!id || !tag) return jsonRes(res, 400, { error: 'нужны id и tag' });
-        const e = olPatch(id, x => {
-            const was = (Array.isArray(x.usedOn) ? x.usedOn : [])
-                .map(m => (typeof m === 'string' ? { tag: m, at: null } : m))
-                .filter(m => m && m.tag);
-            const cur = was.filter(m => m.tag !== tag);
-            // Повторная отметка тем же тегом дату НЕ обновляет: важен факт первого расхода,
-            // а не последнего клика. `off` — откат ошибочной отметки, иначе промах мышью
-            // лечился бы только удалением ящика вместе с профилем.
-            if (!body.off) {
-                const prev = was.find(m => m.tag === tag);
-                cur.push({ tag, at: (prev && prev.at) || new Date().toISOString() });
-            }
-            x.usedOn = cur;
-        });
+        // Повторная отметка тем же тегом дату НЕ обновляет: важен факт первого расхода,
+        // а не последнего клика. `off` — откат ошибочной отметки, иначе промах мышью
+        // лечился бы только удалением ящика вместе с профилем.
+        // Тело вынесено в olMarkTag: ту же метку ставит связка set-outlook, и две копии
+        // логики занятости разъехались бы на первой же правке.
+        const e = olMarkTag(id, tag, !!body.off);
         if (!e) return jsonRes(res, 404, { error: 'ящик не найден' });
         logLine(`outlook mark: ${olMaskEmail(e.email)} ${body.off ? '− снята метка ' : '→ занят на '}${tag}`);
         jsonRes(res, 200, { ok: true, entry: olSafe(e) });
@@ -6724,6 +6716,11 @@ function handleOlAvailable(req, res) {
         jsonRes(res, 200, {
             ok: true, tag,
             account: ranked[0] || null,
+            // `list` — тот же отбор целиком, для пикера ящиков во вкладке шлюза: человек
+            // выбирает сам, а не получает «первый годный». Порядок тот же (готовые к
+            // работе вперёд), поэтому верхний элемент списка = `account`, и две ручки
+            // не могут разъехаться в том, кого считать лучшим кандидатом.
+            list: ranked,
             free: free.length,
             ready: free.filter(ready).length,
         });
@@ -8670,8 +8667,15 @@ function leagueSelf() {
     const proj = (m, keys) => keys.map(k => Math.round((m.get(k) || 0)));
     const proj2 = (m, keys) => keys.map(k => round2(m.get(k) || 0));
     // Накопительный счётчик аккаунтов: в дни без закупок держит предыдущее значение.
-    const accAt = keys => { const m = new Map(acc.cum); let last = 0;
-        return keys.map(k => { if (m.has(k)) last = m.get(k); return last; }); };
+    // Затравка — счётчик на момент НАЧАЛА окна, а не ноль: иначе неделя начиналась с
+    // нуля, когда в её первый день никого не заводили, кривая обрывалась на сутки, а
+    // «разрыв данных» рисовался там, где данные как раз есть.
+    const accAt = keys => {
+        const m = new Map(acc.cum);
+        let last = 0;
+        for (const [k, v] of acc.cum) { if (k < keys[0]) last = v; else break; }
+        return keys.map(k => { if (m.has(k)) last = m.get(k); return last; });
+    };
     const sum = a => a.reduce((x, y) => x + y, 0);
 
     const tok = { h24: proj(tj.hour, hKeys.keys), d7: proj(tokDay, k7.keys),
@@ -9261,6 +9265,144 @@ function handleGoSetGithub(req, res) {
 }
 function handleKkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
+
+// POST /__switch/api/{hn}/set-outlook { api_key|id, olId } → привязать / сменить / отвязать
+// купленный ящик у записи шлюза. Ровно то же место, что `set-github` занимает у пяти
+// остальных вкладок, — только источник другой (менеджер 📧 вместо менеджера гитхабов).
+//
+// Зачем это отдельная ручка, а не поле в `add`: у hcnsec GitHub-входа нет физически
+// (`/api/status`: github_oauth=false, github_client_id пустой), а регистрация требует код
+// с почты (`email_verification=true`). Значит «на чём завёрнут аккаунт» здесь — ящик, и
+// связка нужна не для красоты: без неё `/ol/code` не знает, в каком профиле искать письмо.
+//
+// 🪤 Занятость пишем В ОБЕ стороны сразу: `outlookId` в записи шлюза и `usedOn[{tag}]` в
+// записи ящика. Если писать только в одну, пикер честно покажет ящик свободным, и второй
+// аккаунт уедет на ту же почту — а панель на повторную регистрацию отвечает «аккаунт уже
+// создан», то есть промах виден не сразу, а через минуту ручной работы.
+async function newapiSetOutlook(req, res, { tag, load, save }) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const key = String(body.api_key || '').trim();
+        if (!id && !key) return jsonRes(res, 400, { error: 'нужен id записи или api_key' });
+        const olId = (body.olId === null || body.olId === undefined || body.olId === '') ? null : String(body.olId).trim();
+        const sessions = load();
+        const target = sessions.find(s => (id && s.id === id) || (key && s.api_key === key));
+        if (!target) return jsonRes(res, 404, { error: 'запись не найдена' });
+
+        const pool = olPool.load();
+        if (olId && !pool.some(e => e.id === olId)) {
+            return jsonRes(res, 400, { error: 'ящик не найден в менеджере 📧' });
+        }
+        // Один ящик — один аккаунт на шлюз. Иначе два аккаунта делят один почтовый профиль,
+        // и код из письма достаётся тому, кто спросил первым.
+        const busy = olId && sessions.find(s => s !== target && s.outlookId === olId);
+        if (busy) {
+            return jsonRes(res, 409, { error: `ящик уже привязан к «${busy.name || busy.email || busy.id}» на этом шлюзе` });
+        }
+
+        const prev = target.outlookId || null;
+        if (olId === null) delete target.outlookId; else target.outlookId = olId;
+        save(sessions);
+
+        // Метка занятости: снимаем со старого ящика, ставим на новый. Дату первого расхода
+        // не переписываем — её ведёт сам olMarkTag (повторная отметка дату не двигает).
+        if (prev && prev !== olId) olMarkTag(prev, tag, true);
+        if (olId) olMarkTag(olId, tag, false);
+
+        const box = olId ? pool.find(e => e.id === olId) : null;
+        logLine(`${tag} set-outlook: ${target.name || target.email || target.id} → `
+            + (olId === null ? 'отвязан' : olMaskEmail(box && box.email)));
+        jsonRes(res, 200, { ok: true, outlookId: target.outlookId || null, usage: olUsageMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Пометить/снять занятость ящика тегом шлюза. Та же логика, что в /ol/mark, вынесенная
+// отдельно: ручка HTTP-ручкой, а связка зовёт её напрямую — лишний round-trip на себя же
+// был бы ещё одним местом, где половина операции может не доехать.
+function olMarkTag(id, tag, off) {
+    return olPatch(id, x => {
+        const was = (Array.isArray(x.usedOn) ? x.usedOn : [])
+            .map(m => (typeof m === 'string' ? { tag: m, at: null } : m))
+            .filter(m => m && m.tag);
+        const cur = was.filter(m => m.tag !== tag);
+        if (!off) {
+            const prev = was.find(m => m.tag === tag);
+            cur.push({ tag, at: (prev && prev.at) || new Date().toISOString() });
+        }
+        x.usedOn = cur;
+    });
+}
+
+// Карта «ящик → на каких шлюзах израсходован» для бейджей пикера. Форма как у ghUsageMap:
+// фронт рисует занятость одним и тем же кодом.
+function olUsageMap() {
+    const map = {};
+    for (const e of olPool.load()) {
+        map[e.id] = (Array.isArray(e.usedOn) ? e.usedOn : [])
+            .map(m => (typeof m === 'string' ? m : (m && m.tag)))
+            .filter(Boolean);
+    }
+    return map;
+}
+
+function handleHnSetOutlook(req, res) {
+    return newapiSetOutlook(req, res, { tag: 'hcnsec', load: hnLoad, save: hnSave });
+}
+
+// POST /__switch/api/hn/add-outlook { olId, name? } → завести запись шлюза НА ящике.
+//
+// Это «заселение» из менеджера 📧 — то же место, что `add-github` занимает у пяти вкладок
+// с GitHub-входом. Запись создаётся без ключа (`no_key`): ключ появится в консоли панели
+// после регистрации, и вписывается он потом кнопкой 🔑 или ручкой `/hn/key`.
+//
+// Пароль генерируем ЗДЕСЬ, а не просим у человека: панель требует пароль при регистрации,
+// придуманный руками он окажется либо слабым, либо одинаковым на всех аккаунтах, а читать
+// его человеку неоткуда — форму заполняет `open-session.js` из переменных среды.
+async function handleHnAddOutlook(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const olId = String(body.olId || '').trim();
+        if (!olId) return jsonRes(res, 400, { error: 'нужен olId — какой ящик из менеджера 📧' });
+        const box = olPool.load().find(e => e.id === olId);
+        if (!box) return jsonRes(res, 404, { error: 'ящик не найден в менеджере 📧' });
+        if (box.status === 'dead') return jsonRes(res, 400, { error: 'ящик помечен мёртвым — регистрация на него не доедет' });
+        const used = (Array.isArray(box.usedOn) ? box.usedOn : []).some(m => m && m.tag === 'hcnsec');
+        if (used) return jsonRes(res, 409, { error: 'ящик уже израсходован на hcnsec — панель ответит «аккаунт уже создан»' });
+
+        const sessions = hnLoad();
+        if (sessions.some(s => s.outlookId === olId)) {
+            return jsonRes(res, 409, { error: 'ящик уже привязан к записи на этом шлюзе' });
+        }
+        const mail = String(box.email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'у ящика нет адреса' });
+        if (sessions.some(s => String(s.email || '').toLowerCase() === mail.toLowerCase())) {
+            return jsonRes(res, 409, { error: 'запись с этим адресом на шлюзе уже есть' });
+        }
+
+        // 12 байт base64url без символов, которые формы New API иногда режут на вставке.
+        const password = 'Hn' + crypto.randomBytes(12).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 14) + '!7';
+        const id = 'hn_' + Date.now() + '_' + sessions.length;
+        sessions.push({
+            id,
+            email: mail,
+            name: String(body.name || '').trim() || box.nickname || mail.split('@')[0],
+            api_key: makeNoKeyStub(),
+            password,
+            outlookId: olId,
+            active: false,
+            status: 'no_key',
+            created: new Date().toISOString(),
+        });
+        hnSave(sessions);
+        olMarkTag(olId, 'hcnsec', false);
+        logLine(`hcnsec add-outlook: ${olMaskEmail(mail)} → запись ${id} (без ключа, регистрация по рефке)`);
+        // `next` — что делать фронту дальше: открыть окно регистрации этой же записи.
+        // Отдаём подсказкой, а не редиректом: браузер поднимает ручка session/open, и
+        // решать, жать её сразу или после проверки ящика, должен человек.
+        jsonRes(res, 200, { ok: true, id, olId, next: 'session/open?mode=register', usage: olUsageMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 function handleTbSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'tabi', load: tbLoad, save: tbSave });
@@ -11723,16 +11865,24 @@ async function handleHnSessionOpen(req, res) {
         const script = path.join(__dirname, '..', 'hcnsec', 'open-session.js');
         // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
         newapiSyncProfile('api.hcnsec.cn', label, 'перед ЛК');
-        // Ключа ещё нет → гоним на регистрацию (реф-кода у шлюза нет, ссылка прямая);
-        // есть — сразу на баланс.
+        // Ключа ещё нет → гоним на регистрацию по рефке (код владельца в ref-codes с 31.08,
+        // добавлен после заведения вкладки); есть — сразу на баланс.
         // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
-        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
-        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
-        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и форма
+        // регистрации ему не нужна — нужен вход. Регистрация вместо входа там отвечает
+        // «аккаунт уже создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
         const wantMode = String(body.mode || '').trim();
         const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
             : isRealKey(target.api_key) ? 'console' : 'register';
-        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        // Креды уезжают в скрипт ПЕРЕМЕННЫМИ СРЕДЫ, а не аргументами: argv виден в списке
+        // процессов любому, кто откроет диспетчер задач, — пароль там светиться не должен.
+        // Скрипт читает их как HN_LK_EMAIL / HN_LK_PASS и подставляет в форму; сабмит
+        // пароля жмёт человек (у панели на входе бывает код на почту).
+        const proc = spawn(process.execPath, [script, label, mode], {
+            detached: true,
+            stdio: 'pipe',
+            env: { ...process.env, HN_LK_EMAIL: String(target.email || ''), HN_LK_PASS: String(target.password || '') },
+        });
         proc.stdout.on('data', d => logLine(`hcnsec session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`hcnsec session/open ERR [${label}]: ${String(d).trim()}`));
         proc.on('error', e => logLine(`hcnsec session/open spawn error: ${e.message}`));
@@ -11890,7 +12040,7 @@ async function handleHnImport(req, res) {
 async function handleHnAdd(req, res) {
     try {
         const body = await readJsonBody(req);
-        const { email, api_key, name } = body;
+        const { email, api_key, name, password } = body;
         const mail = String(email || '').trim();
         if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
         // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
@@ -11902,11 +12052,16 @@ async function handleHnAdd(req, res) {
         const nick = String(name || '').trim() || mail.split('@')[0];
         // 🪤 ghLinkForNew здесь НЕ зовём: GitHub-входа у шлюза нет, тега `hn` нет в
         // GH_POOL_*, и проставленный ghId никто бы не прочитал — только сбивал бы с толку.
+        // Пароль храним рядом с email: у панели нет ни GitHub, ни OIDC, ни Telegram —
+        // единственный вход в ЛК это почта с паролем, а ЛК нужен для ТОЧНОГО баланса
+        // (ключом остаток у этого шлюза не читается вовсе, замер 31.08 по ~15 путям).
+        // Пул закрыт .gitignore, наружу уходит только факт наличия — см. hnSafe.
         sessions.push({
             id,
             email: mail,
             name: nick,
             api_key: key,
+            ...(String(password || '') ? { password: String(password) } : {}),
             active: false,
             status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
@@ -17259,6 +17414,10 @@ const server = http.createServer((req, res) => {
     // Без этой строки регресс ловит «либо все четыре точки, либо ни одной»: хендлер,
     // функция во фронте и кнопка 🔗 существуют, а роута нет — кнопка молча даёт 404.
     if (req.method === 'POST' && req.url === '/__switch/api/hn/map-profiles') return handleHnMapProfiles(req, res);
+    // Связка с менеджером 📧 — здесь у hcnsec то, чем у пяти вкладок служат add-github и
+    // set-github: GitHub-входа у панели нет, а регистрация требует код с почты.
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/set-outlook') return handleHnSetOutlook(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/add-outlook') return handleHnAddOutlook(req, res);
 
     // ---- Tabi (tb) — автономная вкладка, keepalive :20155 → tabitoken.com ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/sessions')) return handleTbSessions(req, res);

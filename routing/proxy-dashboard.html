@@ -6556,6 +6556,10 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
           <button onclick="hnCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
           <button onclick="hnMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
           <button onclick="hnShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          <!-- Заселение на купленный ящик. Это местный аналог ⚡ авто-заведения у JustWoker:
+               там источник — купленный GitHub, здесь — купленная почта, потому что
+               GitHub-входа у панели нет вовсе (/api/status: github_oauth=false). -->
+          <button onclick="olPickOpen(null)" title="Завести аккаунт hcnsec на купленном ящике из менеджера 📧: запись без ключа + свой пароль, дальше регистрация по рефке" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">📧 На ящик</button>
           <button onclick="hnShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
           <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
                здесь нет: колонка чек-ина есть только у AgentRouter. -->
@@ -14737,6 +14741,125 @@ async function hnSelectModel(id) {
   } catch (e) { toast('hnSelectModel: ' + e.message, 'error'); }
 }
 
+// ───── Ящики Outlook в hcnsec: пикер на месте пикера гитхабов ─────
+//
+// У hcnsec GitHub-входа нет физически (`/api/status`: github_oauth=false, client_id пуст),
+// а регистрация требует код с почты (`email_verification=true`). Поэтому «на чём завёрнут
+// аккаунт» здесь — ящик из менеджера 📧, и место в UI то же, что у `ghPick*` у пяти вкладок
+// с гитхабами: занятость бейджами, готовые к работе вперёд, привязка одним кликом.
+//
+// 🪤 Оверлей строится на лету и удаляется при закрытии, узла в разметке нет НАМЕРЕННО:
+// этот же файл в эти же часы правит вкладка «Лига», и лишний блок в HTML — лишний конфликт.
+const OL_TAG_HN = 'hcnsec';
+
+function olPickClose() {
+  const el = document.getElementById('ol-pick-overlay');
+  if (el) el.remove();
+}
+
+// Занятость ящика: на каких шлюзах он уже израсходован. Форма и смысл — как у ghPickBadges,
+// источник — `usedOn` в самой записи ящика (у ТГ она размазана по четырём чужим файлам).
+function olPickBadges(box) {
+  const tags = (box.usedOn || []).map(m => (typeof m === 'string' ? m : (m && m.tag))).filter(Boolean);
+  if (!tags.length) return '<span class="text-[10px] text-emerald/80">свободен</span>';
+  return tags.map(t => `<span class="text-[10px] px-1 py-px rounded border border-crimson/30 bg-crimson/10 text-crimson">${esc(t)}</span>`).join(' ');
+}
+
+// Готовность: в ящик уже входили (есть профиль или снимок) — значит код из письма достанется
+// без ручного логина. Такие ставим вперёд, ровно как это делает серверный /ol/available.
+const olPickReady = b => (b.hasProfile || b.hasSession) ? 1 : 0;
+
+async function olPickOpen(apiKey) {
+  olPickClose();
+  let boxes = [];
+  try {
+    const r = await fetch('/__switch/api/ol/list').then(x => x.json());
+    boxes = (r.entries || []).slice().sort((a, b) => olPickReady(b) - olPickReady(a));
+  } catch (e) { return toast('Ящики: ' + e.message, 'error'); }
+  if (!boxes.length) return toast('В менеджере 📧 пусто — импортируй чеки магазина кнопкой 📥', 'error');
+
+  const cur = apiKey ? (state.hcnsec || []).find(s => s.api_key === apiKey) : null;
+  const curOl = cur && cur.outlookId ? cur.outlookId : null;
+  const kJs = JSON.stringify(apiKey || '').replace(/'/g, '&#39;');
+  const rows = boxes.map(b => {
+    const sel = curOl === b.id;
+    const usedHere = (b.usedOn || []).some(m => (typeof m === 'string' ? m : m && m.tag) === OL_TAG_HN);
+    const bJs = JSON.stringify(b.id).replace(/'/g, '&#39;');
+    const act = apiKey ? `olPickBind(${kJs}, ${bJs})` : `olPickSeed(${bJs})`;
+    const dim = usedHere && !sel;
+    return `<div class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border cursor-pointer transition ${
+      sel ? 'bg-teal/10 border-teal/50' : dim ? 'bg-crimson/5 border-crimson/30 hover:border-crimson/60' : 'bg-elevated border-line-soft hover:border-teal/60'}"
+      onclick='${act}'>
+      <span class="text-xs ${dim ? 'text-muted' : 'text-ink'} truncate max-w-[26ch]">📧 ${esc(b.nickname || b.email)}</span>
+      <span class="flex items-center gap-1.5 shrink-0">
+        ${olPickReady(b) ? '<span class="text-[10px] text-emerald" title="в ящик уже входили — код из письма достанется без ручного логина">вход есть</span>'
+                         : '<span class="text-[10px] text-amber" title="сессии нет: сначала войди в ящик кнопкой 🌐 в менеджере 📧">нужен вход</span>'}
+        ${olPickBadges(b)}
+        ${sel ? '<span class="text-teal text-xs">✓</span>' : ''}
+      </span>
+    </div>`;
+  }).join('');
+
+  const unbind = curOl
+    ? `<button onclick='olPickBind(${kJs}, null)' class="text-xs px-3 py-1.5 rounded-lg border border-crimson/40 text-crimson hover:bg-crimson/10 transition">Отвязать</button>`
+    : '';
+  const head = apiKey
+    ? `Ящик для «${esc((cur && (cur.email || cur.name)) || String(apiKey).slice(-6))}»`
+    : 'Завести аккаунт hcnsec на ящике';
+  const sub = apiKey
+    ? 'Связка нужна не для красоты: без неё чтение кода из письма не знает, в каком профиле искать.'
+    : 'Запись создастся без ключа, пароль сгенерируется сам. Дальше — 🌐 регистрация по рефке.';
+  const el = document.createElement('div');
+  el.id = 'ol-pick-overlay';
+  el.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4';
+  el.onclick = ev => { if (ev.target === el) olPickClose(); };
+  el.innerHTML = `<div class="w-full max-w-lg rounded-2xl border border-line-soft bg-surface shadow-2xl overflow-hidden">
+      <div class="px-4 py-3 border-b border-line-soft flex items-center justify-between">
+        <div><div class="text-sm text-ink">${head}</div><div class="text-[11px] text-muted mt-0.5">${sub}</div></div>
+        <button onclick="olPickClose()" class="text-muted hover:text-ink text-lg leading-none">×</button>
+      </div>
+      <div class="p-3 space-y-1.5 max-h-[60vh] overflow-y-auto">${rows}</div>
+      <div class="px-4 py-3 border-t border-line-soft flex items-center justify-between">
+        <span class="text-[11px] text-faint">Красным — уже израсходован на этом шлюзе: панель ответит «аккаунт уже создан».</span>
+        ${unbind}
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+}
+
+// Привязать/отвязать ящик у существующей записи шлюза.
+async function olPickBind(apiKey, olId) {
+  try {
+    const r = await fetch('/__switch/api/hn/set-outlook', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, olId }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    olPickClose();
+    toast(olId ? 'Ящик привязан' : 'Ящик отвязан', 'success');
+    await loadHnSessions(false);
+  } catch (e) { toast('Ящик: ' + e.message, 'error'); }
+}
+
+// Заселение: новая запись шлюза на выбранном ящике, дальше сразу предлагаем регистрацию.
+async function olPickSeed(olId) {
+  try {
+    const r = await fetch('/__switch/api/hn/add-outlook', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ olId }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    olPickClose();
+    toast('Запись создана на ящике — открываю регистрацию', 'success');
+    await loadHnSessions(false);
+    // Окно регистрации поднимаем сразу: смысл заселения именно в том, чтобы дальше человек
+    // дожал форму. Пароль в форму подставит open-session.js из переменных среды.
+    hnOpenLk(d.id, 'register');
+  } catch (e) { toast('Заселение: ' + e.message, 'error'); }
+}
+
 function renderHn() {
   const { list: all, total, q } = newapiRows(state.hcnsec, 'hn');
   if (!all.length) {
@@ -14779,6 +14902,7 @@ function renderHn() {
         ${actBtn(`hnShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
         ${actBtn(`hnSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
         ${actBtn(`hnRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${actBtn(`olPickOpen(${kJ})`, s.outlookId ? 'Ящик привязан — сменить или отвязать' : 'Привязать ящик из менеджера 📧 (нужен для кода из письма)', s.outlookId ? '📧' : '📭', s.outlookId ? 'teal' : 'sky')}
         ${noKey ? '' : actBtn(`hnActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
         ${noKey ? '' : actBtn(`hnPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
         ${actBtn(`hnOpenLk(${idJ})`,    noKey ? 'Открыть панель в браузере аккаунта (вход email+паролем)' : 'Открыть браузер аккаунта (баланс hcnsec)', '🌐', 'violet')}
@@ -15051,12 +15175,15 @@ function hnMapProfiles() {
   return newapiMapProfilesUI('hn', () => loadHnSessions(false));
 }
 
-async function hnOpenLk(id) {
+async function hnOpenLk(id, mode) {
   if (!id) return;
   try {
     const res = await fetch('/__switch/api/hn/session/open', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
+      // `mode` передаём, только если его назвали: без него сервер решает сам по наличию
+      // ключа (нет ключа → регистрация). Заселение на ящик просит 'register' явно —
+      // ключа там нет по определению, но полагаться на догадку в новом пути незачем.
+      body: JSON.stringify(mode ? { id, mode } : { id }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
@@ -26505,8 +26632,11 @@ function lgDrawPlot(top) {
   if (!n) { host.innerHTML = '<div class="lgcap" style="padding:40px 0">данных за это окно нет</div>'; return; }
   const series = top.map(p => lgAligned(p, keys));
   const ymax = Math.max(...series.flat().map(v => Number(v) || 0), 1);
+  // Верх оси. В лестнице есть 4, а не только 1·2·5: при максимуме 223 «5» давала верх
+  // 500 и половину карточки пустой, а 4 даёт 400 и целые числа на всех четырёх засечках
+  // (шаг 0.25 от верха обязан делиться, иначе на оси появляются десятые).
   const nice = p => { const e = Math.pow(10, Math.floor(Math.log10(p))), s = p / e;
-    return (s <= 1 ? 1 : s <= 2 ? 2 : s <= 5 ? 5 : 10) * e; };
+    return (s <= 1 ? 1 : s <= 2 ? 2 : s <= 4 ? 4 : s <= 5 ? 5 : 10) * e; };
   const yTop = nice(ymax * 1.08);
   const xs = i => LG_PL + (n === 1 ? 0 : i * (W - LG_PL - LG_PR) / (n - 1));
   const ys = v => LG_PT + (1 - (Number(v) || 0) / yTop) * (H - LG_PT - LG_PB);

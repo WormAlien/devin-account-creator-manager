@@ -73,6 +73,11 @@ const HOST = 'api.hcnsec.cn';
 // GitHub-пула нет (`github_oauth=false`, живая проба 31.08) — вход email+пароль.
 const GH_LESS_HANDLERS = ['AddGithub', 'MapProfiles', 'SetGithub'];
 const GH_LESS_ROUTES = ['add-github', 'map-profiles', 'set-github'];
+// Обратная сторона того же различия: у hcnsec есть то, чего нет у GoRouter. Аккаунт здесь
+// заводится НА КУПЛЕННОМ ЯЩИКЕ (регистрация просит код с почты, `email_verification=true`),
+// поэтому место пикера гитхабов занял пикер ящиков из менеджера 📧. Список ЗАКРЫТЫЙ: любой
+// другой лишний роут по-прежнему считается опечаткой или чужим хендлером.
+const OL_ONLY_ROUTES = ['set-outlook', 'add-outlook'];
 // 🪤 `map-profiles` вычтен из ПАРНОСТИ, но его отсутствие НЕ утверждается, и это
 // разбор, а не небрежность. Спецификация вкладки относит ручку к GitHub-механике, а
 // код говорит другое: `newapiMapProfiles` сопоставляет запись с профилем по API-КЛЮЧУ,
@@ -227,13 +232,23 @@ section('routing/transparent-proxy.js · роуты /__switch/api/{go,hn}/*');
     const hn = routeSet(proxy, 'hn');
     check(go.size >= 20, `роутов go найдено ${go.size} (парсер жив)`);
     const miss = lack(go, hn).filter((r) => !GH_LESS_ROUTES.includes(r));
-    const extra = lack(hn, go);
+    const extra = lack(hn, go).filter((r) => !OL_ONLY_ROUTES.includes(r));
     check(miss.length === 0,
         `парных hn-роутов ${hn.size} из ${go.size - GH_LESS_ROUTES.length} ожидаемых${miss.length ? ' — не хватает: ' + miss.map((r) => '/hn/' + r).join(' ') : ''}`);
-    // Авто-заведения (⚡) и GitHub-входа у шлюза нет, поэтому лишних роутов быть не
-    // должно вовсе: любой сверх набора GoRouter — либо опечатка, либо чужой хендлер.
+    // Лишних роутов быть не должно — кроме связки с менеджером ящиков (OL_ONLY_ROUTES):
+    // у GoRouter её пары нет, потому что там аккаунт заводится на GitHub, а здесь на почте.
+    // Всё остальное сверх набора GoRouter — либо опечатка, либо чужой хендлер.
     check(extra.length === 0,
         `лишних hn-роутов нет${extra.length ? ' — у go нет пары: ' + extra.map((r) => '/hn/' + r).join(' ') : ''}`);
+    // И обратная проверка, положительная: связка обязана быть целиком. Половина
+    // (ручка без кнопки или наоборот) — это 404 по клику, то есть худший вид поломки.
+    for (const r of OL_ONLY_ROUTES) {
+        check(hn.has(r), `роут /hn/${r} на месте — связка с менеджером 📧 вместо пикера гитхабов`);
+    }
+    check(/function handleHnSetOutlook\s*\(/.test(proxy) && /async function handleHnAddOutlook\s*\(/.test(proxy),
+        'хендлеры handleHnSetOutlook и handleHnAddOutlook объявлены');
+    check(/function olMarkTag\s*\(/.test(proxy) && /function olUsageMap\s*\(/.test(proxy),
+        'занятость ящиков считает общий olMarkTag/olUsageMap — не вторая копия логики');
 }
 
 // ── 4. Серверные реестры: то, что легче всего забыть ──────────────────────────

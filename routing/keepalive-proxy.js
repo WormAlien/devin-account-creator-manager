@@ -38,6 +38,7 @@ const https = require('https');
 const net = require('net');
 const path = require('path');
 const { PassThrough } = require('stream');
+const evStore = require('./event-store.js');
 
 const PORT = Number(process.env.PORT || 8787);
 const UPSTREAM = process.env.UPSTREAM || 'https://agentrouter.org';
@@ -609,6 +610,8 @@ function publicState() {
     flatRate: FLAT_RATE_HOSTS.has(upstream.hostname),
     paidHedgeLocked: PAID_HEDGE_HOST,
     cfgVersion: CFG_VERSION,
+    // История событий за сутки — она переживает рестарт, в отличие от stats.
+    events24h: evStore.summarize(ev.snapshot(), 86400).totals,
     upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt,
     // Авторотация: включена ли и в какой пул звоним. Без этого в панели невозможно
     // отличить «тумблер выключен» от «прокси не знает этот шлюз».
@@ -650,6 +653,11 @@ const LAT_BUCKETS = latStore.BUCKETS;             // 24ч при бакете в
 // Файл кейсуется по PORT — как keepalive-config-<PORT>.json: на одном скрипте живут
 // пять прокси, и общая история слепила бы agentrouter с tabi в одну кривую.
 const LAT_FILE = process.env.LATENCY_FILE || latStore.fileFor(PORT, __dirname);
+// История СОБЫТИЙ переживает рестарт — в отличие от stats в памяти, которые обнуляются.
+// 05.09 дашборд поднимался четыре раза за час, и каждый раз картина начиналась с нуля;
+// разбирая отказ, приходилось искать в логе `listening on` и складывать вручную.
+const EVENTS_FILE = process.env.EVENTS_FILE || evStore.fileFor(PORT, __dirname);
+const ev = evStore.createWriter(EVENTS_FILE, { onError: (e) => log(`история событий: ${e.message}`) });
 const lat = { slots: new Array(LAT_BUCKETS).fill(null), lastMs: 0, lastAt: 0 };
 let latDirty = false;
 
@@ -1244,6 +1252,7 @@ const server = http.createServer((req, res) => {
 
   log(`>> ${req.method} ${reqPath} start`);
   stats.requests += 1;
+  ev.note('req');
 
   // ФИКС 1 — count_tokens fallback: шлюз обычно 404-ит этот endpoint, CC читает
   // input_tokens с тела ошибки и падает на валидации модели (/model не работает).
@@ -1338,6 +1347,7 @@ const server = http.createServer((req, res) => {
     // секунде с `Stream idle timeout - no chunks received`. Строк стража в логе при этом
     // ноль — он просто не был взведён.
     armEmptyGuard(null);
+    ev.note('precommit');
     log(`${req.method} ${reqPath} пре-коммит SSE (${cfg.preCommitMs}ms тишины)`);
   };
 
@@ -1373,6 +1383,7 @@ const server = http.createServer((req, res) => {
     res.write(' ');
     jsonDrips = 1;
     armJsonTick();
+    ev.note('jsonhold');
     log(`${req.method} ${reqPath} пре-коммит JSON (${cfg.jsonHoldMs}ms тишины) — дальше пробелы, пока шлюз считает`);
   };
   // Отказ, когда JSON-ответ уже открыт: статус сменить нельзя, а писать объект ошибки с
@@ -1443,6 +1454,7 @@ const server = http.createServer((req, res) => {
       const m = JSON.parse((reqBody || Buffer.alloc(0)).toString('utf8')).model;
       if (typeof m === 'string') stats.byModel[m] = (stats.byModel[m] || 0) + 1;
     } catch (e) {}
+    ev.note(status >= 200 && status < 300 ? 'ok' : 'err');
     log(`${req.method} ${reqPath} -> ${status}${isSSE ? ' (SSE)' : ''} ${Date.now() - started}ms`);
 
     // Клиенту уже отправлены заголовки (пре-коммит) — writeHead больше нельзя.
@@ -1476,7 +1488,8 @@ const server = http.createServer((req, res) => {
           // попытка: клиент видел только пинги, значит запрос можно переиграть.
           if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
           stopTimer();
-          log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
+          ev.note('abort');
+      log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
           if (!res.writableEnded && !res.destroyed) res.destroy(err);
         });
       } else {
@@ -1537,7 +1550,8 @@ const server = http.createServer((req, res) => {
       });
       stream.on('error', (err) => {
         if (clientJSON) return jsonHoldFail(`обрыв тела: ${err.message}`);
-        log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
+        ev.note('abort');
+      log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
         if (!res.writableEnded && !res.destroyed) res.destroy(err);
       });
       return;
@@ -1579,6 +1593,7 @@ const server = http.createServer((req, res) => {
     stream.on('error', (err) => {
       if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
       stopTimer();
+      ev.note('abort');
       log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
       if (!res.writableEnded && !res.destroyed) res.destroy(err);
     });
@@ -1613,6 +1628,7 @@ const server = http.createServer((req, res) => {
       if (!x.destroyed) { try { x.destroy(); } catch (e) {} }
     }
     activeSet.clear();
+    ev.note('err');
     log(`${req.method} ${reqPath} все попытки исчерпаны: ${why}`);
     if (clientJSON) {
       jsonHoldFail(why);
@@ -1667,6 +1683,7 @@ const server = http.createServer((req, res) => {
         }
         holdProbing = false;
         bonusAttempts += 1;
+        ev.note('hold');
         log(`${req.method} ${reqPath} путь до ${t.hostname} жив — повторяю (удержание #${holdLaunches})`);
         makeUpstream('удержание');
       });
@@ -1693,6 +1710,7 @@ const server = http.createServer((req, res) => {
     winner = null;
     bonusAttempts += 1;        // переигровка пустого потока не съедает бюджет ретраев
     stats.retries += 1;
+    ev.note('empty');
     log(`${req.method} ${reqPath} пустой поток #${emptyRetries}: ${why} — переигрываю запрос`);
     makeUpstream('пустой поток');
     return true;
@@ -1707,6 +1725,7 @@ const server = http.createServer((req, res) => {
       stallTimer = null;
       if (aborted || res.writableEnded) return;
       stopTimer();
+      ev.note('stall');
       log(`${req.method} ${reqPath} поток встал: ${cfg.stallMs}мс без байт после начала ответа — рву, иначе вызывающий ждёт вечно`);
       try { if (stream && !stream.destroyed) stream.destroy(); } catch (e) { /* уже мёртв */ }
       if (!res.writableEnded && !res.destroyed) res.destroy();
@@ -1764,6 +1783,7 @@ const server = http.createServer((req, res) => {
       if (finished || aborted) return;
       if (rot && rot.ok) {
         rotations += 1;
+        ev.note('rotate');
         bonusAttempts += 1;   // ротация не должна съедать бюджет ретраев
         log(`${req.method} ${reqPath} ротация #${rotations}: → ${rot.email || rot.mask || '?'}`
           + `${rot.already ? ' (ключ уже сменил параллельный запрос)' : ''} — повторяю запрос`);
@@ -1943,6 +1963,7 @@ const server = http.createServer((req, res) => {
                 reqBody = nextBody;
                 tgt = again;
                 bonusAttempts += 1;   // подмена модели не должна съедать бюджет ретраев
+                ev.note('route');
                 log(`${req.method} ${reqPath} подмена модели: ${wasModel} → ${nextModel}, повторяю`);
                 makeUpstream('другая модель');
                 return;
@@ -2028,6 +2049,7 @@ const server = http.createServer((req, res) => {
   res.on('close', () => {
     if (!res.writableEnded) {
       aborted = true;
+      ev.note('clientgone');
       stopTimer();
       for (const x of activeSet) { try { x.destroy(); } catch (e) {} }
       activeSet.clear();
@@ -2322,7 +2344,7 @@ if (process.argv[2] === 'selftest') {
     'у удержания есть потолок повторов — на плоском тарифе каждая дошедшая попытка платная');
   assert.ok(/probePath\(t\.hostname, t\.port/.test(holdSrc),
     'перед повтором проверяем путь, а не стреляем в мёртвую сеть');
-  assert.ok(/bonusAttempts \+= 1;\s*log\(`\$\{req\.method\} \$\{reqPath\} путь до/.test(holdSrc),
+  assert.ok(/bonusAttempts \+= 1;[\s\S]{0,80}?log\(`\$\{req\.method\} \$\{reqPath\} путь до/.test(holdSrc),
     'подаренная удержанием попытка не съедает бюджет ретраев на транзиентную 500');
   // Форма отказа: 529 overloaded_error, а не 502 proxy_error — иначе подагент умирает
   // вместо того, чтобы повторить сам.
@@ -2474,6 +2496,7 @@ server.on('clientError', (err, socket) => {
 server.listen(PORT, '127.0.0.1', () => {
   log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, мульти-запрос ${hedgeOff(cfg) ? 'выкл' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? cfg.holdMs + 'ms (≤' + HOLD_MAX_LAUNCHES + ' повторов)' : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? cfg.emptyStreamMs + 'ms (≤' + EMPTY_MAX_RETRIES + ')' : 'выкл'}, каталог моделей ${cfg.catalogTtlMs ? cfg.catalogTtlMs + 'ms' : 'выкл (строго по карте)'}, JSON-удержание ${cfg.jsonHoldMs ? cfg.jsonHoldMs + 'ms' : 'выкл'}, вставший поток ${cfg.stallMs ? cfg.stallMs + 'ms' : 'выкл'})`);
 
+  ev.note('boot');
   log(`gpt-конвертер: ${GPT_PROXY_ENABLED ? HAIKU_GPT_PROXY : 'off (чужой шлюз — gpt остаётся на ' + upstream.host + ')'}`);
   // Каталог моделей шлюза греем на старте: тогда первый же запрос с мёртвой целью тира
   // уедет уже подменённым, без круга через 503.

@@ -137,6 +137,9 @@ routing/keepalive-config-*.json
 routing/keepalive-config-*.json.v*.bak
 # Суточная история времени ответа (минутные бакеты, у каждого своя)
 routing/keepalive-latency-*.json
+# История событий прокси: те же минутные бакеты, что латентность — данные, не конфиг
+routing/keepalive-events-*.json
+routing/keepalive-events-*.json.tmp
 # Архивы логов прокси: имя со временем, поэтому под `routing/*.log` не попадают
 routing/*.log.*
 # Журнал настоящих токенов (usage-tap во фронт-дворе) — локальные данные расхода
@@ -437,3 +440,8 @@ outlook/sessions/
 
 # Отстойник восстановления из транскриптов (05.09) — рабочий мусор, не код репо.
 .recovered/
+
+# Лига: конфиг отправителя содержит секрет приёмника, данные приёмника — чужие срезы
+routing/league-config.json
+routing/league-data/
+routing/league-peers.json

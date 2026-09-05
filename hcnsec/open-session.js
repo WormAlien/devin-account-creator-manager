@@ -94,6 +94,62 @@ function loadImportedSession() {
   } catch { return null; }
 }
 
+// ───── Вторая вкладка: почта того ящика, на который заводим аккаунт ─────
+//
+// Панель шлёт код подтверждения письмом (`/api/status`: `email_verification=true`), и без
+// почты под рукой регистрация упирается в «введите код» с уходом в другой браузер. Поэтому
+// когда к записи привязан ящик из менеджера 📧, открываем его ВТОРЫМ ТАБОМ в этом же окне:
+// адрес, пароль панели и письмо с кодом оказываются в одном месте.
+//
+// 🪤 Куки берём из СНИМКА ящика (`outlook/sessions/<id>.json`), а не из его профиля.
+// В профиле Chromium доменные куки лежат с ведущей точкой в `host_key`, а `readProfileCookies`
+// её срезает — `login.live.com` получил бы host-only куку вместо доменной и всё равно
+// попросил бы логин. Снимок уже в форме Playwright, с доменами и путями.
+const OL_EMAIL = String(process.env.HN_OL_EMAIL || '');
+const OL_SNAPSHOT = String(process.env.HN_OL_SNAPSHOT || '');
+const OL_MAIL_URL = 'https://outlook.live.com/mail/0/';
+
+function maskMail(a) {
+  const s = String(a || '');
+  const at = s.indexOf('@');
+  if (at < 1) return s ? s.slice(0, 2) + '***' : '';
+  return s.slice(0, 2) + '***' + s.slice(at);
+}
+
+async function openMailTab(context) {
+  if (!OL_EMAIL) return;                       // ящик не привязан — вкладка не нужна
+  if (!OL_SNAPSHOT || !fs.existsSync(OL_SNAPSHOT)) {
+    console.log(`📭 ящик ${maskMail(OL_EMAIL)} привязан, но снимка сессии нет — код письмом взять негде.`);
+    console.log('   Войди в него один раз кнопкой 🌐 в менеджере 📧, дальше он откроется сам.');
+    return;
+  }
+  let cookies = [];
+  try {
+    const ss = JSON.parse(fs.readFileSync(OL_SNAPSHOT, 'utf8'));
+    cookies = Array.isArray(ss && ss.cookies) ? ss.cookies : [];
+  } catch (e) {
+    console.log(`⚠️  снимок ящика не читается (${e.message}) — вкладку почты не открываю`);
+    return;
+  }
+  // Только почтовые домены. Куки шлюза из снимка ящика в этот профиль попасть не должны:
+  // там своя сессия панели, и чужая её перетрёт.
+  const MAIL_HOSTS = /(^|\.)(live|office|office365|microsoft|microsoftonline|outlook)\.com$/i;
+  const mail = cookies.filter(c => MAIL_HOSTS.test(String(c.domain || '').replace(/^\./, '')));
+  if (!mail.length) {
+    console.log('⚠️  в снимке ящика нет почтовых кук — вкладку почты не открываю');
+    return;
+  }
+  try {
+    await context.addCookies(mail);
+    const tab = await context.newPage();
+    await tab.goto(OL_MAIL_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    console.log(`📬 вторая вкладка: почта ${maskMail(OL_EMAIL)} (${mail.length} кук из снимка)`);
+    console.log('   Код из письма — там же; в дашборде та же операция это кнопка 📩 «Взять код».');
+  } catch (e) {
+    console.log(`⚠️  вкладка почты не открылась: ${e.message}`);
+  }
+}
+
 async function applyImportedSession(context, session) {
   if (!session) return false;
   let applied = false;
@@ -365,6 +421,9 @@ async function main() {
       console.log('⚠️  Регистрация почтой: email + пароль + код с почты (GitHub-кнопки тут нет).');
       console.log('   Затем возьми ключ в ЛК HCNsec и вставь его кнопкой 🔑 в дашборде.');
       await prefillLogin(page);
+      // Почта — сразу рядом, вторым табом: код из письма нужен на этом же шаге.
+      // Открываем ПОСЛЕ prefillLogin, чтобы активной осталась вкладка регистрации.
+      await openMailTab(context);
 
       const res = await waitForLogin(page, context);
       if (!res.ok) {

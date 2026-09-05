@@ -476,6 +476,21 @@ if (!openjs) {
         'SESSIONS_DIR = hcnsec/sessions — иначе снимок сессии уедет в чужой каталог');
     check(fs.existsSync(path.join(REPO, 'hcnsec', 'share-session.js')),
         'hcnsec/share-session.js на месте — иначе кнопка 🔗 «Поделиться» позовёт несуществующий скрипт');
+    // Регистрация идёт по РЕФ-ССЫЛКЕ и с почтой под рукой — два свойства, каждое из
+    // которых ломается молча. Литерал вместо ref-codes = потерянный реф-кредит; отсутствие
+    // второй вкладки = уход за кодом в другой браузер посреди регистрации.
+    check(/require\('\.\.\/routing\/lib\/ref-codes\.js'\)\.url\('hcnsec'\)/.test(openjs),
+        'REGISTER_URL берётся из ref-codes.url(hcnsec) — не литералом, иначе правка кода в настройках не доедет');
+    check(/localStorage\.getItem\('aff'\)/.test(openjs),
+        'openRegister проверяет, что aff осел в localStorage — одного захода панели не хватает');
+    check(/async function openMailTab\s*\(/.test(openjs) && /await openMailTab\(context\)/.test(openjs),
+        'openMailTab объявлен и вызван — почта привязанного ящика открывается второй вкладкой');
+    check(/HN_OL_EMAIL/.test(openjs) && /HN_OL_SNAPSHOT/.test(openjs),
+        'ящик приезжает переменными среды HN_OL_EMAIL / HN_OL_SNAPSHOT, а не argv');
+    check(/HN_OL_EMAIL: String\(olBox\.email/.test(proxy) && /HN_OL_SNAPSHOT: olSessionFile\(olBox\.id\)/.test(proxy),
+        'сервер отдаёт скрипту адрес ящика и путь снимка — искать их скрипту неоткуда, пул закрыт');
+    check(/MAIL_HOSTS/.test(openjs),
+        'в профиль шлюза подкладываются ТОЛЬКО почтовые куки — чужая сессия панели её бы перетёрла');
 }
 
 // ── 7. Тир-карта: живое знание о каталоге ─────────────────────────────────────

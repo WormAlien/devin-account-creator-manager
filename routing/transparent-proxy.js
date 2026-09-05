@@ -11878,10 +11878,27 @@ async function handleHnSessionOpen(req, res) {
         // процессов любому, кто откроет диспетчер задач, — пароль там светиться не должен.
         // Скрипт читает их как HN_LK_EMAIL / HN_LK_PASS и подставляет в форму; сабмит
         // пароля жмёт человек (у панели на входе бывает код на почту).
+        //
+        // Привязанный ящик уезжает туда же: скрипт откроет почту ВТОРЫМ ТАБОМ, чтобы код
+        // подтверждения (`email_verification=true`) был на том же шаге, а не в другом
+        // браузере. Путь снимка отдаём готовым — искать его скрипту неоткуда, пул закрыт.
+        const olBox = target.outlookId ? olPool.load().find(e => e.id === target.outlookId) : null;
+        const olEnv = olBox ? {
+            HN_OL_EMAIL: String(olBox.email || ''),
+            HN_OL_SNAPSHOT: olSessionFile(olBox.id),
+        } : {};
+        if (target.outlookId && !olBox) {
+            logLine(`hcnsec session/open: ящик ${target.outlookId} привязан, но в менеджере 📧 его нет — вкладку почты не открою`);
+        }
         const proc = spawn(process.execPath, [script, label, mode], {
             detached: true,
             stdio: 'pipe',
-            env: { ...process.env, HN_LK_EMAIL: String(target.email || ''), HN_LK_PASS: String(target.password || '') },
+            env: {
+                ...process.env,
+                HN_LK_EMAIL: String(target.email || ''),
+                HN_LK_PASS: String(target.password || ''),
+                ...olEnv,
+            },
         });
         proc.stdout.on('data', d => logLine(`hcnsec session/open [${label}]: ${String(d).trim()}`));
         proc.stderr.on('data', d => logLine(`hcnsec session/open ERR [${label}]: ${String(d).trim()}`));

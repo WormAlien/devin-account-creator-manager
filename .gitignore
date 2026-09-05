@@ -448,3 +448,5 @@ outlook/sessions/
 routing/league-config.json
 routing/league-data/
 routing/league-peers.json
+routing/league-e2e-key.json
+routing/archive/

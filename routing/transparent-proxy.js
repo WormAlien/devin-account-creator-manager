@@ -8173,6 +8173,26 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     // деньги. `granted: null` тоже обязателен: иначе шкала запаса делит на угаданное.
     const grantTotal = round2(legacyGrant + bonus + referral);
     const guessBalance = round2(grantTotal - usageSpent);
+    // Валюта показа панели нужна и здесь, а не только на точной ветви. У api.hcnsec.cn
+    // `quota_display_type: CNY`: расход из `/dashboard/billing/usage` тоже в юанях, и без
+    // этой пары полей вкладка честно писала бы «потрачено $2307.27» вместо ¥ — та же
+    // ошибка ×7.3, только переехавшая с остатка на расход. `rate = 1` (долларовая
+    // панель) поля не добавляет вовсе, поэтому у остальных восьми шлюзов ничего не меняется.
+    let cur = {};
+    try {
+        const nlib = newapiLib();
+        const meta = nlib && nlib.statusMeta ? await nlib.statusMeta(host) : null;
+        if (meta && Number(meta.rate) > 1) {
+            cur = {
+                currency: meta.displayType,
+                currencySymbol: meta.symbol,
+                currencyRate: meta.rate,
+                spentLocal: nlib.usdToLocal(usageSpent, meta.rate),
+                balanceLocal: nlib.usdToLocal(guessBalance, meta.rate),
+                grantedLocal: nlib.usdToLocal(grantTotal, meta.rate),
+            };
+        }
+    } catch { /* валюта — украшение: без неё цифры остаются долларовыми */ }
     if (!(grantTotal > 0) || guessBalance < 0) {
         return {
             status: 'live',
@@ -8181,6 +8201,8 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             spent: usageSpent,
             usageSpent,
             granted: null,
+            // Остатка не знаем — значит и в юанях его нет. Расход знаем, он и переводится.
+            ...cur, balanceLocal: null, grantedLocal: null,
             accessUntil,
             selfError,
         };
@@ -8192,6 +8214,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         spent: usageSpent,
         usageSpent,
         granted: grantTotal,
+        ...cur,
         accessUntil,
         selfError,
     };
@@ -8307,15 +8330,19 @@ function newapiApplyBalance(target, bal, opts) {
         // долларовыми, потому что на них стоят сортировка таблиц, сумма шапки хаба и
         // порог годности авторотации. 🪤 Ушла валюта из ответа — стираем и в записи,
         // иначе пул навсегда останется с ¥ от панели, которую админ перевёл в доллары.
-        const loc = (bal.self && bal.self.balanceLocal != null) ? bal.self : bal;
-        if (loc.currency && loc.rate > 1) {
-            target.currency = loc.currency;
-            target.currencySymbol = loc.symbol || '';
-            target.currencyRate = loc.rate;
-            target.balanceLocal = loc.balanceLocal;
-            target.spentLocal = loc.spentLocal;
-            if (loc.grantedLocal != null) target.grantedLocal = loc.grantedLocal; else delete target.grantedLocal;
-        } else if (bal.balanceSource === 'self') {
+        // 🪤 Две формы имён: на точной ветви `selfToBalance` отдаёт `rate`/`symbol`, на
+        // прикидке `newapiBalance` — `currencyRate`/`currencySymbol`. Нормализуем здесь,
+        // иначе юани доезжали бы только с одной из двух ветвей (и молча).
+        const src = (bal.self && (bal.self.balanceLocal != null || bal.self.rate > 1)) ? bal.self : bal;
+        const rate = Number(src.currencyRate || src.rate) || 1;
+        if (src.currency && rate > 1) {
+            target.currency = src.currency;
+            target.currencySymbol = src.currencySymbol || src.symbol || '';
+            target.currencyRate = rate;
+            target.balanceLocal = src.balanceLocal != null ? src.balanceLocal : null;
+            target.spentLocal = src.spentLocal != null ? src.spentLocal : null;
+            if (src.grantedLocal != null) target.grantedLocal = src.grantedLocal; else delete target.grantedLocal;
+        } else {
             for (const k of ['currency', 'currencySymbol', 'currencyRate', 'balanceLocal', 'spentLocal', 'grantedLocal']) delete target[k];
         }
         if (bal.accessUntil != null) target.accessUntil = bal.accessUntil;

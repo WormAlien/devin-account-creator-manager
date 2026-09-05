@@ -4335,11 +4335,15 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
       #leagueTab .lgrow .lgv{text-align:right;font-family:var(--lg-mono);
         font-variant-numeric:tabular-nums;font-size:13px;color:var(--lg-ink2)}
       #leagueTab .lgrow .lgv.on{color:var(--lg-ink);font-size:15px;font-weight:600}
+      /* backdrop-filter здесь НЕ используется намеренно: плашка «ты» приклеена к низу
+         и перекрывает всю ширину, поэтому размытие пересчитывалось бы на каждом кадре
+         прокрутки — это самая дорогая вещь, которую можно повесить на sticky-элемент. */
       #leagueTab .lgyou{position:sticky;bottom:14px;z-index:20;margin-top:16px;
         padding:14px 18px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
-        border-radius:16px;backdrop-filter:blur(24px);
+        border-radius:16px;
         background:color-mix(in oklab,var(--lg-azure) 14%,var(--lg-surface));
-        border:1px solid color-mix(in oklab,var(--lg-azure) 40%,transparent)}
+        border:1px solid color-mix(in oklab,var(--lg-azure) 40%,transparent);
+        box-shadow:0 10px 30px -18px rgb(0 0 0 / .7)}
       #leagueTab .lgnick{appearance:none;cursor:pointer;border-radius:9px;padding:5px 10px;
         font:600 14px/1 inherit;color:var(--lg-ink);
         background:color-mix(in oklab,var(--lg-ink) 9%,transparent);
@@ -15164,6 +15168,11 @@ async function hnCheckBalance(api_key) {
       if (data.status === 'live') {
         s.spent = data.spent; s.balance = data.balance;
         s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        // Валюта показа панели (у hcnsec юани, курс из /api/status) — переносим в запись,
+        // иначе до следующей полной перезагрузки пула строка рисовалась бы в долларах.
+        s.currency = data.currency; s.currencySymbol = data.currencySymbol;
+        s.currencyRate = data.currencyRate; s.balanceLocal = data.balanceLocal;
+        s.spentLocal = data.spentLocal; s.grantedLocal = data.grantedLocal;
         applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
@@ -15172,7 +15181,14 @@ async function hnCheckBalance(api_key) {
     renderHnGauge();
     if (data.status === 'live') {
       const lbl = balSrcLabel(data);
-      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+      // Подписываем той валютой, в которой панель считает: писать «$2307» на юанях —
+      // ровно та ошибка ×7.3, из-за которой этот шлюз и разбирали.
+      const cs = (Number(data.currencyRate) > 1 && data.currencySymbol) ? data.currencySymbol : '';
+      const num = (v, local) => {
+        const x = (cs && local != null) ? local : v;
+        return x == null ? 'неизвестно' : cs + Number(x).toFixed(2);
+      };
+      toast(`💰 баланс ${num(data.balance, data.balanceLocal)} (${lbl} · потрачено ${num(data.spent, data.spentLocal)})`, 'success', 4000);
     }
     else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
     else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
@@ -26830,26 +26846,45 @@ function lgHookHover() {
   const tip = document.getElementById('lg-tip');
   if (!plot || !svg || !cross || !hits || !tip) return;
   const { series, top, xs, ys, n, keys, W } = LG.plot;
+  // Перерисовка привязана к кадру и к СМЕНЕ точки, а не к каждому событию мыши.
+  // Было наоборот: `pointermove` летит десятками в секунду, и на каждом собирался
+  // innerHTML перекрестья и подсказки — на графике это читалось как просадка FPS.
+  let lastI = -1, pending = null, raf = 0;
+  const paint = () => {
+    raf = 0;
+    if (!pending) return;
+    const { i, cx, cy } = pending;
+    if (i !== lastI) {
+      lastI = i;
+      cross.setAttribute('x1', xs(i)); cross.setAttribute('x2', xs(i));
+      hits.innerHTML = series.map((v, k) => v[i] === undefined ? ''
+        : `<circle class="lghit" cx="${xs(i).toFixed(1)}" cy="${ys(v[i]).toFixed(1)}" r="5"
+            fill="${LG_SER[k % LG_SER.length]}" stroke="var(--lg-surface)" stroke-width="2.5"/>`).join('');
+      tip.innerHTML = `<div class="th">${lgEsc(lgLab(keys[i] || ''))}</div>`
+        + series.map((v, k) => `<div class="tr"><i style="background:${LG_SER[k % LG_SER.length]}"></i>
+            ${lgEsc(top[k].nick)}<b>${LG_M[LG.metric].fmt(v[i] || 0)}</b></div>`).join('');
+    }
+    // Позиция подсказки едет за курсором каждый кадр — это дешёвый transform-путь,
+    // в отличие от пересборки её содержимого.
+    tip.style.left = Math.min(cx + 16, innerWidth - tip.offsetWidth - 14) + 'px';
+    tip.style.top = Math.min(cy + 16, innerHeight - tip.offsetHeight - 14) + 'px';
+    pending = null;
+  };
   const move = e => {
     const b = svg.getBoundingClientRect();
     const vx = (e.clientX - b.left) / b.width * W;
     let i = 0, best = 1e9;
     for (let k = 0; k < n; k++) { const dd = Math.abs(xs(k) - vx); if (dd < best) { best = dd; i = k; } }
     plot.classList.add('hot');
-    cross.setAttribute('x1', xs(i)); cross.setAttribute('x2', xs(i));
-    hits.innerHTML = series.map((v, k) => v[i] === undefined ? ''
-      : `<circle class="lghit" cx="${xs(i).toFixed(1)}" cy="${ys(v[i]).toFixed(1)}" r="5"
-          fill="${LG_SER[k % LG_SER.length]}" stroke="var(--lg-surface)" stroke-width="2.5"/>`).join('');
-    tip.innerHTML = `<div class="th">${lgEsc(lgLab(keys[i] || ''))}</div>`
-      + series.map((v, k) => `<div class="tr"><i style="background:${LG_SER[k % LG_SER.length]}"></i>
-          ${lgEsc(top[k].nick)}<b>${LG_M[LG.metric].fmt(v[i] || 0)}</b></div>`).join('');
     tip.classList.add('on');
-    tip.style.left = Math.min(e.clientX + 16, innerWidth - tip.offsetWidth - 14) + 'px';
-    tip.style.top = Math.min(e.clientY + 16, innerHeight - tip.offsetHeight - 14) + 'px';
+    pending = { i, cx: e.clientX, cy: e.clientY };
+    if (!raf) raf = requestAnimationFrame(paint);
   };
   svg.addEventListener('pointermove', move);
   svg.addEventListener('pointerdown', move);
   svg.addEventListener('pointerleave', () => {
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    pending = null; lastI = -1;
     plot.classList.remove('hot'); tip.classList.remove('on'); hits.innerHTML = '';
   });
 }
@@ -26930,6 +26965,24 @@ const lgAgo = iso => {
   const mn = Math.round(ms / 60000);
   return mn < 1 ? 'только что' : mn < 60 ? mn + ' мин назад' : Math.round(mn / 60) + ' ч назад';
 };
+// Состояние приёмника словами. «Один в лиге» и «приёмник не поднят» — РАЗНЫЕ вещи, и
+// путать их нельзя: сначала вкладка писала второе, когда верно было первое, — приёмник
+// работал, обмен проходил, просто друзья ещё не подключились.
+function lgReceiverState() {
+  const r = (LG.data && LG.data.receiver) || {};
+  if (!r.configured) {
+    return { ok: false, short: 'приёмник не настроен',
+      long: 'приёмник не настроен — нет файла <code>routing/league-config.json</code>' };
+  }
+  const last = r.last || {};
+  if (last.ok === false) {
+    return { ok: false, short: 'обмен не идёт',
+      long: `<b>обмен с приёмником падает:</b> ${lgEsc(String(last.error || '—'))}` };
+  }
+  const when = last.at ? lgAgo(last.at) : 'ещё не было';
+  return { ok: true, short: `обмен ${when}`,
+    long: `обмен с приёмником прошёл <b>${when}</b>, но друзья пока не прислали свой срез` };
+}
 function lgRender() {
   const host = document.getElementById('leagueTab');
   if (!host) return;

@@ -140,6 +140,7 @@ case "$helper" in
     *seekai-active-key.txt*)         raw_target="seekai" ;;
     *truesota-active-key.txt*)       raw_target="truesota" ;;
     *kktoken-active-key.txt*)        raw_target="kktoken" ;;
+    *hcnsec-active-key.txt*)         raw_target="hcnsec" ;;
     *custom-active-key.txt*)         raw_target="custom" ;;
 esac
 if [ -z "$raw_target" ]; then
@@ -165,6 +166,11 @@ if [ -z "$raw_target" ]; then
         *127.0.0.1:20160*)        raw_target="truesota" ;;
         *localhost:20161*)        raw_target="kktoken" ;;
         *127.0.0.1:20161*)        raw_target="kktoken" ;;
+        # :20162 (hcnsec) — тоже ВЫШЕ catch-all Custom-конвертеров: шаблон
+        # `*localhost:201[6-9][0-9]*` съедает весь диапазон 20160–20199, и без явной
+        # пары строк шлюз показывался бы как `Custom🧪`.
+        *localhost:20162*)        raw_target="hcnsec" ;;
+        *127.0.0.1:20162*)        raw_target="hcnsec" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
@@ -172,6 +178,7 @@ if [ -z "$raw_target" ]; then
         *seekai.cc*)              raw_target="seekai" ;;
         *true-sota.com*)          raw_target="truesota" ;;
         *kktoken.cc*)             raw_target="kktoken" ;;
+        *api.hcnsec.cn*)          raw_target="hcnsec" ;;
         *localhost:8190*)         raw_target="notion" ;;
         *agentrouter.org*)        raw_target="agentrouter" ;;
         *cc.freemodel.dev*)       raw_target="apihelper" ;;
@@ -199,6 +206,7 @@ case "$raw_target" in
     seekai)                      provider="seekai" ;;
     truesota)                    provider="truesota" ;;
     kktoken)                     provider="kktoken" ;;
+    hcnsec)                      provider="hcnsec" ;;
     custom)                      provider="Custom🧪" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
@@ -222,7 +230,7 @@ balance_age_s=-1   # возраст цифры баланса в секунда�
 balance_err=""     # непустая = последняя проверка баланса не удалась (таймаут/dead)
 active_name=""
 
-# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker/seekai/truesota/kktoken):
+# Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker/seekai/truesota/kktoken/hcnsec):
 # дашборд держит там balance/granted/balanceCheckedAt активного ключа. Читаем блок активного
 # ключа bash-native (0 форков), avail_sum = balance как есть (дашборд уже посчитал точную
 # цифру из /api/user/self либо вывел из вписанного анкера), pct = balance/granted. Ленивый
@@ -407,6 +415,8 @@ elif [ "$provider" = "truesota" ] && [ -f "$ROUTING/truesota-sessions.json" ]; t
     gauge_from_balance_cache "$ROUTING/truesota-sessions.json" "$PROF/.claude/truesota-active-key.txt" "ts/balance" 90
 elif [ "$provider" = "kktoken" ] && [ -f "$ROUTING/kktoken-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/kktoken-sessions.json" "$PROF/.claude/kktoken-active-key.txt" "kk/balance" 90
+elif [ "$provider" = "hcnsec" ] && [ -f "$ROUTING/hcnsec-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/hcnsec-sessions.json" "$PROF/.claude/hcnsec-active-key.txt" "hn/balance" 90
 fi
 
 # ---- render ----------------------------------------------------------------
@@ -556,7 +566,7 @@ fi
 # ложной тревогой. Это отличает блок от 🎁, который считается всегда намеренно
 # (бонус лежит на пуле и важен, даже когда сидишь на другом провайдере).
 case "$provider" in
-    agentrouter|tabi|gorouter|xpeach|justwoker|seekai|truesota|kktoken)
+    agentrouter|tabi|gorouter|xpeach|justwoker|seekai|truesota|kktoken|hcnsec)
         rot_raw=""
         [ -f "$LOGS/.money_autorotate.json" ] && rot_raw="$(<"$LOGS/.money_autorotate.json")"
         if [[ "$rot_raw" =~ \"enabled\"[[:space:]]*:[[:space:]]*true ]]; then

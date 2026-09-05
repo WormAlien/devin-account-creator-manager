@@ -72,6 +72,8 @@ const KEEPALIVES = [
     { backend: 'truesota', port: 20160 },
     // kktoken :20161 — восьмой шлюз, живой с 31.08, поэтому в опросе.
     { backend: 'kktoken', port: 20161 },
+    // hcnsec :20162 — девятый шлюз, живой с 31.08, поэтому в опросе.
+    { backend: 'hcnsec', port: 20162 },
 ];
 
 function log(msg) {
@@ -263,7 +265,12 @@ if (process.argv[2] === 'selftest') {
         'вотчдог НЕ пишет active-backend.json (автопереключение запрещено владельцем)');
     assert.ok(!KEEPALIVES.some((k) => k.port === 20157 || k.backend === 'xpeach'),
         'xpeach :20157 в опрос не попадает (легаси, все ключи banned)');
-    assert.strictEqual(KEEPALIVES.length, 4, 'опрашиваем четыре живых шлюза');
+    // 🪤 Число здесь ЗАСТРЕВАЕТ: добавляют шлюз в KEEPALIVES и забывают про ассерт, а
+    // падает он не там, где ошиблись, — на HEAD ef3cee3 selftest уже был красным
+    // (6 !== 4: не поправили ни на truesota 25.08, ни на kktoken 31.08). Смысл проверки
+    // не в самой цифре, а в том, что список не разъехался молча: правишь список —
+    // правишь и её. Сейчас семь: ar, tabi, gorouter, justwoker, truesota, kktoken, hcnsec.
+    assert.strictEqual(KEEPALIVES.length, 7, 'опрашиваем семь живых шлюзов');
 
     console.log('selftest OK');
     process.exit(0);

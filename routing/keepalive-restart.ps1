@@ -1,7 +1,8 @@
 # Recreates the keepalive-proxy.js process on the given port (default :20133).
 #   powershell -NoProfile -ExecutionPolicy Bypass -File keepalive-restart.ps1 -Port 20155
 # Instances: 20133 = AgentRouter, 20155 = Tabi, 20156 = GoRouter, 20157 = XPeach,
-#            20158 = JustWoker, 20159 = SeekAi, 20160 = TrueSOTA, 20161 = KKtoken.
+#            20158 = JustWoker, 20159 = SeekAi, 20160 = TrueSOTA, 20161 = KKtoken,
+#            20162 = HCNsec.
 #
 # Normal path is the dashboard button (Health tab -> POST /__switch/api/keepalive/restart).
 # This script is the fallback for when the dashboard itself is down.
@@ -56,9 +57,14 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  # HCNsec (New API): bare root here too - keepalive appends /v1/messages itself. The
+  # /v1 base URL (HN_BASE_URL in transparent-proxy.js) is for model listing only;
+  # putting it here would send /v1/v1/messages and the gateway answers 404.
+  20162 = @{ UPSTREAM = 'https://api.hcnsec.cn'; KEY_FILE = "$profileDir\.claude\hcnsec-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'hcnsec-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162)"; exit 1
 }
 
 # Kill the current listener

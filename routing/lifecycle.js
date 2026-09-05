@@ -98,6 +98,7 @@ function children() {
         { port: 20159, name: 'SeekAi keepalive', respawn: false },
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
+        { port: 20162, name: 'HCNsec keepalive', respawn: false },
         { port: 8300, name: 'Дашборд (легаси)', respawn: false },
     ];
 }

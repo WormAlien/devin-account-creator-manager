@@ -26,6 +26,11 @@ const POOLS = [
     { id: 'tb', file: 'tabi-sessions.json', name: 'Tabi Token' },
     // KKtoken (31.08) — восьмой шлюз, деньги живые, значит идёт в сумму шапки.
     { id: 'kk', file: 'kktoken-sessions.json', name: 'KKtoken' },
+    // HCNsec (31.08) — девятый шлюз. Тариф токенный (не плоский за запрос), остаток
+    // на аккаунте настоящий, поэтому в сумму «Общий запас» он тоже идёт.
+    // 🪤 Складывается ТОЛЬКО поле `balance` — оно в долларах. Юаневая цифра панели живёт
+    // отдельным `balanceLocal`, иначе ¥ попали бы в долларовую сумму с ошибкой ×7.3.
+    { id: 'hn', file: 'hcnsec-sessions.json', name: 'HCNsec' },
 ];
 
 function readPool(p) {

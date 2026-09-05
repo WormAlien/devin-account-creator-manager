@@ -38,7 +38,7 @@ let rc = null;
 try { rc = require(path.join(ROOT, 'routing', 'lib', 'ref-codes.js')); } catch (e) { /* ниже */ }
 chk(!!rc, 'модуль загружается', rc ? '' : 'require упал');
 if (rc) {
-    chk(rc.PROVIDERS.length === 8, 'провайдеров восемь', 'нашлось ' + rc.PROVIDERS.length);
+    chk(rc.PROVIDERS.length === 9, 'провайдеров девять', 'нашлось ' + rc.PROVIDERS.length);
     for (const p of Object.keys(WAS)) {
         chk(rc.PROVIDERS.includes(p), 'провайдер ' + p + ' в списке');
         chk(rc.url(p) === WAS[p], 'url(' + p + ') совпадает с прежним хардкодом', rc.url(p));
@@ -52,8 +52,8 @@ if (rc) {
         'XPeach НЕ в живом наборе — легаси, в настройках ему места нет');
     chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('seekai'),
         'SeekAi НЕ в живом наборе — легаси с 24.08');
-    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 6,
-        'живых провайдеров шесть (ar/go/jw/tb/truesota/kktoken)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
+    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 7,
+        'живых провайдеров семь (ar/go/jw/tb/truesota/kktoken/hcnsec)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
     // TrueSOTA заведён 2026-08-25 БЕЗ дефолтного кода: аккаунта на шлюзе ещё не было.
     // Поэтому url() обязан отдавать корень, а не ссылку с пустым `aff=` — иначе панель
     // примет битый параметр за код, и реф-кредит потеряется вообще (см. ref-codes.js § url).
@@ -74,6 +74,20 @@ if (rc) {
         'форма регистрации kktoken — /sign-up?aff= (New API, как у go/tb/jw)');
     chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.includes('kktoken'),
         'kktoken в живом наборе — шлюз рабочий, рефку настраивать есть смысл');
+    // HCNsec заведён 2026-08-31 — девятый шлюз, New API. 🪤 Порядок был обратный обычного:
+    // вкладку собрали с литеральной ссылкой и записью «рефки нет», а код владелец принёс
+    // после. Поэтому проверки ниже стоят парой с теми, что в `tools/check-hcnsec.js`:
+    // там утверждается, что `hcnsec/open-session.js` берёт ссылку из ref-codes, а не
+    // литералом — иначе правка кода в настройках не доехала бы до регистрации.
+    chk(rc.PROVIDERS.includes('hcnsec'), 'провайдер hcnsec в списке');
+    chk(rc.url('hcnsec') === 'https://api.hcnsec.cn/sign-up?aff=u4eN',
+        'url(hcnsec) собирается из кода владельца u4eN', rc.url('hcnsec'));
+    chk(rc.SHAPES && rc.SHAPES.hcnsec && rc.SHAPES.hcnsec.path === '/sign-up?aff=',
+        'форма регистрации hcnsec — /sign-up?aff= (New API, как у go/tb/jw/kk)');
+    chk(rc.SHAPES && rc.SHAPES.hcnsec && rc.SHAPES.hcnsec.host === 'api.hcnsec.cn',
+        'хост hcnsec — api.hcnsec.cn (панель и шлюз на одном домене)');
+    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.includes('hcnsec'),
+        'hcnsec в живом наборе — шлюз рабочий, рефку настраивать есть смысл');
     const saved = rc.user();
     chk(Object.keys(saved).length === 0 || true, 'user() читается');
 }
@@ -87,6 +101,8 @@ if (def) for (const p of Object.keys(WAS)) {
 }
 // kktoken мимо цикла по WAS (см. выше), но дефолт у него есть и он обязан быть валиден.
 if (def) chk(def.kktoken === 'Sog2', 'дефолт kktoken = Sog2', String(def.kktoken));
+// hcnsec — тем же порядком: код владельца приехал живой ссылкой из его кабинета.
+if (def) chk(def.hcnsec === 'u4eN', 'дефолт hcnsec = u4eN', String(def.hcnsec));
 
 console.log('\n── <prov>/open-session.js: литералов больше нет ──');
 for (const p of Object.keys(WAS)) {

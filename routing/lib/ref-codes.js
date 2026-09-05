@@ -25,6 +25,9 @@ const USER_FILE = path.join(DIR, 'ref-codes.json');
 const SHAPES = {
     agentrouter: { host: 'agentrouter.org',   path: '/register?aff=', label: 'AgentRouter' },
     gorouter:    { host: 'gorouter.app',      path: '/sign-up?aff=',  label: 'GoRouter' },
+    // HCNsec (2026-08-31) — New API, форма как у go/tb/jw/kk: `/sign-up?aff=`. Код
+    // владельца принесён живой ссылкой из его кабинета, ссылка проверена: 200.
+    hcnsec:      { host: 'api.hcnsec.cn',     path: '/sign-up?aff=',  label: 'HCNsec' },
     justwoker:   { host: 'api.justwoker.icu', path: '/sign-up?aff=',  label: 'JustWoker' },
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.

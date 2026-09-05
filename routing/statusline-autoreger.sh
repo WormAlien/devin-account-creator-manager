@@ -92,6 +92,29 @@ ctx_pct=""; [[ "$payload" =~ \"used_percentage\"[[:space:]]*:[[:space:]]*([0-9]+
 ctx_tok=""; [[ "$payload" =~ \"total_input_tokens\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && ctx_tok="${BASH_REMATCH[1]}"
 ctx_max=""; [[ "$payload" =~ \"context_window_size\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && ctx_max="${BASH_REMATCH[1]}"
 
+# /effort: уровень усилий ИМЕННО ЭТОЙ сессии. Источник — payload, а не
+# settings.json: `effortLevel` в настройках это лишь дефолт для новых сессий, а
+# `/effort` в живой сессии его не переписывает (и `ultracode` не пишет вообще).
+# Поэтому по файлу настроек нельзя понять, что выбрано в текущем окне — ради
+# этого блок и появился. Поле приходит только у моделей, поддерживающих effort:
+# нет поля → ничего не рисуем.
+# Значения: low | medium | high | xhigh | max (CC: `CD=["low","medium","high","xhigh","max"]`).
+# 🪤 `ultracode` в бар не доедет: CC разворачивает его в `xhigh` до отправки
+# payload (`qoe()` → `effortValue = "xhigh"`), отдельного флага в payload нет.
+# Поэтому «ultracode» и «xhigh» в баре выглядят одинаково — фиолетовым.
+effort=""
+[[ "$payload" =~ \"effort\"[^}]*\"level\"[[:space:]]*:[[:space:]]*\"([a-z]+)\" ]] && effort="${BASH_REMATCH[1]}"
+
+# git-воркtree: имя, если сессия открыта не в основном рабочем дереве. Поле
+# `workspace.git_worktree`, а НЕ верхнеуровневый объект `worktree` — тот приходит
+# только у воркtree, созданных самим CC (`EnterWorktree`), и за месяц отладочного
+# лога не пришёл ни разу. А `git_worktree` пришёл 655 раз: так выглядят рабочие
+# копии Orca (`orca\workspaces\<репо>\<имя>`). Зачем в баре: при нескольких
+# открытых окнах по одному репо перепутать, в каком дереве правишь, — вопрос
+# времени, и цена ошибки — правка в чужую ветку.
+worktree=""
+[[ "$payload" =~ \"git_worktree\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && worktree="${BASH_REMATCH[1]}"
+
 # ---- active provider: из settings.json (bash-native, БЕЗ сети) ------------
 # Раньше тут был блокирующий `curl :8200` в КАЖДОМ вызове statusline — сеть в
 # горячем пути. Провайдер однозначно определяется по apiKeyHelper/ANTHROPIC_BASE_URL
@@ -428,6 +451,55 @@ MONEY=$'\033[38;5;42m'
 
 printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
 
+# ---- /effort: тем же цветом, каким уровень подсвечен в самом Claude Code -----
+# Цвета не выдуманы, а сняты из бандла CC (2.1.220), чтобы бар и его собственный
+# слайдер `/effort` говорили одно и то же. Соответствие уровень → токен темы:
+#   low    → warning      rgb(255,193,7)     жёлтый
+#   medium → success      rgb(78,186,101)    зелёный
+#   high   → permission   rgb(177,185,249)   сине-сиреневый
+#   xhigh  → autoAccept   rgb(175,135,255)   фиолетовый (он же ultracode, см. выше)
+#   max    → rainbow-animated: радуга rainbow_red…rainbow_violet
+# Значения взяты из ТЁМНОЙ палитры (`text:"rgb(255,255,255)"`) — терминал тут
+# тёмный, а `theme: auto` в settings.json к statusline отношения не имеет: CC
+# цвет бара не навязывает, escape-последовательности пишем мы сами.
+# Truecolor (38;2;R;G;B) вместо 38;5;N по всему блоку намеренно: попадание в
+# 256-цветную палитру исказило бы именно те оттенки, ради совпадения с которыми
+# всё и делается. Warp и Windows Terminal truecolor понимают.
+if [ -n "$effort" ]; then
+    printf ' %s·%s ' "$SEP" "$RESET"
+    case "$effort" in
+        low)    printf '%s%s%s' $'\033[38;2;255;193;7m'     "$effort" "$RESET" ;;
+        medium) printf '%s%s%s' $'\033[38;2;78;186;101m'    "$effort" "$RESET" ;;
+        high)   printf '%s%s%s' $'\033[38;2;177;185;249m'   "$effort" "$RESET" ;;
+        xhigh)  printf '%s%s%s' $'\033[1;38;2;175;135;255m' "$effort" "$RESET" ;;
+        max)
+            # Радуга по буквам. Шаг 2 по кольцу из 7 цветов, а не 1: на трёх
+            # символах соседние оттенки дали бы тёплый градиент, который читается
+            # не как радуга, а как «оранжевый». Шаг 2 = красный/жёлтый/синий.
+            # Фаза вращается по секундам — статуслайн перерисовывается на каждом
+            # событии, и `max` за счёт этого переливается, как «rainbow-animated»
+            # в самом CC. Форк `date` здесь единственный и только на уровне max.
+            rb=( '235;95;87' '245;139;87' '250;195;95' '145;200;130' '130;170;220' '155;130;200' '200;130;180' )
+            ph=$(( $(date +%s) % 7 ))
+            i=0
+            while [ "$i" -lt "${#effort}" ]; do
+                printf '\033[1;38;2;%sm%s' "${rb[$(( (ph + i * 2) % 7 ))]}" "${effort:$i:1}"
+                i=$(( i + 1 ))
+            done
+            printf '%s' "$RESET"
+            ;;
+        *)      printf '%s%s%s' "$DIM" "$effort" "$RESET" ;;
+    esac
+fi
+
+# ---- ⑂ воркtree: в каком рабочем дереве эта сессия ---------------------------
+# Показываем ТОЛЬКО когда дерево не основное: в обычном репо поля нет, и лишнего
+# символа в баре не появляется. Цвет `planMode` rgb(72,150,140) выбран потому, что
+# бирюзовый в этом баре больше нигде не занят — уровень effort, деньги, контекст и
+# 💸 его не используют, так что пятно читается как отдельная сущность, а не как
+# продолжение модели.
+[ -n "$worktree" ] && printf ' %s⑂%s%s' $'\033[38;2;72;150;140m' "$worktree" "$RESET"
+
 if [ "$have_gauge" = "1" ]; then
     # Возраст цифры показываем текстом: раньше был только тусклый `~`, по которому
     # нельзя было понять «обновляется, просто чуть отстало» или «залипло часы назад».
@@ -469,6 +541,26 @@ if [ -n "$ctx_max" ] && [ "$provider" = "freemodel" ] && [ "$ctx_max" -lt 100000
     esac
 fi
 
+# Цвет по заполненности. До 2026-08-31 здесь стоял безусловный $DIM — то есть
+# предупреждения о близком автокомпакте в баре не было вообще, ни на 80%, ни на
+# 95%: цифра одинаково тускла и на 17%, и за минуту до того, как CC срежет
+# контекст. (Вика утверждала, что «цветовые пороги cохранены» — это было неправдой
+# с самого перехода на компактный формат.) Пороги 70/85 выбраны от места
+# срабатывания автокомпакта: он бьёт в районе 90%+, значит жёлтый должен успеть
+# предупредить, а красный — застать ещё с запасом на `/compact` руками.
+ctx_col="$DIM"
+ctx_pct_calc=""
+if [ -n "$ctx_tok" ] && [ -n "$ctx_max" ] && [ "$ctx_max" -gt 0 ] 2>/dev/null; then
+    ctx_pct_calc=$(( ctx_tok * 100 / ctx_max ))
+elif [ -n "$ctx_pct" ]; then
+    ctx_pct_calc="$ctx_pct"
+fi
+if [ -n "$ctx_pct_calc" ]; then
+    if   [ "$ctx_pct_calc" -ge 85 ]; then ctx_col=$'\033[1;38;2;255;107;128m'   # error, жирный
+    elif [ "$ctx_pct_calc" -ge 70 ]; then ctx_col=$'\033[38;2;255;193;7m'       # warning
+    fi
+fi
+
 if [ -n "$ctx_tok" ] && [ "$ctx_tok" -gt 0 ] && [ -n "$ctx_max" ] && [ "$ctx_max" -gt 0 ]; then
     format_tokens() {
         local tokens="$1" out_var="$2" formatted
@@ -483,14 +575,14 @@ if [ -n "$ctx_tok" ] && [ "$ctx_tok" -gt 0 ] && [ -n "$ctx_max" ] && [ "$ctx_max
     format_tokens "$ctx_max" ctx_max_h
     printf ' %s│%s %s⧉ %s/%s%s' \
         "$SEP" "$RESET" \
-        "$DIM" "$ctx_tok_h" "$ctx_max_h" "$RESET"
+        "$ctx_col" "$ctx_tok_h" "$ctx_max_h" "$RESET"
 else
     # Старые/неполные payload: процент пригоден только еcли Claude Code его поcчитал.
     if [ -n "$ctx_pct" ] && [ "$ctx_pct" -gt 0 ]; then
         [ "$ctx_pct" -gt 100 ] && ctx_pct=100
         printf ' %s│%s %s⧉ %d%%%s' \
             "$SEP" "$RESET" \
-            "$DIM" "$ctx_pct" "$RESET"
+            "$ctx_col" "$ctx_pct" "$RESET"
     elif [ -n "$ctx_max" ] && [ "$ctx_max" -gt 0 ]; then
         # Нулевой usage от gateway не означает пуcтую живую cеccию.
         printf ' %s│%s %s⧉ ?%s' "$SEP" "$RESET" "$DIM" "$RESET"

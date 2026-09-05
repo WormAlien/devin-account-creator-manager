@@ -191,8 +191,16 @@ const upBase = upstream.pathname.replace(/\/+$/, '');
 // рукопожатий через туннель (happ-tun/sing-tun часть их роняет — в логе это выглядело
 // как `Client network socket disconnected before secure TLS`). Явный лимит гасит эти
 // кластеры обрывов и заодно переиспользует сокет: замер 20.08 — первое рукопожатие
-// ~0.5с, дальше запросы идут за ~0.25с. 16 — с запасом на N агентов Orca на одном ключе.
-const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 16);
+// ~0.5с, дальше запросы идут за ~0.25с.
+// 🎯 16 → 32 (05.09): «с запасом на N агентов Orca» считали по ЧИСЛУ агентов, а сокет
+// держится всю ЖИЗНЬ стримового ответа — у упавших агентов это 56–687 с. Замер по
+// живому :20158: пул 16/16 занято, в очереди до 24 запросов, ожидание сокета до 50,4 с
+// и первый байт 52 с при пустых dns/tcp/tls. Запрос, стоящий в очереди агента Node,
+// ещё не отправлен — и пре-коммит SSE ему не помогает: клиент видит тишину. Выше 32 не
+// идём без замера: лимит здесь ради кластеров TLS-рукопожатий через happ-tun, и он
+// возвращается ростом `Client network socket disconnected before secure TLS`.
+// Разбор — вики, [[Обрывы пути к шлюзам — план удержания запроса]].
+const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 32);
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const agentFor = requester => (requester === https.request ? httpsAgent : httpAgent);
@@ -394,6 +402,21 @@ const DEFAULT_CFG = {
   // наблюдённый ответ 159.6с): живой медленный шлюз не обрываем, мёртвый не ждём вечно.
   // 0 = выключить.
   emptyStreamMs: 180000,
+  // ── Бюджет ВРЕМЕНИ на повторы (2026-09-05) ──────────────────────────────────
+  // Считать попытки было мало: `524` от Cloudflare («origin не ответил») приходит
+  // примерно через 100 с, и три попытки складываются в **381 с** ожидания при нуле
+  // содержимого — замер 05.09, четыре запроса justwoker умерли ровно так, а агенты
+  // владельца вместе с ними. Клиент к этой секунде ушёл давно, то есть вторая и третья
+  // попытки не спасали никого, а только жгли время.
+  // 🪤 Запрещать ретрай ПО КЛАССУ ошибки здесь нельзя: 23.08 `522` уже был записан в
+  // постоянные ошибки, ретрая не стало вовсе — и это положило агентов (см. RETRY_NO).
+  // Поэтому режем не класс, а безнадёжно долгий повтор: дешёвый отказ (медиана
+  // `ECONNRESET` 11 с, p90 22.8 с) переигрываем как раньше, дорогой отдаём клиенту,
+  // пока он ещё жив и может переспросить сам.
+  // 90с — под наблюдавшийся потолок Cloudflare: первый `524` приходит позже, значит
+  // повтора не будет; всё, что упало быстрее, ретраится по-прежнему.
+  // 0 = бюджет выключен, поведение ровно как до 05.09.
+  retryBudgetMs: 90000,
   // Как часто перечитывать каталог моделей шлюза — и он же выключатель подмены.
   // **0 = каталога нет вовсе**: маппинг работает строго по карте, ровно как до 04.09.
   // Ручка нужна не для тюнинга, а для отката: если шлюз в `/v1/models` СОВРЁТ (не покажет
@@ -470,6 +493,7 @@ const cfg = {
   // дашборда, ломать совместимость ради красоты нельзя.
   upstreamTimeoutMs: Number(process.env.UPSTREAM_TIMEOUT_MS || DEFAULT_CFG.upstreamTimeoutMs),
   holdMs: Number(process.env.HOLD_MS || DEFAULT_CFG.holdMs),
+  retryBudgetMs: Number(process.env.RETRY_BUDGET_MS || DEFAULT_CFG.retryBudgetMs),
   emptyStreamMs: Number(process.env.EMPTY_STREAM_MS || DEFAULT_CFG.emptyStreamMs),
   catalogTtlMs: Number(process.env.CATALOG_TTL_MS || DEFAULT_CFG.catalogTtlMs),
   jsonHoldMs: Number(process.env.JSON_HOLD_MS || DEFAULT_CFG.jsonHoldMs),
@@ -498,7 +522,7 @@ function patchNum(v, min, max, allowZero) {
 // путь до шлюза. Правило то же: без поднятия версии у тех, кто однажды нажал «Применить»,
 // в json нет нового поля, удержание осталось бы на дефолте кода, а старые цифры доехали
 // бы из файла — полусостояние, в котором непонятно, что именно работает.
-const CFG_VERSION = 5;
+const CFG_VERSION = 6;
 // Платный мульти-запрос: на плоскотарифных шлюзах дубль стоит полную цену запроса, поэтому там
 // его нельзя включить ни из json, ни из панели, ни curl'ом — только осознанным
 // ALLOW_PAID_HEDGE=1 при запуске процесса. Гвоздь прибит НАД конфигом намеренно:
@@ -545,6 +569,8 @@ function loadConfig() {
   if (hm !== null) cfg.holdMs = hm;
   const es = patchNum(c.emptyStreamMs, 30000, 600000, true);
   if (es !== null) cfg.emptyStreamMs = es;
+  const rb = patchNum(c.retryBudgetMs, 10000, 600000, true);
+  if (rb !== null) cfg.retryBudgetMs = rb;
   const ct = patchNum(c.catalogTtlMs, 60000, 3600000, true);
   if (ct !== null) cfg.catalogTtlMs = ct;
   const jh = patchNum(c.jsonHoldMs, 3000, 60000, true);
@@ -583,6 +609,10 @@ function applyPatch(p) {
   if ('emptyStreamMs' in p) {
     const es = patchNum(p.emptyStreamMs, 30000, 600000, true);
     if (es !== null) cfg.emptyStreamMs = es;
+  }
+  if ('retryBudgetMs' in p) {
+    const rb = patchNum(p.retryBudgetMs, 10000, 600000, true);
+    if (rb !== null) cfg.retryBudgetMs = rb;
   }
   if ('catalogTtlMs' in p) {
     const ct = patchNum(p.catalogTtlMs, 60000, 3600000, true);
@@ -1269,6 +1299,44 @@ const server = http.createServer((req, res) => {
   // Пустой поток: заголовки от шлюза пришли, содержимое — нет. Пока `contentSent` false,
   // наружу ушли максимум пинги, значит попытку ещё можно переиграть незаметно для клиента.
   let contentSent = false;
+  // ── Целостность ответа: поток Messages обязан закончиться `message_stop` ──────
+  // Без этой проверки обрыв шлюза ПОСЛЕ первой дельты невидим по устройству: мы
+  // честно пересылаем байты, апстрим кончается, мы закрываем ответ штатным `end()` —
+  // и в наших логах нет ни строки, а человек видит `Connection closed mid-response`.
+  // Замер 05.09 21:55: три агента подряд умерли так, при этом ни у keepalive, ни у
+  // front-door не было ни ошибки, ни ухода клиента. Считаем по ВЫХОДНОМУ потоку и
+  // держим хвост: событие SSE легко разрезается границей чанка.
+  let sawStop = false;
+  let stopTail = '';
+  // Какой блок содержимого открыт СЕЙЧАС: text | thinking | tool_use. Нужно ровно для
+  // одного решения: можно ли вместо `event: ping` капнуть синтетическую дельту с пробелом
+  // (пинги CC не считает содержимым, дельты считает). Пробел безопасен только в `text`:
+  // в `thinking` он ломает подпись блока, в `tool_use` — JSON аргументов. Пока просто
+  // пишем в строку пинга, чтобы измерить, ГДЕ случаются длинные паузы. Замера нет —
+  // приёма не пишем.
+  let openBlock = '';
+  const BLOCK_START_RE = /"content_block":\{"type":"([a-z_]+)"/g;
+  const noteStop = (buf) => {
+    const s = stopTail + buf.toString('latin1');
+    if (!sawStop && s.includes('message_stop')) sawStop = true;
+    // Состояние задаёт ПОСЛЕДНИЙ маркер в потоке: старт блока или его конец. Хвост даёт
+    // перехлёст между чанками — событие SSE легко режется границей.
+    let last = null;
+    let m;
+    BLOCK_START_RE.lastIndex = 0;
+    while ((m = BLOCK_START_RE.exec(s)) !== null) last = { at: m.index, type: m[1] };
+    const stopAt = s.lastIndexOf('content_block_stop');
+    if (last && (stopAt < 0 || last.at > stopAt)) openBlock = last.type;
+    else if (stopAt >= 0) openBlock = '';
+    stopTail = s.slice(-256);
+  };
+  const noteTruncated = () => {
+    if (!contentSent || sawStop) return;
+    stats.truncated = (stats.truncated || 0) + 1;
+    ev.note('truncated');
+    log(`${req.method} ${reqPath} 🔴 шлюз закрыл поток без message_stop: отдано ${sentBytes}Б — `
+      + `у клиента это «Connection closed mid-response», ответ неполный`);
+  };
   let emptyTimer = null;
   let emptyRetries = 0;
   let hedgeTimer = null;          // таймер мульти-дубля
@@ -1348,13 +1416,15 @@ const server = http.createServer((req, res) => {
       tail = Buffer.concat([tail, Buffer.from(PING)]).slice(-4);
       keepalives += 1;
       stats.keepalives += 1;
-      log(`${req.method} ${reqPath} keepalive ping #${keepalives}`);
+      log(`${req.method} ${reqPath} keepalive ping #${keepalives}`
+        + `${openBlock ? ` · открыт блок ${openBlock}` : ''}`);
     } else if (t.endsWith('\n')) {
       res.write(KEEPALIVE_COMMENT);
       tail = Buffer.concat([tail, Buffer.from(KEEPALIVE_COMMENT)]).slice(-4);
       keepalives += 1;
       stats.keepalives += 1;
-      log(`${req.method} ${reqPath} keepalive mid-event #${keepalives}`);
+      log(`${req.method} ${reqPath} keepalive mid-event #${keepalives}`
+        + `${openBlock ? ` · открыт блок ${openBlock}` : ''}`);
     }
     sseTimer = setTimeout(tick, IDLE_MS);
   };
@@ -1516,13 +1586,15 @@ const server = http.createServer((req, res) => {
           armStall(stream);
           sentBytes += out.length;
           res.write(out);
+          noteStop(out);
           noteBytes(out);
           armTimer();
         });
         stream.on('end', () => {
           const rest = flushSseEcho();
-          if (rest) { res.write(rest); noteBytes(rest); }
+          if (rest) { res.write(rest); noteStop(rest); noteBytes(rest); }
           stopTimer();
+          noteTruncated();
           if (!res.writableEnded) res.end();
         });
         stream.on('error', (err) => {
@@ -1624,13 +1696,15 @@ const server = http.createServer((req, res) => {
       armStall(stream);
       sentBytes += out.length;
       res.write(out);
+      noteStop(out);
       noteBytes(out);
       armTimer();
     });
     stream.on('end', () => {
       const rest = flushSseEcho();
-      if (rest) { res.write(rest); noteBytes(rest); }
+      if (rest) { res.write(rest); noteStop(rest); noteBytes(rest); }
       stopTimer();
+      noteTruncated();
       res.end();
     });
     stream.on('error', (err) => {
@@ -1788,11 +1862,24 @@ const server = http.createServer((req, res) => {
   const attemptDone = (r, why, delayMs) => {
     activeSet.delete(r);
     if (finished || aborted) return;
-    if (launched < cfg.maxAttempts + bonusAttempts) {
+    // Бюджет ВРЕМЕНИ на повторы — см. DEFAULT_CFG.retryBudgetMs. Повтор после дорогого
+    // отказа клиент уже не дождётся: `524` приходит через ~100 с, три попытки давали
+    // 381 с при нуле содержимого.
+    // 🪤 Удержание здесь НЕ отключаем: оно вытаскивает больше запросов, чем ретрай
+    // (за сутки 352 против 91), и работает по другой причине — лежащему пути, а не
+    // медленному origin. Гасим только повтор.
+    const spentMs = Date.now() - started;
+    const overBudget = cfg.retryBudgetMs > 0 && spentMs > cfg.retryBudgetMs;
+    if (!overBudget && launched < cfg.maxAttempts + bonusAttempts) {
       stats.retries += 1;
       log(`${req.method} ${reqPath} -> повтор/копия #${launched + 1} через ${delayMs}ms (${why})`);
       setTimeout(() => { if (!aborted && !finished) makeUpstream('ретрай'); }, delayMs);
       return;
+    }
+    if (overBudget && launched < cfg.maxAttempts + bonusAttempts) {
+      stats.budgetStops = (stats.budgetStops || 0) + 1;
+      log(`${req.method} ${reqPath} бюджет повторов исчерпан: ${Math.round(spentMs / 1000)}с > `
+        + `${Math.round(cfg.retryBudgetMs / 1000)}с — не переигрываю, отдаю отказ клиенту (${why})`);
     }
     if (activeSet.size === 0) {
       // Удержание уже идёт (его начала другая попытка) — она же и доведёт запрос.
@@ -2479,7 +2566,18 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(DEFAULT_CFG.jsonHoldMs, 15000,
     'поставочные 15с — по замеру 137 не-стримовых ответов: быстрее 15с только 24 из них, '
     + 'а путь giveUp успевает отдать честный 529 до коммита');
-  assert.strictEqual(CFG_VERSION, 5, 'версия конфига поднята под три новых поля');
+  assert.strictEqual(CFG_VERSION, 6, 'версия конфига поднята под retryBudgetMs (05.09)');
+  // Бюджет времени на повторы: дешёвый отказ ретраим, дорогой отдаём клиенту.
+  assert.strictEqual(DEFAULT_CFG.retryBudgetMs, 90000,
+    '90с — под потолок Cloudflare: первый 524 приходит позже, значит повтора не будет, '
+    + 'а обычный ECONNRESET (медиана 11с) ретраится как раньше');
+  applyPatch({ retryBudgetMs: 120000 });
+  assert.strictEqual(cfg.retryBudgetMs, 120000, 'retryBudgetMs применился');
+  applyPatch({ retryBudgetMs: 5 });
+  assert.strictEqual(cfg.retryBudgetMs, 10000, 'retryBudgetMs зажат по нижней границе');
+  applyPatch({ retryBudgetMs: 0 });
+  assert.strictEqual(cfg.retryBudgetMs, 0, '0 выключает бюджет (поведение как до 05.09)');
+  applyPatch({ retryBudgetMs: DEFAULT_CFG.retryBudgetMs });
   // Ведущие пробелы перед значением — легальный JSON, на этом стоит весь приём.
   assert.deepStrictEqual(JSON.parse('   {"type":"message"}'), { type: 'message' },
     'JSON.parse съедает ведущие пробелы — иначе капать было бы нельзя');

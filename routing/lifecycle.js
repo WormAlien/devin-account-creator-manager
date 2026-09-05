@@ -58,20 +58,55 @@ function frontdoorPort() {
     }
 }
 
+// ── Какой бэкенд выбран прямо сейчас ────────────────────────────────────────
+// Нужно, чтобы не поднимать конвертеры провайдеров, которыми не пользуются (см. ниже).
+// Источник правды тот же, что у дашборда (transparent-proxy.js § activeBackendPort):
+// `~/.claude/settings.json` → ANTHROPIC_BASE_URL; если он смотрит в front-door, то
+// настоящий адрес лежит в `~/.claude/active-backend.json`, потому что в settings всегда
+// один и тот же `:20100`.
+// 🪤 Читаем, а не спрашиваем дашборд по HTTP: на старте его ещё нет.
+function activeUpstreamPort() {
+    const read = (p) => {
+        const raw = fs.readFileSync(p, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    };
+    const home = os.homedir();
+    let base = '';
+    try { base = String((read(path.join(home, '.claude', 'settings.json')).env || {}).ANTHROPIC_BASE_URL || ''); } catch { return 0; }
+    let target = base;
+    const fdPort = frontdoorPort();
+    if (new RegExp(`^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\]):${fdPort}(/|$)`).test(base)) {
+        try { target = String(read(path.join(home, '.claude', 'active-backend.json')).upstream || ''); } catch { return 0; }
+    }
+    const m = target.match(/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)/);
+    return m ? Number(m[1]) : 0;
+}
+
 // ── Что хаб поднимает своими руками, в этом порядке ──────────────────────────
 // Дашборд идёт последним: он на boot спавнит своих детей (front-door, конвертер
 // AR, keepalive активного бэкенда) и снимает лежалых с прошлого запуска, поэтому
 // к его старту порты уже должны быть свободны.
+//
+// 🪤 `provider` — конвертер Anthropic→OpenAI одного конкретного бэкенда. Такие
+// поднимаются ТОЛЬКО если этот бэкенд выбран последним (решение владельца 05.09:
+// «дашборд, вотчдог, фронтдор, а прокси по последнему выбранному провайдеру»).
+// Раньше все три стартовали всегда — три процесса node по ~45 МБ и лишние секунды
+// на старте ради панелей, в которые никто не заходит. Девять шлюзовых keepalive
+// живут по этому правилу с самого начала (см. children(), respawn: false), а эти
+// три его не получили: они старше keepalive-механики и остались в списке с мая.
+// В `stop()` и `status()` список по-прежнему ПОЛНЫЙ — иначе «остановил» означало бы
+// живой процесс на порту, а «статус» врал бы про него молчанием.
 const SERVICES = [
-    { port: 20126, name: 'FM-ротатор', script: 'freemodel-rotator.js' },
-    { port: 20130, name: 'FM-OpenAI', script: 'freemodel-openai-proxy.js' },
-    { port: 20131, name: 'VyceAI', script: 'vyceai-openai-proxy.js' },
+    { port: 20126, name: 'FM-ротатор', script: 'freemodel-rotator.js', provider: 'freemodel_rotator' },
+    { port: 20130, name: 'FM-OpenAI', script: 'freemodel-openai-proxy.js', provider: 'fm_openai' },
+    { port: 20131, name: 'VyceAI', script: 'vyceai-openai-proxy.js', provider: 'vyce_openai' },
     { port: 8200, name: 'Дашборд', script: 'transparent-proxy.js', ready: '/__switch/api/status' },
     // Вотчдог пулов: следит, не отдаёт ли активный шлюз «all nodes exhausted», и
     // ГРОМКО сообщает (лог + pool-alert.json), сам НЕ переключает. Стоит после
     // дашборда: без активного бэкенда ему нечего мерить. Разбор — pool-watchdog.js.
     { port: 20134, name: 'Вотчдог пулов', script: 'pool-watchdog.js', ready: '/__watchdog/api/status' },
 ];
+
 
 // ── Дети дашборда: хаб их НЕ поднимает никогда ───────────────────────────────
 // Разница между «перезапустить» и «остановить» живёт ровно здесь, и она не
@@ -482,9 +517,17 @@ async function waitReady(port, urlPath, timeoutMs = 15000) {
 // поломка (keepalive неактивного провайдера лежит штатно).
 function status() {
     const map = listeners();
+    const activePort = activeUpstreamPort();
     const row = (x, role) => {
         const pids = [...(map.get(x.port) || [])];
-        return { port: x.port, name: x.name, role, up: pids.length > 0, pids, respawn: !!x.respawn };
+        return {
+            port: x.port, name: x.name, role, up: pids.length > 0, pids, respawn: !!x.respawn,
+            // provider → сервис поднимается по выбору бэкенда. `expected` отвечает на
+            // вопрос «должен ли он сейчас быть живым»: без него счётчик хаба показывал бы
+            // жёлтое «2/5» на штатном состоянии и читался как недозапуск.
+            provider: x.provider || undefined,
+            expected: x.provider ? x.port === activePort : true,
+        };
     };
     return [
         ...SERVICES.map(s => row(s, 'service')),
@@ -529,7 +572,13 @@ async function start({ on = () => {} } = {}) {
     const map = listeners();
     const started = [];
     const foreign = [];
+    // Конвертер провайдера поднимаем только если этот провайдер выбран последним.
+    const activePort = activeUpstreamPort();
     for (const svc of SERVICES) {
+        if (svc.provider && svc.port !== activePort) {
+            on({ type: 'start-lazy', ...svc });
+            continue;
+        }
         const holders = [...(map.get(svc.port) || [])];
         if (holders.length) {
             // Порт занят — но нами ли? Посторонняя программа на :8200 раньше читалась
@@ -587,10 +636,33 @@ async function restart({ on = () => {} } = {}) {
     return { ...(await start({ on })), stage: 'start' };
 }
 
+// ── Поднять конвертер провайдера по требованию ───────────────────────────────
+// Обратная сторона ленивого старта: раз на boot их больше не поднимают, кто-то обязан
+// поднять при выборе провайдера. Зовёт дашборд из applyTarget ДО того, как обратится к
+// порту (у freemodel_rotator он сразу спрашивает активный ключ у :20126, и на пустом
+// порту переключение молча получало бы пустой ключ).
+//
+// Идемпотентно: порт уже слушает — ничего не делаем. Ждём именно ЗАНЯТИЯ ПОРТА, а не
+// факта spawn: node мог умереть на первой строке, и «поднял» тогда означало бы неправду.
+// → { ok, port, pid, already?, error? }
+async function ensureProviderService(port) {
+    const svc = SERVICES.find(s => s.provider && s.port === Number(port));
+    if (!svc) return { ok: false, port: Number(port), error: 'это не конвертер провайдера' };
+    const live = [...(listeners().get(svc.port) || [])];
+    if (live.length) return { ok: true, port: svc.port, pid: live[0], already: true };
+    try { startService(svc); } catch (e) { return { ok: false, port: svc.port, error: e.message }; }
+    for (let i = 0; i < 24; i++) {
+        await sleep(250);
+        const pid = [...(listeners().get(svc.port) || [])][0];
+        if (pid) return { ok: true, port: svc.port, pid, name: svc.name };
+    }
+    return { ok: false, port: svc.port, error: `порт :${svc.port} не занялся`, tail: logTail(svc) };
+}
+
 module.exports = {
     ROOT, ROUTING, IS_WIN, LOG_DIR, serviceLog, isElevated,
     SERVICES, children, customPorts, killPlan, frontdoorPort,
     listeners, killPort, killPid, status, start, stop, restart,
     preparePlatform, childEnv, waitReady, logTail, sleep, startService,
-    pidAlive, pidImage, isOurs,
+    pidAlive, pidImage, isOurs, activeUpstreamPort, ensureProviderService,
 };

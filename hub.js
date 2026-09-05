@@ -660,6 +660,12 @@ function reporter() {
             case 'start-skip':
                 line(`  ${SKIP()} ${grey(`${ev.name} :${ev.port} — уже поднят, не трогаю`)}`);
                 break;
+            // Конвертер провайдера, которым сейчас не пользуются. Печатаем строкой, а не
+            // молчим: «а куда делся FM-ротатор» — вопрос, который иначе задаёт себе
+            // человек, глядя на список из трёх строк вместо шести.
+            case 'start-lazy':
+                line(`  ${SKIP()} ${grey(`${ev.name} :${ev.port} — не поднимаю: провайдер не выбран`)}`);
+                break;
             case 'start-foreign':
                 line(`  ${NO()} ${red(`${ev.name} :${ev.port} занят ЧУЖИМ процессом`)} ${dim('— ' + ev.who)}`);
                 line(`     ${dim('это не наш сервис: поднять на этом порту нечего, пока порт не освободить')}`);
@@ -1669,12 +1675,21 @@ function printStatus() {
     for (const r of rows) {
         const mark = r.up ? green(DOT_ON) : grey(DOT_OFF);
         const role = r.role === 'service' ? 'сервис' : (r.respawn ? 'ребёнок (сам встанет)' : 'ребёнок');
-        line(`  ${mark} ${r.name.padEnd(w)} ${dim((':' + r.port).padEnd(7))} ${dim(role.padEnd(22))}${r.up ? dim('pid ' + r.pids.join(',')) : ''}`);
+        // Конвертер невыбранного провайдера лежит штатно — подписываем, иначе строка без
+        // pid читается как «упало». Ту же роль у детей играет слово «ребёнок».
+        const note = r.up ? dim('pid ' + r.pids.join(',')) : (r.provider && !r.expected ? dim('по выбору провайдера') : '');
+        line(`  ${mark} ${r.name.padEnd(w)} ${dim((':' + r.port).padEnd(7))} ${dim(role.padEnd(22))}${note}`);
     }
-    const svcTotal = rows.filter(r => r.role === 'service').length;
-    const svcUp = rows.filter(r => r.role === 'service' && r.up).length;
+    // В знаменателе — только те сервисы, что ДОЛЖНЫ быть живыми сейчас: конвертеры
+    // невыбранных провайдеров туда не идут, иначе штатное состояние выглядело бы как
+    // недозапуск (жёлтое «2/5» вместо зелёного «2/2»).
+    const need = rows.filter(r => r.role === 'service' && r.expected !== false);
+    const svcTotal = need.length;
+    const svcUp = need.filter(r => r.up).length;
+    const lazyDown = rows.filter(r => r.role === 'service' && r.expected === false && !r.up).length;
     line();
-    line(`  сервисов поднято: ${svcUp === svcTotal ? green(`${svcUp}/${svcTotal}`) : yellow(`${svcUp}/${svcTotal}`)}`);
+    line(`  сервисов поднято: ${svcUp === svcTotal ? green(`${svcUp}/${svcTotal}`) : yellow(`${svcUp}/${svcTotal}`)}`
+        + (lazyDown ? dim(`   (+${lazyDown} по выбору провайдера)`) : ''));
     if (L.IS_WIN) line(`  права: ${L.isElevated() ? 'администратор' : 'обычные'}`);
 }
 

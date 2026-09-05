@@ -4360,6 +4360,18 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
         #leagueTab .lgrow .lgv:nth-of-type(3),
         #leagueTab .lgrow .lgv:nth-of-type(4){display:none}
       }
+      #leagueTab .lgtgl{appearance:none;cursor:pointer;border-radius:999px;padding:6px 13px;
+        font:500 12.5px/1 var(--lg-mono);color:var(--lg-muted);
+        background:color-mix(in oklab,var(--lg-bg) 55%,transparent);
+        border:1px solid color-mix(in oklab,var(--lg-line-soft) 80%,transparent);
+        transition:color .18s var(--lg-spring),background .18s var(--lg-spring),
+        border-color .18s var(--lg-spring),transform .1s ease-out}
+      #leagueTab .lgtgl:hover:not(:disabled){color:var(--lg-ink)}
+      #leagueTab .lgtgl:active:not(:disabled){transform:scale(.97)}
+      #leagueTab .lgtgl[aria-pressed="true"]{color:var(--lg-ink);
+        background:color-mix(in oklab,var(--lg-azure) 22%,transparent);
+        border-color:color-mix(in oklab,var(--lg-azure) 55%,transparent)}
+      #leagueTab .lgtgl:disabled{opacity:.4;cursor:default}
       #leagueTab #lg-ptitle{font:600 17px/1.2 inherit;letter-spacing:-.01em;color:var(--lg-ink)}
       #leagueTab #lg-ptitle span{display:block;margin-top:5px;font:400 11.5px var(--lg-mono);
         color:var(--lg-faint);letter-spacing:.02em}
@@ -8062,7 +8074,13 @@ function renderHealth() {
   // порт берём из active-backend.json (wired.effectivePort) — иначе упавший
   // keepalive активного провайдера числился бы мирно «не запущенным».
   const wiredPort = (d.wired || {}).effectivePort || (d.wired || {}).port || null;
-  const isIdle = (s) => s.keepalive && s.status !== 'up' && s.port !== wiredPort;
+  // «Простаивает» = сервис, который поднимают по требованию, и сейчас он не нужен. Два
+  // вида: keepalive неактивного шлюза и (с 05.09) конвертер провайдера — FM-ротатор,
+  // FM-OpenAI, VyceAI. Раньше конвертеры стартовали всегда, поэтому лежащий порт
+  // действительно означал поломку; теперь их поднимает выбор провайдера, и красное
+  // «упал» на сервисе, которым не пользуются, — ложная тревога. Активный при этом
+  // остаётся под контролем: `s.port !== wiredPort` держит настоящую поломку красной.
+  const isIdle = (s) => (s.keepalive || s.lazy) && s.status !== 'up' && s.port !== wiredPort;
 
   const downs = svc.filter(s => s.status === 'down' && !isIdle(s));
   const badge = $('nav-health-badge');
@@ -8142,8 +8160,8 @@ function renderHealth() {
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2 flex-wrap">
             <span class="text-sm font-medium ${up ? '' : (idle ? 'text-muted' : 'text-crimson')}">${esc(s.name)}</span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${badgeCls}">${up ? (warn ? 'внимание' : (s.orphan ? 'осиротел' : 'жив')) : (idle ? 'не запущен' : 'упал')}</span>
-            ${idle ? `<span class="text-[10px] text-faint">поднимется при активации провайдера</span>` : ''}
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${badgeCls}">${up ? (warn ? 'внимание' : (s.orphan ? 'осиротел' : 'жив')) : (idle ? 'не поднят' : 'упал')}</span>
+            ${idle ? `<span class="text-[10px] text-faint">${s.lazy ? 'поднимется при выборе провайдера' : 'поднимется при активации провайдера'}</span>` : ''}
             ${s.orphan ? `<span class="text-[10px] text-faint">слушает, но не в конфиге</span>` : ''}
             ${s.omni ? `<span class="text-[10px] text-faint">порт 20128 · localhost/v1</span>` : ''}
             ${s.orphan ? `<button onclick="killHealthPort(${s.port})" title="Убить всё, что слушает :${s.port}" class="text-[10px] px-2 py-1 rounded border border-crimson/40 text-crimson hover:bg-crimson/15 transition">💀 убить</button>` : ''}
@@ -26587,7 +26605,11 @@ setInterval(() => {
 // свою строку считает leagueSelf() на сервере, соседи приедут из league-peers.json,
 // когда поднимем приёмник. Пока их нет, вкладка честно говорит об этом и показывает
 // свою кривую — она и есть половина смысла, «как в Claude Code статистика».
-const LG = { data: null, metric: 'tok', range: 'd7', plot: null, err: null, loading: false };
+const LG = { data: null, metric: 'tok', range: 'd7', cum: false, plot: null, err: null, loading: false };
+// Накопительный режим осмыслен только для потоковых метрик. У «аккаунтов» кривая — это
+// уже уровень счётчика, и суммировать его по дням значило бы складывать одно и то же
+// с собой; поэтому там режим не просто выключен, а недоступен.
+const lgCumOn = () => LG.cum && !LG_M[LG.metric].cum;
 // Определения метрик живут в подсказках кнопок, а не абзацами под графиком: сноски
 // владелец снял как лишний текст, но цифру всё равно надо уметь прочитать правильно.
 // Полный разбор — в вике, [[Рейтинг расхода в ABUSE HUB — аудит учёта и план]].
@@ -26716,7 +26738,15 @@ function lgDrawPlot(top) {
   const keys = ((LG.data.me.keys || {})[LG.range]) || [];
   const n = keys.length;
   if (!n) { host.innerHTML = '<div class="lgcap" style="padding:40px 0">данных за это окно нет</div>'; return; }
-  const series = top.map(p => lgAligned(p, keys));
+  // Накопительно: нарастающий итог ВНУТРИ окна. Последняя точка при этом совпадает с
+  // итогом окна в плитках — кривая и цифры продолжают говорить одно и то же.
+  const cum = lgCumOn();
+  const series = top.map(p => {
+    const v = lgAligned(p, keys);
+    if (!cum) return v;
+    let a = 0;
+    return v.map(x => (a += (Number(x) || 0)));
+  });
   const ymax = Math.max(...series.flat().map(v => Number(v) || 0), 1);
   // Верх оси. В лестнице есть 4, а не только 1·2·5: при максимуме 223 «5» давала верх
   // 500 и половину карточки пустой, а 4 даёт 400 и целые числа на всех четырёх засечках
@@ -26737,7 +26767,9 @@ function lgDrawPlot(top) {
   const tEl = document.getElementById('lg-ptitle');
   // «на точку» верно для потока (токены за час, доллары за день), но не для аккаунтов:
   // там кривая — уровень счётчика, а не расход за шаг. Подпись обязана это различать.
-  const perPoint = LG_M[LG.metric].cum ? `${U.name}, накопительно` : `${U.name} на точку`;
+  const perPoint = LG_M[LG.metric].cum ? `${U.name}, накопительно`
+    : cum ? `${U.name} нарастающим итогом`
+    : `${U.name} на точку`;
   if (tEl) tEl.innerHTML = `${LG_M[LG.metric].lb} · ${LG_R[LG.range].lb}`
     + `<span>${LG_R[LG.range].ttl} · ${perPoint}`
     + `${top.length > 1 ? ' · тройка лидеров' : ''}</span>`;
@@ -26855,6 +26887,8 @@ const LG_SHELL = `
     <div class="flex items-center gap-2 flex-wrap mb-5">
       <span class="lgcap">метрика</span><span class="lgseg" id="lg-segM"></span>
       <span class="lgcap" style="margin-left:10px">окно</span><span class="lgseg" id="lg-segR"></span>
+      <button class="lgtgl" id="lg-cum" type="button" aria-pressed="false"
+              style="margin-left:10px" title="нарастающим итогом за окно">накопительно</button>
       <span class="lgcap" id="lg-stamp" style="margin-left:auto"></span>
     </div>
     <header>
@@ -26917,10 +26951,22 @@ function lgRender() {
       () => LG.metric, k => { LG.metric = k; });
     lgSeg(document.getElementById('lg-segR'), Object.entries(LG_R).map(([k, v]) => [k, v.lb, v.hint]),
       () => LG.range, k => { LG.range = k; });
+    // «Накопительно» — как на вкладке «Финансы»: тот же смысл, то же слово. У метрики
+    // «аккаунты» кнопка выключена: там кривая и так уровень счётчика, суммировать его
+    // по дням значило бы складывать одно и то же с собой.
+    document.getElementById('lg-cum').addEventListener('click', () => {
+      LG.cum = !LG.cum;
+      lgRender();
+    });
   }
   const rows = lgRows(), me = LG.data.me, m = LG_M[LG.metric], r = LG_R[LG.range];
   const top = rows.slice(0, 3), solo = rows.length < 2;
   const mi = rows.findIndex(p => p.isMe);
+  const cumBtn = document.getElementById('lg-cum');
+  if (cumBtn) {
+    cumBtn.disabled = !!m.cum;
+    cumBtn.setAttribute('aria-pressed', String(lgCumOn()));
+  }
   document.getElementById('lg-lede').innerHTML = solo
     ? `Гонка во времени, а не в моменте. Пока в лиге <b class="text-ink">только эта установка</b>:
        приёмник, который складывает срезы друзей, ещё не поднят — поэтому кривая своя,

@@ -104,6 +104,53 @@ t('у каждого сервиса существующий скрипт, да�
     return true;
 });
 
+t('конвертеры провайдеров поднимаются по выбору, а не на старте', () => {
+    // Решение владельца 05.09: «дашборд, вотчдог, фронтдор — а прокси по последнему
+    // выбранному провайдеру». До этого FM-ротатор, FM-OpenAI и VyceAI стартовали всегда:
+    // три процесса node по ~45 МБ и лишние секунды ради панелей, в которые не заходят.
+    // 🪤 Список в `stop()`/`status()` обязан остаться ПОЛНЫМ — иначе «остановил» оставит
+    // живой процесс на порту, а «статус» промолчит про него. Поэтому здесь проверяется
+    // не отсутствие в SERVICES, а наличие метки `provider` и обвязки под неё.
+    const lazy = L.SERVICES.filter(s => s.provider);
+    if (lazy.length !== 3) return `помечено provider: ${lazy.length}, ожидалось 3 (FM-ротатор, FM-OpenAI, VyceAI)`;
+    for (const p of [20126, 20130, 20131]) {
+        if (!lazy.some(s => s.port === p)) return `:${p} не помечен provider`;
+    }
+    if (typeof L.activeUpstreamPort !== 'function') return 'нет activeUpstreamPort — по чему решать, кто выбран';
+    if (typeof L.ensureProviderService !== 'function') return 'нет ensureProviderService — кто поднимет при выборе';
+    const port = L.activeUpstreamPort();
+    if (!Number.isInteger(port)) return 'activeUpstreamPort вернул не число';
+    const src = read('routing/lifecycle.js');
+    if (!/svc\.provider && svc\.port !== activePort/.test(src)) return 'start() не пропускает невыбранные конвертеры';
+    if (!/start-lazy/.test(src)) return 'пропуск не сообщается наружу — в выводе хаба сервис просто исчезнет';
+    if (!/start-lazy/.test(read('hub.js'))) return 'хаб не печатает строку про пропущенный конвертер';
+    // Обратная сторона: раз на старте не поднимают, обязан поднимать выбор провайдера.
+    const proxy = read('routing/transparent-proxy.js');
+    if (!/ensureProviderService\(port\)/.test(proxy)) return 'applyTarget не поднимает конвертер при переключении';
+    const apply = proxy.slice(proxy.indexOf('async function applyTarget'));
+    const iEnsure = apply.indexOf('ensureProviderService');
+    const iRotKey = apply.indexOf("'/__fmrot/api/active-key'");
+    if (iEnsure < 0 || (iRotKey >= 0 && iEnsure > iRotKey)) {
+        return 'конвертер поднимается ПОСЛЕ запроса ключа у ротатора — на пустом порту ключ придёт пустым';
+    }
+    return true;
+});
+
+t('«Здоровье»: неподнятый конвертер — покой, а не поломка', () => {
+    const proxy = read('routing/transparent-proxy.js');
+    for (const p of ['20126', '20130', '20131']) {
+        if (!new RegExp(`port: ${p}, path: '[^']+', lazy:`).test(proxy)) return `проверка :${p} без флага lazy`;
+    }
+    if (!/lazy: c\.lazy \|\| undefined/.test(proxy)) return 'флаг lazy не доезжает до фронта';
+    const html = read('routing/proxy-dashboard.html');
+    if (!/const isIdle = \(s\) => \(s\.keepalive \|\| s\.lazy\)/.test(html)) return 'isIdle не считает lazy-сервисы простаивающими';
+    if (!/idle \? 'не поднят' : 'упал'/.test(html)) return 'бейдж по-прежнему пишет «не запущен»/«упал» вместо «не поднят»';
+    if (!/поднимется при выборе провайдера/.test(html)) return 'нет подсказки, когда он поднимется';
+    // Настоящая поломка обязана остаться красной: активный порт из isIdle исключён.
+    if (!/s\.port !== wiredPort/.test(html)) return 'из простаивающих не исключён активный порт — упавший активный станет серым';
+    return true;
+});
+
 t('логи разведены по файлу на сервис', () => {
     // Один общий лог не работает на Windows физически: cmd-редирект `>>` не может
     // открыть файл, который держат живые процессы стека, — старт падает молча.

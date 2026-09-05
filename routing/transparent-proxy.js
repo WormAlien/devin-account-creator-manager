@@ -9,6 +9,7 @@
 // restart Claude Code.
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -735,6 +736,20 @@ function saveState(target) {
 async function applyTarget(target) {
     const backend = BACKENDS[target];
     if (!backend) throw new Error('Unknown target: ' + target);
+
+    // Конвертеры провайдеров с 05.09 не поднимаются на старте хаба — их поднимает выбор
+    // провайдера, то есть этот вызов. Он обязан быть ДО чтения ключа у ротатора ниже: на
+    // пустом порту переключение получило бы пустой ключ и выглядело бы как «сломался
+    // FreeModel», а не как «конвертер не поднят».
+    {
+        const m = String(backend.base_url || '').match(/^https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)/);
+        const port = m ? Number(m[1]) : 0;
+        if (port && lifecycleLib().SERVICES.some(s => s.provider && s.port === port)) {
+            const r = await lifecycleLib().ensureProviderService(port);
+            if (r.ok && !r.already) logLine(`switch ${target}: поднял конвертер :${port} (pid ${r.pid})`);
+            else if (!r.ok) logLine(`switch ${target}: конвертер :${port} НЕ поднялся — ${r.error}`);
+        }
+    }
 
     const settings = readSettings();
     settings.env = settings.env || {};
@@ -3898,9 +3913,9 @@ async function handleHealth(res) {
     const checks = [
         { name: 'Дашборд (switcher)', port: LISTEN_PORT, path: '/__switch/api/status' },
         { name: 'Front Door', port: frontdoorPort(), path: '/__frontdoor/api/status', frontdoor: true },
-        { name: 'FreeModel ротатор',  port: 20126, path: '/__fmrot/api/status' },
-        { name: 'FreeModel OpenAI',   port: 20130, path: '/__fmoai/api/status' },
-        { name: 'VyceAI',             port: 20131, path: '/__vyceai/api/status' },
+        { name: 'FreeModel ротатор',  port: 20126, path: '/__fmrot/api/status', lazy: 'freemodel_rotator' },
+        { name: 'FreeModel OpenAI',   port: 20130, path: '/__fmoai/api/status', lazy: 'fm_openai' },
+        { name: 'VyceAI',             port: 20131, path: '/__vyceai/api/status', lazy: 'vyce_openai' },
         { name: 'AgentRouter',        port: 20132, path: '/__agentrouter/api/status' },
         { name: 'Keepalive',          port: AR_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive GoRouter', port: Number(process.env.GO_KEEPALIVE_PORT || 20156), path: '/__keepalive/api/status', keepalive: true },
@@ -3968,6 +3983,10 @@ async function handleHealth(res) {
             orphan: !!c.orphan,
             keepalive: !!c.keepalive,
             frontdoor: !!c.frontdoor,
+            // Конвертер провайдера, который на старте намеренно не поднимают: лежащий порт
+            // здесь ПОКОЙ, а не поломка. Без этого флага UI красил его красным «лежит», и
+            // человек шёл разбираться с сервисом, которым не пользуется.
+            lazy: c.lazy || undefined,
             custom: c.custom ? { id: c.custom.id, modelMap: c.custom.modelMap } : undefined,
             detail: summarizeStatus(data),
         };
@@ -7543,6 +7562,14 @@ function newapiLib() {
     catch (e) { logLine(`newapi-account недоступен: ${e.message}`); return null; }
 }
 
+// Механика запуска/остановки — та же, что у хаба (routing/lifecycle.js). Ленивым
+// require, как и остальные библиотеки здесь: дашборд должен подниматься и в дереве, где
+// lifecycle почему-то не читается, — тогда пропадёт ленивый старт конвертеров, а не UI.
+function lifecycleLib() {
+    try { return require('./lifecycle'); }
+    catch (e) { logLine(`lifecycle недоступен: ${e.message}`); return { SERVICES: [], ensureProviderService: async () => ({ ok: false, error: 'lifecycle недоступен' }) }; }
+}
+
 // Путь к профилю аккаунта. Метку профиля храним в записи пула (поле profile),
 // её проставляет сопоставление (handle*MapProfiles).
 function newapiProfileDir(host, profileLabel) {
@@ -8758,11 +8785,72 @@ function leagueConfig() {
             enabled: !!c.enabled,
             url: String(c.url || '').replace(/\/+$/, ''),
             key: String(c.key || ''),
+            // Необязательный `ip`: адрес соединения и имя для TLS разведены. С этой
+            // рабочей станции имя `*.xgate.online` уводится правилами happ-tun и не
+            // доезжает вовсе (замер 05.09: по IP HTTP 200 за 0.76 с, по имени таймаут
+            // 12 с при том, что DNS отдаёт верный адрес). По IP всё работает, но
+            // сертификат при этом обязан проверяться по ИМЕНИ, а не отключаться.
+            ip: String(c.ip || ''),
+            // Отпечаток sha256 сертификата приёмника. Задан — проверяем им и не шлём SNI.
+            pin: String(c.pin || ''),
             everyMin: Number(c.everyMin) > 0 ? Number(c.everyMin) : 10,
         };
     } catch { return { enabled: false, url: '', key: '', everyMin: 10 }; }
 }
 let LEAGUE_SYNC_LAST = { at: null, ok: null, error: null, peers: 0 };
+
+// Запрос к приёмнику. Не `fetch`, потому что нужен SNI отдельно от адреса соединения:
+// connect по `cfg.ip`, проверка сертификата — по имени из `cfg.url`. Отключать
+// проверку нельзя: секрет ходит в заголовке, и MITM тут стоит ровно всего.
+function leagueReq(cfg, pathname, method, bodyStr) {
+    const u = new URL(cfg.url + pathname);
+    const tls = u.protocol === 'https:';
+    const lib = tls ? https : http;
+    const headers = { 'X-League-Key': cfg.key };
+    if (bodyStr) {
+        headers['Content-Type'] = 'application/json';
+        headers['Content-Length'] = Buffer.byteLength(bodyStr);
+    }
+    const opts = {
+        host: cfg.ip || u.hostname,
+        port: u.port || (tls ? 443 : 80),
+        path: u.pathname + u.search,
+        method, headers, timeout: 20000,
+    };
+    if (tls) {
+        // Пин вместо доверия к CA и БЕЗ SNI. Причина не в паранойе, а в замере 05.09:
+        // happ-tun смотрит SNI в ClientHello и уводит `*.xgate.online` по правилу
+        // «напрямую», а напрямую из РФ финская нода недоступна по TCP вообще — при
+        // пустом SNI тот же адрес отвечает за 755 мс, с SNI висит и рвётся.
+        // Поэтому: соединение по IP, SNI не отправляем, а подлинность проверяем
+        // отпечатком сертификата. Для одного известного узла это строже, чем CA:
+        // подойдёт только ЭТОТ сертификат, а не любой, выписанный любым центром.
+        if (cfg.pin) { opts.rejectUnauthorized = false; opts.servername = undefined; }
+        else { opts.servername = u.hostname; opts.headers.Host = u.hostname; }
+    }
+    return new Promise((resolve, reject) => {
+        const req = lib.request(opts, res => {
+            let data = '';
+            res.on('data', c => { data += c; });
+            res.on('end', () => resolve({ status: res.statusCode, body: data }));
+        });
+        // Отпечаток сверяем ДО отправки тела: иначе срез уедет неизвестно кому.
+        if (tls && cfg.pin) {
+            req.on('socket', s => s.on('secureConnect', () => {
+                let got = '';
+                try { got = (s.getPeerCertificate().fingerprint256 || ''); } catch (e) {}
+                const norm = v => String(v).replace(/[^A-Fa-f0-9]/g, '').toUpperCase();
+                if (norm(got) !== norm(cfg.pin)) {
+                    req.destroy(new Error(`отпечаток приёмника не совпал: ${got.slice(0, 23)}…`));
+                }
+            }));
+        }
+        req.on('timeout', () => req.destroy(new Error('таймаут 20 с')));
+        req.on('error', reject);
+        if (bodyStr) req.write(bodyStr);
+        req.end();
+    });
+}
 
 // Один обмен: отправить свой срез, забрать чужие, записать в league-peers.json.
 // Ключ в логи не попадает никогда — только адрес и результат.
@@ -8771,19 +8859,11 @@ async function leagueSync() {
     if (!c.enabled || !c.url || !c.key) return { skipped: 'лига не настроена' };
     try {
         const me = leagueSelf();
-        const r = await fetch(`${c.url}/slice`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-League-Key': c.key },
-            body: JSON.stringify(me),
-            signal: AbortSignal.timeout(20000),
-        });
-        if (!r.ok) throw new Error(`slice ${r.status}: ${(await r.text()).slice(0, 160)}`);
-        const p = await fetch(`${c.url}/peers?installId=${encodeURIComponent(me.installId)}`, {
-            headers: { 'X-League-Key': c.key },
-            signal: AbortSignal.timeout(20000),
-        });
-        if (!p.ok) throw new Error(`peers ${p.status}`);
-        const doc = await p.json();
+        const r = await leagueReq(c, '/slice', 'POST', JSON.stringify(me));
+        if (r.status !== 200) throw new Error(`slice ${r.status}: ${r.body.slice(0, 160)}`);
+        const p = await leagueReq(c, `/peers?installId=${encodeURIComponent(me.installId)}`, 'GET');
+        if (p.status !== 200) throw new Error(`peers ${p.status}: ${p.body.slice(0, 120)}`);
+        const doc = JSON.parse(p.body);
         const peers = Array.isArray(doc.peers) ? doc.peers : [];
         const tmp = LEAGUE_PEERS_FILE + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify({ updated: doc.updated || new Date().toISOString(), peers }));

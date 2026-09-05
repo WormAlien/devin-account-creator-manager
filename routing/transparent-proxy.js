@@ -17229,6 +17229,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/hn/session/open') return handleHnSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/hn/share')    return handleHnShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/hn/import')   return handleHnImport(req, res);
+    // 🪤 map-profiles у hn ЕСТЬ, хотя GitHub-входа у панели нет: общий обработчик
+    // сопоставляет запись с профилем по API-ключу из панели, а GitHub там лишь резерв.
+    // Без этой строки регресс ловит «либо все четыре точки, либо ни одной»: хендлер,
+    // функция во фронте и кнопка 🔗 существуют, а роута нет — кнопка молча даёт 404.
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/map-profiles') return handleHnMapProfiles(req, res);
 
     // ---- Tabi (tb) — автономная вкладка, keepalive :20155 → tabitoken.com ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/sessions')) return handleTbSessions(req, res);

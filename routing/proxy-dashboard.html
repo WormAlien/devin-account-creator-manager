@@ -392,13 +392,54 @@ function randomThemeId() {
       </div>
     </div>
 
+    <!-- LEAGUE-MINI:BEGIN -->
+    <!-- Мини-рейтинг лиги: место крупно, значение, кривая за 7 суток, три места вокруг
+         тебя и отрыв. Весь блок — одна кнопка на вкладку «Лига». Ширина, отступы и
+         кегли те же, что у карточки ACTIVE ниже. Наполняет leaguePaintMini(); пока
+         среза нет — блок скрыт, чтобы в сайдбаре не висела пустая рамка. -->
+    <button id="league-mini" type="button" onclick="showTab('league')" title="Открыть Лигу"
+            class="group hidden mx-3 mb-4 w-[calc(100%-1.5rem)] text-left rounded-lg bg-elevated border border-line-soft overflow-hidden text-azure transition-colors hover:border-azure/50 active:scale-[.985]">
+      <div class="flex items-center gap-2 px-3 pt-2.5">
+        <span class="text-[10px] uppercase tracking-widest text-dim">лига</span>
+        <span class="ml-auto text-[11px] text-faint group-hover:text-azure transition-colors">открыть →</span>
+      </div>
+      <div class="flex items-baseline gap-1.5 px-3 pt-1">
+        <span id="league-mini-place" class="font-mono font-semibold text-[27px] leading-none tracking-tight text-ink">—</span>
+        <span id="league-mini-of" class="font-mono text-[11px] text-dim"></span>
+        <span id="league-mini-mv" class="ml-auto font-mono text-[11.5px] font-semibold"></span>
+      </div>
+      <div class="flex items-baseline gap-1.5 px-3 pt-1">
+        <span id="league-mini-val" class="font-mono font-semibold text-[15px] text-ink">—</span>
+        <span id="league-mini-unit" class="font-mono text-[10px] uppercase tracking-wider text-dim">токены · 7 дней</span>
+      </div>
+      <svg class="block w-full h-[26px] mt-0.5" viewBox="0 0 240 26" preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="lgMiniGrad" x1="0" y1="0" x2="0" y2="26" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="currentColor" stop-opacity=".38"/>
+          <stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+        <path id="league-mini-area" fill="url(#lgMiniGrad)" d=""/>
+        <path id="league-mini-line" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round" d=""/>
+      </svg>
+      <div id="league-mini-nb" class="border-t border-line-soft/60 px-3 py-1.5 flex flex-col gap-1"></div>
+      <div id="league-mini-gap" class="px-3 pb-2.5 pt-1 font-mono text-[11px] text-faint"></div>
+    </button>
+    <!-- LEAGUE-MINI:END -->
+
     <!-- Current backend pill (always visible) -->
-    <div class="mx-3 mb-4 px-3 py-2.5 rounded-lg bg-elevated border border-line-soft">
+    <!-- Карточка кликается и ведёт на вкладку своего провайдера. Это НЕ <button>:
+         внутри живёт тумблер авторотации, а кнопка в кнопке — невалидная разметка,
+         и внутренний тумблер бы перестал работать. Поэтому role="link" + гвард на
+         клики из #side-auto. -->
+    <div id="side-active-card" role="link" tabindex="0" title="Открыть вкладку активного провайдера"
+         onclick="sideOpenCurrentTab(event)"
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sideOpenCurrentTab(event)}"
+         class="group mx-3 mb-4 px-3 py-2.5 rounded-lg bg-elevated border border-line-soft cursor-pointer transition-colors hover:border-azure/50 active:scale-[.985]">
       <div class="text-[10px] uppercase tracking-widest text-dim mb-1">active</div>
       <div class="flex items-center gap-2">
         <span id="side-dot" class="relative inline-block size-2 rounded-full text-emerald bg-emerald pulse-dot"></span>
         <span id="side-current" class="text-sm font-semibold truncate">…</span>
         <span id="side-mode" class="hidden shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-medium"></span>
+        <span id="side-go" class="ml-auto shrink-0 text-[10px] font-mono text-faint opacity-0 group-hover:opacity-100 group-hover:text-azure transition">открыть →</span>
       </div>
       <div id="side-url" class="text-[10px] text-faint font-mono mt-1 truncate">…</div>
       <!-- Баланс активного аккаунта + запас пула. Видно только у провайдеров с
@@ -510,11 +551,23 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="hcnsec" title="New API на api.hcnsec.cn. GitHub-входа НЕТ (github_oauth=False у /api/status) — только email+пароль, поэтому колонки 🐙 на вкладке нет. Каталог 13 моделей, годны четыре: kimi-k3, step-3.7-flash, step-explore, kat-coder-pro-v2.5">
+        <span class="w-5 text-center text-[14px]">🛡️</span>
+        <span class="flex-1">HCNsec</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-hcnsec">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="tabi">
         <span class="w-5 text-center text-[14px]">🎫</span>
         <span class="flex-1">Tabi Token</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-tabi">—</span>
       </button>
+      <!-- LEAGUE-TAB:NAV:BEGIN -->
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="league" title="Рейтинг между установками хаба: токены, деньги, активность, аккаунты">
+        <span class="w-5 text-center text-[14px]">🏆</span>
+        <span class="flex-1">Лига</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-league">—</span>
+      </button>
+      <!-- LEAGUE-TAB:NAV:END -->
       <!-- FIN-TAB:NAV:BEGIN -->
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="fin">
         <span class="w-5 text-center text-[14px]">💵</span>
@@ -526,6 +579,11 @@ function randomThemeId() {
         <span class="w-5 text-center text-[14px]">🐙</span>
         <span class="flex-1">GitHub аккаунты</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-github">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="outlook" title="Купленные Outlook-ящики: профиль браузера на ящик, код из письма достаётся из живой сессии (IMAP по паролю Microsoft отключил)">
+        <span class="w-5 text-center text-[14px]">📧</span>
+        <span class="flex-1">Outlook-почты</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-outlook" title="живых / всего ящиков">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="telegram">
         <span class="w-5 text-center text-[14px]">📱</span>
@@ -4171,6 +4229,164 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
       </div>
     </div>
     <!-- FIN-TAB:END -->
+    <!-- LEAGUE-TAB:BEGIN -->
+    <!-- ═══════════ ВКЛАДКА «ЛИГА» ═══════════
+         Рейтинг между установками хаба. Черновик, с которого снято:
+         `_sandbox/rating-drafts/trend.html` (кривая) и `sidebar-mini.html` (мини-блок).
+         Данные — одна ручка `/__switch/api/league`: свой срез считает leagueSelf() на
+         сервере, соседи приедут из `routing/league-peers.json`, когда поднимем приёмник.
+         Приёмка среза — `node tools/check-league.js` (30 проверок, из них 7 на то, что
+         в срезе нет ключей, почт и текста промптов: он уедет с машины). -->
+    <div data-tab-content="league">
+      <style>
+      /* Свои токены висят на #leagueTab, а не на :root — иначе потекут на остальной
+         дашборд. Ни одного своего hex в ролях фон/линия/текст: только --color-* темы
+         с фолбэком, поэтому вкладка едет за переключателем 22 тем сама.
+         Цвета серий — акценты ТЕМЫ (azure/amber/emerald), а не зашитая тройка из
+         черновика: у дашборда есть две светлые темы, и валидированные под тёмный фон
+         oklch(0.66 …) на них не добирают 3:1. Контраст остаётся ответственностью темы,
+         а различимость держат далеко разнесённые тона + подпись на конце каждой линии. */
+      #leagueTab{
+        --lg-mono:"Geist Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+        --lg-bg:var(--color-bg,#0b0e13); --lg-surface:var(--color-surface,#131922);
+        --lg-elev:var(--color-elevated,#1a212b); --lg-line:var(--color-line,#2c3339);
+        --lg-line-soft:var(--color-line-soft,#1e242c); --lg-ink:var(--color-ink,#e8ebee);
+        --lg-muted:var(--color-muted,#c9d1d9);
+        --lg-dim:color-mix(in oklab,var(--lg-ink) 68%,var(--lg-surface));
+        --lg-faint:color-mix(in oklab,var(--lg-ink) 58%,var(--lg-surface));
+        --lg-ink2:color-mix(in oklab,var(--lg-ink) 78%,var(--lg-surface));
+        --lg-azure:var(--color-azure,#4a9eff); --lg-amber:var(--color-amber,#ff8a3d);
+        --lg-emerald:var(--color-emerald,#3ddc91); --lg-rose:var(--color-crimson,#ff6b6b);
+        --lg-s1:var(--lg-azure); --lg-s2:var(--lg-amber); --lg-s3:var(--lg-emerald);
+        --lg-spring:cubic-bezier(.22,1,.36,1);
+      }
+      #leagueTab .lgnum{font-family:var(--lg-mono);font-variant-numeric:tabular-nums}
+      #leagueTab .lgcap{font:600 10.5px/1 var(--lg-mono);letter-spacing:.13em;
+        text-transform:uppercase;color:var(--lg-faint)}
+      #leagueTab .lgseg{display:inline-flex;padding:3px;gap:2px;border-radius:999px;
+        background:color-mix(in oklab,var(--lg-bg) 55%,transparent);
+        border:1px solid color-mix(in oklab,var(--lg-line-soft) 80%,transparent)}
+      #leagueTab .lgseg button{appearance:none;border:0;cursor:pointer;border-radius:999px;
+        padding:6px 13px;font:500 12.5px/1 var(--lg-mono);color:var(--lg-muted);
+        background:transparent;transition:color .18s var(--lg-spring),
+        background .18s var(--lg-spring),transform .1s ease-out}
+      #leagueTab .lgseg button:hover{color:var(--lg-ink)}
+      #leagueTab .lgseg button:active{transform:scale(.97)}
+      #leagueTab .lgseg button[aria-pressed="true"]{color:var(--lg-ink);
+        background:color-mix(in oklab,var(--lg-ink) 13%,transparent)}
+      #leagueTab .lgmat{position:relative;border-radius:16px;background:var(--lg-surface);
+        border:1px solid var(--lg-line-soft)}
+      /* ── График ── */
+      /* height:auto — высоту задаёт viewBox, ширина которого равна реальным пикселям
+         контейнера (см. lgDrawPlot). Фиксированная высота + `viewBox="0 0 1000 300"`
+         давали вписывание с сохранением пропорций и по 350 px пустоты по бокам. */
+      #leagueTab .lgplot svg{display:block;width:100%;height:auto;
+        overflow:visible;touch-action:none}
+      #leagueTab .lggrid{stroke:color-mix(in oklab,var(--lg-line) 60%,transparent);stroke-width:1}
+      #leagueTab .lgax{font:10.5px var(--lg-mono);fill:var(--lg-faint);letter-spacing:.02em}
+      #leagueTab .lgserie{fill:none;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+      #leagueTab .lgend{font:600 12.5px var(--lg-mono);letter-spacing:-.01em}
+      #leagueTab .lgcross{stroke:color-mix(in oklab,var(--lg-ink) 34%,transparent);
+        stroke-width:1;opacity:0;transition:opacity .12s}
+      #leagueTab .lgplot.hot .lgcross{opacity:1}
+      #leagueTab .lghit{opacity:0;transition:opacity .12s}
+      #leagueTab .lgplot.hot .lghit{opacity:1}
+      #leagueTab .lgtip{position:fixed;z-index:60;pointer-events:none;opacity:0;
+        transition:opacity .12s;border-radius:12px;padding:10px 12px;min-width:168px;
+        background:var(--lg-elev);border:1px solid var(--lg-line);
+        box-shadow:0 16px 40px -16px rgb(0 0 0 / .6)}
+      #leagueTab .lgtip.on{opacity:1}
+      #leagueTab .lgtip .th{font:600 11px var(--lg-mono);letter-spacing:.09em;
+        text-transform:uppercase;color:var(--lg-faint);margin-bottom:7px}
+      #leagueTab .lgtip .tr{display:flex;align-items:baseline;gap:9px;padding:3px 0;font-size:13px}
+      #leagueTab .lgtip .tr i{width:9px;height:9px;border-radius:3px;flex:none}
+      #leagueTab .lgtip .tr b{margin-left:auto;font:600 13.5px var(--lg-mono);
+        font-variant-numeric:tabular-nums}
+      /* ── Плитки, список, плашка «ты» ── */
+      /* Аватар кружком. Селектор БЕЗ `#leagueTab` намеренно: те же аватары стоят в
+         мини-блоке лиги, а он живёт в сайдбаре, вне вкладки. Со скоупом правило туда
+         не доставало, и в сайдбаре вместо кружков с инициалами были квадратные пятна. */
+      .lgav{display:inline-flex;align-items:center;justify-content:center;
+        border-radius:50%;flex:none;font-family:var(--lg-mono,ui-monospace,monospace);
+        font-weight:700;color:var(--color-bg,#0b0e13);letter-spacing:-.03em;
+        user-select:none;line-height:1}
+      #leagueTab .lgrow{display:grid;
+        grid-template-columns:40px 32px minmax(0,1fr) 104px 92px 84px 72px;
+        gap:11px;align-items:center;padding:11px 15px;border-radius:12px;
+        background:color-mix(in oklab,var(--lg-surface) 70%,transparent);
+        transition:background .18s ease-out}
+      #leagueTab .lgrow:hover{background:var(--lg-elev)}
+      #leagueTab .lgrow.me{background:color-mix(in oklab,var(--lg-azure) 13%,transparent);
+        box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--lg-azure) 34%,transparent)}
+      #leagueTab .lgrow.pend{background:transparent;color:var(--lg-faint);
+        box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--lg-line-soft) 90%,transparent)}
+      #leagueTab .lghead{display:grid;
+        grid-template-columns:40px 32px minmax(0,1fr) 104px 92px 84px 72px;
+        gap:11px;align-items:end;padding:4px 15px 8px}
+      #leagueTab .lghead .th{text-align:right;display:flex;flex-direction:column;gap:2px}
+      #leagueTab .lghead .th i{font:normal 9px/1.3 var(--lg-mono);font-style:normal;
+        letter-spacing:.04em;text-transform:none;
+        color:color-mix(in oklab,var(--lg-faint) 82%,transparent)}
+      #leagueTab .lgrow .lgv{text-align:right;font-family:var(--lg-mono);
+        font-variant-numeric:tabular-nums;font-size:13px;color:var(--lg-ink2)}
+      #leagueTab .lgrow .lgv.on{color:var(--lg-ink);font-size:15px;font-weight:600}
+      #leagueTab .lgyou{position:sticky;bottom:14px;z-index:20;margin-top:16px;
+        padding:14px 18px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+        border-radius:16px;backdrop-filter:blur(24px);
+        background:color-mix(in oklab,var(--lg-azure) 14%,var(--lg-surface));
+        border:1px solid color-mix(in oklab,var(--lg-azure) 40%,transparent)}
+      #leagueTab .lgnick{appearance:none;cursor:pointer;border-radius:9px;padding:5px 10px;
+        font:600 14px/1 inherit;color:var(--lg-ink);
+        background:color-mix(in oklab,var(--lg-ink) 9%,transparent);
+        border:1px solid color-mix(in oklab,var(--lg-ink) 18%,transparent);
+        transition:background .16s var(--lg-spring),border-color .16s var(--lg-spring),
+        transform .1s ease-out}
+      #leagueTab .lgnick:hover{background:color-mix(in oklab,var(--lg-ink) 15%,transparent);
+        border-color:color-mix(in oklab,var(--lg-azure) 60%,transparent)}
+      #leagueTab .lgnick:active{transform:scale(.97)}
+      #leagueTab .lgnickinp{width:180px;padding:5px 10px;border-radius:9px;
+        font:600 14px/1 inherit;color:var(--lg-ink);
+        background:color-mix(in oklab,var(--lg-bg) 60%,transparent);
+        border:1px solid var(--lg-azure);outline:none}
+      #leagueTab .lgfoot{margin-top:26px;color:var(--lg-faint);font-size:12.5px;
+        line-height:1.7;max-width:84ch}
+      #leagueTab .lgfoot b{color:var(--lg-muted)}
+      #leagueTab .lgfoot code{font:12px var(--lg-mono);color:var(--lg-dim)}
+      @media (max-width:1100px){
+        #leagueTab .lghead{display:none}
+        #leagueTab .lgrow{grid-template-columns:34px 30px minmax(0,1fr) 96px}
+        #leagueTab .lgrow .lgv:nth-of-type(2),
+        #leagueTab .lgrow .lgv:nth-of-type(3),
+        #leagueTab .lgrow .lgv:nth-of-type(4){display:none}
+      }
+      #leagueTab #lg-ptitle{font:600 17px/1.2 inherit;letter-spacing:-.01em;color:var(--lg-ink)}
+      #leagueTab #lg-ptitle span{display:block;margin-top:5px;font:400 11.5px var(--lg-mono);
+        color:var(--lg-faint);letter-spacing:.02em}
+      #leagueTab .lglg span{display:inline-flex;align-items:center;gap:8px}
+      #leagueTab .lglg i{width:15px;height:3px;border-radius:2px;flex:none}
+      #leagueTab .lglg b{font:600 13px var(--lg-mono);color:var(--lg-ink)}
+      #leagueTab .lglg u{text-decoration:none;color:var(--lg-faint);font:11.5px var(--lg-mono)}
+      #leagueTab .lgtile{padding:14px 16px;display:flex;align-items:center;gap:12px}
+      #leagueTab .lgtile .who{font-size:15px;font-weight:600;letter-spacing:-.006em;margin-top:3px;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--lg-ink)}
+      #leagueTab .lgtile .big{margin-left:auto;text-align:right;font:600 21px/1 var(--lg-mono);
+        letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--lg-ink)}
+      #leagueTab .lgtile .big u{display:block;text-decoration:none;font:500 10.5px var(--lg-mono);
+        letter-spacing:.05em;color:var(--lg-faint);margin-top:5px;text-transform:uppercase}
+      #leagueTab .lgt1{border-color:color-mix(in oklab,var(--lg-s1) 55%,var(--lg-line-soft))}
+      #leagueTab .lgt2{border-color:color-mix(in oklab,var(--lg-s2) 55%,var(--lg-line-soft))}
+      #leagueTab .lgt3{border-color:color-mix(in oklab,var(--lg-s3) 55%,var(--lg-line-soft))}
+      #leagueTab .lgrank{display:flex;flex-direction:column;align-items:center;gap:2px}
+      #leagueTab .lgrank b{font:600 18px/1 var(--lg-mono);color:var(--lg-muted)}
+      #leagueTab .lgnm{min-width:0;font-size:15px;font-weight:500;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap;color:var(--lg-ink)}
+      #leagueTab .lgnm i{display:block;font:400 11px var(--lg-mono);color:var(--lg-faint);
+        margin-top:3px;font-style:normal}
+      @media (prefers-reduced-motion:reduce){#leagueTab *{transition-duration:.001s!important}}
+      </style>
+      <div id="leagueTab"></div>
+    </div>
+    <!-- LEAGUE-TAB:END -->
     <div data-tab-content="claude" class="active">
       <div class="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
@@ -6246,6 +6462,167 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
       </div>
     </div>
 
+    <!-- ═════════ TAB: HCNSEC ═══════════ -->
+    <div data-tab-content="hcnsec">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-emerald">🛡️</span> <a href="https://api.hcnsec.cn/" target="_blank" rel="noopener" title="панель шлюза · вход email+пароль: GitHub-входа тут нет (github_oauth=False у /api/status), поэтому реф-ссылки и колонки 🐙 на вкладке тоже нет" class="text-ink underline underline-offset-4 hover:text-emerald">HCNsec</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-emerald text-xs">api.hcnsec.cn</code> · клик по ключу = активный (через keepalive <code class="font-mono text-emerald text-xs">:20162</code>) · вход в панель <b>email+пароль</b>, GitHub-входа НЕТ · каталог 13 моделей, годны четыре — <code class="font-mono text-xs">kimi-k3</code>, <code class="font-mono text-xs">step-3.7-flash</code>, <code class="font-mono text-xs">step-explore</code>, <code class="font-mono text-xs">kat-coder-pro-v2.5</code>; негодные помечены 🚫 прямо в списке</p>
+          </div>
+        </header>
+
+        <div id="hn-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). 🪤 Ставить сюда помеченное 🚫 нельзя:
+             шлюз отвечает на такие модели 200, поэтому падения не будет — будет чужой
+             системный промпт, подменённая модель или стрим без message_stop. -->
+        <div id="hn-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · выбирать только из непомеченных</h2>
+            <button onclick="loadHnModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="hn-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20162) -->
+        <div id="hn-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20162 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="hnLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="hn-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="hn-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="hn-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="hn-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="hn-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="hnApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="hnResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="hn-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="hn-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="hn-lat-chart" class="w-full"></div>
+              <div id="hn-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="hn-lat-windows"></div>
+          </div>
+          <div id="hn-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="hn-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="hn-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="hn-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="hn-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="hn-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="hn-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="hn-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list. Порядок — не алфавит шлюза, а ранжир по мощности и популярности
+             (HN_MODEL_RANK): первая годная модель обязана быть первой строкой. -->
+        <div id="hn-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — по мощности и популярности · клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadHnModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="hn-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadHnSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadHnSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="hnCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="hnMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="hnShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить</button>
+          <button onclick="hnShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="hn-filter" oninput="newapiFilterChange('hn')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-emerald/60">
+          <select id="hn-sort" onchange="newapiSortChange('hn')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-emerald/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию). Пароль здесь есть, а кнопки «🐙 из менеджера»
+             нет: у панели github_oauth=False, единственный вход — email+пароль, и без
+             пароля кнопка 🌐 не сможет открыть ЛК, где берётся точный баланс. -->
+        <div id="hn-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="hn-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">пароль панели</span>
+              <input id="hn-add-pass" type="password" placeholder="••••••••" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="hn-add-key" placeholder="пусто = зарегаюсь в панели и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="hnAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="hnShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="hn-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="hnShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (панель hcnsec уже залогинена).</p>
+          <textarea id="hn-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="hn-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="hnImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="hnShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="hn-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20162</code> keepalive → <code class="text-ink">api.hcnsec.cn</code></span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в панели после входа email+паролем</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 GitHub-входа нет (<code class="text-ink">github_oauth=False</code>) — колонки 🐙 и кнопки «из менеджера» на вкладке не будет</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://api.hcnsec.cn/" target="_blank" class="text-emerald hover:underline">панель</a>
+        </div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: TABI TOKEN ═════════ -->
     <div data-tab-content="tabi">
       <div class="px-6 py-8 space-y-4">
@@ -6636,6 +7013,96 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
           <span>status: emerald live / amber cooldown / crimson dead — меняется в меню карточки</span>
           <span class="mx-2 opacity-40">·</span>
           <span>плашки <span class="text-azure">AR</span>/<span class="text-violet">GO</span>/<span class="text-amber">TB</span>/<span class="text-rose">XP</span> — запись в пуле шлюза (сверка по <code class="font-mono">ghId</code> и по нику/логину); «свободен» = записи в пуле нет</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: OUTLOOK MAILBOXES ═════════
+         Менеджер купленных ящиков. Сделан по образцу вкладки GitHub-аккаунтов
+         (шапка со сводкой, таблица, скрытая форма добавления), но с одним осознанным
+         расхождением:
+         🪤 разбор пачки из магазина живёт НА СЕРВЕРЕ — POST /ol/import с полем dryRun.
+         У GitHub парсер продублирован во фронте (ghParseLine), и любая новая раскладка
+         полей у магазина требует правки в двух местах; здесь фронт только рисует то,
+         что вернул сервер, и своего парсера НЕ содержит.
+         Пароли на фронт не приезжают вообще: /ol/list отдаёт только hasPassword. -->
+    <div data-tab-content="outlook">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-azure">📧</span> <a href="https://outlook.live.com/mail/" target="_blank" rel="noopener" class="text-ink underline underline-offset-4 hover:text-azure">Outlook-почты</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">купленные ящики · пул <code class="font-mono text-azure text-xs">outlook/accounts.json</code> · профили <code class="font-mono text-azure text-xs">outlook/profiles/acct_&lt;id&gt;/</code> · сессии <code class="font-mono text-azure text-xs">outlook/sessions/&lt;id&gt;.json</code></p>
+            <p class="text-xs text-faint mt-1">🪤 базовую авторизацию Microsoft выключил (<code class="font-mono">outlook.office365.com:993</code> → <code class="font-mono">AUTH=XOAUTH2 LOGINDISABLED</code>): по паролю IMAP не входит, письмо с кодом читается только из залогиненной сессии профиля. Пароль здесь — то, чем один раз входят в профиль, а не доступ к почте.</p>
+            <p id="ol-summary" class="text-xs text-faint mt-1">—</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <input id="ol-search" oninput="renderOl()" placeholder="🔍 адрес, ник, заметка…" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-52 focus:outline-none focus:border-azure/60">
+            <select id="ol-status" onchange="renderOl()" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-azure/60" title="Статус ящика — его ставит проверка сессий или рука">
+              <option value="">⚡ статус: все</option>
+              <option value="live">● live</option>
+              <option value="dead">✕ dead</option>
+              <option value="locked">🔒 locked</option>
+              <option value="unknown">— не проверен</option>
+            </select>
+            <select id="ol-kind" onchange="renderOl()" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-azure/60" title="Тип ящика: студенческий определяется доменом (.edu / .ac.<cc>)">
+              <option value="">🎫 тип: все</option>
+              <option value="student">🎓 student</option>
+              <option value="personal">personal</option>
+            </select>
+            <button onclick="loadOlList()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button id="ol-check-btn" onclick="olHealthRun()" class="text-xs px-3 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium" title="Прогнать проверку сессий по всем ящикам: открывает профиль и смотрит, залогинен ли он. Идёт в фоне — можно уйти со вкладки.">🔄 Проверить сессии</button>
+            <button onclick="olShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить вручную</button>
+            <button onclick="olShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">📥 Импорт</button>
+          </div>
+        </header>
+
+        <!-- Прогресс фоновой проверки сессий (скрыт, пока прогона нет) -->
+        <div id="ol-progress" class="hidden text-[11px] font-mono text-azure flex items-center gap-2">
+          <div class="flex-1 h-1.5 bg-elevated rounded-full overflow-hidden max-w-[240px]">
+            <div id="ol-progress-bar" class="h-full bg-azure transition-all" style="width:0%"></div>
+          </div>
+          <span id="ol-progress-txt">—</span>
+        </div>
+        <!-- Добавить вручную — скрыта по умолчанию. Пароль уходит на сервер и обратно
+             больше не приезжает: в /ol/list от него остаётся только hasPassword. -->
+        <div id="ol-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">адрес ящика</span>
+              <input id="ol-add-email" placeholder="mailbox@outlook.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-64 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">пароль</span>
+              <input id="ol-add-pass" type="password" placeholder="••••••••" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">ник</span>
+              <input id="ol-add-nick" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1">
+              <span class="text-[10px] text-faint">заметка (резервная почта, дата покупки — что дал магазин сверх пары)</span>
+              <input id="ol-add-note" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
+            </label>
+            <button onclick="olAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
+            <button onclick="olShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <p class="text-[10px] text-faint mt-2">🎓 студенческий тип не выбирается руками — сервер ставит его по домену (<code class="font-mono">.edu</code>, <code class="font-mono">.edu.&lt;cc&gt;</code>, <code class="font-mono">.ac.&lt;cc&gt;</code>).</p>
+        </div>
+
+        <div id="ol-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>🌐 «Открыть ящик» поднимает профиль этого ящика — первый раз логин и пароль вводятся руками, дальше живёт кука</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>📩 «Взять код» читает последнее письмо с кодом из живой сессии и кладёт код в буфер</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>status: <span class="text-emerald">live</span> / <span class="text-crimson">dead</span> / <span class="text-amber">locked</span> / <span class="text-dim">unknown</span> — меняется кнопкой 🏷</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>чипы справа — где ящик уже израсходован (<code class="font-mono">usedOn</code>)</span>
         </div>
       </div>
     </div>
@@ -7246,7 +7713,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, hcnsec: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -7283,6 +7750,10 @@ const state = {
   kkModels: [],
   kkActiveModel: '',
   kkModelMap: {},
+  hcnsec: [],
+  hnModels: [],
+  hnActiveModel: '',
+  hnModelMap: {},
   tabi: [],
   tbModels: [],
   tbActiveModel: '',
@@ -7456,9 +7927,14 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'hcnsec') { if (!state.loaded.hcnsec) { state.loaded.hcnsec = true; loadHnSessions(false); } hnLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'xpeach') { if (!state.loaded.xpeach) { state.loaded.xpeach = true; loadXpSessions(false); } xpLoadKeepalive(); }
   if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
+  // Список ящиков — по ленивой загрузке, а поллинг прогресса дёргаем на каждый заход:
+  // проверка сессий идёт минутами в фоне, и вернувшись на вкладку надо увидеть полосу,
+  // а не пустоту. Таймер сам себя гасит, если прогона нет (см. olProgressPoll).
+  if (name === 'outlook') { if (!state.loaded.outlook) { state.loaded.outlook = true; loadOlList(); } olProgressPoll(); }
   // Пул перечитываем всегда — его меняют автореги из других вкладок (как в freemodel/conduit/svrtr).
   if (name === 'telegram') { loadTgPool(); tgmProgressPoll(); }
   if (name === 'svrtr') { loadTgPool(); if (!state.loaded.svrtr) { state.loaded.svrtr = true; loadSvrtrSessions(false).then(() => loadSvrtrModels(false)); } }
@@ -7473,6 +7949,7 @@ function showTab(name) {
   if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); loadFrontdoor(); loadRefCodes(); }
   if (name === 'plugins') { loadPlugins(); loadMcp(); }
   if (name === 'health') { loadHealth(); }
+  if (name === 'league') { lgRender(); lgLoad(state.loaded.league ? true : false); state.loaded.league = true; }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -7491,8 +7968,8 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', hcnsec: 'HCNsec', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', hcnsec: 'text-emerald bg-emerald', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -10839,6 +11316,7 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  hn: '/__switch/api/hn/keepalive',
 };
 const LAT_WINDOWS = [[15, '15м'], [60, '1ч'], [360, '6ч'], [1440, '24ч']];
 const LAT_MIN = {};    // pfx → выбранное окно в минутах (помним в localStorage)
@@ -11185,6 +11663,13 @@ const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+// ts-трио пропустили при заведении вкладки TrueSOTA: `tsLoadKeepalive()` зовётся из
+// switchTab и трёх кнопок карточки, а определения не было — открытие вкладки падало
+// ReferenceError и не доходило до конца. Найдено при сверке множеств для hcnsec.
+const tsLoadKeepalive   = () => loadKeepaliveCard('ts', KEEPALIVE_API.ts);
+const tsApplyKeepalive  = () => applyKeepaliveCard('ts', KEEPALIVE_API.ts);
+const hnLoadKeepalive   = () => loadKeepaliveCard('hn', KEEPALIVE_API.hn);
+const hnApplyKeepalive  = () => applyKeepaliveCard('hn', KEEPALIVE_API.hn);
 const arResetKeepalive  = () => resetKeepaliveCard('ar', KEEPALIVE_API.ar);
 const goResetKeepalive  = () => resetKeepaliveCard('go', KEEPALIVE_API.go);
 const tbResetKeepalive  = () => resetKeepaliveCard('tb', KEEPALIVE_API.tb);
@@ -11202,6 +11687,7 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  hcnsec: ['hn', '/__switch/api/hn/keepalive'],
   tabi: ['tb', '/__switch/api/tb/keepalive'],
   xpeach: ['xp', '/__switch/api/xp/keepalive'],
 };
@@ -11329,7 +11815,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), hn: () => renderHn() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -11416,7 +11902,7 @@ function newapiFooter(list, total, prov, q) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -14023,6 +14509,608 @@ async function kkSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.kkModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+
+
+// ═══════════════════ HCNSEC ═════════════════════════════════════════
+// Провайдер api.hcnsec.cn — ДЕВЯТЫЙ шлюз, структурная копия вкладки GoRouter: пул
+// ключей + балансы + keepalive-активация через прокси :20162 + share/import. Аккаунт
+// идентифицируется id (не api_key).
+//
+// Чем отличается от остальных New-API-вкладок:
+//   · 🪤 GITHUB-ВХОДА НЕТ. Живая проба GET https://api.hcnsec.cn/api/status отдаёт
+//     github_oauth=False — единственный вход в панель это email+пароль. Поэтому здесь
+//     нет колонки 🐙, нет кнопки «из менеджера», нет ghCredBtn и записи в
+//     NEWAPI_SEED_PROV: привязывать нечего, а пустая колонка врала бы, что привязка
+//     возможна. Пароль спрашивается прямо в форме добавления и уезжает в /hn/add.
+//   · каталог 13 моделей, и порядок в нём НЕ алфавитный: HN_MODEL_RANK ставит их по
+//     мощности и популярности, а негодные помечены 🚫 с причиной в подсказке
+//     (HN_MODEL_BAD) — тем же приёмом, что у TrueSOTA. Скрывать нельзя: шлюз отвечает
+//     на них 200, и «просто выбери верхнюю» однажды увело бы тир-карту в модель,
+//     которая подменяет себя другой или рвёт стрим без message_stop.
+//   · база выдачи 0 (см. MONEY_PROVIDERS.hcnsec): о гранте ничего не известно.
+function hnPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель — только реально известный лимит. Дефолт 0, а не выдуманная база
+      // выдачи: о гранте HCNsec мы не знаем ничего (та же логика, что у TrueSOTA).
+      sumGrant += balanceDenom(s, 0);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+
+function renderHnGauge() {
+  moneyAutoFetch('hcnsec').then(() => moneyRotateToHistory('hcnsec')).catch(() => {});
+  const st = hnPoolStats(state.hcnsec);
+  renderEnergyGauge($('hn-energy'), {
+    title: 'HCNsec · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-emerald">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20162 → api.hcnsec.cn. Точный баланс читается кукой сессии из профиля аккаунта (вход email+паролем).',
+  });
+}
+
+async function loadHnSessions(probe) {
+  if (probe) $('hn-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/hn/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.hcnsec = data.sessions || [];
+    if ($('nav-count-hcnsec')) $('nav-count-hcnsec').textContent = state.hcnsec.length;
+    renderHn();
+    renderHnGauge();
+    loadHnModels();
+    loadHnModelMap();
+    if (probe) toast('✓ HCNsec: статусы обновлены', 'success');
+  } catch (e) {
+    $('hn-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadHnSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/hn/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.hcnsec = data.sessions || [];
+    if ($('nav-count-hcnsec')) $('nav-count-hcnsec').textContent = state.hcnsec.length;
+    renderHn();
+    renderHnGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+
+async function loadHnModels(force) {
+  const keys = state.hcnsec
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('hn-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('hn-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/hn/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderHnModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('hn-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+// Ранжир каталога — по мощности и популярности, по живой пробе 13 моделей (методика трёх
+// запросов, 31.08). Шлюз отдаёт каталог своим порядком, а выбирают его глазами сверху
+// вниз: первая годная модель обязана быть первой строкой. Неизвестное (шлюз добавил
+// модель после пробы) уезжает в конец — не наверх: непроверенную нельзя показывать
+// впереди проверенной годной.
+const HN_MODEL_RANK = [
+  'kimi-k3', 'kat-coder-pro-v2.5', 'step-3.7-flash', 'step-explore', 'step-router-v1',
+  'DeepSeek-V4-Pro', 'MiniMax-M3', 'Qwen3.8-27B', 'DeepSeek-V4-Flash', 'glm-4.5-air',
+  'sensenova-6.8-flash-lite', 'auto', 'sensenova-u1.5-lite',
+];
+const hnModelRank = (id) => {
+  const i = HN_MODEL_RANK.indexOf(id);
+  return i < 0 ? HN_MODEL_RANK.length : i;
+};
+
+// Негодные для агента — проверено живьём. Пометка та же, что у TrueSOTA: 🚫 +
+// приглушённый вид + причина в подсказке. Скрывать нельзя — шлюз отвечает на них 200,
+// то есть «тихо неправильно», и без пометки такая модель попадёт в тир-карту.
+const HN_MODEL_BAD = {
+  'DeepSeek-V4-Pro':   'подменяет модель на nvidia/nemotron-3-ultra-550b-a55b, как только в запросе есть tools',
+  'DeepSeek-V4-Flash': '1030 токенов чужого системного префикса + таймауты',
+  'glm-4.5-air':       'отдаёт 余额不足或无可用资源包 («нет средств / нет пакета ресурсов») кодом 200 — ошибка приезжает как успешный ответ',
+  'sensenova-u1.5-lite': 'в каталоге есть, в сервисе 404',
+  'auto':              'отдаёт неизвестную agnes-2.5-flash и стрим БЕЗ message_stop — клиент ждёт конца вечно',
+  'Qwen3.8-27B':       'инструменты не парсятся',
+  'MiniMax-M3':        'ответ 22–60 с',
+};
+// Годна, но не как основная. Формулировка оговорки моя: живая проба отметила её
+// «с оговоркой», не уточнив причину — поэтому в подсказке сказано ровно это.
+const HN_MODEL_WARN = {
+  'step-router-v1': 'годна с оговоркой (живая проба 31.08) — держать как резерв, а не как основную',
+};
+
+// Сортированный каталог: сначала ранжир, потом алфавит (чтобы порядок не дрожал у
+// моделей вне ранжира). Один вход и для списка, и для селектов тир-карты — иначе в
+// двух местах на одном экране был бы разный порядок.
+function hnModelsSorted() {
+  return (state.hnModels || []).slice().sort((a, b) =>
+    hnModelRank(a.id) - hnModelRank(b.id) || String(a.id).localeCompare(String(b.id)));
+}
+
+async function renderHnModels(models) {
+  if (models) state.hnModels = models;
+  const list = hnModelsSorted();
+  let active = state.hnActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/hn/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.hnActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('hn-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    const bad = HN_MODEL_BAD[id];
+    const warn = !bad && HN_MODEL_WARN[id];
+    const cls = isActive
+      ? 'bg-emerald/15 border border-emerald/50 text-emerald'
+      : bad
+      ? 'bg-elevated/40 border border-line-soft text-muted opacity-60'
+      : warn
+      ? 'bg-amber/10 border border-amber/30 text-amber'
+      : 'bg-emerald/10 border border-emerald/30 text-emerald';
+    const hint = bad
+      ? `НЕ годится для агента: ${bad}. Клик всё равно применит, если знаешь зачем`
+      : warn || 'клик = применить модель (settings.json + hcnsec-active-model.txt) · 📋 = копия';
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${cls}"
+      onclick='hnSelectModel(${JSON.stringify(id)})'
+      title="${esc(hint)}">
+      ${bad ? '<span class="opacity-70">🚫</span>' : warn ? '<span class="opacity-70">⚠</span>' : ''}${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderHnModelMap();
+}
+
+async function hnSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  if (HN_MODEL_BAD[id] && !confirm(`${id} помечена негодной: ${HN_MODEL_BAD[id]}.\n\nВсё равно применить?`)) return;
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/hn/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.hnModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.hnActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderHnModels(state.hnModels);
+  } catch (e) { toast('hnSelectModel: ' + e.message, 'error'); }
+}
+
+function renderHn() {
+  const { list: all, total, q } = newapiRows(state.hcnsec, 'hn');
+  if (!all.length) {
+    $('hn-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (email + пароль панели; ключ можно вписать позже кнопкой 🔑)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-emerald text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-emerald/5' : '';
+    const activeTag = active ? '<span class="text-emerald mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = hnBalanceCell(s, kJ);
+    const keyCell = noKey ? noKeyCell(`hnSetKey(${idJ})`) : `<button onclick='hnActivate(${kJ})' title="Сделать активным (keepalive :20162 → api.hcnsec.cn)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-emerald/10 border-emerald/50 text-emerald' : 'bg-surface border-line-soft text-emerald hover:border-emerald/50'} transition">${esc(keyMask)}</button>`;
+    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`hnCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`hnShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`hnSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`hnRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`hnActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`hnPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${actBtn(`hnOpenLk(${idJ})`,    noKey ? 'Открыть панель в браузере аккаунта (вход email+паролем)' : 'Открыть браузер аккаунта (баланс hcnsec)', '🌐', 'violet')}
+        ${actBtn(`hnDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Колонки 🐙 GitHub здесь нет намеренно: у панели github_oauth=False, привязывать
+  // нечего (см. шапку блока). Остальные шесть — как у GoRouter.
+  $('hn-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'hn', q),
+    { sortProv: 'hn', accent: 'emerald' }
+  );
+}
+
+function hnBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'hn'); }
+
+function hnShowAdd(show = true) {
+  $('hn-add-form').classList.toggle('hidden', !show);
+  if (show) { $('hn-add-email').value = ''; $('hn-add-pass').value = ''; $('hn-add-key').value = ''; $('hn-add-email').focus(); }
+}
+
+// Пароль уезжает вместе с email: другого входа в панель нет (github_oauth=False), и без
+// него кнопка 🌐 не откроет ЛК, а значит точного баланса по этому аккаунту не будет.
+async function hnAdd() {
+  const email = $('hn-add-email').value.trim();
+  const password = $('hn-add-pass').value;
+  const api_key = $('hn-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  if (!password) return toast('пароль обязателен: у панели нет GitHub-входа, без пароля ЛК не открыть', 'warn', 6000);
+  try {
+    const res = await fetch('/__switch/api/hn/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю панель, ключ возьми в консоли и вставь кнопкой 🔑' : '✓ добавлен', 'success', 6000);
+      hnShowAdd(false);
+      loadHnSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта, где панель ждёт email+пароль.
+      if (data.noKey && data.id) hnOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function hnDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/hn/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadHnSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function hnShare(id) {
+  const cur = state.hcnsec.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/hn/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'HCNsec',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function hnShowImport(show = true) {
+  $('hn-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('hn-import-text').value = '';
+    $('hn-import-preview').innerHTML = '';
+    $('hn-import-text').focus();
+  }
+}
+
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера панель залогинена.
+async function hnImport() {
+  const share = $('hn-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('hn-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/hn/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('hn-import-preview').innerHTML = '';
+    hnShowImport(false);
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadHnSessions(false);
+  } catch (e) {
+    $('hn-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли панели).
+async function hnSetKey(id) {
+  const cur = state.hcnsec.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли api.hcnsec.cn после входа email+паролем).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/hn/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadHnSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (hnSetKey).
+async function hnRename(id) {
+  const cur = state.hcnsec.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/hn/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadHnSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function hnActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/hn/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'hcnsec';
+      state.urls.hcnsec = 'http://localhost:20162';
+      paintStatus();
+      loadHnSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+async function hnPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/hn/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.hcnsec.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.hcnsec[idx].status = data.status;
+    renderHn();
+    renderHnGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function hnCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/hn/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.hcnsec.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderHn();
+    renderHnGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+
+async function hnCheckAllBalances() {
+  $('hn-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/hn/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.hcnsec = data.sessions || [];
+    renderHn();
+    renderHnGauge();
+    balanceBatchToast(state.hcnsec);
+  } catch (e) {
+    $('hn-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function hnSetBalance(api_key) {
+  return newapiSetBalanceUI('hn', api_key, () => state.hcnsec, () => { renderHn(); renderHnGauge(); });
+}
+
+function hnMapProfiles() {
+  return newapiMapProfilesUI('hn', () => loadHnSessions(false));
+}
+
+async function hnOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/hn/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась панель — заведи аккаунт email+паролем, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function hnCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+// Настраиваемый маппинг opus/sonnet/haiku → hcnsec-модели (как в Custom).
+async function loadHnModelMap() {
+  try {
+    const res = await fetch('/__switch/api/hn/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.hnModelMap = data.modelMap || {};
+    renderHnModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderHnModelMap() {
+  const mm = state.hnModelMap || {};
+  // Порядок опций — тот же ранжир, что в списке моделей (hnModelsSorted): у трёх
+  // селектов и плашек над ними не должно быть двух разных порядков на одном экране.
+  const models = hnModelsSorted().map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /hn/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя hcnsec-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    // 🚫 в тексте опции — тот же язык пометки, что в списке моделей: селект это
+    // второе место, где негодную модель можно выбрать не глядя.
+    const o = opts.map(id => {
+      const mark = HN_MODEL_BAD[id] ? '🚫 ' : HN_MODEL_WARN[id] ? '⚠ ' : '';
+      return `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? mark + esc(id) : '— как есть —'}</option>`;
+    }).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="hn-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('hn-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='hnSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function hnSaveModelMap() {
+  const mm = {
+    opus: $('hn-mm-opus')?.value || '',
+    sonnet: $('hn-mm-sonnet')?.value || '',
+    haiku: $('hn-mm-haiku')?.value || '',
+  };
+  const bad = ['opus', 'sonnet', 'haiku'].filter(t => HN_MODEL_BAD[mm[t]]);
+  if (bad.length && !confirm(`В тир-карту выбраны негодные модели:\n\n${bad.map(t => `${t} → ${mm[t]}: ${HN_MODEL_BAD[mm[t]]}`).join('\n')}\n\nВсё равно сохранить?`)) return;
+  try {
+    const res = await fetch('/__switch/api/hn/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.hnModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -18155,6 +19243,450 @@ function ghCredBtn(s, prov, idJ) {
     `Креды GitHub ${who}: логин, пароль и живой 2FA окном у строки`, '🐙', 'teal');
 }
 
+// ═══════════════════ OUTLOOK: КУПЛЕННЫЕ ЯЩИКИ ════════════════════════
+// Фронт вкладки «Outlook-почты». Роуты — /__switch/api/ol/*, их держит бэкенд.
+//
+// Что тут принципиально иначе, чем у GitHub:
+//   · 🪤 парсера пачки НЕТ. Импорт — это POST /ol/import, «Проверить» — тот же роут с
+//     dryRun:true. У GitHub логика разбора продублирована во фронте (ghParseLine), и
+//     формат магазина приходится держать в двух местах; здесь одно.
+//   · пароля во фронте нет вообще — /ol/list отдаёт hasPassword, а не пароль, поэтому
+//     ни «показать», ни «копировать пароль» на этой вкладке быть не может.
+//   · IMAP по паролю невозможен (AUTH=XOAUTH2 LOGINDISABLED), значит «взять код» — это
+//     чтение из живой сессии профиля, а не почтовый клиент. Отсюда колонка «сессия».
+
+const OL_STATUS_META = {
+  live:    { cls: 'text-emerald', label: '● live',    hint: 'последняя проверка прошла — сессия жива' },
+  dead:    { cls: 'text-crimson', label: '✕ dead',    hint: 'вход не проходит: пароль сменили или ящик закрыт' },
+  locked:  { cls: 'text-amber',   label: '🔒 locked',  hint: 'Microsoft просит подтверждение — нужен ручной вход в профиль' },
+  unknown: { cls: 'text-dim',     label: '— unknown', hint: 'ещё ни разу не проверяли' },
+};
+const olStatusMeta = s => OL_STATUS_META[s] || { cls: 'text-dim', label: String(s || '—'), hint: '' };
+const OL_STATUSES = ['live', 'dead', 'locked', 'unknown'];
+
+const olAccount = id => (state.outlook || []).find(a => a.id === id) || null;
+// Дата приходит строкой ISO, а ageStr() ждёт миллисекунды.
+const olAge = iso => { const t = iso ? Date.parse(iso) : 0; return t ? ageStr(t) : ''; };
+
+async function loadOlList() {
+  try {
+    const res = await fetch('/__switch/api/ol/list');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'fail');
+    // 🪤 Имена ключей у сервера — `entries` и `stats` (сверено с `handleOlList`), но
+    // фолбэки оставлены: вкладку и сервер писали два агента параллельно, и на стыке
+    // первый прогон дал ровно эту поломку — живой пул рисовался как «пул пуст», потому
+    // что во фронте ждали `accounts`, а сервер отдавал `entries`. Молчаливый промах:
+    // ошибки нет, страница просто пустая.
+    state.outlook = Array.isArray(data) ? data
+      : (data.entries || data.accounts || data.mailboxes || data.list || data.items || []);
+    state.olSummary = data.stats || data.summary || {};
+    olPaintSummary();
+    renderOl();
+  } catch (e) {
+    const box = $('ol-list');
+    if (box) box.innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+// Сводка цифрами в шапке + счётчик в сайдбаре. Если сервер сводку не прислал —
+// считаем по списку сами: цифра в сайдбаре не должна зависеть от лишнего поля.
+function olPaintSummary() {
+  const list = state.outlook || [];
+  const s = state.olSummary || {};
+  const cnt = k => (s[k] != null ? s[k] : list.filter(a => a.status === k).length);
+  const total = s.total != null ? s.total : list.length;
+  const live = cnt('live');
+  const student = s.student != null ? s.student : list.filter(a => a.kind === 'student').length;
+  const withSess = list.filter(a => a.hasSession).length;
+  const el = $('ol-summary');
+  if (el) {
+    el.innerHTML =
+      `всего <b class="text-ink">${total}</b> · ` +
+      `<span class="text-emerald">●</span> live <b class="text-emerald">${live}</b> · ` +
+      `<span class="text-crimson">✕</span> dead <b class="text-crimson">${cnt('dead')}</b> · ` +
+      `<span class="text-amber">🔒</span> locked <b class="text-amber">${cnt('locked')}</b> · ` +
+      `<span class="text-dim">—</span> не проверено <b class="text-dim">${cnt('unknown')}</b>` +
+      `<span class="mx-2 text-line">│</span>` +
+      `🎓 student <b class="text-violet">${student}</b>` +
+      `<span class="mx-2 text-line">│</span>` +
+      `<span title="Снимок storageState на диске — без него «Взять код» полезет логиниться руками">сессия есть у</span> <b class="text-azure">${withSess}</b>`;
+  }
+  const nav = $('nav-count-outlook');
+  if (nav) nav.textContent = `${live}/${total}`;
+}
+// Таблица ящиков. Адрес показываем ЦЕЛИКОМ: вкладка приватная, как и соседние, а
+// маска здесь только мешала бы искать глазами. Маска приходит лишь в превью импорта —
+// её ставит сервер до записи в пул.
+function renderOl() {
+  const box = $('ol-list');
+  if (!box) return;
+  const list = state.outlook || [];
+  const total = list.length;
+  if (!total) {
+    box.innerHTML = '<div class="p-12 text-center text-muted text-xs">пул пуст — жми «📥 Импорт» и вставь чек из магазина</div>';
+    return;
+  }
+  const f = {
+    search: ($('ol-search')?.value || '').trim().toLowerCase(),
+    status: $('ol-status')?.value || '',
+    kind:   $('ol-kind')?.value || '',
+  };
+  const rows = list.filter(a => {
+    if (f.status && (a.status || 'unknown') !== f.status) return false;
+    if (f.kind && a.kind !== f.kind) return false;
+    if (f.search) {
+      const used = (a.usedOn || []).map(u => u.tag).join(' ');
+      const hay = `${a.email || ''} ${a.nickname || ''} ${a.note || ''} ${used}`.toLowerCase();
+      if (!hay.includes(f.search)) return false;
+    }
+    return true;
+  }).sort((a, b) => Date.parse(b.addedAt || 0) - Date.parse(a.addedAt || 0));
+
+  if (!rows.length) {
+    box.innerHTML = `<div class="p-12 text-center text-muted text-xs">под фильтры не попал никто <span class="text-faint">(всего ${total})</span></div>`;
+    return;
+  }
+
+  const body = rows.map(a => olRowHtml(a)).join('');
+  box.innerHTML = `<table class="w-full">
+    <thead class="bg-elevated/60 text-[10px] uppercase tracking-wider text-muted sticky top-0">
+      <tr>
+        <th class="px-3 py-2 text-left">Ящик</th>
+        <th class="px-3 py-2 text-left">Тип</th>
+        <th class="px-3 py-2 text-left">Статус</th>
+        <th class="px-3 py-2 text-left" title="Снимок storageState: без него «Взять код» попросит войти руками">Сессия</th>
+        <th class="px-3 py-2 text-left" title="Где ящик уже израсходован">Занят</th>
+        <th class="px-3 py-2 text-left">Заметка</th>
+        <th class="px-3 py-2 text-right">—</th>
+      </tr>
+    </thead>
+    <tbody>${body}</tbody>
+  </table>
+  <div class="px-3 py-2 border-t border-line-soft text-[11px] font-mono text-faint">показано ${rows.length} из ${total}</div>`;
+}
+// ───── форма «добавить вручную» ─────
+function olShowAdd(show = true) {
+  const f = $('ol-add-form');
+  if (!f) return;
+  f.classList.toggle('hidden', !show);
+  if (show) {
+    for (const id of ['ol-add-email', 'ol-add-pass', 'ol-add-nick', 'ol-add-note']) { if ($(id)) $(id).value = ''; }
+    $('ol-add-email')?.focus();
+  }
+}
+
+async function olAdd() {
+  const email = ($('ol-add-email')?.value || '').trim().toLowerCase();
+  const password = $('ol-add-pass')?.value || '';
+  if (!email) return toast('адрес обязателен', 'warn');
+  // Формат проверяем и здесь — но только чтобы не ходить в сеть за очевидной опечаткой.
+  // Решающая проверка всё равно серверная, вместе с определением типа по домену.
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return toast('это не похоже на адрес почты', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ol/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, nickname: ($('ol-add-nick')?.value || '').trim(), note: ($('ol-add-note')?.value || '').trim() }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    toast(`✓ ${email} добавлен`, 'success');
+    olShowAdd(false);
+    loadOlList();
+  } catch (e) { toast('Add: ' + e.message, 'error', 6000); }
+}
+
+// ───── импорт пачкой: разбирает СЕРВЕР ─────
+function olShowImport(show = true) {
+  const m = $('ol-import-modal');
+  if (!m) return;
+  m.classList.toggle('hidden', !show);
+  if (show) { $('ol-import-text')?.focus(); }
+  else if ($('ol-import-preview')) {
+    $('ol-import-preview').innerHTML = 'нажми «Проверить» — разбор делает сервер';
+  }
+}
+
+// Общий вызов /ol/import: dryRun решает, пишем мы или только смотрим. Второй роут под
+// превью не нужен, и парсер во фронте — тем более.
+async function olImportPost(dryRun) {
+  const text = $('ol-import-text')?.value || '';
+  if (!text.trim()) { toast('вставь строки из чека', 'warn'); return null; }
+  const res = await fetch('/__switch/api/ol/import', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, dryRun }),
+  });
+  const d = await res.json();
+  if (!res.ok || d.error) throw new Error(d.error || 'fail');
+  return d;
+}
+// Превью сухого прогона. Адреса в ответе уже маской (ab***@outlook.com) — сервер
+// маскирует их до отдачи, так что показываем как есть, ничего не режем.
+async function olImportCheck() {
+  const box = $('ol-import-preview');
+  const btn = $('ol-import-check');
+  if (btn) btn.disabled = true;
+  if (box) box.innerHTML = '<span class="text-azure">⏳ сервер разбирает…</span>';
+  try {
+    const d = await olImportPost(true);
+    if (!d) { if (box) box.innerHTML = ''; return; }
+    olRenderImportPreview(d);
+  } catch (e) {
+    if (box) box.innerHTML = `<span class="text-crimson">⚠ ${esc(e.message)}</span>`;
+  } finally { if (btn) btn.disabled = false; }
+}
+
+function olRenderImportPreview(d) {
+  const box = $('ol-import-preview');
+  if (!box) return;
+  const entries = d.entries || [];
+  const errors = d.errors || [];
+  const dups = d.duplicates || [];
+  const dupCount = typeof dups === 'number' ? dups : dups.length;
+  const rows = entries.map(e => `<tr class="border-b border-line-soft/40">
+      <td class="py-0.5 pr-2 font-mono text-ink">${esc(e.email || '')}</td>
+      <td class="py-0.5 pr-2">${e.kind === 'student'
+        ? '<span class="text-violet">🎓 student</span>'
+        : `<span class="text-dim">${esc(e.kind || 'personal')}</span>`}</td>
+      <td class="py-0.5 pr-2 font-mono text-faint">${esc(e.note || '')}</td>
+    </tr>`).join('');
+  // Ошибки — построчно и с номером строки: в чеке магазина их бывает несколько, и
+  // «2 строки с ошибкой» без номеров не даёт понять, что именно править.
+  const errHtml = errors.length
+    ? `<div class="text-crimson mt-2">⚠ ошибок ${errors.length}:<ul class="list-disc pl-5 mt-0.5">` +
+      errors.map(er => `<li>строка ${esc(String(er.line ?? '?'))}: ${esc(er.error || er.message || String(er))}</li>`).join('') +
+      `</ul></div>`
+    : '';
+  const dupHtml = dupCount
+    ? `<div class="text-amber mt-1">↺ дублей ${dupCount}${Array.isArray(dups) && dups.length ? ': <span class="font-mono">' + dups.map(esc).join(', ') + '</span>' : ''} — эти ящики уже в пуле, второй профиль на них не заведётся</div>`
+    : '';
+  box.innerHTML =
+    (entries.length
+      ? `<div class="text-emerald mb-1">✓ к импорту ${entries.length}</div>` +
+        `<table class="w-full text-[11px]"><thead><tr class="text-faint text-left"><th class="py-0.5 pr-2 font-normal">адрес (маска сервера)</th><th class="py-0.5 pr-2 font-normal">тип</th><th class="py-0.5 font-normal">заметка</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="text-faint">новых ящиков в тексте нет</div>`) + dupHtml + errHtml;
+}
+async function olImportDo() {
+  const btn = $('ol-import-do');
+  if (btn) btn.disabled = true;
+  try {
+    const d = await olImportPost(false);
+    if (!d) return;
+    const added = d.added ?? (d.entries || []).length;
+    const dups = typeof d.duplicates === 'number' ? d.duplicates : (d.duplicates || []).length;
+    const errs = typeof d.errors === 'number' ? d.errors : (d.errors || []).length;
+    toast(`добавлено ${added} · дублей ${dups} · ошибок ${errs}`, errs ? 'warn' : 'success', 7000);
+    if ($('ol-import-text')) $('ol-import-text').value = '';
+    olShowImport(false);
+    loadOlList();
+  } catch (e) { toast('Import: ' + e.message, 'error', 8000); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+// ───── правка одной записи ─────
+async function olRename(id) {
+  const a = olAccount(id);
+  if (!a) return;
+  const v = prompt(`Ник для ${a.email} (пусто — снять):`, a.nickname || '');
+  if (v === null) return;
+  try {
+    const res = await fetch('/__switch/api/ol/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, nickname: String(v).trim() }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    toast('✓ переименован', 'info');
+    loadOlList();
+  } catch (e) { toast('Rename: ' + e.message, 'error', 6000); }
+}
+
+// Статус — меню у кнопки, а не цикл по клику: четыре значения, и «промотать до нужного»
+// на записи, которую только что прочекали, значит трижды соврать серверу по дороге.
+function olStatusMenu(ev, id) {
+  const a = olAccount(id);
+  popMenu(ev, OL_STATUSES.map(s => {
+    const m = olStatusMeta(s);
+    return {
+      icon: a && a.status === s ? '•' : ' ',
+      label: m.label.replace(/^[●✕🔒—]\s*/, '') + (a && a.status === s ? ' (сейчас)' : ''),
+      hint: m.hint,
+      run: `olSetStatus(${JSON.stringify(id)}, ${JSON.stringify(s)})`,
+    };
+  }));
+}
+
+async function olSetStatus(id, status) {
+  try {
+    const res = await fetch('/__switch/api/ol/status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    toast(`статус → ${status}`, 'info');
+    loadOlList();
+  } catch (e) { toast('Status: ' + e.message, 'error', 6000); }
+}
+async function olDelete(id) {
+  const a = olAccount(id);
+  if (!a) return;
+  if (!confirm(`Удалить ${a.email} из пула? Профиль браузера и снимок сессии этого ящика тоже перестанут использоваться.`)) return;
+  try {
+    const res = await fetch('/__switch/api/ol/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    toast('удалён', 'info');
+    loadOlList();
+  } catch (e) { toast('Delete: ' + e.message, 'error', 6000); }
+}
+
+// Снять метку usedOn. Ставят её шлюзы, когда заселяют ящик, — здесь только ручное
+// «это было ошибкой». 🪤 Тело роута контракт не фиксирует; шлём {id, tag, on:false} по
+// образцу /gh/mark-used, и любую жалобу сервера показываем как есть, не гадая.
+async function olUnmark(id, tag) {
+  if (!confirm(`Снять метку «${tag}»? Запись о том, что ящик израсходован там, исчезнет.`)) return;
+  try {
+    const res = await fetch('/__switch/api/ol/mark', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, tag, on: false }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    toast(`метка «${tag}» снята`, 'info');
+    loadOlList();
+  } catch (e) { toast('Mark: ' + e.message, 'error', 6000); }
+}
+
+// ───── действия с живым профилем ─────
+// Открытие профиля и чтение кода — это запуск Chromium, десятки секунд молчания в
+// сокете. Повторный клик за это время поднял бы второй Chromium на тот же профиль
+// (а профиль Chromium — один на процесс), поэтому кнопка на время занята: state.olBusy
+// красит её в ⏳ и второй вызов отбивается.
+function olBusySet(id, what) {
+  state.olBusy = state.olBusy || {};
+  if (what) state.olBusy[id] = what; else delete state.olBusy[id];
+  renderOl();
+}
+
+async function olOpen(id) {
+  const a = olAccount(id);
+  if (!a) return;
+  if ((state.olBusy || {})[id]) return toast('⏳ уже открываю — запуск профиля занимает до минуты', 'info');
+  olBusySet(id, 'open');
+  try {
+    const res = await fetch('/__switch/api/ol/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    if (d.already) toast('🌐 браузер этого ящика уже открыт', 'info');
+    else toast(`🌐 ${a.email}: профиль открыт${a.hasSession ? '' : ' — сессии не было, войди логином и паролем из пула'}`, 'success', 7000);
+  } catch (e) { toast('Open: ' + e.message, 'error', 8000); }
+  finally { olBusySet(id, null); }
+}
+// Код из письма: показать тостом и положить в буфер. Тост живёт долго нарочно — код
+// вводят в другом окне, и 4 секунды на это не хватает. В буфер кладём ТОЛЬКО код:
+// clipboard-запись должна быть вставляема в поле подтверждения как есть.
+async function olCode(id) {
+  const a = olAccount(id);
+  if (!a) return;
+  if ((state.olBusy || {})[id]) return toast('⏳ уже читаю письмо', 'info');
+  olBusySet(id, 'code');
+  try {
+    const res = await fetch('/__switch/api/ol/code', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    const code = d.code || d.otp || '';
+    if (!code) return toast(`📩 ${a.email}: письма с кодом не нашлось${d.subject ? ' (последнее письмо: ' + d.subject + ')' : ''}`, 'warn', 8000);
+    let copied = true;
+    try { await navigator.clipboard.writeText(String(code)); } catch { copied = false; }
+    toast(`📩 ${code}${copied ? ' — в буфере' : ' (буфер недоступен, скопируй глазами)'}`, 'success', 20000);
+  } catch (e) { toast('Code: ' + e.message, 'error', 8000); }
+  finally { olBusySet(id, null); }
+}
+
+// ───── фоновая проверка сессий ─────
+// Прогон последовательный (каждый ящик — запуск профиля), поэтому он идёт в фоне, а
+// фронт только поллит прогресс. Подтверждение спрашиваем: на восьми ящиках это минуты.
+async function olHealthRun() {
+  const n = (state.outlook || []).length;
+  if (!confirm(`Проверить сессии${n ? ` ${n} ящиков` : ''}? Каждый — запуск профиля браузера, идёт последовательно и в фоне; со вкладки можно уйти.`)) return;
+  try {
+    const res = await fetch('/__switch/api/ol/health-check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'all' }),
+    });
+    const d = await res.json();
+    if (res.status === 409) return toast(`🔄 ${d.error || 'проверка уже идёт'}`, 'warn', 5000);
+    if (!res.ok || d.error) throw new Error(d.error || 'fail');
+    if (d.started === false) return toast('🔄 проверять некого', 'info', 4000);
+    toast(`🔄 запущена проверка${d.total ? `: ${d.total} шт.` : ''} — идёт в фоне`, 'success', 5000);
+    olProgressPoll();
+  } catch (e) { toast('Health: ' + e.message, 'error', 8000); }
+}
+// Поллинг прогресса — калька с tgmProgressPoll: таймер один, сам себя гасит, когда
+// прогона нет, и НЕ привязан к активной вкладке нарочно (прогон идёт минутами, тост о
+// финише должен долететь, даже если ушли смотреть другую вкладку). Пока прогона нет —
+// один опрос и стоп: он нужен, чтобы подпись кнопки получила актуальный счётчик.
+let olPollTimer = null;
+let olSawRunning = false;
+
+function olProgressPoll() {
+  if (olPollTimer) return;
+  const stop = () => {
+    if (olPollTimer) { clearInterval(olPollTimer); olPollTimer = null; }
+    olSawRunning = false;
+  };
+  const tick = async () => {
+    let d;
+    try {
+      const res = await fetch('/__switch/api/ol/health-progress');
+      d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'fail');
+    } catch { return stop(); }
+
+    const job = d.job || {};
+    const btn = $('ol-check-btn');
+    if (btn) {
+      btn.disabled = !!job.running;
+      btn.textContent = job.running
+        ? `🔄 проверяю ${job.done ?? 0}/${job.total ?? '?'}`
+        : '🔄 Проверить сессии';
+    }
+    const wrap = $('ol-progress');
+    if (!wrap) return stop();   // вкладка выкинута из DOM — поллить некуда
+
+    if (job.running) {
+      olSawRunning = true;
+      wrap.classList.remove('hidden');
+      const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+      $('ol-progress-bar').style.width = pct + '%';
+      $('ol-progress-txt').textContent =
+        `${job.done ?? 0}/${job.total ?? '?'} (${pct}%) · 🟢 ${job.live ?? job.alive ?? 0} 🔴 ${job.dead ?? 0} 🔒 ${job.locked ?? 0}` +
+        (job.currentEmail ? ` · сейчас ${job.currentEmail}` : '');
+      return;
+    }
+
+    wrap.classList.add('hidden');
+    if (olSawRunning) {   // только что финишировал — подтянуть таблицу и отчитаться
+      const dead = job.dead ?? 0;
+      toast(`🔄 готово: 🟢 ${job.live ?? job.alive ?? 0} · 🔴 ${dead} · 🔒 ${job.locked ?? 0}`, dead ? 'warn' : 'success', 7000);
+      loadOlList();
+    }
+    stop();
+  };
+  olPollTimer = setInterval(tick, 2000);
+  tick();
+}
+
 
 // ───── триал-сайты картинок (где взять бесплатные кредиты) ─────
 async function loadImageTrials() {
@@ -19469,6 +21001,11 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  // base: 0 — про выдачу HCNsec ничего не известно: панель платная, гранта не заявлено,
+  // а живая проба показала только каталог и ответы моделей. Ноль здесь значит «делить не
+  // на что»: процент запаса считается по live/total, пока балансы не приедут из ЛК. Любое
+  // выдуманное число обещало бы деньги, которых мы не видели (та же логика, что у TrueSOTA).
+  hcnsec:      { id: 'hcnsec',      p: 'hn', stateKey: 'hcnsec',      base: 0,   sym: '$',  label: 'HCNsec',      icon: '🛡️', color: 'emerald', reload: () => loadHnSessionsLight() },
   tabi:        { id: 'tabi',        p: 'tb', stateKey: 'tabi',        base: 100, sym: '$',  label: 'Tabi Token',  icon: '🎫', color: 'violet', reload: () => loadTbSessionsLight() },
   xpeach:      { id: 'xpeach',      p: 'xp', stateKey: 'xpeach',      base: 10,  sym: '🍑', label: 'XPeach',      icon: '🍑', color: 'rose',   reload: () => loadXpSessionsLight() },
 };
@@ -19628,19 +21165,24 @@ function sideDetectRotation(prov, accounts) {
 // Одна арифметика на все четыре шлюза: было четыре копии одного цикла.
 // base — база выдачи провайдера, нужна только чтобы не делить на ноль.
 function poolMoneyStat(accounts, base) {
-  let live = 0, dead = 0, total = 0;
+  let live = 0, dead = 0, total = 0, unknown = 0;
   let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
   for (const s of (accounts || [])) {
     total++;
     if (s.status === 'live') live++;
     else if (s.status === 'dead') dead++;
     if (balanceUsable(s)) {
+      // Отрицательный остаток — не долг, а промах угадывания выдачи: ячейка строки
+      // его обрезала до нуля, а сумма пула складывала сырым, и шапка расходилась со
+      // строками на $2192 (12.4%). Такой ключ идёт в `unknown` — денег на нём мы не
+      // знаем, а знаменатель шкалы от него тем более брать нельзя.
+      if (s.balance < 0) { unknown++; continue; }
       sumBalance += s.balance;
       sumGrant += balanceDenom(s, base);
       withBalance++;
     } else if (typeof s.balance === 'number') deadBalance += s.balance;
   }
-  return { total, live, dead, withBalance, sumBalance, sumGrant, deadBalance };
+  return { total, live, dead, withBalance, sumBalance, sumGrant, deadBalance, unknown };
 }
 
 async function renderGlobalGauge() {
@@ -19673,6 +21215,7 @@ async function renderGlobalGauge() {
     // забрать её нельзя, а глаз она отвлекает.
     const money = st.withBalance
       ? `<span class="text-emerald">${p.sym || '$'}${st.sumBalance.toFixed(2)} доступно</span>`
+      : st.unknown > 0 ? '<span class="text-faint" title="остаток на ключах угадан мимо: выдача меньше расхода, доверять цифре нельзя">выдача неизвестна</span>'
       : st.deadBalance > 0 ? '' : '<span class="text-faint">баланс не опрошен</span>';
     extra += `<div class="mt-2 pt-2 border-t border-line-soft/50 flex items-center gap-x-4 gap-y-1 text-xs font-mono flex-wrap">
       <span class="text-${p.color}">${p.icon} ${p.label}</span>
@@ -22878,7 +24421,12 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // первыми, гитхабы, четыре живых шлюза, Custom, затем служебное. `claude`, `grok` и
 // `telegram` из дефолта убраны намеренно — на чистой установке они пустые, а место в
 // сайдбаре занимают; включаются в «Настроить вкладки» одним кликом.
-const DEFAULT_TABS_VISIBLE = ['fin', 'github', 'agentrouter', 'gorouter', 'justwoker', 'truesota', 'kktoken', 'tabi', 'custom', 'plugins', 'health', 'settings'];
+// 05.09: `truesota` убран из дефолта решением владельца. Вкладка живая, но место в
+// сайдбаре не оправдывает: включается тем же одним кликом.
+// 31.08 → возвращено 05.09: `outlook` сразу за `github` (обе про аккаунты, не про
+// шлюзы), `hcnsec` сразу за `kktoken` (одно поколение панели New API). Из дефолта они
+// пропали не решением, а откатом 04.09 20:11 — код той ночи лежал незакоммиченным.
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'hcnsec', 'tabi', 'custom', 'plugins', 'health', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -23190,6 +24738,7 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'hcnsec':        loadHnSessionsLight(); break;
       case 'tabi':          loadTbSessionsLight(); break;
       case 'xpeach':        loadXpSessionsLight(); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
@@ -23197,6 +24746,7 @@ function autoRefreshTick() {
       case 'video':         loadVideoKeys(); break;
       case 'image':         loadImageKeys(); break;
       case 'github':        loadGhKeys(); break;
+      case 'outlook':       loadOlList(); break;
       case 'omniroute-pool': loadOmSessions(false); break;
       // grok — свой autopoll (4s) уже отдельно
       // switcher/settings/plugins — статичные, не трогаем
@@ -23236,9 +24786,13 @@ const NAV_COUNT_JOBS = [
   ['seekai',      () => loadSkSessionsLight()],
   ['truesota',    () => loadTsSessionsLight()],
   ['kktoken',     () => loadKkSessionsLight()],
+  ['hcnsec',      () => loadHnSessionsLight()],
   ['tabi',        () => loadTbSessionsLight()],
   ['xpeach',      () => loadXpSessionsLight()],
   ['github',      () => loadGhKeys()],
+  // Ящики: /ol/list — чтение локального JSON, в Microsoft не ходит (сессии проверяет
+  // только явная кнопка), поэтому в дешёвый круговой тик его брать можно.
+  ['outlook',     () => loadOlList()],
   ['telegram',    () => loadTgPool()],
   ['custom',      () => loadCustomProviders()],
   ['plugins',     () => loadPlugins()],
@@ -23778,8 +25332,30 @@ document.addEventListener('DOMContentLoaded', () => {
   </div>
 </div>
 
+<!-- 📥 Импорт Outlook-ящиков пачкой.
+     🪤 Разбор — на сервере. «Проверить» шлёт то же тело с dryRun:true и рисует ответ:
+     адреса приходят уже маской (ab***@outlook.com), поэтому превью можно показывать
+     как есть. Своего парсера в браузере здесь нет намеренно — расхождение с GitHub,
+     где ghParseLine дублирует серверную логику, повторять не стали. -->
+<div id="ol-import-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onclick="if(event.target===this) olShowImport(false)">
+  <div class="bg-surface rounded-xl border border-violet/40 shadow-2xl p-5 w-[720px] max-w-[92vw] max-h-[86vh] flex flex-col">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-sm font-semibold">📥 Импорт Outlook-ящиков</h3>
+      <button onclick="olShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-muted mb-2">Вставь письмо-чек из магазина целиком — рекламу, рамки <code class="font-mono">↓↓↓ Ваш заказ ↓↓↓</code> и ссылки сервер отбросит сам. Разделители <code class="font-mono">:</code>, <code class="font-mono">;</code>, <code class="font-mono">|</code> и табы понимаются все, позиции полей не фиксированы: ищется адрес, пароль — первое поле после него.</p>
+    <textarea id="ol-import-text" rows="9" placeholder="mailbox@outlook.com:пароль&#10;other.mailbox@outlook.com|пароль|резервная@почта" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+    <div id="ol-import-preview" class="text-xs text-faint mt-2 overflow-y-auto pr-1">нажми «Проверить» — разбор делает сервер</div>
+    <div class="flex gap-2 justify-end mt-3">
+      <button id="ol-import-check" onclick="olImportCheck()" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium" title="Сухой прогон: сервер разберёт текст и вернёт превью, ничего не записав">🔍 Проверить</button>
+      <button id="ol-import-do" onclick="olImportDo()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">📥 Импортировать</button>
+      <button onclick="olShowImport(false)" class="text-xs px-3 py-2 rounded-lg border border-line-soft hover:bg-elevated transition">Отмена</button>
+    </div>
+  </div>
+</div>
+
 <script>
-// ═══════════════════ JUSTWOKER: ЗАЛИПШИЙ IP ══════════════════════════
+
 // id последнего прогона, упёршегося в IP: кнопка «Повтор» в модалке заводит тот же
 // аккаунт, а не тот, на котором в этот момент стоит курсор в таблице.
 let jwIpModalId = null;
@@ -24784,6 +26360,541 @@ setInterval(() => {
   });
   if (expired) { renderAr(); arRenderCheckinCard(); arSetNavCount(); }
 }, 1000);
+
+// ═══════════════════ ЛИГА ══════════════════════════════════════════════════
+// Витрина рейтинга между установками хаба. Данные — одна ручка /__switch/api/league:
+// свою строку считает leagueSelf() на сервере, соседи приедут из league-peers.json,
+// когда поднимем приёмник. Пока их нет, вкладка честно говорит об этом и показывает
+// свою кривую — она и есть половина смысла, «как в Claude Code статистика».
+const LG = { data: null, metric: 'tok', range: 'd7', plot: null, err: null, loading: false };
+const LG_M = {
+  tok: { lb: 'токены', fmt: v => lgTok(v), unit: null },
+  sp:  { lb: 'деньги', fmt: v => '$' + lgInt(v), unit: { div: 1, name: 'долларов' } },
+  act: { lb: 'активность', fmt: v => lgInt(v), unit: { div: 1, name: 'промптов' } },
+  // Аккаунты — величина накопительная (счётчик заведённых, а не расход за период),
+  // поэтому кривая монотонна и итог не зависит от окна.
+  acc: { lb: 'аккаунты', fmt: v => lgInt(v), unit: { div: 1, name: 'аккаунтов' }, cum: 1 },
+};
+const LG_R = {
+  h24: { lb: 'сутки', ttl: 'по часам за скользящие сутки' },
+  d7:  { lb: 'неделя', ttl: 'по дням за 7 суток' },
+  d30: { lb: 'месяц', ttl: 'по дням за 30 суток' },
+  all: { lb: 'всё время', ttl: 'по дням, всё что знаем' },
+};
+const LG_TOT = { tok: { h24: 'tokD', d7: 'tokW', d30: 'tokM', all: 'tokA' },
+                 sp:  { h24: 'spD',  d7: 'spW',  d30: 'spM',  all: 'spA'  } };
+const LG_SER = ['var(--lg-s1)', 'var(--lg-s2)', 'var(--lg-s3)'];
+
+const lgInt = v => Math.round(v).toLocaleString('ru-RU');
+// Токены приходят штуками. «15 293 000 000» глазом не берётся, поэтому от миллиарда
+// показываем миллиарды с двумя знаками (иначе теряется разница между 4,8 и 4,82),
+// от миллиона — целые миллионы.
+function lgTok(v) {
+  if (v >= 1e9) return (v / 1e9).toLocaleString('ru-RU',
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' млрд';
+  if (v >= 1e6) return lgInt(v / 1e6) + ' M';
+  return lgInt(v);
+}
+// Ось — в ОДНОЙ единице на весь график, а не «500 M / 1 млрд» вперемешку: единица
+// уезжает в подпись оси, на засечках остаются чистые числа.
+function lgTokUnit(top) {
+  if (top >= 1e9) return { div: 1e9, name: 'млрд токенов' };
+  if (top >= 1e6) return { div: 1e6, name: 'млн токенов' };
+  return { div: 1e3, name: 'тыс. токенов' };
+}
+const lgSum = a => a.reduce((x, y) => x + (Number(y) || 0), 0);
+const lgEsc = s => String(s).replace(/[&<>"]/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const lgLab = k => String(k).includes('T') ? String(k).slice(11) + ':00' : String(k).slice(5);
+const lgSeed = s => [...String(s)].reduce((a, c) => a + c.charCodeAt(0) * 7, 0);
+const LG_AVH = [240, 82, 158, 295, 10, 200, 320, 60];
+function lgAv(nick, px) {
+  const h = LG_AVH[lgSeed(nick) % LG_AVH.length];
+  return `<span class="lgav" style="width:${px}px;height:${px}px;font-size:${Math.round(px * .37)}px;
+    background:linear-gradient(150deg,oklch(0.76 0.15 ${h}),oklch(0.62 0.17 ${h}))"
+    >${lgEsc(String(nick).slice(0, 2))}</span>`;
+}
+// Итог окна. Токены и деньги сервер уже просуммировал (плитка и кривая обязаны
+// совпадать — это проверяет check-league.js), активность считаем по ряду, аккаунты
+// накопительные и от окна не зависят.
+function lgTotal(p, r) {
+  const m = LG.metric;
+  r = r || LG.range;
+  if (LG_TOT[m]) return Number((p.tot || {})[LG_TOT[m][r]]) || 0;
+  if (m === 'act') return lgSum((p.act || {})[r] || []);
+  return (Number((p.tot || {}).bought) || 0) + (Number((p.tot || {}).reg) || 0);
+}
+function lgRows() {
+  const d = LG.data;
+  if (!d || !d.me) return [];
+  const rows = [{ ...d.me, isMe: 1 }, ...(d.peers || [])];
+  return rows.sort((a, b) => lgTotal(b) - lgTotal(a));
+}
+// Ряды соседей выравниваем ПО КЛЮЧАМ, а не по индексу: у каждой установки своя дата
+// первого дня, и «всё время» у всех разной длины — совмещение по индексу сдвинуло бы
+// чужую кривую во времени, то есть соврало бы в самом графике.
+function lgAligned(p, keys) {
+  const own = ((p.keys || {})[LG.range]) || [];
+  const vals = ((p[LG.metric] || {})[LG.range]) || [];
+  if (!own.length || own.length !== vals.length) return keys.map((_, i) => Number(vals[i]) || 0);
+  const m = new Map(own.map((k, i) => [k, Number(vals[i]) || 0]));
+  return keys.map(k => m.has(k) ? m.get(k) : 0);
+}
+// ── Монотонный кубический сплайн (Fritsch–Carlson) ──────────────────────────
+// Гладко, но без горбов: наклоны ограничены так, чтобы кривая не выходила за пределы
+// соседних точек. Обычный Catmull-Rom этого не делает и придумывает пики между
+// измерениями — на графике расхода это прямое вранье.
+function lgSpline(pts) {
+  const n = pts.length;
+  if (n < 2) return '';
+  const dx = [], dy = [], m = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(pts[i + 1][0] - pts[i][0]);
+    dy.push(pts[i + 1][1] - pts[i][1]);
+    m.push(dy[i] / (dx[i] || 1));
+  }
+  const t = [m[0]];
+  for (let i = 1; i < n - 1; i++) t.push(m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2);
+  t.push(m[n - 2]);
+  for (let i = 0; i < n - 1; i++) {
+    if (m[i] === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+    const a = t[i] / m[i], b = t[i + 1] / m[i], h = Math.hypot(a, b);
+    if (h > 3) { const s = 3 / h; t[i] = s * a * m[i]; t[i + 1] = s * b * m[i]; }
+  }
+  let p = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    p += `C${(pts[i][0] + h).toFixed(1)},${(pts[i][1] + t[i] * h).toFixed(1)}`
+      + ` ${(pts[i + 1][0] - h).toFixed(1)},${(pts[i + 1][1] - t[i + 1] * h).toFixed(1)}`
+      + ` ${pts[i + 1][0].toFixed(1)},${pts[i + 1][1].toFixed(1)}`;
+  }
+  return p;
+}
+// Разрыв данных рисуем разрывом: подряд идущие нули В НАЧАЛЕ ряда — это «данных нет»,
+// а не «работы не было», и соединять их линией нельзя.
+function lgFirstReal(v) { let i = 0; while (i < v.length && !v[i]) i++; return i; }
+// Высота фиксированная, ШИРИНА — по контейнеру. viewBox обязан совпадать с реальными
+// пикселями элемента: при `viewBox="0 0 1000 300"` и `width:100%` браузер вписывает
+// картинку с сохранением пропорций, и на широком сайдбаре по бокам оставалось по 350 px
+// пустоты — график жался в середину. Теперь масштаб 1:1, текст и волосяные линии чёткие.
+const LG_H = 300, LG_PL = 52, LG_PR = 112, LG_PT = 16, LG_PB = 34;
+function lgDrawPlot(top) {
+  const host = document.getElementById('lg-plot');
+  if (!host) return;
+  const W = Math.max(620, Math.round(host.clientWidth || 1000)), H = LG_H;
+  const keys = ((LG.data.me.keys || {})[LG.range]) || [];
+  const n = keys.length;
+  if (!n) { host.innerHTML = '<div class="lgcap" style="padding:40px 0">данных за это окно нет</div>'; return; }
+  const series = top.map(p => lgAligned(p, keys));
+  const ymax = Math.max(...series.flat().map(v => Number(v) || 0), 1);
+  const nice = p => { const e = Math.pow(10, Math.floor(Math.log10(p))), s = p / e;
+    return (s <= 1 ? 1 : s <= 2 ? 2 : s <= 5 ? 5 : 10) * e; };
+  const yTop = nice(ymax * 1.08);
+  const xs = i => LG_PL + (n === 1 ? 0 : i * (W - LG_PL - LG_PR) / (n - 1));
+  const ys = v => LG_PT + (1 - (Number(v) || 0) / yTop) * (H - LG_PT - LG_PB);
+  const U = LG_M[LG.metric].unit || lgTokUnit(yTop);
+  // Знаков после запятой не угадываем: если все пять засечек делятся на единицу без
+  // остатка — ставим целые. Иначе получалось «0 · 1 · 3 · 4 · 5», где 2,5 округлялась
+  // в 3 и двойка просто пропадала.
+  const ticks = [0, .25, .5, .75, 1].map(f => yTop * f / U.div);
+  const dec = ticks.every(t => Math.abs(t - Math.round(t)) < 1e-9) ? 0 : 1;
+  const axNum = v => (v / U.div).toLocaleString('ru-RU',
+    { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  const tEl = document.getElementById('lg-ptitle');
+  if (tEl) tEl.innerHTML = `${LG_M[LG.metric].lb} · ${LG_R[LG.range].lb}`
+    + `<span>${LG_R[LG.range].ttl} · ${U.name} на точку`
+    + `${top.length > 1 ? ' · тройка лидеров' : ''}</span>`;
+
+  const grid = [0, .25, .5, .75, 1].map(f => {
+    const v = yTop * f, y = ys(v);
+    return `<line class="lggrid" x1="${LG_PL}" x2="${W - LG_PR + 8}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>
+      <text class="lgax" x="${LG_PL - 9}" y="${(y + 3.6).toFixed(1)}" text-anchor="end">${axNum(v)}</text>`;
+  }).join('');
+  const every = n <= 8 ? 1 : n <= 24 ? 3 : n <= 31 ? 5 : Math.ceil(n / 8);
+  const xlab = keys.map((k, i) => (i % every === 0 || i === n - 1)
+    ? `<text class="lgax" x="${xs(i).toFixed(1)}" y="${H - 10}" text-anchor="middle">${lgEsc(lgLab(k))}</text>`
+    : '').join('');
+
+  // Концы линий считаем заранее и РАЗВОДИМ подписи по вертикали: у двух серий
+  // последние значения могут совпасть, и подписи налезали друг на друга в кашу.
+  const ends = series.map((v, k) => {
+    const from = lgFirstReal(v), pts = [];
+    for (let i = from; i < v.length; i++) pts.push([xs(i), ys(v[i])]);
+    return { k, pts, path: pts.length > 1 ? lgSpline(pts) : '',
+      x: pts.length ? pts[pts.length - 1][0] : 0, y: pts.length ? pts[pts.length - 1][1] : 0 };
+  });
+  const LBH = 15, order = ends.filter(e => e.pts.length > 1).sort((a, b) => a.y - b.y);
+  order.forEach(e => { e.ly = e.y; });
+  for (let i = 1; i < order.length; i++)
+    if (order[i].ly - order[i - 1].ly < LBH) order[i].ly = order[i - 1].ly + LBH;
+  const shift = Math.max(0, (order.length ? order[order.length - 1].ly : 0) - (H - LG_PB - 4));
+  order.forEach(e => { e.ly -= shift; });
+
+  const body = ends.map(e => {
+    if (e.pts.length < 2) return '';
+    const k = e.k, col = LG_SER[k % LG_SER.length];
+    return `<linearGradient id="lgG${k}" x1="0" y1="${LG_PT}" x2="0" y2="${H - LG_PB}" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="${col}" stop-opacity=".28"/>
+        <stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient>
+      <path d="${e.path} L${e.x.toFixed(1)},${(H - LG_PB).toFixed(1)} L${e.pts[0][0].toFixed(1)},${(H - LG_PB).toFixed(1)} Z" fill="url(#lgG${k})"/>
+      <path class="lgserie" d="${e.path}" stroke="${col}"/>
+      <circle cx="${e.x.toFixed(1)}" cy="${e.y.toFixed(1)}" r="4.5" fill="${col}"
+        stroke="var(--lg-surface)" stroke-width="2.5"/>
+      ${Math.abs(e.ly - e.y) > 2 ? `<path d="M${(e.x + 5).toFixed(1)},${e.y.toFixed(1)} L${(e.x + 9).toFixed(1)},${e.ly.toFixed(1)}" stroke="${col}" stroke-width="1.2" fill="none" opacity=".55"/>` : ''}
+      <text class="lgend" x="${(e.x + 12).toFixed(1)}" y="${(e.ly + 4.2).toFixed(1)}"
+        fill="${col}">${lgEsc(String(top[k].nick).slice(0, 12))}</text>`;
+  }).join('');
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" id="lg-svg" role="img"
+      aria-label="${lgEsc(LG_M[LG.metric].lb)}, ${lgEsc(LG_R[LG.range].ttl)}">
+      <defs></defs>${grid}${xlab}${body}
+      <line class="lgcross" id="lg-cross" y1="${LG_PT - 4}" y2="${H - LG_PB}"/>
+      <g id="lg-hits"></g></svg>`;
+  LG.plot = { series, top, xs, ys, n, keys, W, H };
+  lgHookHover();
+}
+// Наведение: перекрестье и значения ВСЕХ серий за этот момент. Отклик и на нажатии,
+// а не только на движении — на тачпаде иначе не поймать точку.
+function lgHookHover() {
+  const plot = document.getElementById('lg-plot'), svg = document.getElementById('lg-svg');
+  const cross = document.getElementById('lg-cross'), hits = document.getElementById('lg-hits');
+  const tip = document.getElementById('lg-tip');
+  if (!plot || !svg || !cross || !hits || !tip) return;
+  const { series, top, xs, ys, n, keys, W } = LG.plot;
+  const move = e => {
+    const b = svg.getBoundingClientRect();
+    const vx = (e.clientX - b.left) / b.width * W;
+    let i = 0, best = 1e9;
+    for (let k = 0; k < n; k++) { const dd = Math.abs(xs(k) - vx); if (dd < best) { best = dd; i = k; } }
+    plot.classList.add('hot');
+    cross.setAttribute('x1', xs(i)); cross.setAttribute('x2', xs(i));
+    hits.innerHTML = series.map((v, k) => v[i] === undefined ? ''
+      : `<circle class="lghit" cx="${xs(i).toFixed(1)}" cy="${ys(v[i]).toFixed(1)}" r="5"
+          fill="${LG_SER[k % LG_SER.length]}" stroke="var(--lg-surface)" stroke-width="2.5"/>`).join('');
+    tip.innerHTML = `<div class="th">${lgEsc(lgLab(keys[i] || ''))}</div>`
+      + series.map((v, k) => `<div class="tr"><i style="background:${LG_SER[k % LG_SER.length]}"></i>
+          ${lgEsc(top[k].nick)}<b>${LG_M[LG.metric].fmt(v[i] || 0)}</b></div>`).join('');
+    tip.classList.add('on');
+    tip.style.left = Math.min(e.clientX + 16, innerWidth - tip.offsetWidth - 14) + 'px';
+    tip.style.top = Math.min(e.clientY + 16, innerHeight - tip.offsetHeight - 14) + 'px';
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerdown', move);
+  svg.addEventListener('pointerleave', () => {
+    plot.classList.remove('hot'); tip.classList.remove('on'); hits.innerHTML = '';
+  });
+}
+// ── Ник: правка на месте, без модалок и кнопки «сохранить» ───────────────────
+function lgNickEdit() {
+  const host = document.getElementById('lg-nickbox');
+  if (!host || !LG.data) return;
+  host.innerHTML = `<input class="lgnickinp" id="lg-nickinp" maxlength="20" spellcheck="false"
+    value="${lgEsc(LG.data.me.nick)}" aria-label="Твой ник в рейтинге">`;
+  const inp = document.getElementById('lg-nickinp');
+  inp.focus(); inp.select();
+  let closed = false;
+  const done = async ok => {
+    if (closed) return; closed = true;
+    const v = inp.value;
+    if (ok && v.trim() && v.trim() !== LG.data.me.nick) {
+      try {
+        const r = await fetch('/__switch/api/league/nick', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nick: v }) });
+        const j = await r.json();
+        if (j && j.nick) { LG.data.me.nick = j.nick; toast(`ник в лиге: ${j.nick}`, 'success'); }
+        else toast((j && j.error) || 'ник не сохранён', 'error');
+      } catch (e) { toast('ник не сохранён: ' + e.message, 'error'); }
+    }
+    lgRender();
+  };
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); done(true); }
+    if (e.key === 'Escape') { e.preventDefault(); done(false); }
+  });
+  inp.addEventListener('blur', () => done(true));
+}
+const LG_SHELL = `
+  <div class="px-6 py-8">
+    <div class="flex items-center gap-2 flex-wrap mb-5">
+      <span class="lgcap">метрика</span><span class="lgseg" id="lg-segM"></span>
+      <span class="lgcap" style="margin-left:10px">окно</span><span class="lgseg" id="lg-segR"></span>
+      <span class="lgcap" id="lg-stamp" style="margin-left:auto"></span>
+    </div>
+    <header>
+      <h1 class="text-2xl font-semibold tracking-tight">Лига ABUSE HUB</h1>
+      <p class="text-sm text-muted mt-1 max-w-[72ch]" id="lg-lede"></p>
+    </header>
+    <section class="lgmat mt-5 p-5">
+      <div class="flex items-start gap-5 flex-wrap"><div id="lg-ptitle"></div>
+        <div class="lglg ml-auto flex gap-4 flex-wrap items-center" id="lg-legend"></div></div>
+      <div class="lgplot mt-2" id="lg-plot"></div>
+    </section>
+    <div id="lg-tiles" class="grid gap-3 mt-4"
+         style="grid-template-columns:repeat(auto-fit,minmax(232px,1fr))"></div>
+    <div class="lghead" id="lg-thead"></div>
+    <div id="lg-list" class="flex flex-col gap-0.5"></div>
+    <div class="lgyou" id="lg-you"></div>
+    <footer class="lgfoot" id="lg-foot"></footer>
+  </div>
+  <div class="lgtip" id="lg-tip"></div>`;
+
+function lgSeg(host, items, cur, pick) {
+  if (!host) return;
+  host.innerHTML = '';
+  for (const [k, lb] of items) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = lb; b.dataset.k = k;
+    b.setAttribute('aria-pressed', String(k === cur()));
+    b.addEventListener('click', () => {
+      pick(k);
+      [...host.children].forEach(x => x.setAttribute('aria-pressed', String(x.dataset.k === k)));
+      lgRender();
+    });
+    host.appendChild(b);
+  }
+}
+const lgAgo = iso => {
+  const ms = Date.now() - Date.parse(iso);
+  if (!isFinite(ms) || ms < 0) return 'только что';
+  const mn = Math.round(ms / 60000);
+  return mn < 1 ? 'только что' : mn < 60 ? mn + ' мин назад' : Math.round(mn / 60) + ' ч назад';
+};
+function lgRender() {
+  const host = document.getElementById('leagueTab');
+  if (!host) return;
+  if (LG.err) {
+    host.innerHTML = `<div class="px-6 py-8"><div class="lgmat p-5 text-sm">
+      <b class="text-crimson">Лига не собралась:</b> ${lgEsc(LG.err)}
+      <div class="lgcap" style="margin-top:8px">ручка /__switch/api/league — нужен рестарт хаба,
+        если он поднят на сборке без неё</div></div></div>`;
+    return;
+  }
+  if (!LG.data) {
+    host.innerHTML = '<div class="px-6 py-8 lgcap">срез считается…</div>';
+    return;
+  }
+  if (!host.dataset.built) {
+    host.innerHTML = LG_SHELL;
+    host.dataset.built = '1';
+    lgSeg(document.getElementById('lg-segM'), Object.entries(LG_M).map(([k, v]) => [k, v.lb]),
+      () => LG.metric, k => { LG.metric = k; });
+    lgSeg(document.getElementById('lg-segR'), Object.entries(LG_R).map(([k, v]) => [k, v.lb]),
+      () => LG.range, k => { LG.range = k; });
+  }
+  const rows = lgRows(), me = LG.data.me, m = LG_M[LG.metric], r = LG_R[LG.range];
+  const top = rows.slice(0, 3), solo = rows.length < 2;
+  const mi = rows.findIndex(p => p.isMe);
+  document.getElementById('lg-lede').innerHTML = solo
+    ? `Гонка во времени, а не в моменте. Пока в лиге <b class="text-ink">только эта установка</b>:
+       приёмник, который складывает срезы друзей, ещё не поднят — поэтому кривая своя,
+       и она настоящая. Окно переключается от суток по часам до всего времени.`
+    : `Гонка во времени, а не в моменте: тройка лидеров линиями, все участники —
+       списком ниже. Окно переключается от суток по часам до всего времени.`;
+  document.getElementById('lg-legend').innerHTML = top.map((p, k) =>
+    `<span><i style="background:${LG_SER[k % LG_SER.length]}"></i><b>${lgEsc(p.nick)}</b>
+      <u>${m.fmt(lgTotal(p))}</u></span>`).join('');
+  lgDrawPlot(top);
+
+  // Плитки. Соседей нет — показываем СВОИ три окна, а не пустой пьедестал: слот один
+  // и тот же, но подпись у него разная, и путать их нельзя.
+  document.getElementById('lg-tiles').innerHTML = solo
+    ? ['h24', 'd7', 'all'].map((rk, k) => `
+        <div class="lgmat lgtile lgt${k + 1}">${lgAv(me.nick, 38)}
+          <div style="min-width:0"><div class="lgcap">моё · ${LG_R[rk].lb}</div>
+            <div class="who">${lgEsc(me.nick)}</div></div>
+          <div class="big">${m.fmt(lgTotal(me, rk))}<u>${m.lb}</u></div></div>`).join('')
+    : top.map((p, k) => `
+        <div class="lgmat lgtile lgt${k + 1}">${lgAv(p.nick, 38)}
+          <div style="min-width:0"><div class="lgcap">${k + 1} место</div>
+            <div class="who">${lgEsc(p.nick)}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}</div></div>
+          <div class="big">${m.fmt(lgTotal(p))}<u>${m.lb} · ${r.lb}</u></div></div>`).join('');
+
+  // Список — ВСЕ участники, включая тройку: колонки «закуплено / зарегано / стрик»
+  // должны быть видны и у лидеров, иначе таблица снова становится неинформативной.
+  document.getElementById('lg-thead').innerHTML =
+    `<span class="lgcap">место</span><span></span><span class="lgcap">участник</span>
+     <span class="lgcap th">${lgEsc(m.lb)} · ${lgEsc(r.lb)}</span>
+     <span class="lgcap th">закуплено<i>гитхабов</i></span>
+     <span class="lgcap th">зарегано<i>ключей на шлюзах</i></span>
+     <span class="lgcap th">стрик</span>`;
+  document.getElementById('lg-list').innerHTML = rows.map((p, i) => `
+    <div class="lgrow${p.isMe ? ' me' : ''}">
+      <span class="lgrank"><b>${i + 1}</b></span>${lgAv(p.nick, 32)}
+      <span class="lgnm">${lgEsc(p.nick)}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}
+        <i>${p.isMe ? 'срез только что' : 'срез ' + lgAgo(p.stamp)} · ${lgInt((p.tot || {}).ppd || 0)} промптов/д${p.ver ? ' · v' + lgEsc(p.ver) : ''}</i></span>
+      <span class="lgv on">${m.fmt(lgTotal(p))}</span>
+      <span class="lgv" title="куплено гитхабов с кредами">${lgInt((p.tot || {}).bought || 0)}</span>
+      <span class="lgv" title="ключей, заведённых через эти гитхабы">${lgInt((p.tot || {}).reg || 0)}</span>
+      <span class="lgv">🔥&nbsp;${(p.tot || {}).streak || '—'}</span>
+    </div>`).join('') + (solo ? `
+    <div class="lgrow pend"><span class="lgrank"><b>—</b></span>${lgAv('??', 32)}
+      <span class="lgnm" style="font-weight:400">друзья
+        <i>приёмник не поднят · срезы складывать некуда</i></span>
+      <span class="lgv">—</span><span class="lgv">—</span><span class="lgv">—</span><span class="lgv">—</span></div>` : '');
+
+  const gap = solo ? 'соперников пока нет'
+    : mi === 0
+      ? `отрыв от второго: +${Math.round((lgTotal(rows[0]) / Math.max(lgTotal(rows[1]), 1) - 1) * 100)}%`
+      : `до ${mi}-го места не хватает ${m.fmt(lgTotal(rows[mi - 1]) - lgTotal(me))}`;
+  document.getElementById('lg-you').innerHTML = `${lgAv(me.nick, 32)}
+    <span style="font-size:15.5px;font-weight:600">${solo ? 'Пока в лиге только ты' : `Ты — ${mi + 1}-е место из ${rows.length}`}</span>
+    <span class="lgnickbox" id="lg-nickbox"><button class="lgnick" id="lg-nickbtn"
+      title="Изменить ник в рейтинге">${lgEsc(me.nick)} <span style="color:var(--lg-faint);font-size:11.5px">✎</span></button></span>
+    <span class="lgnum" style="font-size:13px;color:var(--lg-muted)">${m.fmt(lgTotal(me))} · ${lgEsc(m.lb)} · ${lgEsc(r.lb)}</span>
+    <span class="lgnum" style="margin-left:auto;font-weight:600;font-size:13.5px;color:var(--lg-azure)">${gap}</span>`;
+  document.getElementById('lg-nickbtn').addEventListener('click', lgNickEdit);
+  document.getElementById('lg-stamp').textContent = solo
+    ? `срез свежий · участников 1` : `участников ${rows.length} · срез ${lgAgo(me.stamp)}`;
+  lgFoot();
+  const nav = document.getElementById('nav-count-league');
+  if (nav) nav.textContent = solo ? '1' : `${mi + 1} / ${rows.length}`;
+  lgPaintMini(rows, mi);
+}
+// Сноски пишем цифрами со среза, а не общими словами: у этой вкладки три источника,
+// и читатель обязан знать, какая цифра откуда и что в неё не входит.
+function lgFoot() {
+  const s = LG.data.me.src || {}, t = LG.data.me.tot || {};
+  const cacheRatio = t.tokW > 0 ? (s.cacheTokW / t.tokW) : 0;
+  document.getElementById('lg-foot').innerHTML = `
+    <p><b>Токены — это вход плюс выход.</b> Кеш (чтение и запись) в метрику не входит:
+      по суткам за всё время его знает только сводка Claude Code целиком, а не по дням,
+      и менять определение посреди окон значит врать в самой заметной цифре. За неделю
+      кеш добавил бы сверху ещё <b>${lgTok(s.cacheTokW || 0)}</b>
+      (${(cacheRatio * 100).toFixed(0)}% к показанному).</p>
+    <p><b>Два источника, сшитые по дате.</b> Журнал хаба <code>token-usage.jsonl</code>
+      живёт с <b>${lgEsc(s.journalFirst || '—')}</b> и видит все харнессы через front-door;
+      раньше этой даты — <code>~/.claude/stats-cache.json</code> самого Claude Code
+      (посчитан до <b>${lgEsc(s.statsCacheLast || '—')}</b>). Граница —
+      <b>${lgEsc(s.cutover || '—')}</b>: первые сутки журнала неполные, поэтому стык
+      сдвинут на день вперёд. Величина в обоих одна и та же, разный только охват.</p>
+    <p><b>Кривая гладкая, но не выдуманная.</b> Точки соединены монотонным кубическим
+      сплайном: обычный Catmull-Rom рисует горбы между точками там, где данные их не
+      подтверждают. Разрыв данных нарисован разрывом, а не нулём.</p>
+    <p><b>Активность — промпты, не сообщения.</b> Одна строка
+      <code>~/.claude/history.jsonl</code> = одно нажатие Enter: всего
+      <b>${lgInt(t.promptsAll || 0)}</b>, за неделю <b>${lgInt(t.ppd || 0)}</b> в день,
+      стрик <b>${lgInt(t.streak || 0)}</b> суток. Считаются только количества — текст
+      промптов не читается и в срез не попадает.</p>
+    <p><b>Аккаунты — две разные вещи, и в одну сумму их не сводим.</b> Закуплено
+      <b>${lgInt(t.bought || 0)}</b> гитхабов (у ${lgInt(s.boughtCreds || 0)} в записи
+      лежат креды — так их и отдают при покупке): за них платили деньгами. Зарегано
+      <b>${lgInt(t.reg || 0)}</b> ключей на шлюзах, которые авторег завёл через эти
+      гитхабы: за них платили временем. Кривая показывает их сумму по накоплению —
+      по настоящим датам заведения, поэтому она монотонна.</p>
+    <p><b>Деньги.</b> Остаток <b>$${lgInt(t.bal || 0)}</b> — сумма только
+      ПОЛОЖИТЕЛЬНЫХ остатков живых ключей${s.balanceUnknownKeys
+        ? `; на <b>${lgInt(s.balanceUnknownKeys)}</b> ключах выдача угадана мимо и остаток
+           считается неизвестным, а не отрицательным` : ''}. Расход за неделю
+      <b>$${lgInt(t.spW || 0)}</b> собран знаковыми дельтами по
+      <code>finance-history.jsonl</code> (${lgInt(s.financeLines || 0)} записей): откаты
+      вычитаются, сбросы счётчика — нет, повторная наливка отсеяна
+      (за неделю дублей на $${lgInt(s.dupTopupW || 0)}).</p>
+    <p><b>Ник правится на месте</b> — клик по нему в плашке ниже, Enter сохраняет.
+      Живёт в <code>routing/hub-identity.json</code> рядом с постоянным
+      <code>installId ${lgEsc(String(LG.data.me.installId || '').slice(0, 8))}…</code>,
+      чтобы переименование не заводило в рейтинге вторую строку. По умолчанию хаб берёт
+      <code>git config user.name</code>.</p>`;
+}
+// Мини-блок в сайдбаре. Метрика у него ЗАФИКСИРОВАНА — токены за 7 дней: он висит на
+// всех вкладках, и если бы он ездил за переключателем «Лиги», цифра в сайдбаре меняла
+// бы смысл незаметно для того, кто на другой вкладке.
+function lgPaintMini(rows, mi) {
+  const box = document.getElementById('league-mini');
+  if (!box || !LG.data) return;
+  const me = LG.data.me, solo = rows.length < 2;
+  const val = Number((me.tot || {}).tokW) || 0;
+  document.getElementById('league-mini-place').textContent = solo ? '1' : String(mi + 1);
+  document.getElementById('league-mini-of').textContent = solo ? 'один в лиге' : 'из ' + rows.length;
+  // Движение места. Считать его пока нечем: прошлые места знает приёмник, а он не
+  // поднят. Слот держим видимым прочерком, а не выдуманной стрелкой.
+  const mv = document.getElementById('league-mini-mv');
+  mv.textContent = '—';
+  mv.style.color = 'var(--color-faint,#6b7684)';
+  document.getElementById('league-mini-val').textContent = lgTok(val);
+  // Спарклайн — свой недельный ряд тем же монотонным сплайном, что на большой витрине.
+  const v = ((me.tok || {}).d7 || []).map(x => Number(x) || 0);
+  const W = 240, H = 26, mx = Math.max(...v, 1);
+  const pts = v.map((x, i) => [i * (W / Math.max(v.length - 1, 1)), H - (x / mx) * (H - 3) - 1.5]);
+  const line = v.length > 1 ? lgSpline(pts) : '';
+  const ln = document.getElementById('league-mini-line');
+  const ar = document.getElementById('league-mini-area');
+  if (ln) ln.setAttribute('d', line);
+  if (ar) ar.setAttribute('d', line ? `${line} L${W},${H} L0,${H} Z` : '');
+  // Три места ВОКРУГ тебя, а не жёсткий топ-3: на первом месте это 1-2-3, в середине —
+  // «кто впереди · ты · кто сзади», то есть ответ на «кого догонять». Блок стоит
+  // ВСЕГДА — это выбранный вид; когда соперников нет, в нём своя строка и строка
+  // ожидания, а не пустота.
+  const nb = document.getElementById('league-mini-nb');
+  const gap = document.getElementById('league-mini-gap');
+  const from = solo ? 0 : Math.max(0, Math.min(mi - 1, rows.length - 3));
+  const near = rows.slice(from, from + 3);
+  nb.innerHTML = near.map((p, k) => `
+    <div class="flex items-center gap-1.5 text-xs ${p.isMe ? 'text-ink' : 'text-muted'}">
+      <span class="font-mono text-[11px] text-faint w-3.5">${from + k + 1}</span>
+      ${lgAv(p.nick, 18)}<span class="truncate">${lgEsc(p.nick)}</span>
+      <span class="ml-auto font-mono text-[11.5px] ${p.isMe ? 'text-ink' : 'text-dim'}">${lgTok(Number((p.tot || {}).tokW) || 0)}</span>
+    </div>`).join('') + (solo ? `
+    <div class="flex items-center gap-1.5 text-xs text-faint">
+      <span class="font-mono text-[11px] w-3.5">—</span>
+      ${lgAv('??', 18)}<span class="truncate">друзья</span>
+      <span class="ml-auto font-mono text-[11.5px]">ждём срез</span>
+    </div>` : '');
+  gap.innerHTML = solo
+    ? 'приёмник не поднят — соперники не приедут'
+    : mi === 0
+      ? `отрыв от второго <b class="text-muted font-medium">${lgTok(val - (Number((rows[1].tot || {}).tokW) || 0))}</b>`
+      : `до 1-го места <b class="text-muted font-medium">${lgTok((Number((rows[0].tot || {}).tokW) || 0) - val)}</b>`;
+  box.classList.remove('hidden');
+}
+// Загрузка среза. Зовётся при открытии вкладки И один раз на старте — мини-блок в
+// сайдбаре виден на всех вкладках, значит данные ему нужны без открытия «Лиги».
+async function lgLoad(force = false) {
+  if (LG.loading) return;
+  if (LG.data && !force) { lgRender(); return; }
+  LG.loading = true;
+  try {
+    const r = await fetch('/__switch/api/league');
+    if (!r.ok) throw new Error('ручка ответила ' + r.status);
+    const j = await r.json();
+    if (!j || !j.me) throw new Error('в ответе нет своего среза');
+    LG.data = j; LG.err = null;
+  } catch (e) {
+    LG.err = e.message;
+  } finally {
+    LG.loading = false;
+  }
+  // Мини-блок красим всегда, даже когда «Лига» не открыта: он и есть быстрый взгляд.
+  if (LG.data) { const rows = lgRows(); lgPaintMini(rows, rows.findIndex(p => p.isMe)); }
+  if (document.querySelector('[data-tab-content="league"]')?.classList.contains('active')
+      || LG.err) lgRender();
+}
+addEventListener('resize', () => { if (LG.plot) lgDrawPlot(LG.plot.top); });
+
+// Вкладка активного провайдера — для карточки ACTIVE в сайдбаре. Ключи MONEY_PROVIDERS
+// совпадают с именами вкладок; у остальных внутренний ключ переключателя называется
+// иначе, чем вкладка, поэтому нужен алиас. Нет вкладки — карточка молчит, а не ведёт
+// в никуда.
+const CURRENT_TAB_ALIAS = {
+  apihelper: 'freemodel', freemodel_rotator: 'freemodel', fm_openai: 'freemodel',
+  vyce_openai: 'vyceai', omniroute: 'omniroute-pool', notion: 'notion',
+  official: 'claude', unknown: 'health',
+};
+function currentProviderTab() {
+  const p = state && state.current;
+  if (!p) return null;
+  const name = CURRENT_TAB_ALIAS[p] || p;
+  return document.querySelector(`.nav-btn[data-tab="${name}"]`) ? name : null;
+}
+function sideOpenCurrentTab(ev) {
+  // Клик по тумблеру авторотации внутри карточки вкладку не открывает: он про другое.
+  if (ev && ev.target && ev.target.closest && ev.target.closest('#side-auto')) return;
+  const tab = currentProviderTab();
+  if (tab) showTab(tab);
+}
+// Первый срез — с задержкой: на старте дашборд и так занят пулами, а лига читает
+// журналы на 11 МБ. Мини-блок появится через пару секунд после загрузки страницы.
+setTimeout(() => lgLoad(), 2500);
+
 
 </script>
 

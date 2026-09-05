@@ -845,7 +845,14 @@ t('дефолтный набор вкладок дашборда — как на
     const tabs = m[1].split(',').map(s => s.trim().replace(/['"]/g, ''));
     // 25.08: добавился 'truesota' (седьмой шлюз, sub2api) — вкладка живая и в дефолте.
     // 31.08: добавился 'kktoken' (восьмой шлюз, New API + Kiro) — тоже живой и в дефолте.
-    const want = ['fin', 'github', 'agentrouter', 'gorouter', 'justwoker', 'truesota', 'kktoken', 'tabi', 'custom', 'plugins', 'health', 'settings'];
+    // 05.09: добавилась 'league' — рейтинг между установками, стоит сразу за «Финансами».
+    // 05.09: 'truesota' УБРАН из дефолта решением владельца — вкладка живая, но место
+    // в сайдбаре не оправдывает; включается в «Настроить вкладки» одним кликом.
+    // 31.08 → восстановлено 05.09: 'outlook' (менеджер купленных ящиков) стоит сразу за
+    // 'github' — оба про аккаунты, а не про шлюзы; 'hcnsec' (девятый шлюз, New API без
+    // GitHub-входа) — сразу за 'kktoken', рядом со своим поколением панели. Обе вкладки
+    // 04.09 пропали из дефолта не по решению, а откатом: код лежал незакоммиченным.
+    const want = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'hcnsec', 'tabi', 'custom', 'plugins', 'health', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });

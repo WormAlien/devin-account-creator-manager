@@ -195,6 +195,18 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    hcnsec: {
+        label: 'HCNsec',
+        base_url: 'http://localhost:20162',
+        api_key: 'dummy',           // real key keepalive reads from hcnsec-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20162) → api.hcnsec.cn (БЕЗ /v1).
+        // Активация через handleHnActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в hcnsec-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Корень без /v1 обязателен: `/v1/v1/messages` → 404 `Invalid URL`, а
+        // `/messages` без префикса отдаёт 200 с HTML — потеря даст мусор, не ошибку.
+    },
     xpeach: {
         label: 'XPeach',
         base_url: 'http://localhost:20157',
@@ -320,6 +332,7 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    hcnsec: 'hcnsec',
     ourtoken: 'ot',
     cun: 'cun',
     conduit: 'cdt',
@@ -995,7 +1008,7 @@ function makeKeepaliveHandlers(port) {
 }
 
 // Инстансы моста: AgentRouter :20133, Tabi :20155, GoRouter :20156, XPeach :20157,
-// JustWoker :20158, SeekAi :20159, TrueSOTA :20160, KKtoken :20161.
+// JustWoker :20158, SeekAi :20159, TrueSOTA :20160, KKtoken :20161, HCNsec :20162.
 const keepaliveAr = makeKeepaliveHandlers(Number(process.env.AR_KEEPALIVE_PORT || 20133));
 const keepaliveTb = makeKeepaliveHandlers(Number(process.env.TB_KEEPALIVE_PORT || 20155));
 const keepaliveGo = makeKeepaliveHandlers(Number(process.env.GO_KEEPALIVE_PORT || 20156));
@@ -1004,6 +1017,7 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveHn = makeKeepaliveHandlers(Number(process.env.HN_KEEPALIVE_PORT || 20162));
 
 
 // ---- /__switch/api/whoami --------------------------------------------------
@@ -3896,6 +3910,7 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive HCNsec',   port: Number(process.env.HN_KEEPALIVE_PORT || 20162), path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -6226,6 +6241,583 @@ function handleTsAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'truesota', host: 'true-sota.com', prefix: 'ts_', load: tsLoad, save: tsSave, sessionsDir: TS_SESSIONS_DIR });
 }
 
+// ───── Outlook-ящики (ol) — пул купленных почт под регистрации ─────
+//
+// Зачем свой менеджер рядом с менеджером GitHub. Почта нужна там, где шлюз просит
+// подтверждение кодом, а входа через GitHub у него нет. И живёт она иначе: у GitHub на
+// руках логин+пароль+TOTP, и этого хватает навсегда, а у ящика пароль — разовый ключ к
+// профилю браузера. Basic auth Microsoft выключил (живая проба 31.08:
+// `outlook.office365.com:993` отдаёт `AUTH=XOAUTH2 LOGINDISABLED`), значит IMAP по паролю
+// невозможен и письмо с кодом читается только из залогиненной сессии — отсюда профиль на
+// ящик и снимок куки, а не пара логин-пароль в файле.
+//
+// Разбор пачки из магазина живёт в routing/lib/outlook-pool.js и вызывается ОТСЮДА, а не
+// из браузера: у GitHub парсер продублирован во фронте, и правки в него приходится делать
+// дважды. Здесь модуль один и проверяемый.
+//
+// 🔴 Пароль ящика наружу не уходит НИКОГДА: ни в /ol/list, ни в лог. В ответах только
+// `hasPassword`, в логах — маскированный адрес, в дочерние скрипты креды уезжают
+// переменными среды (см. handleOlOpen).
+const olPool = require('./lib/outlook-pool');
+
+const OL_OPEN_SCRIPT = path.join(__dirname, '..', 'outlook', 'open-session.js');
+const OL_CODE_SCRIPT = path.join(__dirname, '..', 'outlook', 'read-code.js');
+const OL_CODE_TIMEOUT_MS = 90_000;
+// 30 дней — рубеж «снимок ещё похож на живой». Цифра из наблюдения, а не из документации
+// Microsoft: refresh-кука outlook.com переживает месяц простоя, дальше вход просят заново.
+// Нужна только для подписи в UI, решений на ней не строится.
+const OL_SESSION_FRESH_MS = 30 * 86400000;
+
+function olSessionFile(id) { return path.join(olPool.SESSIONS_DIR, String(id) + '.json'); }
+function olProfileDir(id)  { return path.join(olPool.PROFILES_DIR, olPool.profileLabel(id)); }
+
+// Снимок сессии — единственный дешёвый признак «в ящик уже входили». Берём stat, а не
+// содержимое: storageState весит десятки килобайт, а нужна только дата.
+function olSessionStat(id) {
+    try { return fs.statSync(olSessionFile(id)); } catch { return null; }
+}
+
+// `ab***@outlook.com`. Маска нужна в логах (строки лога уезжают в скриншоты README) и в
+// превью импорта — там показывается чужой чек до того, как владелец решил его завести.
+function olMaskEmail(email) {
+    const s = String(email || '').trim();
+    const at = s.indexOf('@');
+    if (at < 0) return (s.slice(0, 2) || '?') + '***';
+    return s.slice(0, Math.min(2, at)) + '***' + s.slice(at);
+}
+// 🪤 Тексты ошибок парсера содержат адрес целиком (`у vasya@outlook.com нет пароля`), и без
+// этой замены маска в превью не значит ничего: тот же адрес виден строкой ниже, в ошибках.
+const OL_EMAIL_IN_TEXT_RE = /[^\s:;|]+@[^\s:;|]+\.[A-Za-z]{2,}/g;
+function olMaskInText(s) { return String(s || '').replace(OL_EMAIL_IN_TEXT_RE, m => olMaskEmail(m)); }
+
+// Публичная форма записи. Пароль не маскируем частично, как auth_key у ТГ: у hex-ключа
+// первые шесть символов бесполезны, а у пароля это подсказка к подбору — убираем совсем.
+function olSafe(e) {
+    const st = olSessionStat(e.id);
+    // 🪤 Снимок и профиль — РАЗНЫЕ вещи, и путать их нельзя. Код читает outlook/read-code.js
+    // из ПАПКИ ПРОФИЛЯ, а снимок storageState — резервная копия, которая иногда не снимается
+    // (окно закрыли раньше, storageState упал). Поэтому «в ящик входили» = профиль есть, а
+    // `hasSession` — только про файл снимка.
+    const hasProfile = fs.existsSync(olProfileDir(e.id));
+    // Возраст считаем по снимку, а если его нет — по sessionAt, который ставит сам
+    // open-session.js после входа. Иначе успешный вход без снимка выглядел бы как «никогда».
+    const stampMs = st ? st.mtimeMs : (e.sessionAt ? Date.parse(e.sessionAt) : NaN);
+    const ageMs = Number.isFinite(stampMs) ? Date.now() - stampMs : null;
+    return {
+        id: e.id,
+        email: e.email || '',
+        kind: olPool.KINDS.includes(e.kind) ? e.kind : 'personal',
+        nickname: e.nickname || String(e.email || '').split('@')[0],
+        status: olPool.STATUSES.includes(e.status) ? e.status : 'unknown',
+        note: e.note || '',
+        addedAt: e.addedAt || null,
+        sessionAt: e.sessionAt || null,
+        lastCheck: e.lastCheck || null,
+        usedOn: Array.isArray(e.usedOn) ? e.usedOn : [],
+        hasPassword: !!String(e.password || '').length,
+        hasSession: !!st,
+        hasProfile,
+        // Это ВОЗРАСТ СНИМКА, а не «аккаунт жив» — см. блок health-чека ниже.
+        sessionAgeDays: ageMs === null ? null : Math.floor(ageMs / 86400000),
+        sessionFresh: ageMs === null ? null : ageMs < OL_SESSION_FRESH_MS,
+        profile: olPool.profileLabel(e.id),
+    };
+}
+
+function olStats(arr) {
+    const s = { total: arr.length, live: 0, dead: 0, unknown: 0, locked: 0, student: 0 };
+    for (const e of arr) {
+        s[olPool.STATUSES.includes(e.status) ? e.status : 'unknown']++;
+        if (e.kind === 'student') s.student++;
+    }
+    return s;
+}
+
+function olFind(arr, id) { return arr.findIndex(e => String(e.id) === String(id)); }
+
+// Точечная правка одной записи на диске. Пул перечитываем ПЕРЕД правкой: между открытием
+// окна и его закрытием владелец мог завести или удалить ящики, и запись всего массива из
+// памяти обработчика откатила бы это молча.
+function olPatch(id, fn) {
+    const arr = olPool.load();
+    const i = olFind(arr, id);
+    if (i < 0) return null;
+    fn(arr[i]);
+    olPool.save(arr);
+    return arr[i];
+}
+
+// id по схеме outlook/accounts.example.json: `ol_<ts>_<n>`, где n — номер внутри пачки.
+// Занятые всё равно проверяем: два импорта в одну миллисекунду руками невозможны, но
+// совпавший id дал бы двум ящикам ОДИН профиль браузера, то есть чужую куку в «своём».
+function olNewEntry(src, ts, n, taken) {
+    let id = `ol_${ts}_${n}`;
+    while (taken.has(id)) id = `ol_${ts}_${++n}`;
+    taken.add(id);
+    const email = String(src.email || '').trim().toLowerCase();
+    const kind = olPool.KINDS.includes(src.kind) ? src.kind
+        : olPool.isStudentDomain(email) ? 'student' : 'personal';
+    return {
+        id,
+        email,
+        password: String(src.password ?? ''),
+        kind,
+        nickname: String(src.nickname || '').trim() || email.split('@')[0],
+        status: 'unknown',
+        note: String(src.note || '').trim(),
+        addedAt: new Date().toISOString(),
+        sessionAt: null,
+        lastCheck: null,
+        usedOn: [],
+    };
+}
+
+// Живые окна по label профиля. Второе окно на тот же профиль Chromium не поднимется
+// (ProcessSingleton), а снаружи это выглядит как «кнопка молча не работает» — образец
+// ghLkPids/hnLkPids. Карта живёт в памяти процесса: рестарт прокси её теряет, и тогда
+// повторный клик просто упрётся в занятый профиль с внятной ошибкой.
+const olLkPids = new Map();
+function olPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// GET /__switch/api/ol/list → весь пул + сводка. Единственный источник для вкладки:
+// один запрос = карточки и цифры сводки физически не могут разойтись.
+function handleOlList(res) {
+    try {
+        const arr = olPool.load();
+        jsonRes(res, 200, { entries: arr.map(olSafe), stats: olStats(arr) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ol/import { text, dryRun }
+//
+// dryRun — не удобство, а обязательный шаг: файл магазина это письмо-чек, и в нём лежат
+// строки ДРУГИХ покупок (GitHub-аккаунты `почта:пароль:2FA`, gmail). Завести такую строку
+// почтой значит получить профиль, в который не войти, и понять это только руками. Превью
+// показывает, что парсер понял, ДО записи на диск.
+async function handleOlImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const text = String(body.text || '');
+        if (!text.trim()) return jsonRes(res, 400, { error: 'нет text' });
+        const arr = olPool.load();
+        const parsed = olPool.parseBulk(text, arr);
+
+        if (body.dryRun) {
+            return jsonRes(res, 200, {
+                ok: true, dryRun: true,
+                preview: parsed.entries.map(e => ({ email: olMaskEmail(e.email), kind: e.kind, note: e.note })),
+                errors: parsed.errors.map(x => ({ line: x.line, error: olMaskInText(x.error) })),
+                duplicates: parsed.duplicates.map(olMaskEmail),
+                counts: {
+                    entries: parsed.entries.length,
+                    errors: parsed.errors.length,
+                    duplicates: parsed.duplicates.length,
+                },
+            });
+        }
+
+        const ts = Date.now();
+        const taken = new Set(arr.map(e => String(e.id)));
+        const added = [];
+        parsed.entries.forEach((src, i) => {
+            const e = olNewEntry(src, ts, i, taken);
+            arr.push(e);
+            added.push({ id: e.id, email: olMaskEmail(e.email), kind: e.kind });
+        });
+        if (added.length) olPool.save(arr);
+        logLine(`outlook import: +${added.length} (дублей ${parsed.duplicates.length}, ошибок ${parsed.errors.length})`);
+        // Здесь адреса и ошибки НЕ маскируем, в отличие от превью: пачка уже заведена
+        // владельцем, и чтобы починить кривую строку, надо видеть, какая именно кривая.
+        jsonRes(res, 200, {
+            ok: true,
+            added: added.length,
+            accounts: added,
+            skipped: parsed.duplicates.length,
+            duplicates: parsed.duplicates,
+            errors: parsed.errors,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ol/add { email, password, kind?, note? } — одна запись руками.
+async function handleOlAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const email = String(body.email || '').trim().toLowerCase();
+        const password = String(body.password ?? '');
+        if (!olPool.isEmail(email)) return jsonRes(res, 400, { error: 'адрес не похож на почту' });
+        // Ящик без пароля бесполезен: в профиль браузера входить нечем, а кука появляется
+        // только после входа. Лучше отказать здесь, чем завести карточку-пустышку.
+        if (!password) return jsonRes(res, 400, { error: 'пароль обязателен — без него в профиль не войти' });
+        const arr = olPool.load();
+        if (arr.some(e => String(e.email || '').toLowerCase() === email))
+            return jsonRes(res, 409, { error: 'такой ящик уже есть' });
+        const e = olNewEntry(
+            { email, password, kind: body.kind, note: body.note },
+            Date.now(), arr.length, new Set(arr.map(x => String(x.id))),
+        );
+        arr.push(e);
+        olPool.save(arr);
+        logLine(`outlook add: ${olMaskEmail(email)} (${e.kind})`);
+        jsonRes(res, 200, { ok: true, id: e.id, entry: olSafe(e) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ol/rename { id, nickname }
+async function handleOlRename(req, res) {
+    try {
+        const { id, nickname } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        // Пустой ник не запрещаем, а откатываем на локальную часть адреса: карточка без
+        // подписи в списке неотличима от соседней.
+        const e = olPatch(id, x => {
+            x.nickname = String(nickname || '').trim() || String(x.email || '').split('@')[0];
+        });
+        if (!e) return jsonRes(res, 404, { error: 'ящик не найден' });
+        logLine(`outlook rename: ${olMaskEmail(e.email)} → ${e.nickname}`);
+        jsonRes(res, 200, { ok: true, entry: olSafe(e) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ol/status { id, status } — ручной вердикт владельца.
+// Автоматически статус НЕ меняет ничто: health-чек трогает только даты (см. ниже).
+async function handleOlStatus(req, res) {
+    try {
+        const { id, status } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        if (!olPool.STATUSES.includes(status))
+            return jsonRes(res, 400, { error: `status: одно из ${olPool.STATUSES.join(', ')}` });
+        const e = olPatch(id, x => { x.status = status; });
+        if (!e) return jsonRes(res, 404, { error: 'ящик не найден' });
+        logLine(`outlook status: ${olMaskEmail(e.email)} → ${status}`);
+        jsonRes(res, 200, { ok: true, entry: olSafe(e) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ol/mark { id, tag, off? } — «ящик израсходован на этом шлюзе».
+//
+// Метка живёт В САМОЙ ЗАПИСИ (`usedOn: [{tag, at}]`), а не в отдельных файлах занятости.
+// У ТГ она размазана по четырём чужим `.tg_used.json`, и цифры вкладки расходятся с тем,
+// что реально возьмёт автореж, — здесь один файл и один источник истины.
+async function handleOlMark(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const tag = String(body.tag || '').trim();
+        if (!id || !tag) return jsonRes(res, 400, { error: 'нужны id и tag' });
+        const e = olPatch(id, x => {
+            const was = (Array.isArray(x.usedOn) ? x.usedOn : [])
+                .map(m => (typeof m === 'string' ? { tag: m, at: null } : m))
+                .filter(m => m && m.tag);
+            const cur = was.filter(m => m.tag !== tag);
+            // Повторная отметка тем же тегом дату НЕ обновляет: важен факт первого расхода,
+            // а не последнего клика. `off` — откат ошибочной отметки, иначе промах мышью
+            // лечился бы только удалением ящика вместе с профилем.
+            if (!body.off) {
+                const prev = was.find(m => m.tag === tag);
+                cur.push({ tag, at: (prev && prev.at) || new Date().toISOString() });
+            }
+            x.usedOn = cur;
+        });
+        if (!e) return jsonRes(res, 404, { error: 'ящик не найден' });
+        logLine(`outlook mark: ${olMaskEmail(e.email)} ${body.off ? '− снята метка ' : '→ занят на '}${tag}`);
+        jsonRes(res, 200, { ok: true, entry: olSafe(e) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ol/delete { id }
+//
+// 🪤 Удалять надо ТРИ вещи: запись, снимок сессии и папку профиля. Оставленный профиль —
+// не мусор, а ловушка: перезалив того же ящика подхватит лежащую там куку, и «свой» ящик
+// молча покажет чужую почту. Поэтому файлы сносим ПЕРВЫМИ, и если профиль не удалился,
+// запись остаётся на месте — лучше видимая ошибка, чем осиротевший профиль.
+async function handleOlDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const arr = olPool.load();
+        const i = olFind(arr, id);
+        if (i < 0) return jsonRes(res, 404, { error: 'ящик не найден' });
+        const target = arr[i];
+        const label = olPool.profileLabel(target.id);
+        const pid = olLkPids.get(label);
+        if (olPidAlive(pid))
+            return jsonRes(res, 409, { error: `окно этого ящика открыто (pid ${pid}) — закрой его, иначе профиль на диске не удалится` });
+        try {
+            fs.rmSync(olProfileDir(target.id), { recursive: true, force: true });
+        } catch (err) {
+            // На Windows это EBUSY/EPERM от живого Chromium, которого нет в карте pid'ов
+            // (например, остался после рестарта прокси). Ошибку отдаём как есть.
+            return jsonRes(res, 409, {
+                error: `профиль ${label} не удалился (${err.code || err.message}) — закрой браузер и повтори, запись оставил на месте`,
+            });
+        }
+        try { fs.rmSync(olSessionFile(target.id), { force: true }); } catch {}
+        arr.splice(i, 1);
+        olPool.save(arr);
+        olLkPids.delete(label);
+        logLine(`outlook delete: ${olMaskEmail(target.email)} (профиль ${label} и снимок сессии удалены)`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Снимок появился или обновился, пока окно было открыто → переписываем `sessionAt` датой
+// файла. Статус НЕ трогаем: вход руками мог кончиться капчей или блокировкой, и «снимок
+// есть» не значит «ящик живой» — вердикт ставит владелец через /ol/status.
+function olRefreshSessionAt(id) {
+    try {
+        const st = olSessionStat(id);
+        if (!st) return;
+        const at = new Date(st.mtimeMs).toISOString();
+        const cur = olPool.load().find(e => String(e.id) === String(id));
+        if (!cur || cur.sessionAt === at) return;   // ничего не менялось — не переписываем файл
+        olPatch(id, x => { x.sessionAt = at; });
+        logLine(`outlook: снимок сессии ${olPool.profileLabel(id)} обновлён (${at.slice(0, 16).replace('T', ' ')})`);
+    } catch {}
+}
+
+// POST /__switch/api/ol/open { id } → видимое окно Chromium в профиле этого ящика.
+//
+// 🔴 Креды уезжают в скрипт ПЕРЕМЕННЫМИ СРЕДЫ, а не аргументами: argv виден в диспетчере
+// задач любому, кто его откроет, — пароль там светиться не должен. Аргументом только label.
+async function handleOlOpen(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const arr = olPool.load();
+        const i = olFind(arr, id);
+        if (i < 0) return jsonRes(res, 404, { error: 'ящик не найден' });
+        const target = arr[i];
+        // Профиль привязан к СТАБИЛЬНОМУ id, а не к адресу: переименование не рвёт сессию.
+        const label = olPool.profileLabel(target.id);
+
+        const prevPid = olLkPids.get(label);
+        if (olPidAlive(prevPid)) {
+            logLine(`outlook open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+        if (!fs.existsSync(OL_OPEN_SCRIPT))
+            return jsonRes(res, 500, { error: `нет ${OL_OPEN_SCRIPT} — обнови репо (git pull) и обнови страницу` });
+
+        const proc = spawn(process.execPath, [OL_OPEN_SCRIPT, label], {
+            detached: true,
+            stdio: 'pipe',
+            env: { ...process.env, OL_EMAIL: String(target.email || ''), OL_PASS: String(target.password || '') },
+        });
+        // 🪤 Вывод ребёнка маскируем ЗДЕСЬ. Скрипт печатает полный адрес осознанно — его
+        // запускают и руками из консоли, там маска мешала бы. Но в лог дашборда та же
+        // строка уезжает сбоку от `olMaskEmail`, и адрес купленного ящика оказывается в
+        // файле, который попадает в скриншоты README. Дырку нашёл регресс, а не человек.
+        proc.stdout.on('data', d => logLine(`outlook open [${label}]: ${olMaskInText(String(d).trim())}`));
+        proc.stderr.on('data', d => logLine(`outlook open ERR [${label}]: ${olMaskInText(String(d).trim())}`));
+        proc.on('error', e => logLine(`outlook open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            olLkPids.delete(label);
+            logLine(`outlook open: ${label} — окно закрыто (code ${code}, sig ${sig})`);
+            olRefreshSessionAt(target.id);
+        });
+        proc.unref();
+        olLkPids.set(label, proc.pid);
+        // Не умер за две секунды — считаем, что окно поднимается. Общий пробник ручек
+        // session/open: без него дашборд рисовал зелёный тост на не открывшемся браузере.
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            olLkPids.delete(label);
+            logLine(`outlook open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        logLine(`outlook open: ${olMaskEmail(target.email)} → ${label} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// 🪤 stdout читалки — не только её JSON: playwright и Chromium сыпят туда свои строки, и
+// `JSON.parse` всего вывода падает на первой из них. Берём ПОСЛЕДНИЙ объект — скрипт печатает
+// свой в самом конце.
+function olParseCodeStdout(out) {
+    const text = String(out || '');
+    const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean).reverse();
+    for (const l of lines) {
+        if (!l.startsWith('{') || !l.endsWith('}')) continue;
+        try { const o = JSON.parse(l); if (o && typeof o === 'object') return o; } catch {}
+    }
+    // JSON мог приехать многострочным (pretty-print) — пробуем от последней `{` до конца.
+    const at = text.lastIndexOf('{');
+    if (at >= 0) { try { const o = JSON.parse(text.slice(at)); if (o && typeof o === 'object') return o; } catch {} }
+    return null;
+}
+
+// POST /__switch/api/ol/code { id } → одноразовый код из последнего письма.
+//
+// Ответ читалки (`{ok, code, from, subject, at}`) отдаём КАК ЕСТЬ, не переупаковывая:
+// разбор письма живёт в одном месте, и дашборд с будущей автоподстановкой видят одно и то же.
+async function handleOlCode(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const arr = olPool.load();
+        const i = olFind(arr, id);
+        if (i < 0) return jsonRes(res, 404, { error: 'ящик не найден' });
+        const target = arr[i];
+        const label = olPool.profileLabel(target.id);
+        // Тот же профиль в двух Chromium'ах = ProcessSingleton, читалка упадёт на старте.
+        // Открытое окно — не повод падать молча: код в нём и так виден.
+        if (olPidAlive(olLkPids.get(label)))
+            return jsonRes(res, 409, { ok: false, error: 'окно этого ящика открыто — код видно в нём, либо закрой окно и повтори' });
+        if (!fs.existsSync(OL_CODE_SCRIPT))
+            return jsonRes(res, 500, { ok: false, error: `нет ${OL_CODE_SCRIPT} — обнови репо (git pull)` });
+
+        // Креды — снова средой, а не argv: читалке может понадобиться дологиниться.
+        const proc = spawn(process.execPath, [OL_CODE_SCRIPT, label], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, OL_EMAIL: String(target.email || ''), OL_PASS: String(target.password || '') },
+        });
+        let so = '', se = '';
+        proc.stdout.on('data', d => { so += String(d); });
+        proc.stderr.on('data', d => { se += String(d); });
+        const done = await new Promise(resolve => {
+            const t = setTimeout(() => { try { proc.kill(); } catch {} resolve({ timeout: true }); }, OL_CODE_TIMEOUT_MS);
+            proc.on('error', e => { clearTimeout(t); resolve({ spawnError: e.message }); });
+            proc.on('close', code => { clearTimeout(t); resolve({ code }); });
+        });
+        if (done.timeout) {
+            logLine(`outlook code: ${olMaskEmail(target.email)} — таймаут ${OL_CODE_TIMEOUT_MS / 1000} c`);
+            // Код ответа 200 намеренно: HTTP-запрос прошёл нормально, не сложилось у читалки.
+            // Фронт разбирает `ok:false` + `error`, как у остальных ручек этого файла.
+            return jsonRes(res, 200, { ok: false, error: 'timeout' });
+        }
+        if (done.spawnError) return jsonRes(res, 500, { ok: false, error: done.spawnError });
+        const parsed = olParseCodeStdout(so);
+        if (!parsed) {
+            const tail = (se || so).trim().split('\n').map(s => s.trim()).filter(Boolean).pop() || `код выхода ${done.code}`;
+            logLine(`outlook code: ${olMaskEmail(target.email)} — ответ не разобран: ${olMaskInText(tail.slice(0, 160))}`);
+            return jsonRes(res, 200, { ok: false, error: tail.slice(0, 300) });
+        }
+        // `lastCheck` ставим на любой ответ: заход состоялся, и дата обращения важна даже
+        // когда письма не нашлось.
+        olPatch(target.id, x => { x.lastCheck = new Date().toISOString(); });
+        olRefreshSessionAt(target.id);
+        logLine(`outlook code: ${olMaskEmail(target.email)} → ${parsed.ok ? 'код получен' : (parsed.error || 'кода нет')}`);
+        jsonRes(res, 200, parsed);
+    } catch (e) { jsonRes(res, 500, { ok: false, error: e.message }); }
+}
+
+// GET /__switch/api/ol/available?tag=hcnsec → первый годный ящик под регистрацию.
+//
+// Годен = статус не `dead` и нет метки этого тега. Внутри годных вперёд ставим те, в которые
+// уже входили (есть профиль или снимок): ящик с чистым профилем требует ручного входа в
+// окно, и автоподстановка на нём встанет насмерть, хотя рядом лежит готовый. Порядок пула
+// внутри групп сохраняется — сортировка в V8 стабильная.
+function handleOlAvailable(req, res) {
+    try {
+        const tag = String(new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('tag') || '').trim();
+        if (!tag) return jsonRes(res, 400, { error: 'нужен ?tag=<шлюз>' });
+        const free = olPool.load()
+            .filter(e => e.status !== 'dead'
+                && !(Array.isArray(e.usedOn) ? e.usedOn : []).some(m => m && m.tag === tag))
+            .map(olSafe);
+        const ready = e => (e.hasProfile || e.hasSession) ? 1 : 0;
+        const ranked = free.slice().sort((a, b) => ready(b) - ready(a));
+        jsonRes(res, 200, {
+            ok: true, tag,
+            account: ranked[0] || null,
+            free: free.length,
+            ready: free.filter(ready).length,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── Health-чек ящиков: это ВОЗРАСТ СНИМКА, а не «аккаунт жив» ─────
+//
+// Настоящую проверку входом здесь не делаем сознательно: она требует поднять Chromium в
+// профиле — это десятки секунд на ящик, видимое окно и лишний логин, который Microsoft
+// считает подозрительным. Поэтому вердикт дешёвый и честно так и назван: есть ли снимок
+// сессии и не старше ли он OL_SESSION_FRESH_MS. Слово `live` в статусе ставит только
+// владелец руками (/ol/status), автоматика статуса не трогает.
+//
+// Фоновым джобом это сделано ради того же контракта с фронтом, что у ТГ (кнопка + прогресс),
+// а не потому что stat'ы долгие: сотня ящиков считается за миллисекунды.
+let olHealthJob = {
+    running: false, scope: null, total: 0, done: 0,
+    fresh: 0, stale: 0, missing: 0,
+    currentEmail: null, startedAt: null, finishedAt: null,
+};
+
+// scope 'unchecked' = тех ещё не смотрели (`lastCheck` пуст) — дешёвый догон; 'all' = все.
+function olHealthTargets(scope) {
+    return olPool.load().filter(e => scope === 'all' || !e.lastCheck);
+}
+
+async function olHealthRun(scope) {
+    const targets = olHealthTargets(scope);
+    olHealthJob = {
+        running: true, scope, total: targets.length, done: 0,
+        fresh: 0, stale: 0, missing: 0,
+        currentEmail: null, startedAt: new Date().toISOString(), finishedAt: null,
+    };
+    logLine(`outlook health: старт (${scope}) — ${targets.length} шт., смотрю возраст снимков`);
+    try {
+        for (const t of targets) {
+            olHealthJob.currentEmail = olMaskEmail(t.email);
+            const st = olSessionStat(t.id);
+            // Тот же расчёт, что в olSafe: снимок, а при его отсутствии — дата входа из пула.
+            const stampMs = st ? st.mtimeMs : (t.sessionAt ? Date.parse(t.sessionAt) : NaN);
+            const ageMs = Number.isFinite(stampMs) ? Date.now() - stampMs : null;
+            if (ageMs === null) olHealthJob.missing++;
+            else if (ageMs < OL_SESSION_FRESH_MS) olHealthJob.fresh++;
+            else olHealthJob.stale++;
+            // Пишем инкрементально, запись за записью: обрыв на середине (рестарт прокси)
+            // не теряет уже пройденное. Отдельного поля под вердикт в схеме НЕТ и не нужно —
+            // он считается из sessionAt при чтении, а производное поле на диске гниёт молча.
+            try {
+                olPatch(t.id, x => {
+                    x.lastCheck = new Date().toISOString();
+                    x.sessionAt = st ? new Date(st.mtimeMs).toISOString() : null;
+                });
+            } catch {}
+            olHealthJob.done++;
+            // 🪤 Без уступки циклу событий весь прогон уходит в один тик, и GET
+            // /ol/health-progress не отвечает до самого конца: прогресс прыгает с 0 на 100.
+            await new Promise(r => setImmediate(r));
+        }
+    } finally {
+        olHealthJob.running = false;
+        olHealthJob.currentEmail = null;
+        olHealthJob.finishedAt = new Date().toISOString();
+        logLine(`outlook health: готово (${scope}) свежих=${olHealthJob.fresh} старых=${olHealthJob.stale} без снимка=${olHealthJob.missing}`);
+    }
+}
+
+// POST /__switch/api/ol/health-check { scope: 'unchecked' | 'all' }
+async function handleOlHealthCheck(req, res) {
+    try {
+        let body = {};
+        try { body = await readJsonBody(req); } catch { body = {}; }
+        if (olHealthJob.running)
+            return jsonRes(res, 409, { error: `уже идёт (${olHealthJob.done}/${olHealthJob.total})`, job: olHealthJob });
+        const scope = body && body.scope === 'all' ? 'all' : 'unchecked';
+        const total = olHealthTargets(scope).length;
+        if (!total) return jsonRes(res, 200, { ok: true, started: false, scope, total: 0 });
+        // Промис никто не ждёт — catch обязателен: unhandledRejection уронил бы весь прокси.
+        olHealthRun(scope).catch(e => logLine(`outlook health: прогон упал: ${e.message}`));
+        jsonRes(res, 200, { ok: true, started: true, scope, total });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/ol/health-progress → прогресс + сколько осталось (для подписей кнопок).
+function handleOlHealthProgress(res) {
+    try {
+        jsonRes(res, 200, {
+            ok: true,
+            job: olHealthJob,
+            pending: { unchecked: olHealthTargets('unchecked').length, all: olHealthTargets('all').length },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // ───── Svrtr — пул ТГ-аккаунтов, активация через API Helper ─────
 // api.svrtr.org — Anthropic-совместимый endpoint (x-api-key). Авторег через @svrtrbot.
 // Активация = ключ в sr-active-key.txt + apiKeyHelper в settings.json.
@@ -6944,6 +7536,9 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    // HCNsec: ключ — ХОСТ ПАНЕЛИ целиком, `api.hcnsec.cn`. GitHub-входа у шлюза нет,
+    // но профиль и куки нужны: точный остаток даёт /api/user/self куками профиля.
+    'api.hcnsec.cn':   path.join(__dirname, '..', 'hcnsec', 'profiles'),
 };
 
 function newapiLib() {
@@ -7539,13 +8134,31 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             }
         } catch { /* срок доступа не критичен */ }
     }
+    // Отрицательного остатка на ключе не бывает: шлюз бы просто отказал. Значит
+    // выдачу угадали мимо (у hcnsec так получалось −$2174) — и честный ответ
+    // «неизвестно», а не минус, который потом складывается в шапку дашборда как
+    // деньги. `granted: null` тоже обязателен: иначе шкала запаса делит на угаданное.
+    const grantTotal = round2(legacyGrant + bonus + referral);
+    const guessBalance = round2(grantTotal - usageSpent);
+    if (!(grantTotal > 0) || guessBalance < 0) {
+        return {
+            status: 'live',
+            balanceSource: 'unknown',
+            balance: null,
+            spent: usageSpent,
+            usageSpent,
+            granted: null,
+            accessUntil,
+            selfError,
+        };
+    }
     return {
         status: 'live',
         balanceSource: 'guess',
-        balance: round2(legacyGrant + bonus + referral - usageSpent),
+        balance: guessBalance,
         spent: usageSpent,
         usageSpent,
-        granted: round2(legacyGrant + bonus + referral),
+        granted: grantTotal,
         accessUntil,
         selfError,
     };
@@ -7728,6 +8341,404 @@ function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { 
 // Отдаёт бакеты для графика: расход (прирост spent) и наливка (прирост granted).
 // Бакет — час для «дня», сутки для остальных. Плюс текущий снимок пулов, чтобы
 // вкладка не дёргала пять ручек сессий ради двух сумм.
+// ═══════════ ЛИГА: свой срез для рейтинга между установками хаба ════════════
+// Одна ручка отдаёт всё, что рисует вкладка «Лига»: токены, деньги, активность и
+// аккаунты в четырёх окнах. Ключей, почт, ссылок и текста промптов здесь НЕТ —
+// только счётчики, поэтому этот же объект уедет на приёмник без вычищения.
+const HUB_IDENTITY_FILE = path.join(__dirname, 'hub-identity.json');
+const CC_STATS_CACHE_FILE = path.join(os.homedir(), '.claude', 'stats-cache.json');
+const CC_HISTORY_FILE = path.join(os.homedir(), '.claude', 'history.jsonl');
+
+// Ключи бакетов — по МЕСТНОМУ времени. В UTC сутки резались по Гринвичу: в MSK всё
+// до 03:00 уезжало во «вчера», а часовой график был сдвинут на три часа.
+const pad2 = v => String(v).padStart(2, '0');
+const dayKey = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const hourKey = d => `${dayKey(d)}T${pad2(d.getHours())}`;
+const bucketKey = (d, hour) => (hour ? hourKey(d) : dayKey(d));
+
+// Сетка последних n шагов, последний — текущий. Окно скользящее, а не календарное:
+// «за сутки» это 24 часа назад от сейчас, иначе в 00:10 график пустой.
+function timeKeys(n, hour) {
+    const now = new Date(), keys = [], labs = [];
+    for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(now);
+        if (hour) d.setHours(d.getHours() - i); else d.setDate(d.getDate() - i);
+        keys.push(bucketKey(d, hour));
+        labs.push(hour ? pad2(d.getHours()) + ':00' : `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`);
+    }
+    return { keys, labs };
+}
+
+// Ник: пробелы в подчёркивания, буквы любого алфавита, 2…20 символов.
+function leagueNickClean(v) {
+    const t = String(v || '').trim().replace(/\s+/g, '_')
+        .replace(/[^\p{L}\p{N}_.\-]/gu, '').slice(0, 20);
+    return t.length >= 2 ? t : '';
+}
+
+// installId постоянный: переименование не должно заводить в рейтинге вторую строку.
+// Ник по умолчанию — из `git config user.name`, как и договаривались.
+function hubIdentity() {
+    let doc = {};
+    try {
+        const raw = fs.readFileSync(HUB_IDENTITY_FILE, 'utf8');
+        doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { /* первый запуск */ }
+    let dirty = false;
+    if (typeof doc.installId !== 'string' || doc.installId.length < 8) {
+        doc.installId = crypto.randomBytes(8).toString('hex');
+        dirty = true;
+    }
+    if (!leagueNickClean(doc.nick)) {
+        let git = '';
+        try {
+            git = execFileSync('git', ['config', 'user.name'],
+                { cwd: __dirname, encoding: 'utf8', timeout: 3000 }).trim();
+        } catch { /* нет git или имя не задано — не беда */ }
+        doc.nick = leagueNickClean(git) || ('hub-' + doc.installId.slice(0, 4));
+        dirty = true;
+    }
+    if (dirty) {
+        try { fs.writeFileSync(HUB_IDENTITY_FILE, JSON.stringify(doc, null, 2) + '\n', 'utf8'); }
+        catch (e) { logLine(`league identity write: ${e.message}`); }
+    }
+    return { installId: doc.installId, nick: doc.nick, joined: doc.joined || null };
+}
+// Единственная реализация правил денежных дельт: знаковый расход, отлов сброса
+// счётчика, дедуп наливки, отметка реконструкции. Ею считают и вкладка «Финансы»,
+// и «Лига» — второй копии этих правил в проекте быть не должно, они уже расходились.
+const GRANT_DEDUP_MS = 5000;
+function financeAggregate(keys, hour) {
+    const idx = new Map(keys.map((k, i) => [k, i]));
+    const buckets = keys.map(k => ({ k, spend: 0, topup: 0, events: 0,
+        resets: 0, dupTopup: 0, estSpend: 0, estTopup: 0,
+        tin: 0, tout: 0, tcr: 0, tcw: 0, tcost: 0, treq: 0 }));
+    let lines = 0, used = 0, bad = 0;
+    const grantSeen = new Map();
+    let raw = '';
+    try { raw = fs.readFileSync(FINANCE_HISTORY_FILE, 'utf8'); } catch (e) { /* истории ещё нет */ }
+    for (const ln of raw.split('\n')) {
+        if (!ln) continue;
+        lines++;
+        let e; try { e = JSON.parse(ln); } catch (_) { bad++; continue; }
+        const d = new Date(e.t);
+        if (isNaN(d.getTime())) { bad++; continue; }
+        const i = idx.get(bucketKey(d, hour));
+        if (i == null) continue;                       // вне окна — молча мимо
+        used++;
+        const b = buckets[i];
+        // Дельты берём ЗНАКОВЫМИ. Было `if (e.dSpent > 0)` — откат расхода (шлюз
+        // пересчитал в минус) выпадал целиком, и месячная трата выходила завышенной
+        // на 6.3%. Отдельно ловим СБРОС счётчика: сильный минус при почти нулевом
+        // `spent` — это не откат, а новый цикл на ключе, вычитать его нельзя.
+        const dS = Number(e.dSpent) || 0, dG = Number(e.dGrant) || 0;
+        const isReset = dS < -1 && Math.abs(Number(e.spent) || 0) <= Math.abs(dS) * 0.02;
+        if (isReset) b.resets++;
+        else if (dS) b.spend += dS;
+        if (dG) {
+            // Одна наливка, записанная дважды за секунды (два чека подряд по одному
+            // ключу), удваивала «пополнено» — на месяце это $908 лишних. Отсеянное не
+            // выбрасываем, а копим в `dupTopup`, чтобы расхождение было видно.
+            const gk = `${e.p}|${e.id}|${dG.toFixed(4)}`;
+            const tMs = d.getTime();
+            const prevMs = grantSeen.get(gk);
+            if (prevMs && tMs - prevMs <= GRANT_DEDUP_MS) b.dupTopup += dG;
+            else b.topup += dG;
+            grantSeen.set(gk, tMs);
+        }
+        // `est: true` ставит finance-backfill.js — это реконструкция, не измерение.
+        // Считаем отдельно, чтобы вкладка могла сказать, какая часть цифры досочинена.
+        if (e.est) { b.estSpend += Math.max(0, dS); b.estTopup += Math.max(0, dG); }
+        b.events++;
+    }
+    return { buckets, idx, lines, used, bad };
+}
+// Журнал front-door: один проход → суммы по часам и по дням. Токены = ВХОД+ВЫХОД;
+// кеш (чтение/запись) копится отдельно и в метрику не мешается. Кеш нельзя внести
+// в кривую «всё время»: по суткам его знает только сводка `modelUsage` целиком, а
+// не по дням, и смена определения посреди окон соврала бы в главной цифре.
+let TOKEN_JOURNAL_CACHE = { mtime: -1, day: new Map(), hour: new Map(),
+    cday: new Map(), chour: new Map(), lines: 0, first: null };
+function tokenJournalCounts() {
+    let st; try { st = fs.statSync(TOKEN_USAGE_FILE); } catch { return TOKEN_JOURNAL_CACHE; }
+    if (st.mtimeMs === TOKEN_JOURNAL_CACHE.mtime) return TOKEN_JOURNAL_CACHE;
+    const day = new Map(), hour = new Map(), cday = new Map(), chour = new Map();
+    let lines = 0, first = null;
+    const bump = (m, k, v) => m.set(k, (m.get(k) || 0) + v);
+    try {
+        for (const ln of fs.readFileSync(TOKEN_USAGE_FILE, 'utf8').split('\n')) {
+            if (!ln) continue;
+            let e; try { e = JSON.parse(ln); } catch (_) { continue; }
+            const d = new Date(e.t);
+            if (isNaN(d.getTime())) continue;
+            lines++;
+            if (!first) first = d;
+            const dk = dayKey(d), hk = `${dk}T${pad2(d.getHours())}`;
+            bump(day, dk, (Number(e.in) || 0) + (Number(e.out) || 0));
+            bump(hour, hk, (Number(e.in) || 0) + (Number(e.out) || 0));
+            bump(cday, dk, (Number(e.cr) || 0) + (Number(e.cw) || 0));
+            bump(chour, hk, (Number(e.cr) || 0) + (Number(e.cw) || 0));
+        }
+    } catch (e) { /* журнала ещё нет — не ошибка */ }
+    TOKEN_JOURNAL_CACHE = { mtime: st.mtimeMs, day, hour, cday, chour, lines, first };
+    return TOKEN_JOURNAL_CACHE;
+}
+
+// Активность = промпты человека из ~/.claude/history.jsonl: одна строка на каждое
+// нажатие Enter. Считаем ТОЛЬКО количество; текст промптов не читается и наружу не
+// уезжает. Файл 6.4 МБ и растёт — кеш по mtime.
+// Почему не `dailyActivity` из stats-cache: он считает все сообщения диалога
+// (267 тыс. против 17.5 тыс. промптов) и отстаёт — на 05.09 последний день там 01.09.
+let CC_PROMPTS_CACHE = { mtime: -1, day: new Map(), hour: new Map(), total: 0, first: null };
+function ccPromptCounts() {
+    let st; try { st = fs.statSync(CC_HISTORY_FILE); } catch { return CC_PROMPTS_CACHE; }
+    if (st.mtimeMs === CC_PROMPTS_CACHE.mtime) return CC_PROMPTS_CACHE;
+    const day = new Map(), hour = new Map();
+    let total = 0, first = null;
+    try {
+        for (const ln of fs.readFileSync(CC_HISTORY_FILE, 'utf8').split('\n')) {
+            if (!ln) continue;
+            let e; try { e = JSON.parse(ln); } catch (_) { continue; }
+            const d = new Date(Number(e.timestamp) || 0);
+            if (isNaN(d.getTime()) || d.getFullYear() < 2024) continue;
+            total++;
+            if (!first) first = d;
+            const dk = dayKey(d), hk = `${dk}T${pad2(d.getHours())}`;
+            day.set(dk, (day.get(dk) || 0) + 1);
+            hour.set(hk, (hour.get(hk) || 0) + 1);
+        }
+    } catch (e) { /* истории нет — активность просто нулевая */ }
+    CC_PROMPTS_CACHE = { mtime: st.mtimeMs, day, hour, total, first };
+    return CC_PROMPTS_CACHE;
+}
+// stats-cache самого Claude Code — единственный источник токенов ДО появления
+// журнала хаба (тот живёт с 25.08). `tokensByModel` — это вход+выход, ровно та же
+// величина, что мы считаем по журналу: окна сшиваются без подмены определения.
+// Отличается только охват: stats-cache видит один Claude Code, журнал — все харнессы
+// через front-door. Поэтому за дни, где есть журнал, берём журнал.
+let CC_STATS_CACHE = { mtime: -1, day: new Map(), lastComputed: null, first: null };
+function ccDailyTokens() {
+    let st; try { st = fs.statSync(CC_STATS_CACHE_FILE); } catch { return CC_STATS_CACHE; }
+    if (st.mtimeMs === CC_STATS_CACHE.mtime) return CC_STATS_CACHE;
+    const day = new Map();
+    let lastComputed = null, first = null;
+    try {
+        const raw = fs.readFileSync(CC_STATS_CACHE_FILE, 'utf8');
+        const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        lastComputed = doc.lastComputedDate || null;
+        for (const rec of (doc.dailyModelTokens || [])) {
+            if (!rec || !rec.date) continue;
+            let sum = 0;
+            for (const m in (rec.tokensByModel || {})) sum += Number(rec.tokensByModel[m]) || 0;
+            day.set(rec.date, sum);
+            if (!first) first = rec.date;
+        }
+    } catch (e) { /* нет файла или битый — обойдёмся журналом */ }
+    CC_STATS_CACHE = { mtime: st.mtimeMs, day, lastComputed, first };
+    return CC_STATS_CACHE;
+}
+
+// Стрик: сколько суток подряд был хотя бы один промпт. Если сегодня ещё не начинали,
+// счёт ведём от вчера — иначе в 03:00 стрик обнулялся бы на ровном месте.
+function ccStreak(dayMap) {
+    const d = new Date();
+    if (!dayMap.has(dayKey(d))) d.setDate(d.getDate() - 1);
+    let n = 0;
+    while (dayMap.has(dayKey(d))) { n++; d.setDate(d.getDate() - 1); }
+    return n;
+}
+
+// Аккаунты — две разные вещи, и в одну сумму их не сводим: ЗАКУПЛЕНО это гитхабы,
+// купленные с кредами (за них платили деньгами), ЗАРЕГАНО — ключи на шлюзах,
+// которые авторег завёл через эти гитхабы (за них платили временем).
+function leagueAccounts() {
+    const byDay = new Map();
+    const mark = ts => {
+        const d = new Date(ts);
+        if (isNaN(d.getTime()) || d.getFullYear() < 2024) return;
+        const k = dayKey(d);
+        byDay.set(k, (byDay.get(k) || 0) + 1);
+    };
+    let bought = 0, boughtCreds = 0;
+    try {
+        const gh = ghLoad();
+        bought = gh.length;
+        boughtCreds = gh.filter(a => a && (a.password || a.totpSecret)).length;
+        for (const a of gh) mark(a && a.added);
+    } catch (e) { /* нет файла — просто нули */ }
+    let reg = 0;
+    const perPool = {};
+    for (const [tag, load] of [['agentrouter', arLoad], ['gorouter', goLoad], ['tabi', tbLoad],
+        ['xpeach', xpLoad], ['justwoker', jwLoad], ['seekai', skLoad], ['truesota', tsLoad],
+        ['kktoken', kkLoad]]) {
+        try {
+            const arr = load() || [];
+            perPool[tag] = arr.length; reg += arr.length;
+            for (const s of arr) mark(s && s.created);
+        } catch (e) { /* пула нет */ }
+    }
+    // Кривая накопления — по настоящим датам заведения (`added` у гитхабов, `created`
+    // у ключей), а не досочинённая: счётчик заведённых убывать не может, поэтому в дни
+    // без закупок держим предыдущее значение. Считаем ОБА вида вместе, иначе кривая
+    // упиралась бы в 32 при итоге 174 — как и было в первом прогоне.
+    let run = 0;
+    const cum = [...byDay.keys()].sort().map(k => { run += byDay.get(k); return [k, run]; });
+    return { bought, boughtCreds, reg, perPool, cum, dated: run };
+}
+// Деньги на руках: сумма ПОЛОЖИТЕЛЬНЫХ остатков по живым ключам денежных шлюзов.
+// Отрицательный остаток — промах угадывания выдачи, в сумму он не идёт: ровно это
+// расхождение ($2192, 12.4%) заставляло шапку дашборда врать.
+function leagueBalance() {
+    let balance = 0, spent = 0, keys = 0, unknown = 0;
+    for (const load of [arLoad, goLoad, tbLoad, xpLoad, jwLoad, skLoad, tsLoad, kkLoad]) {
+        let arr = [];
+        try { arr = load() || []; } catch (e) { continue; }
+        for (const s of arr) {
+            keys++;
+            spent += Number(s.spent) || 0;
+            if (s.status === 'dead' || s.status === 'no_key') continue;
+            if (typeof s.balance !== 'number') continue;
+            if (s.balance < 0) { unknown++; continue; }
+            balance += s.balance;
+        }
+    }
+    return { balance: round2(balance), spent: round2(spent), keys, unknown };
+}
+
+// Свой срез целиком. Метрики: токены (вход+выход), деньги (расход), активность
+// (промпты), аккаунты (накопительно). Окна: скользящие сутки по часам, 7 и 30 дней
+// по суткам, всё время по суткам.
+function leagueSelf() {
+    const id = hubIdentity();
+    const tj = tokenJournalCounts(), pr = ccPromptCounts(), sc = ccDailyTokens();
+    const acc = leagueAccounts(), money = leagueBalance();
+
+    // «Всё время» — от самого раннего известного дня до СЕГОДНЯ. Ключи строим сами:
+    // stats-cache посчитан до 01.09 и обрезал бы четверо последних суток.
+    const firstDays = [sc.first, tj.first && dayKey(tj.first), pr.first && dayKey(pr.first)]
+        .filter(Boolean).sort();
+    const today = dayKey(new Date());
+    const allKeys = [];
+    if (firstDays.length) {
+        const d = new Date(firstDays[0] + 'T12:00:00');
+        for (let guard = 0; guard < 4000; guard++) {
+            const k = dayKey(d);
+            allKeys.push(k);
+            if (k >= today) break;
+            d.setDate(d.getDate() + 1);
+        }
+    } else allKeys.push(today);
+    const allLabs = allKeys.map(k => k.slice(5));
+
+    // Токены по дням: где есть журнал хаба — берём его (шире и свежее), раньше —
+    // stats-cache. Первые сутки журнала неполные (он начался днём), поэтому граница
+    // сдвинута на сутки вперёд, иначе 25.08 просел бы вдвое.
+    const cut = tj.first ? dayKey(new Date(tj.first.getTime() + 864e5)) : null;
+    const tokDay = new Map(sc.day);
+    for (const [k, v] of tj.day) if (!cut || k >= cut) tokDay.set(k, v);
+
+    const hKeys = timeKeys(24, true), k7 = timeKeys(7), k30 = timeKeys(30);
+    const faDay = financeAggregate(allKeys, false);
+    const faHour = financeAggregate(hKeys.keys, true);
+    const spDay = new Map(faDay.buckets.map(b => [b.k, b.spend]));
+    const topupDay = new Map(faDay.buckets.map(b => [b.k, b.topup]));
+    const proj = (m, keys) => keys.map(k => Math.round((m.get(k) || 0)));
+    const proj2 = (m, keys) => keys.map(k => round2(m.get(k) || 0));
+    // Накопительный счётчик аккаунтов: в дни без закупок держит предыдущее значение.
+    const accAt = keys => { const m = new Map(acc.cum); let last = 0;
+        return keys.map(k => { if (m.has(k)) last = m.get(k); return last; }); };
+    const sum = a => a.reduce((x, y) => x + y, 0);
+
+    const tok = { h24: proj(tj.hour, hKeys.keys), d7: proj(tokDay, k7.keys),
+        d30: proj(tokDay, k30.keys), all: proj(tokDay, allKeys) };
+    const sp = { h24: proj2(new Map(faHour.buckets.map(b => [b.k, b.spend])), hKeys.keys),
+        d7: proj2(spDay, k7.keys), d30: proj2(spDay, k30.keys), all: proj2(spDay, allKeys) };
+    const act = { h24: proj(pr.hour, hKeys.keys), d7: proj(pr.day, k7.keys),
+        d30: proj(pr.day, k30.keys), all: proj(pr.day, allKeys) };
+    const accCurve = { h24: new Array(24).fill(acc.bought + acc.reg),
+        d7: accAt(k7.keys), d30: accAt(k30.keys), all: accAt(allKeys) };
+
+    const week = sum(act.d7);
+    return {
+        nick: id.nick, installId: id.installId, ver: hubBuild().ver, sha: hubBuild().sha,
+        stamp: new Date().toISOString(), tzOffsetMin: -new Date().getTimezoneOffset(),
+        // Ключи бакетов отдаём ЦЕЛИКОМ, а не подписями для оси: соседей надо
+        // совмещать по времени, а не по индексу — у каждой установки своя дата
+        // первого дня, и «всё время» у всех разной длины. Подпись клиент сделает сам.
+        keys: { h24: hKeys.keys, d7: k7.keys, d30: k30.keys, all: allKeys },
+        tok, sp, act, acc: accCurve,
+        tot: {
+            tokD: sum(tok.h24), tokW: sum(tok.d7), tokM: sum(tok.d30), tokA: sum(tok.all),
+            spD: round2(sum(sp.h24)), spW: round2(sum(sp.d7)),
+            spM: round2(sum(sp.d30)), spA: round2(sum(sp.all)),
+            bal: money.balance, spentAll: money.spent,
+            ppd: Math.round(week / 7), promptsAll: pr.total, streak: ccStreak(pr.day),
+            bought: acc.bought, reg: acc.reg, keys: money.keys, accDated: acc.dated,
+        },
+        src: {
+            journalFirst: tj.first ? dayKey(tj.first) : null, journalLines: tj.lines,
+            statsCacheLast: sc.lastComputed, cutover: cut,
+            financeLines: faDay.lines, balanceUnknownKeys: money.unknown,
+            cacheTokD: sum(hKeys.keys.map(k => tj.chour.get(k) || 0)),
+            cacheTokW: sum(k7.keys.map(k => tj.cday.get(k) || 0)),
+            topupW: round2(sum(k7.keys.map(k => topupDay.get(k) || 0))),
+            dupTopupW: round2(sum(faDay.buckets.filter(b => k7.keys.includes(b.k)).map(b => b.dupTopup))),
+            boughtCreds: acc.boughtCreds, perPool: acc.perPool,
+        },
+    };
+}
+// Версия сборки хаба — чтобы в лиге было видно, кто сидит на старой. Считается один
+// раз по требованию: `git rev-parse` на старте процесса не нужен никому.
+let HUB_BUILD = null;
+function hubBuild() {
+    if (HUB_BUILD) return HUB_BUILD;
+    let ver = null, sha = null;
+    try { ver = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || null; } catch (e) {}
+    try {
+        sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'],
+            { cwd: __dirname, encoding: 'utf8', timeout: 3000 }).trim();
+    } catch (e) { /* не git-чекаут — сойдёт и без sha */ }
+    HUB_BUILD = { ver, sha };
+    return HUB_BUILD;
+}
+
+// Соседи по лиге. Приёмника пока нет — файл появится, когда поднимем его на Финке;
+// до тех тех пор лига честно показывает одну строку и объясняет, чего не хватает.
+// Формат файла: { updated: ISO, peers: [ <тот же объект, что отдаёт leagueSelf> ] }
+const LEAGUE_PEERS_FILE = path.join(__dirname, 'league-peers.json');
+function leaguePeers() {
+    try {
+        const raw = fs.readFileSync(LEAGUE_PEERS_FILE, 'utf8');
+        const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        const peers = Array.isArray(doc) ? doc : (doc.peers || []);
+        return { updated: (doc && doc.updated) || null, peers: peers.filter(p => p && p.installId) };
+    } catch { return { updated: null, peers: [] }; }
+}
+
+// GET /__switch/api/league — свой срез + соседи (пока пусто) одним ответом.
+async function handleLeague(req, res) {
+    try {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        const me = leagueSelf();
+        const nb = leaguePeers();
+        jsonRes(res, 200, { me, peers: nb.peers, peersUpdated: nb.updated,
+            receiver: { configured: false, note: 'приёмник на Финке ещё не поднят' } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/league/nick { nick } → сохраняет ник рядом с installId.
+async function handleLeagueNick(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const nick = leagueNickClean(body && body.nick);
+        if (!nick) return jsonRes(res, 400, { error: 'ник — от 2 до 20 символов' });
+        const cur = hubIdentity();
+        const doc = { installId: cur.installId, nick, joined: cur.joined || new Date().toISOString() };
+        fs.writeFileSync(HUB_IDENTITY_FILE, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+        logLine(`league nick → ${nick}`);
+        jsonRes(res, 200, { ok: true, nick, installId: doc.installId });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFinanceHistory(req, res) {
     try {
         // CORS нужен только пока вкладку смотрят из черновика по file:// — внутри
@@ -7737,32 +8748,13 @@ async function handleFinanceHistory(req, res) {
         const range = q.get('range') || 'week';
         const conf = { day: { n: 24, hour: true }, week: { n: 7 }, month: { n: 30 } }[range]
             || { n: 7 };
-        const now = new Date();
-        const keyOf = d => conf.hour
-            ? d.toISOString().slice(0, 13)                       // YYYY-MM-DDTHH
-            : d.toISOString().slice(0, 10);                      // YYYY-MM-DD
-        // Пустая сетка бакетов: график должен рисоваться и когда истории ещё нет.
-        const buckets = [];
-        for (let i = conf.n - 1; i >= 0; i--) {
-            const d = new Date(now);
-            if (conf.hour) d.setHours(d.getHours() - i); else d.setDate(d.getDate() - i);
-            buckets.push({ k: keyOf(d), spend: 0, topup: 0, events: 0,
-                tin: 0, tout: 0, tcr: 0, tcw: 0, tcost: 0, treq: 0 });
-        }
-        const idx = new Map(buckets.map((b, i) => [b.k, i]));
-        let lines = [];
-        try { lines = fs.readFileSync(FINANCE_HISTORY_FILE, 'utf8').split('\n'); } catch (e) { /* истории ещё нет */ }
-        let parsed = 0, skipped = 0;
-        for (const ln of lines) {
-            if (!ln) continue;
-            let e; try { e = JSON.parse(ln); } catch (_) { skipped++; continue; }
-            const i = idx.get(conf.hour ? String(e.t).slice(0, 13) : String(e.t).slice(0, 10));
-            if (i == null) continue;                             // вне окна — молча мимо
-            parsed++;
-            if (e.dSpent > 0) buckets[i].spend += e.dSpent;
-            if (e.dGrant > 0) buckets[i].topup += e.dGrant;
-            buckets[i].events++;
-        }
+        // Сетка бакетов и денежные дельты — общей функцией: правила знака, сброса
+        // счётчика и дедупа наливки живут в одном месте, тем же считает «Лига».
+        const { keys } = timeKeys(conf.n, !!conf.hour);
+        const fa = financeAggregate(keys, !!conf.hour);
+        const buckets = fa.buckets, idx = fa.idx;
+        const parsed = fa.used, skipped = fa.bad, histLines = fa.lines;
+        const keyOfTs = ts => { const d = new Date(ts); return isNaN(d.getTime()) ? null : bucketKey(d, !!conf.hour); };
         // Настоящие токены из журнала front-door. Читается тем же способом, что
         // finance-history: построчно, битые строки молча мимо. Файла может не быть
         // вовсе (front-door старой сборки) — тогда бакеты остаются с нулями, и
@@ -7775,7 +8767,8 @@ async function handleFinanceHistory(req, res) {
                 if (!ln) continue;
                 tokens.lines++;
                 let e; try { e = JSON.parse(ln); } catch (_) { tokens.bad++; continue; }
-                const i = idx.get(conf.hour ? String(e.t).slice(0, 13) : String(e.t).slice(0, 10));
+                const tk = keyOfTs(e.t);
+                const i = tk == null ? null : idx.get(tk);
                 if (i == null) continue;
                 tokens.used++;
                 const b = buckets[i];
@@ -7803,12 +8796,13 @@ async function handleFinanceHistory(req, res) {
         try { const a = skLoad(); pools.seekai      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = tsLoad(); pools.truesota    = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         try { const a = kkLoad(); pools.kktoken     = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
+        try { const a = hnLoad(); pools.hcnsec      = { spent: sum(a, 'spent'), balance: sum(usable(a), 'balance'), keys: a.length }; } catch (e) {}
         const totals = Object.values(pools).reduce((a, p) => ({
             spent: a.spent + p.spent, balance: a.balance + p.balance, keys: a.keys + p.keys,
         }), { spent: 0, balance: 0, keys: 0 });
         jsonRes(res, 200, {
             range, hour: !!conf.hour, buckets, pools, totals, tokens,
-            history: { file: path.basename(FINANCE_HISTORY_FILE), lines: lines.filter(Boolean).length, used: parsed, bad: skipped },
+            history: { file: path.basename(FINANCE_HISTORY_FILE), lines: histLines, used: parsed, bad: skipped },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -8183,6 +9177,12 @@ function handleJwMapProfiles(req, res) {
 }
 function handleSkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'seekai', host: 'seekai.cc', load: skLoad, save: skSave });
+}
+// hcnsec: сопоставление идёт ПЕРВЫМ путём общего обработчика — по API-ключу, вычитанному
+// из панели куками профиля. GitHub-логин там только резерв, и его отсутствие у этого шлюза
+// (github_oauth=false) сопоставление не ломает: профиль и ключ есть, а больше ничего не нужно.
+function handleHnMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'hcnsec', host: 'api.hcnsec.cn', load: hnLoad, save: hnSave });
 }
 // Сопоставление профилей идёт по GitHub-логину из кук профиля, а не по панели —
 // поэтому общий обработчик годится и для sub2api.
@@ -10436,6 +11436,677 @@ async function handleKkModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
+// ───── HCNsec — автономная вкладка (New API, вход email+пароль) ────────────
+// Девятый шлюз, структурная копия вкладки GoRouter: `api.hcnsec.cn` — тот же New API.
+// Свой пул (hcnsec-sessions.json), свой активный ключ/модель, свой keepalive :20162.
+//
+// 🪤 GitHub-входа у шлюза НЕТ, и это единственное, чем копия отличается от эталона.
+// Живая проба `GET https://api.hcnsec.cn/api/status`: `github_oauth=false`,
+// `oidc_enabled=false`, `linuxdo_oauth=false`, `telegram_oauth=false`,
+// `wechat_login=false`; включены только `password_login_enabled`,
+// `email_verification`, `register_enabled`. Поэтому у вкладки НЕТ трёх ручек
+// GoRouter — `map-profiles`, `set-github`, `add-github`, — а тега `hn` нет в
+// GH_POOL_LOADERS/FILES/SAVERS/LABELS и в ghLkPidsByTag: заселять сюда готовую
+// GitHub-сессию физически некуда, аккаунт создаётся почтой и паролем. Роутов 19 из 22.
+//
+// Профиль Chromium и куки при этом ЕСТЬ и обязательны: точный остаток даёт
+// `GET /api/user/self` куками профиля (см. newapiBalance), поэтому `api.hcnsec.cn`
+// стоит в NEWAPI_PROFILE_DIRS. Профиль резолвится по СТАБИЛЬНОМУ id аккаунта
+// (`acct_<id>`, newapiResolveProfile) — сопоставление руками (map-profiles) не нужно.
+// Путь авторизации (classic/jwt) newapi-account выбирает по содержимому профиля,
+// таблицы хостов там больше нет (с 30.08), дополнять ничего не надо.
+//
+// 🪤 Гранта у шлюза нет и придумать его нечем: тариф токенный, деньги вносит владелец,
+// бонуса при регистрации не заявлено. Поэтому HN_GRANT_STEP/HN_DEFAULT_GRANT НЕ
+// существует, а guessGrant возвращает 0 — путь TrueSOTA. Прикидка вида «$70» здесь
+// врала бы в пользу пустого аккаунта, и авторотация предпочла бы его живому.
+//
+// 🪤 Реф-кода у шлюза тоже нет: регистрации через нашу ссылку не было, и `hcnsec` в
+// routing/lib/ref-codes.js не заводится — выдуманный код = молча потерянный реф.
+const HN_SESSIONS_FILE = path.join(__dirname, 'hcnsec-sessions.json');
+const HN_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'hcnsec-active-key.txt');
+const HN_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'hcnsec-active-model.txt');
+const HN_BASE_URL = 'https://api.hcnsec.cn/v1';
+// SSE keepalive proxy для hcnsec (как у go :20156): форвардит напрямую в
+// api.hcnsec.cn, режет [1m]-суффиксы, переписывает модель по тир-карте и держит
+// SSE-паузы thinking-моделей.
+// 🪤 UPSTREAM строго БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню
+// (см. keepalive-proxy.js:427). Проверено живьём: `POST /v1/v1/messages` → 404
+// `Invalid URL`, а `POST /messages` БЕЗ префикса отдаёт 200 с HTML. То есть двойной
+// /v1 виден сразу, а потеря /v1 даёт не ошибку, а мусор вместо ответа — поэтому
+// корень здесь важнее, чем кажется. /v1 нужен ТОЛЬКО листингу моделей (HN_BASE_URL).
+const HN_UPSTREAM = 'https://api.hcnsec.cn';
+// Порт через env с дефолтом: спавн, Health и кнопка «перезапустить» обязаны читать
+// одно значение, иначе подмена порта на время отладки расходится по трём местам.
+const HN_KEEPALIVE_PORT = Number(process.env.HN_KEEPALIVE_PORT || 20162);
+const HN_KEEPALIVE_URL = `http://localhost:${HN_KEEPALIVE_PORT}`;
+const HN_MODELMAP_FILE = path.join(__dirname, 'hcnsec-modelmap.json');
+// 🪤 HN_GRANT_STEP / HN_DEFAULT_GRANT здесь НЕТ намеренно (путь TrueSOTA): выдачи у
+// шлюза не существует, прикидывать её нечем, а завышенная прикидка увела бы
+// авторотацию на пустой аккаунт. Точная цифра приходит из /api/user/self куками
+// профиля; вписанный руками баланс (анкер) остаётся вторым резервом.
+const HN_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const HN_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+function hnLoad() {
+    try {
+        const raw = fs.readFileSync(HN_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'hn_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { hnSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function hnSave(arr) {
+    fs.writeFileSync(HN_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function hnReadActiveModel() {
+    try { return fs.readFileSync(HN_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function hnReadActiveKey() {
+    try { return fs.readFileSync(HN_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для hcnsec: девятый экземпляр keepalive-proxy.js, на :20162.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с остальными
+// восемью мостами. UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages.
+async function hnKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(HN_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(HN_KEEPALIVE_PORT),
+                UPSTREAM: HN_UPSTREAM,
+                KEY_FILE: HN_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: HN_MODELMAP_FILE,
+                ...(process.env.HN_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.HN_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive HCNsec', HN_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`hcnsec keepalive proxy spawn: :${HN_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`hcnsec keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+// Листинг ходит С /v1 (HN_BASE_URL) — в отличие от запросов Claude Code, которым
+// /v1 дописывает keepalive к корню.
+async function hnProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${HN_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...HN_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс — полный канон GoRouter, включая куки-сессию. usage-эндпоинт на КОРНЕ
+// `api.hcnsec.cn` (как у gorouter, НЕ под /v1): он даёт легаси-расход и, главное,
+// живость КЛЮЧА — 401/403 здесь означает «ключ мёртв». Точный остаток АККАУНТА
+// приходит из `GET /api/user/self` куками профиля Chromium, поэтому `api.hcnsec.cn`
+// обязан стоять в NEWAPI_PROFILE_DIRS — без записи self не пойдёт вовсе.
+// 🪤 guessGrant = 0: гранта у шлюза нет (см. шапку блока), выдумывать нечего.
+async function hnBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'api.hcnsec.cn',
+        ccHeaders: HN_CC_HEADERS,
+        usageUrl: 'https://api.hcnsec.cn/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: () => 0,
+        force: !!opts.force,
+    });
+}
+
+function hnApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'hcnsec' }); }
+
+async function handleHnSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = hnLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await hnProbe(s.api_key); }));
+            }
+            hnSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => hnApplyBalance(s, await hnBalance(s))));
+            }
+            hnSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: hnReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleHnPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await hnProbe(api_key);
+        const sessions = hnLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; hnSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHnBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = hnLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await hnBalance(target || { api_key }, { force });
+            if (target) { hnApplyBalance(target, bal); hnSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('hn:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleHnSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'hcnsec', load: hnLoad, save: hnSave, balanceFn: hnBalance, applyFn: hnApplyBalance });
+}
+
+const hnLkPids = new Map();
+function hnPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleHnSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = hnLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = hnLkPids.get(label);
+        if (hnPidAlive(prevPid)) {
+            logLine(`hcnsec session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'hcnsec', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('api.hcnsec.cn', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию (реф-кода у шлюза нет, ссылка прямая);
+        // есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`hcnsec session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`hcnsec session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`hcnsec session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            hnLkPids.delete(label);
+            logLine(`hcnsec session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('hn', id);
+        });
+        proc.unref();
+        hnLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            hnLkPids.delete(label);
+            logLine(`hcnsec session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`hcnsec session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── HCNsec: share/import (передать аккаунт другу и принять чужой) ──────────
+// Формат: base64url(JSON { v:1, provider:'hcnsec', email, name, api_key,
+// meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// «Живая» часть — storageState профиля панели из hcnsec/profiles/acct_<id>/
+// (вход email+пароль, GitHub тут не участвует), снимает headless share-session.js.
+
+const HN_SHARE_SCRIPT = path.join(__dirname, '..', 'hcnsec', 'share-session.js');
+const HN_SESSIONS_DIR = path.join(__dirname, '..', 'hcnsec', 'sessions');
+
+function hnB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function hnB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/hn/share { id } → снять storageState профиля и собрать строку.
+async function handleHnShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = hnLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = hnLkPids.get(label);
+        if (hnPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(HN_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [HN_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`hcnsec share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'hcnsec',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = hnB64UrlEncode(JSON.stringify(payload));
+        logLine(`hcnsec share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/hn/import { share } → разобрать строку и добавить аккаунт.
+async function handleHnImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(hnB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'hcnsec' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не hcnsec-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = hnLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'hn_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        hnSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(HN_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(HN_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`hcnsec import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`hcnsec import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHnAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = hnLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'hn_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        // 🪤 ghLinkForNew здесь НЕ зовём: GitHub-входа у шлюза нет, тега `hn` нет в
+        // GH_POOL_*, и проставленный ghId никто бы не прочитал — только сбивал бы с толку.
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+        });
+        hnSave(sessions);
+        logLine(`hcnsec add: ${mail} (${noKey ? 'без ключа — регистрация почтой' : '***' + key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, id, noKey });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
+// в консоли hcnsec). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
+async function handleHnSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = hnLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(HN_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        hnSave(sessions);
+        logLine(`hcnsec set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переименовать аккаунт (подпись) — меняем name и/или email. id и профиль браузера
+// не трогаем, поэтому привязка профиля/сессии сохраняется.
+async function handleHnRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = hnLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        hnSave(sessions);
+        logLine(`hcnsec rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleHnDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = hnLoad();
+        const target = sessions.find(s => s.id === idKey);
+        hnSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === hnReadActiveKey()) {
+            try { fs.rmSync(HN_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(HN_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`hcnsec delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ЧЕРЕЗ keepalive :20162, а не прямым baseUrl (канон go/tb/xp/jw/sk/kk):
+// мост срезает суффикс окна [1m], переписывает модель по тир-карте hcnsec-modelmap.json,
+// держит SSE-паузы thinking-моделей и ретраит отказы. `/v1` дописывает сам keepalive.
+async function handleHnActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в hcnsec-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = hnLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(HN_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        hnSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-hn');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = HN_KEEPALIVE_URL;   // keepalive :20162 → api.hcnsec.cn напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — hcnsec-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const hnCurModel = hnReadActiveModel() || '';
+            if (hnCurModel) settings.model = hnCurModel;
+            else { delete settings.model; logLine('hcnsec activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из hcnsec-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`hcnsec activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20162, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const hnKa = await keepaliveBring(HN_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!hnKa.ok) logLine(`hcnsec activate: keepalive :${HN_KEEPALIVE_PORT} НЕ поднялся — ${hnKa.error || '?'}`);
+        logLine(`hcnsec activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${HN_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: hnKa.ok, port: HN_KEEPALIVE_PORT, error: hnKa.ok ? null : (hnKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleHnModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (HN_MODELS_CACHE.data && Date.now() - HN_MODELS_CACHE.ts < HN_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: HN_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${HN_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...HN_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        HN_MODELS_CACHE.data = models;
+        HN_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (HN_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: HN_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет hcnsec-active-model.txt + settings.model (+ env модели).
+async function handleHnSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(HN_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-hn-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = HN_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`hcnsec set-model: settings.json FAILED: ${e.message}`);
+        }
+        const hnKaM = await keepaliveBring(HN_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!hnKaM.ok) logLine(`hcnsec set-model: keepalive :${HN_KEEPALIVE_PORT} НЕ поднялся — ${hnKaM.error || '?'}`);
+        logLine(`hcnsec set-model: ${m} (base ${HN_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: HN_ACTIVE_MODEL_FILE, base: HN_KEEPALIVE_URL, needRestart: true, keepalive: { up: hnKaM.ok, port: HN_KEEPALIVE_PORT, error: hnKaM.ok ? null : (hnKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Настраиваемый маппинг claude-тиров → hcnsec-модели (как в Custom). Живёт в сессиях.
+// 🪤 Единственный писатель тир-карты — эта ручка. Файл руками не править.
+async function handleHnModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = {
+            opus: String(body.opus || '').trim() || null,
+            sonnet: String(body.sonnet || '').trim() || null,
+            haiku: String(body.haiku || '').trim() || null,
+        };
+        fs.writeFileSync(HN_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        logLine(`hcnsec modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function hnReadModelMap() {
+    try {
+        const raw = fs.readFileSync(HN_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -12922,6 +14593,7 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [HN_KEEPALIVE_PORT]: { name: 'HCNsec', spawn: hnKeepaliveSpawn },
         // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
         [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
@@ -14304,6 +15976,9 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    // 🪤 У hcnsec host — ХОСТ ПАНЕЛИ целиком, `api.hcnsec.cn` (поддомен обязателен).
+    // Эту же строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима — байт в байт.
+    hn: { tag: 'hcnsec',      label: 'HCNsec',      host: 'api.hcnsec.cn', keyFile: HN_ACTIVE_KEY_FILE, load: hnLoad, save: hnSave, balanceFn: hnBalance, applyFn: hnApplyBalance },
 };
 
 const MONEY_AUTO_FILE = path.join(__dirname, '..', 'logs', '.money_autorotate.json');
@@ -15463,6 +17138,9 @@ const server = http.createServer((req, res) => {
 
     // История финансов для вкладки «Финансы»: расход и наливка по бакетам.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/finance/history')) return handleFinanceHistory(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league/nick')) return jsonRes(res, 405, { error: 'POST' });
+    if (req.method === 'POST' && req.url === '/__switch/api/league/nick') return handleLeagueNick(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league')) return handleLeague(req, res);
 
     // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157/:20158) — реальное время без рестарта.
     if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);
@@ -15473,6 +17151,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/hn/keepalive/state')  return keepaliveHn.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/keepalive/config') return keepaliveHn.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/xp/keepalive/state')  return keepaliveXp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/keepalive/config') return keepaliveXp.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/jw/keepalive/state')  return keepaliveJw.state(req, res);
@@ -15486,6 +17166,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/keepalive/latency')) return keepaliveHn.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/keepalive/latency')) return keepaliveXp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/keepalive/latency')) return keepaliveJw.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/keepalive/latency')) return keepaliveSk.latency(req, res);
@@ -15529,6 +17210,25 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    // ── HCNsec (девятая вкладка) — 19 роутов из 22 у go: GitHub-входа у шлюза нет,
+    // поэтому map-profiles / set-github / add-github здесь отсутствуют намеренно.
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/sessions')) return handleHnSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/ping'))     return handleHnPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/balance'))  return handleHnBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/models'))   return handleHnModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/hn/active-model') return jsonRes(res, 200, { model: hnReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/hn/modelmap') return jsonRes(res, 200, { ok: true, modelMap: hnReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/add')       return handleHnAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/key')       return handleHnSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/rename')    return handleHnRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/delete')    return handleHnDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/activate')  return handleHnActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/set-model') return handleHnSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/set-balance') return handleHnSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/modelmap')  return handleHnModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/session/open') return handleHnSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/share')    return handleHnShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/hn/import')   return handleHnImport(req, res);
 
     // ---- Tabi (tb) — автономная вкладка, keepalive :20155 → tabitoken.com ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/sessions')) return handleTbSessions(req, res);
@@ -15680,6 +17380,21 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/jw/auto-add')          return handleJwAutoAdd(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/jw/auto-add/state')    return handleJwAutoAddState(req, res);
 
+    // ---- Outlook-ящики (ol) — пул купленных почт под регистрации ----
+    // Парсер пачки живёт на сервере (routing/lib/outlook-pool.js), во фронте его дубля нет.
+    if (req.method === 'GET'  && req.url === '/__switch/api/ol/list')            return handleOlList(res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/import')          return handleOlImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/add')             return handleOlAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/rename')          return handleOlRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/delete')          return handleOlDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/status')          return handleOlStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/mark')            return handleOlMark(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/open')            return handleOlOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/code')            return handleOlCode(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ol/available')) return handleOlAvailable(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ol/health-check')    return handleOlHealthCheck(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ol/health-progress') return handleOlHealthProgress(res);
+
     // ---- Svrtr — пул ТГ-аккаунтов, активация через API Helper ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/svrtr/sessions'))    return handleSvrtrSessions(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/svrtr/active-key')          return handleSvrtrActiveKey(req, res);
@@ -15748,7 +17463,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
     // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|hn)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

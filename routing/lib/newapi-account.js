@@ -963,21 +963,61 @@ async function apiFetch(host, pathQuery, { method = 'GET', body = null, cookie =
 // quota_per_unit хоста. Публичный эндпоинт, без авторизации; кешируем на процесс.
 const QPU_CACHE = new Map();   // host → number
 async function quotaPerUnit(host) {
-    if (QPU_CACHE.has(host)) return QPU_CACHE.get(host);
-    let v = QUOTA_PER_UNIT_DEFAULT;
+    return (await statusMeta(host)).qpu;
+}
+
+// Валютная карточка хоста из того же `/api/status`, одним запросом на процесс.
+//
+// Зачем отдельно от quotaPerUnit: у New API «единица квоты» это ВСЕГДА доллар
+// (quota / quota_per_unit), а вот в чём панель ПОКАЗЫВАЕТ остаток — её собственная
+// настройка. У api.hcnsec.cn (замер 05.09) `quota_display_type: 'CNY'`, `price` и
+// `usd_exchange_rate` = 7.3: то есть шлюз, который в вике и в пуле назывался «−$2174»,
+// на самом деле считает в юанях, и цифра была завышена ровно в 7.3 раза.
+//
+// 🪤 Курс НЕ хардкодим: он настройка панели и меняется её админом. Промах в эту сторону
+// молчаливый — сумма просто разъедется, никакой ошибки в логе не будет.
+// 🪤 `custom_currency_*` читаем, но в расчёт не берём: у hcnsec там symbol `¤` и rate 1,
+// то есть заполнено «для галочки». Символ выбираем по displayType, а не по этому полю.
+const META_CACHE = new Map();  // host → { qpu, rate, symbol, displayType }
+const SYMBOLS = { CNY: '¥', USD: '$', EUR: '€', RUB: '₽', TOKENS: '' };
+async function statusMeta(host) {
+    if (META_CACHE.has(host)) return META_CACHE.get(host);
+    const meta = { qpu: QUOTA_PER_UNIT_DEFAULT, rate: 1, symbol: '$', displayType: 'USD' };
     try {
         const r = await apiFetch(host, '/api/status', { timeoutMs: 10000 });
-        const d = r.json && (r.json.data || r.json);
-        const q = Number(d && d.quota_per_unit);
-        if (q > 0) v = q;
-    } catch {}
-    QPU_CACHE.set(host, v);
-    return v;
+        const d = (r.json && (r.json.data || r.json)) || {};
+        if (process.env.NEWAPI_DEBUG) {
+            console.error(`[newapi] statusMeta ${host}: HTTP ${r.status} waf=${!!r.waf}`
+                + ` json=${r.json ? 'да' : 'нет'} keys=${Object.keys(d).length}`
+                + ` qpu=${d.quota_per_unit} display=${d.quota_display_type} rate=${d.usd_exchange_rate || d.price}`);
+        }
+        const q = Number(d.quota_per_unit);
+        if (q > 0) meta.qpu = q;
+        const dt = String(d.quota_display_type || '').toUpperCase();
+        if (dt) meta.displayType = dt;
+        const rate = Number(d.usd_exchange_rate || d.price);
+        // Курс осмыслен только для НЕдолларового показа: у долларовой панели он всё равно 1.
+        if (rate > 0 && dt && dt !== 'USD' && dt !== 'TOKENS') meta.rate = rate;
+        meta.symbol = SYMBOLS[meta.displayType] != null ? SYMBOLS[meta.displayType] : '$';
+    } catch (e) {
+        if (process.env.NEWAPI_DEBUG) console.error(`[newapi] statusMeta ${host} упал: ${e && e.message}`);
+    }
+    META_CACHE.set(host, meta);
+    QPU_CACHE.set(host, meta.qpu);
+    return meta;
 }
 
 function quotaToUsd(quota, qpu) {
     if (quota == null || !isFinite(quota)) return null;
     return Math.round((Number(quota) / (qpu || QUOTA_PER_UNIT_DEFAULT)) * 100) / 100;
+}
+
+// Долларовую цифру — в валюту показа панели. null остаётся null: «неизвестно» не
+// умножается на курс и не превращается в ноль.
+function usdToLocal(usd, rate) {
+    if (usd == null || !isFinite(usd)) return null;
+    const r = Number(rate) > 0 ? Number(rate) : 1;
+    return Math.round(Number(usd) * r * 100) / 100;
 }
 
 // ─────────────────────────── access-токен (jwt-хосты) ───────────────────────────
@@ -1003,11 +1043,25 @@ async function refreshAccessToken(host, cookie, jar = null, jarK = null) {
 
 // ──────────────────────────── точный баланс ────────────────────────────
 
-function selfToBalance(me, qpu) {
+function selfToBalance(me, qpu, meta) {
     const quota = Number(me.quota);
     const used = Number(me.used_quota);
     const balance = quotaToUsd(quota, qpu);
     const spent = quotaToUsd(used, qpu);
+    const granted = (balance != null && spent != null) ? Math.round((balance + spent) * 100) / 100 : null;
+    // Валюта показа панели. Поля ДОБАВОЧНЫЕ: `balance`/`spent`/`granted` остаются в
+    // долларах, потому что на них построены и сортировка таблиц, и сумма шапки хаба, и
+    // порог годности авторотации ($2). Юани едут рядом, а не вместо — иначе одна панель
+    // с `quota_display_type: CNY` перекосила бы всё, что складывает деньги девяти пулов.
+    const rate = (meta && Number(meta.rate) > 0) ? Number(meta.rate) : 1;
+    const local = rate !== 1 ? {
+        currency: (meta && meta.displayType) || 'USD',
+        symbol: (meta && meta.symbol) || '$',
+        rate,
+        balanceLocal: usdToLocal(balance, rate),
+        spentLocal: usdToLocal(spent, rate),
+        grantedLocal: usdToLocal(granted, rate),
+    } : {};
     return {
         ok: true,
         source: 'self',
@@ -1017,7 +1071,8 @@ function selfToBalance(me, qpu) {
         balance,
         spent,
         // «Выдано всего» = остаток + расход. Реальная сумма, а не угаданный грант.
-        granted: (balance != null && spent != null) ? Math.round((balance + spent) * 100) / 100 : null,
+        granted,
+        ...local,
     };
 }
 
@@ -1038,9 +1093,9 @@ async function accountSelf(opts) {
 
 // Успешный ответ = серия отказов по частоте закончилась. Без этого сброса следующая
 // случайная заглушка начинала бы отсчёт паузы не с 45 секунд, а с потолка.
-function selfOk(host, data, qpu) {
+function selfOk(host, data, qpu, meta) {
     clearHostStrikes(host);
-    return selfToBalance(data, qpu);
+    return selfToBalance(data, qpu, meta);
 }
 
 async function accountSelfInner({ host, profileDir, accessToken = null, userId = null, force = false }) {
@@ -1052,7 +1107,11 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     // паузу соблюдают — именно они её и вызывают.
     if (cooling && !force) return { ok: false, error: `шлюз отбивает по частоте, пауза ещё ${cooling}с` };
     if (cooling && force) console.log(`[newapi] ${host}: пауза ещё ${cooling}с, но клик владельца — пробую один раз`);
-    const qpu = await quotaPerUnit(host);
+    // Одним запросом и делитель квоты, и валюта показа: у панели с `quota_display_type`
+    // не-USD цифра из /api/user/self всё равно в долларах, а показывать её надо в её
+    // валюте (у api.hcnsec.cn это юани по курсу 7.3 — см. statusMeta).
+    const meta = await statusMeta(host);
+    const qpu = meta.qpu;
     const jar = loadJar();
     const jarK = jarKey(host, profileDir);
     const entry = jar[jarK] || {};
@@ -1067,7 +1126,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
             const r = kind === 'jwt'
                 ? await apiFetch(host, '/api/user/self', { bearer: token, jar, jarK })
                 : await apiFetchRawAuth(host, '/api/user/self', token);
-            if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu);
+            if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu, meta);
         } catch { /* токен протух — ниже пробуем куки профиля */ }
     }
 
@@ -1107,11 +1166,11 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
         saveJar(j);
         // Ответ refresh уже содержит quota и used_quota — второй запрос не нужен.
         if (rt.user && rt.user.quota != null && rt.user.used_quota != null) {
-            return selfOk(host, rt.user, qpu);
+            return selfOk(host, rt.user, qpu, meta);
         }
         const r = await apiFetch(host, '/api/user/self', { bearer: rt.token });
-        if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu);
-        if (rt.user && rt.user.quota != null) return selfOk(host, rt.user, qpu);
+        if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu, meta);
+        if (rt.user && rt.user.quota != null) return selfOk(host, rt.user, qpu, meta);
         return { ok: false, error: `self: HTTP ${r.status}` };
     }
 
@@ -1131,7 +1190,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     if ((r.status === 401 || r.status === 403) && cookieUid && Number(cookieUid) !== Number(uid)) {
         r = await apiFetch(host, '/api/user/self', { cookie, userId: cookieUid, jar, jarK });
     }
-    if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu);
+    if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu, meta);
     if (r.waf || r.status === 429) {
         coolDownHost(host);
         // 🪤 Текст «слишком часто» был догадкой и уводил разбор в частоту запросов.
@@ -1272,7 +1331,7 @@ module.exports = {
     cookieBackendReady, cookieFailReason, cookieDbLocked,
     writeProfileCookies, syncJarToProfile,
     sessionUserId, userIdFromUsername,
-    quotaPerUnit, quotaToUsd, hostGate,
+    quotaPerUnit, quotaToUsd, statusMeta, usdToLocal, hostGate,
     loadJar, saveJar, jarKey, effectiveCookieHeader, putJarCookies,
     accountSelf, refreshAccessToken, mintAccessToken, listAccountKeys,
 };

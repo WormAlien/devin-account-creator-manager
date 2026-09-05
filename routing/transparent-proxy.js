@@ -7975,6 +7975,15 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             spent: self.spent,
             usageSpent,
             granted: self.granted,
+            // Валюта показа панели — сквозь наружу, чтобы newapiApplyBalance записал её в
+            // пул, а фронт нарисовал ¥ рядом с $. Пусто у долларовых панелей, то есть у
+            // восьми шлюзов из девяти это ничего не меняет.
+            currency: self.currency,
+            currencySymbol: self.symbol,
+            currencyRate: self.rate,
+            balanceLocal: self.balanceLocal,
+            spentLocal: self.spentLocal,
+            grantedLocal: self.grantedLocal,
             newApiUserId: self.newApiUserId,
             newApiUsername: self.newApiUsername,
             profileUsed: self.profileUsed,
@@ -8269,6 +8278,22 @@ function newapiApplyBalance(target, bal, opts) {
         target.balance = bal.balance;
         target.balanceSource = bal.balanceSource;
         if (bal.granted != null) target.granted = bal.granted; else delete target.granted;
+        // Валюта показа панели, если она НЕ доллар (у api.hcnsec.cn это юани, курс 7.3
+        // из /api/status). Поля добавочные: `balance`/`spent`/`granted` остаются
+        // долларовыми, потому что на них стоят сортировка таблиц, сумма шапки хаба и
+        // порог годности авторотации. 🪤 Ушла валюта из ответа — стираем и в записи,
+        // иначе пул навсегда останется с ¥ от панели, которую админ перевёл в доллары.
+        const loc = (bal.self && bal.self.balanceLocal != null) ? bal.self : bal;
+        if (loc.currency && loc.rate > 1) {
+            target.currency = loc.currency;
+            target.currencySymbol = loc.symbol || '';
+            target.currencyRate = loc.rate;
+            target.balanceLocal = loc.balanceLocal;
+            target.spentLocal = loc.spentLocal;
+            if (loc.grantedLocal != null) target.grantedLocal = loc.grantedLocal; else delete target.grantedLocal;
+        } else if (bal.balanceSource === 'self') {
+            for (const k of ['currency', 'currencySymbol', 'currencyRate', 'balanceLocal', 'spentLocal', 'grantedLocal']) delete target[k];
+        }
         if (bal.accessUntil != null) target.accessUntil = bal.accessUntil;
         if (bal.newApiUserId) target.newApiUserId = bal.newApiUserId;
         if (bal.newApiUsername) target.newApiUsername = bal.newApiUsername;

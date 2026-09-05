@@ -12217,6 +12217,24 @@ function newapiBalanceCell(s, kJ, prov, sym = '$') {
     const color = balanceColor(shown);
     const spentTip = typeof s.spent === 'number' ? ` · потрачено ${sym}${s.spent.toFixed(2)}` : '';
     const negTip = raw < 0 ? ` · расчёт дал −${sym}${Math.abs(raw).toFixed(2)}: привязка устарела, впиши баланс заново` : '';
+    // Панель, которая показывает не в долларах (api.hcnsec.cn — юани, курс из
+    // /api/status): сверху её родная цифра, под ней доллары мелким. Обе настоящие, одна
+    // получена из другой по курсу шлюза. 🪤 Цвет считаем по ДОЛЛАРАМ: порог «мало денег»
+    // один на весь дашборд, а ¥ в 7.3 раза крупнее и всегда выглядели бы зелёными.
+    const hasLocal = typeof s.balanceLocal === 'number' && s.currencySymbol && Number(s.currencyRate) > 1;
+    if (hasLocal) {
+      const lsym = s.currencySymbol;
+      const lshown = Math.max(0, s.balanceLocal);
+      const lspent = typeof s.spentLocal === 'number' ? ` · потрачено ${lsym}${s.spentLocal.toFixed(2)}` : '';
+      const ltip = `Остаток ${lsym}${lshown.toFixed(2)} — панель считает в ${s.currency || '?'}`
+        + ` (курс ${Number(s.currencyRate).toFixed(2)} за $1, из /api/status)`
+        + ` · это ${sym}${shown.toFixed(2)}${lspent}${negTip} · клик = пересчитать`;
+      return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center">`
+        + `<button onclick='${prov}CheckBalance(${kJ})' title="${esc(ltip)}"`
+        + ` class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">${lsym}${lshown.toFixed(2)}</button>`
+        + `${balanceSourceBadge(s)}${balanceFreshMark(s)}</span>`
+        + `<span class="font-mono text-[9px] text-muted leading-none mt-0.5">≈ ${sym}${shown.toFixed(2)}</span>${edit}</span>`;
+    }
     const tip = `Остаток ${sym}${shown.toFixed(2)} (${(BAL_SRC[s.balanceSource] || {}).label || 'источник неизвестен'})${spentTip}${negTip} · клик = пересчитать`;
     return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center">`
       + `<button onclick='${prov}CheckBalance(${kJ})' title="${esc(tip)}"`
@@ -26501,8 +26519,11 @@ function lgDrawPlot(top) {
   const axNum = v => (v / U.div).toLocaleString('ru-RU',
     { minimumFractionDigits: dec, maximumFractionDigits: dec });
   const tEl = document.getElementById('lg-ptitle');
+  // «на точку» верно для потока (токены за час, доллары за день), но не для аккаунтов:
+  // там кривая — уровень счётчика, а не расход за шаг. Подпись обязана это различать.
+  const perPoint = LG_M[LG.metric].cum ? `${U.name}, накопительно` : `${U.name} на точку`;
   if (tEl) tEl.innerHTML = `${LG_M[LG.metric].lb} · ${LG_R[LG.range].lb}`
-    + `<span>${LG_R[LG.range].ttl} · ${U.name} на точку`
+    + `<span>${LG_R[LG.range].ttl} · ${perPoint}`
     + `${top.length > 1 ? ' · тройка лидеров' : ''}</span>`;
 
   const grid = [0, .25, .5, .75, 1].map(f => {
@@ -26795,6 +26816,21 @@ function lgFoot() {
       чтобы переименование не заводило в рейтинге вторую строку. По умолчанию хаб берёт
       <code>git config user.name</code>.</p>`;
 }
+// Движение места. Прошлые места знает только эта машина (приёмник не поднят), поэтому
+// складываем «место + сутки» в localStorage и сравниваем с сегодняшним. Стрелка меняется
+// при смене суток, а не мигает от каждой перезагрузки: она отвечает на «как за день».
+const LG_RANK_KEY = 'abusehub-league-rank';
+function lgMovement(rank, total) {
+  const today = new Date().toLocaleDateString('sv');       // YYYY-MM-DD, местные сутки
+  let prev = null;
+  try { prev = JSON.parse(localStorage.getItem(LG_RANK_KEY) || 'null'); } catch (e) {}
+  // Плюс = поднялся (номер места стал меньше).
+  const mv = prev && prev.day === today ? (Number(prev.mv) || 0)
+           : prev ? (Number(prev.rank) || rank) - rank : 0;
+  try { localStorage.setItem(LG_RANK_KEY, JSON.stringify({ day: today, rank, mv, total })); }
+  catch (e) { /* приватный режим — обойдёмся без стрелки */ }
+  return mv;
+}
 // Мини-блок в сайдбаре. Метрика у него ЗАФИКСИРОВАНА — токены за 7 дней: он висит на
 // всех вкладках, и если бы он ездил за переключателем «Лиги», цифра в сайдбаре меняла
 // бы смысл незаметно для того, кто на другой вкладке.
@@ -26805,11 +26841,13 @@ function lgPaintMini(rows, mi) {
   const val = Number((me.tot || {}).tokW) || 0;
   document.getElementById('league-mini-place').textContent = solo ? '1' : String(mi + 1);
   document.getElementById('league-mini-of').textContent = solo ? 'один в лиге' : 'из ' + rows.length;
-  // Движение места. Считать его пока нечем: прошлые места знает приёмник, а он не
-  // поднят. Слот держим видимым прочерком, а не выдуманной стрелкой.
+  // Движение места — за прошлые сутки, по своей же памяти (см. lgMovement).
   const mv = document.getElementById('league-mini-mv');
-  mv.textContent = '—';
-  mv.style.color = 'var(--color-faint,#6b7684)';
+  const mvv = lgMovement(solo ? 1 : mi + 1, rows.length);
+  mv.innerHTML = mvv > 0 ? `▲&thinsp;${mvv}` : mvv < 0 ? `▼&thinsp;${-mvv}` : '—';
+  mv.style.color = mvv > 0 ? 'var(--color-emerald,#3ddc91)'
+    : mvv < 0 ? 'var(--color-crimson,#ff6b6b)' : 'var(--color-faint,#6b7684)';
+  mv.title = mvv ? 'изменение места с прошлых суток' : 'место не менялось с прошлых суток';
   document.getElementById('league-mini-val').textContent = lgTok(val);
   // Спарклайн — свой недельный ряд тем же монотонным сплайном, что на большой витрине.
   const v = ((me.tok || {}).d7 || []).map(x => Number(x) || 0);

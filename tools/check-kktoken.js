@@ -101,6 +101,29 @@ function idCounts(src, pfx) {
     return out;
 }
 
+// NAV_COUNT_JOBS — очередь предзагрузки счётчиков в сайдбаре. Литерал ВЫРЕЗАЕТСЯ и
+// РАЗБИРАЕТСЯ парсером JS, а не матчится построчно: 05.09 запись переписали из пары
+// `['kktoken', fn]` в объект `{ tab, fn, mark }`, и построчный регексп перестал находить
+// цель — проверка покраснела на исправном коде. Обратный промах опаснее: чекер, который
+// ЗЕЛЕНЕЕТ от того, что его регексп больше ничего не находит, в этом репо ловили дважды.
+// Поэтому утверждается наличие СВОЕЙ вкладки в разобранном списке, а не расстановка
+// пробелов; сломается разбор — список пустой и проверка краснеет.
+// Вычислять литерал безопасно: стрелки внутри него не вызываются. `with` над Proxy нужен
+// для записи без стрелки (`fn: loadKkSessionsLight`) — иначе разбор упал бы на
+// ReferenceError; стаб помнит своё имя, поэтому загрузчик виден в обеих формах.
+function navCountJobs(src) {
+    const lit = (/const NAV_COUNT_JOBS\s*=\s*(\[[\s\S]*?\n\];)/.exec(src || '') || [])[1];
+    if (!lit) return [];
+    const stub = (k) => Object.assign(() => {}, { $name: k });
+    const scope = 'new Proxy({}, { has: () => true, get: (_, k) => (typeof k === "symbol" ? undefined : $s(k)) })';
+    let raw;
+    try { raw = new Function('$s', `with (${scope}) return ${lit}`)(stub); } catch { return []; }
+    if (!Array.isArray(raw)) return [];
+    // Старую пару ['tab', fn] читаем тоже: смена формы не должна ломать проверку.
+    return raw.map((j) => (Array.isArray(j) ? { tab: j[0], fn: j[1] } : (j || {})))
+        .map((j) => ({ tab: j.tab, fn: !j.fn ? '' : (j.fn.$name || String(j.fn)) }));
+}
+
 const proxy = read(PROXY);
 const html = read(HTML);
 const keepalive = read(KEEPALIVE);
@@ -280,8 +303,13 @@ section('routing/proxy-dashboard.html · вкладка');
     // сообщало «kk потерялся», хотя терялся только шаблон в этой строке.
     check(/for \(const p of \[[^\]]*'kk'[^\]]*\]\)/.test(html),
         "общий цикл по вкладкам-пулам включает 'kk'");
-    check(/\['kktoken',\s+\(\) => loadKkSessionsLight\(\)\]/.test(html),
-        'NAV_COUNT_JOBS: счётчик в сайдбаре считает kktoken на boot');
+    const navJobs = navCountJobs(html);
+    const navJob = navJobs.find((j) => j.tab === 'kktoken');
+    const navWhy = navJobs.length < 15 ? `литерал NAV_COUNT_JOBS не разобран (записей: ${navJobs.length})`
+        : !navJob ? 'записи kktoken в списке нет — цифра у вкладки на boot не появится'
+        : !/\bloadKkSessionsLight\b/.test(navJob.fn) ? `запись есть, но зовёт не loadKkSessionsLight: ${navJob.fn}`
+        : '';
+    check(!navWhy, `NAV_COUNT_JOBS: счётчик в сайдбаре считает kktoken на boot${navWhy ? ' — ' + navWhy : ''}`);
     // Дубль id — самая тихая поломка фронта: getElementById возьмёт первый, и вторая
     // половина вкладки перестанет обновляться без единой ошибки в консоли.
     const kkIds = idCounts(html, 'kk');

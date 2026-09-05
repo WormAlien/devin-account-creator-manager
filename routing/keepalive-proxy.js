@@ -634,6 +634,16 @@ function publicState() {
 // только грузят шлюз (его WAF чувствителен к пачкам) и hedgeMs надо ПОДНИМАТЬ.
 const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, holds: 0, rotations: 0, byStatus: {}, byModel: {}, winBy: {} };
 const startedAt = Date.now();
+// ── Мягкая остановка ────────────────────────────────────────────────────────────
+// Рестарт хаба гасит прокси, и каждый запрос в полёте превращается для клиента в
+// `Connection closed mid-response` / `ECONNRESET`. Мягко погасить чужой процесс на
+// Windows нельзя (SIGTERM не доставляется, `taskkill` без `/F` для node бесполезен),
+// поэтому сигнал внутриполосный: `POST /__drain` — перестать принимать новые
+// соединения, дожать начатые, выйти. Потолок обязателен: один 12-минутный ответ иначе
+// держал бы рестарт бесконечно.
+let draining = false;
+let inflight = 0;
+const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS || 120000);
 
 // ── История времени ответа: минутные бакеты за сутки ────────────────────────
 // Одна цифра «последний ответ» ничего не объясняет: шлюз то отдаёт за 3с, то за 40с,
@@ -1197,6 +1207,32 @@ function remapHaiku(method, reqPath, body) {
   return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
 }
 
+function maybeExitAfterDrain() {
+  if (!draining || inflight > 0) return;
+  log('дренаж закончен: запросов в полёте нет, выхожу');
+  ev.flush();
+  const t = setTimeout(() => process.exit(0), 50);
+  if (t.unref) t.unref();
+}
+
+function startDrain(res) {
+  const body = JSON.stringify({ ok: true, draining: true, inflight });
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+  res.end(body);
+  if (draining) return;
+  draining = true;
+  log(`дренаж: закрываю слушателя, в полёте ${inflight} запрос(ов), потолок ${DRAIN_MAX_MS}мс`);
+  try { server.close(); } catch (e) { /* уже закрыт */ }
+  const t = setTimeout(() => {
+    if (!draining) return;
+    log(`дренаж: потолок ${DRAIN_MAX_MS}мс истёк, в полёте ещё ${inflight} — выхожу`);
+    ev.flush();
+    process.exit(0);
+  }, DRAIN_MAX_MS);
+  if (t.unref) t.unref();
+  maybeExitAfterDrain();
+}
+
 const server = http.createServer((req, res) => {
   const reqPath = req.url;
   const started = Date.now();
@@ -1211,6 +1247,7 @@ const server = http.createServer((req, res) => {
   let jsonTick = null;            // таймер капания пробела
   let jsonDrips = 0;
   let stallTimer = null;          // страховка от потока, который встал посреди ответа
+  let sentBytes = 0;              // сколько байт СОДЕРЖИМОГО ушло клиенту (для разбора уходов)
   let tail = Buffer.alloc(0);     // последние ≤4 байта отправленного клиенту (для формата keepalive)
   let activeSet = new Set();      // все живые попытки (ретраи + мульти-дубли)
   let winner = null;              // победитель гонки
@@ -1243,6 +1280,10 @@ const server = http.createServer((req, res) => {
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
   let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
   let modelEchoDone = false;      // имя модели в ответе уже подменено (message_start)
+
+  if (req.method === 'POST' && reqPath.replace(/\?.*$/, '') === '/__drain') return startDrain(res);
+  inflight += 1;
+  res.on('close', () => { inflight -= 1; maybeExitAfterDrain(); });
 
   // Служебные пути: статус (health-check дашборда), состояние, runtime-конфиг.
   if (req.url.startsWith('/__')) {
@@ -1473,6 +1514,7 @@ const server = http.createServer((req, res) => {
           if (out === null) return;          // придержали до границы события
           if (!contentSent) { contentSent = true; clearEmptyGuard(); }
           armStall(stream);
+          sentBytes += out.length;
           res.write(out);
           noteBytes(out);
           armTimer();
@@ -1580,6 +1622,7 @@ const server = http.createServer((req, res) => {
       if (out === null) return;            // придержали до границы события
       if (!contentSent) { contentSent = true; clearEmptyGuard(); }
       armStall(stream);
+      sentBytes += out.length;
       res.write(out);
       noteBytes(out);
       armTimer();
@@ -2050,6 +2093,13 @@ const server = http.createServer((req, res) => {
     if (!res.writableEnded) {
       aborted = true;
       ev.note('clientgone');
+      // 🪤 Без этой строки уход клиента приходилось восстанавливать по front-door и
+      // цепочкам пингов: 05.09 на разбор одного такого случая ушло десять минут, а ответ
+      // оказался «клиент сдался сам через 12 минут, пока шлюз ещё отвечал». Теперь видно
+      // сразу: сколько прожил запрос, шло ли содержимое и сколько его ушло.
+      log(`${req.method} ${reqPath} клиент ушёл через ${Math.round((Date.now() - started) / 1000)}с`
+        + ` (${contentSent ? `содержимое шло, отдано ${sentBytes}Б` : 'содержимого не было'}`
+        + `${clientSSE ? ', канал был открыт' : ''}${keepalives ? `, пингов ${keepalives}` : ''})`);
       stopTimer();
       for (const x of activeSet) { try { x.destroy(); } catch (e) {} }
       activeSet.clear();

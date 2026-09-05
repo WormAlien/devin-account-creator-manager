@@ -140,6 +140,7 @@ function spawnKeepalive(port, upPort, env) {
       KEEPALIVE_LOG_FILE: logFile,
       CONFIG_FILE: path.join(TMP, `cfg-${port}.json`),
       LATENCY_FILE: path.join(TMP, `lat-${port}.json`),
+      EVENTS_FILE: path.join(TMP, `ev-${port}.json`),
       KEY_FILE: path.join(TMP, 'no-such-key.txt'),
       AUTOROTATE: '0',
       HAIKU_REMAP: '0',

@@ -58,7 +58,15 @@ const req = n('req');
 const bad = n('err');
 console.log(`запросов        ${req}`);
 console.log(`ответов 2xx     ${n('ok')}`);
-console.log(`ошибок клиенту  ${bad}${req ? `  (${(bad / req * 100).toFixed(2)}%)` : ''}`);
+const cut = n('abort') + n('stall');
+const lost = bad + cut;
+console.log(`ошибок статусом ${bad}`);
+// 🪤 Обрыв посреди ответа статусом не выражается — клиент видит «Connection closed
+// mid-response». Не считать его потерей значит писать «ошибок 0» там, где человек
+// потерял ответ: ровно так и вышло 05.09, когда сводка показывала ноль при четырёх
+// порванных потоках.
+console.log(`оборвано посреди ${cut}`);
+console.log(`итого не доехало ${lost}${req ? `  (${(lost / req * 100).toFixed(2)}%)` : ''}`);
 console.log('');
 console.log('сработали защиты:');
 console.log(`  удержание пути      ${n('hold')}`);

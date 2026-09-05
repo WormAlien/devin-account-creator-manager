@@ -224,8 +224,48 @@ function statusPayload() {
     };
 }
 
+// ── Мягкая остановка: дожать начатое, а не расстрелять ───────────────────────
+// Зачем. Рестарт хаба гасит front-door, и КАЖДЫЙ запрос в полёте превращается для
+// Claude Code в `Connection closed mid-response` или `ECONNRESET`. 05.09 это било по
+// живым сессиям раз за разом: дашборд поднимался по четыре раза в час, а владелец
+// требовал прямо — «прокси не должна рвать соединение».
+// 🪤 На Windows мягко погасить чужой процесс нельзя: SIGTERM не доставляется, а
+// `taskkill` без `/F` для node бесполезен (об это же спотыкается lifecycle.killPort).
+// Поэтому сигнал ВНУТРИПОЛОСНЫЙ: кто гасит — просит `POST /__drain`, и процесс сам
+// перестаёт принимать новые соединения, дожимает начатые и выходит.
+let draining = false;
+let inflight = 0;
+const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS || 120000);
+
+function maybeExitAfterDrain() {
+    if (!draining || inflight > 0) return;
+    log('дренаж закончен: запросов в полёте нет, выхожу');
+    setTimeout(() => process.exit(0), 50).unref();
+}
+
+function startDrain(res) {
+    const body = JSON.stringify({ ok: true, draining: true, inflight });
+    res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+    if (draining) return;
+    draining = true;
+    log(`дренаж: закрываю слушателя, в полёте ${inflight} запрос(ов), потолок ожидания ${DRAIN_MAX_MS}мс`);
+    try { server.close(); } catch (e) { /* уже закрыт */ }
+    // Потолок обязателен: один долгий ответ (наблюдались 12-минутные) иначе держал бы
+    // рестарт бесконечно, и человек убил бы процесс руками — то есть вернулся к разрыву.
+    setTimeout(() => {
+        if (!draining) return;
+        log(`дренаж: потолок ${DRAIN_MAX_MS}мс истёк, в полёте ещё ${inflight} — выхожу`);
+        process.exit(0);
+    }, DRAIN_MAX_MS).unref();
+    maybeExitAfterDrain();
+}
+
 function handle(req, res) {
     const reqPath = req.url || '/';
+    if (req.method === 'POST' && reqPath.replace(/\?.*$/, '') === '/__drain') return startDrain(res);
+    inflight += 1;
+    res.on('close', () => { inflight -= 1; maybeExitAfterDrain(); });
     if (req.method === 'GET' && reqPath.replace(/\?.*$/, '') === '/__frontdoor/api/status') {
         const body = JSON.stringify(statusPayload());
         res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });

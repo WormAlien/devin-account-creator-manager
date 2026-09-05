@@ -24,6 +24,8 @@ const { spawn, spawnSync } = require('child_process');
 const ROUTING = __dirname;
 const ROOT = path.join(__dirname, '..');
 const IS_WIN = process.platform === 'win32';
+// Сколько ждать, пока прокси сам дожмёт начатое и освободит порт (0 = не просить вовсе).
+const DRAIN_WAIT_MS = Number(process.env.DRAIN_WAIT_MS || 45000);
 
 // ── Логи: по файлу на сервис ─────────────────────────────────────────────────
 // Раньше все писали в один routing/dashboard.out.log, и это выяснилось как
@@ -318,9 +320,40 @@ async function killPid(pid, hard) {
 // падал с EADDRINUSE, и человек видел «порт занят» сразу после «порт освобождён».
 // Ровно поэтому в старом бате был цикл :KP_WAITFREE — он здесь сохранён, вместе с
 // его же ограничением в ~8 секунд.
-async function killPort(port, { timeoutMs = 8000 } = {}) {
+// Мягкая остановка порта: попросить процесс дожать начатое и выйти сам.
+// Зачем это здесь, а не в убийстве: на Windows мягко погасить чужой процесс НЕЛЬЗЯ —
+// SIGTERM не доставляется, `taskkill` без `/F` для node бесполезен (ровно об это
+// спотыкается round(IS_WIN) ниже). Поэтому просим по HTTP: `POST /__drain`. Прокси
+// закрывает слушателя, дожимает запросы в полёте и выходит сам — и живые сессии
+// Claude Code не получают `Connection closed mid-response` на каждом рестарте хаба.
+// Кто про `/__drain` не знает — ответит 404 или ничем, и мы просто гасим как раньше.
+async function askDrain(port, waitMs) {
+    const ok = await new Promise(resolve => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/__drain', timeout: 2000 },
+            r => { r.resume(); resolve(r.statusCode === 200); });
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.on('error', () => resolve(false));
+        req.end();
+    });
+    if (!ok) return false;
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+        await sleep(250);
+        if (![...(listeners().get(port) || [])].length) return true;
+    }
+    return false;
+}
+
+async function killPort(port, { timeoutMs = 8000, drainMs = DRAIN_WAIT_MS } = {}) {
     let pids = [...(listeners().get(port) || [])];
     if (!pids.length) return { port, was: [], freed: true, denied: false };
+
+    // Сначала по-хорошему. Потолок ожидания небольшой намеренно: рестарт не должен
+    // висеть минутами из-за одного долгого ответа, а совсем долгие запросы всё равно
+    // придётся оборвать — но их единицы, а коротких в полёте десятки.
+    if (drainMs > 0 && await askDrain(port, drainMs)) {
+        return { port, was: pids.slice(), freed: true, denied: false, drained: true };
+    }
 
     const was = pids.slice();
     let denied = false;

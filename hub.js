@@ -671,6 +671,19 @@ function reporter() {
                 else cur.done(NO(), red(`${ev.name} :${ev.port} НЕ освободился`) + dim(` — держит pid ${(ev.holding || []).join(',')}`));
                 cur = null;
                 break;
+            // Мягкая остановка. Без этих двух строк человек видит паузу и решает, что
+            // хаб подвис, — а он дожимает чужой ответ. Пауза бывает только когда в
+            // полёте действительно что-то есть: на простое процессы выходят за миллисекунды.
+            case 'drain-begin':
+                if (ev.inflight > 0) cur = new Spin(`дожимаю ${ev.inflight} запрос(ов) в полёте`);
+                break;
+            case 'drain-done':
+                if (cur) {
+                    if (ev.stuck.length) cur.done(SKIP(), grey(`не дождался ${ev.stuck.length} — гашу как обычно`));
+                    else cur.done(OK(), `дожал, ${ev.freed} процесс(ов) вышли сами`);
+                    cur = null;
+                }
+                break;
             case 'abort':
                 line(`  ${dim('дальше не иду: остальные порты держит тот же администратор')}`);
                 break;

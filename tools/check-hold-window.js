@@ -25,6 +25,19 @@ const SSE_BODY = 'event: message_start\ndata: {"type":"message_start","message":
   + 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
 const ROUTE_MISS = JSON.stringify({ error: { code: 'model_not_found', message: 'No available channel for model claude-opus-4-8 under group g' } });
 
+// 🪤 Убирать детей ТОЛЬКО в finally недостаточно: необработанное отклонение промиса
+// убивает процесс мгновенно, finally не выполняется, и подставные keepalive остаются
+// слушать порты. Поймано на себе — «провал» регресса оказался залётным процессом от
+// упавшего прогона двадцатью минутами раньше.
+const spawned = [];
+const reap = () => { for (const p of spawned) { try { p.kill(); } catch (e) { /* уже мёртв */ } } };
+process.on('exit', reap);
+process.on('unhandledRejection', (e) => {
+  console.error('НЕОБРАБОТАННОЕ ОТКЛОНЕНИЕ: ' + (e && e.message));
+  reap();
+  process.exit(1);
+});
+
 function waitFor(pred, ms, what) {
   return new Promise((resolve, reject) => {
     const t0 = Date.now();
@@ -150,6 +163,7 @@ function spawnKeepalive(port, upPort, env) {
     }, env),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  spawned.push(kp);
   const box = { proc: kp, log: '' };
   kp.stdout.on('data', (c) => { box.log += c; });
   kp.stderr.on('data', (c) => { box.log += c; });

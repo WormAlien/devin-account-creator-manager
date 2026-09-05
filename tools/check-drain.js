@@ -30,6 +30,19 @@ const SSE = 'event: message_start\ndata: {"type":"message_start"}\n\n'
   + 'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"ДРЕНАЖ-ОК"}}\n\n'
   + 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
 
+// 🪤 Убирать детей ТОЛЬКО в finally недостаточно: необработанное отклонение промиса
+// убивает процесс мгновенно, finally не выполняется, и подставные keepalive остаются
+// слушать порты. Поймано на себе — «провал» регресса оказался залётным процессом от
+// упавшего прогона двадцатью минутами раньше.
+const spawned = [];
+const reap = () => { for (const p of spawned) { try { p.kill(); } catch (e) { /* уже мёртв */ } } };
+process.on('exit', reap);
+process.on('unhandledRejection', (e) => {
+  console.error('НЕОБРАБОТАННОЕ ОТКЛОНЕНИЕ: ' + (e && e.message));
+  reap();
+  process.exit(1);
+});
+
 function waitFor(pred, ms, what) {
   return new Promise((resolve, reject) => {
     const t0 = Date.now();
@@ -75,6 +88,7 @@ function spawnKeepalive(port, upPort) {
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  spawned.push(kp);
   const box = { proc: kp, log: '', exited: false, code: null };
   kp.stdout.on('data', (c) => { box.log += c; });
   kp.stderr.on('data', (c) => { box.log += c; });
@@ -199,8 +213,47 @@ const post = (port, p) => new Promise((resolve) => {
       checks += 3;
     }
 
+    // ── Сцена 4: простаивающий прокси выходит МГНОВЕННО ────────────────────────
+    // Это про кнопку «Перезагрузить»: если дренаж добавляет ожидание на пустом стеке,
+    // человек получает «он что-то долго думает» вместо мгновенного рестарта. Владелец
+    // сказал прямо: «рестартить надо по кнопке и без ожидания».
+    {
+      const [P, U] = [28377, 28378];
+      const gw = stubGateway(U, 100);
+      await gw.listen();
+      const kp = spawnKeepalive(P, U);
+      open.push(gw.srv, kp.proc);
+      await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive (сцена 4)');
+
+      const d = await post(P, '/__drain');
+      assert.ok(/"inflight":0/.test(d.body), `на простое в полёте ноль: ${d.body}`);
+      const t0 = Date.now();
+      await waitFor(() => kp.exited, 3000, 'простаивающий процесс вышел сам');
+      const took = Date.now() - t0;
+      assert.ok(took < 1000, `вышел мгновенно, а не через ожидание (${took}мс)`);
+      checks += 2;
+    }
+
+    // ── Сцена 5: lifecycle просит дренаж у всех портов сразу, не по очереди ─────
+    // Потолок ожидания ОБЩИЙ: иначе дюжина портов × 45с = минуты вместо рестарта.
+    {
+      const src = fs.readFileSync(path.join(__dirname, '..', 'routing', 'lifecycle.js'), 'utf8');
+      assert.ok(/await drainAll\(plan\.map\(i => i\.port\), DRAIN_WAIT_MS, on\);/.test(src),
+        'stop() дренажит весь план одним вызовом до цикла убийств');
+      assert.ok(/Promise\.all\(ports\.map\(async port =>/.test(src),
+        'просьбы уходят параллельно, а не по одной');
+      assert.ok(/drainMs = 0 \} = \{\}\) \{/.test(src),
+        'killPort сам по умолчанию НЕ ждёт — иначе ожидание сложилось бы по портам');
+      // Требование владельца дословно: «если я захотел перезагрузить, пусть он
+      // перезагружается без ожидания». Секунда — это время на закрытие сокетов, а не на
+      // дожимание ответов; больше сюда ставить нельзя, иначе кнопка начнёт «думать».
+      const m = /DRAIN_WAIT_MS \|\| (\d+)/.exec(src);
+      assert.ok(m && Number(m[1]) <= 1000, `рестарт не ждёт: потолок не больше 1с (сейчас ${m && m[1]})`);
+      checks += 4;
+    }
+
     console.log(`check-drain OK (${checks} проверок): начатый запрос дожимается, новые не принимаются, `
-      + 'процесс выходит сам, потолок ожидания работает');
+      + 'процесс выходит сам, простой не добавляет ожидания, потолок общий на весь стоп');
     process.exitCode = 0;
   } catch (e) {
     console.error('ПРОВАЛ: ' + e.message);

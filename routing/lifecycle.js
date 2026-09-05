@@ -24,8 +24,19 @@ const { spawn, spawnSync } = require('child_process');
 const ROUTING = __dirname;
 const ROOT = path.join(__dirname, '..');
 const IS_WIN = process.platform === 'win32';
-// Сколько ждать, пока прокси сам дожмёт начатое и освободит порт (0 = не просить вовсе).
-const DRAIN_WAIT_MS = Number(process.env.DRAIN_WAIT_MS || 45000);
+// Сколько ждать, пока прокси сами закроют слушателя и выйдут (0 = не просить вовсе).
+// 🎯 Решение владельца, 05.09: «если я захотел перезагрузить, пусть он перезагружается
+// без ожидания». Поэтому НЕ ждём, пока дожмутся запросы в полёте — секунды хватает
+// ровно на то, чтобы простаивающий процесс успел закрыться сам.
+// Смысл этой секунды не в дожимании, а в ФОРМЕ закрытия соединений. Жёсткое убийство
+// рвёт keep-alive сокеты через RST: у Claude Code они остаются в пуле как живые, и
+// первый запрос после паузы уходит в мёртвый сокет — `ECONNRESET`, которого в наших
+// логах нет вовсе, потому что до нового процесса он не доехал (наблюдалось 05.09 через
+// 22 минуты после рестарта). Процесс, вышедший сам, закрывает их честным FIN, и клиент
+// выбрасывает их из пула.
+// Простаивающий прокси укладывается в ~300мс, так что на пустом стеке ожидания нет.
+// Кому нужно именно дожимание — DRAIN_WAIT_MS в окружении, потолок в прокси 120с.
+const DRAIN_WAIT_MS = Number(process.env.DRAIN_WAIT_MS || 1000);
 
 // ── Логи: по файлу на сервис ─────────────────────────────────────────────────
 // Раньше все писали в один routing/dashboard.out.log, и это выяснилось как
@@ -327,24 +338,36 @@ async function killPid(pid, hard) {
 // закрывает слушателя, дожимает запросы в полёте и выходит сам — и живые сессии
 // Claude Code не получают `Connection closed mid-response` на каждом рестарте хаба.
 // Кто про `/__drain` не знает — ответит 404 или ничем, и мы просто гасим как раньше.
-async function askDrain(port, waitMs) {
-    const ok = await new Promise(resolve => {
-        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/__drain', timeout: 2000 },
-            r => { r.resume(); resolve(r.statusCode === 200); });
-        req.on('timeout', () => { req.destroy(); resolve(false); });
-        req.on('error', () => resolve(false));
+function askDrainOnce(port) {
+    return new Promise(resolve => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/__drain', timeout: 2000 }, r => {
+            let body = '';
+            r.on('data', c => { body += c; });
+            r.on('end', () => {
+                if (r.statusCode !== 200) return resolve(null);
+                let inflight = 0;
+                try { inflight = Number(JSON.parse(body).inflight) || 0; } catch (e) { /* и так сойдёт */ }
+                resolve({ inflight });
+            });
+        });
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('error', () => resolve(null));
         req.end();
     });
-    if (!ok) return false;
+}
+
+// Оставлено для вызовов, которым нужен дренаж ОДНОГО порта с ожиданием.
+async function askDrain(port, waitMs) {
+    if (!await askDrainOnce(port)) return false;
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-        await sleep(250);
+        await sleep(150);
         if (![...(listeners().get(port) || [])].length) return true;
     }
     return false;
 }
 
-async function killPort(port, { timeoutMs = 8000, drainMs = DRAIN_WAIT_MS } = {}) {
+async function killPort(port, { timeoutMs = 8000, drainMs = 0 } = {}) {
     let pids = [...(listeners().get(port) || [])];
     if (!pids.length) return { port, was: [], freed: true, denied: false };
 
@@ -573,8 +596,36 @@ function status() {
 // phase: 'stop' — всё, включая keepalive неактивных провайдеров и конвертеры
 // Custom (их не снимет уже никто). 'restart' — только то, что дашборд поднимет
 // обратно сам; см. комментарий у children().
+// Попросить ВСЕ порты плана дожать начатое — параллельно, одним общим окном.
+// Возвращает { asked, inflight, freed }: сколько процессов поняли просьбу, сколько
+// запросов они дожимали и сколько портов освободилось само.
+async function drainAll(ports, waitMs, on = () => {}) {
+    if (!(waitMs > 0) || !ports.length) return { asked: 0, inflight: 0, freed: 0 };
+    const answers = await Promise.all(ports.map(async port => {
+        if (![...(listeners().get(port) || [])].length) return null;
+        const r = await askDrainOnce(port);
+        return r ? { port, inflight: r.inflight } : null;
+    }));
+    const asked = answers.filter(Boolean);
+    if (!asked.length) return { asked: 0, inflight: 0, freed: 0 };
+    const inflight = asked.reduce((n, a) => n + (Number(a.inflight) || 0), 0);
+    on({ type: 'drain-begin', ports: asked.map(a => a.port), inflight });
+    const deadline = Date.now() + waitMs;
+    let left = asked.map(a => a.port);
+    while (left.length && Date.now() < deadline) {
+        await sleep(150);
+        left = left.filter(port => [...(listeners().get(port) || [])].length);
+    }
+    const freed = asked.length - left.length;
+    on({ type: 'drain-done', freed, stuck: left, waited_ms: waitMs - Math.max(0, deadline - Date.now()) });
+    return { asked: asked.length, inflight, freed };
+}
+
 async function stop({ phase = 'stop', on = () => {} } = {}) {
     const plan = killPlan(phase);
+    // Сначала по-хорошему и всем сразу: кто простаивает — выйдет сам за десятки
+    // миллисекунд, кто отвечает клиенту — дожмёт. Только потом расстрел отставших.
+    await drainAll(plan.map(i => i.port), DRAIN_WAIT_MS, on);
     const results = [];
     for (const item of plan) {
         on({ type: 'kill-begin', ...item });

@@ -1211,7 +1211,7 @@ function maybeExitAfterDrain() {
   if (!draining || inflight > 0) return;
   log('дренаж закончен: запросов в полёте нет, выхожу');
   ev.flush();
-  const t = setTimeout(() => process.exit(0), 50);
+  const t = setTimeout(() => process.exit(0), 250)   // запас на дослив последнего ответа в сокет;
   if (t.unref) t.unref();
 }
 

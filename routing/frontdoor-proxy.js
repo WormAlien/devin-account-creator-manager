@@ -240,7 +240,7 @@ const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS || 120000);
 function maybeExitAfterDrain() {
     if (!draining || inflight > 0) return;
     log('дренаж закончен: запросов в полёте нет, выхожу');
-    setTimeout(() => process.exit(0), 50).unref();
+    setTimeout(() => process.exit(0), 250)   // запас на дослив последнего ответа в сокет.unref();
 }
 
 function startDrain(res) {

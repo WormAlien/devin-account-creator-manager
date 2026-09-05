@@ -140,6 +140,9 @@ routing/keepalive-latency-*.json
 # История событий прокси: те же минутные бакеты, что латентность — данные, не конфиг
 routing/keepalive-events-*.json
 routing/keepalive-events-*.json.tmp
+# Личность установки (installId + ник) — создаётся на машине самим дашбордом
+# (transparent-proxy.js), в публичный репозиторий ей нельзя
+routing/hub-identity.json
 # Архивы логов прокси: имя со временем, поэтому под `routing/*.log` не попадают
 routing/*.log.*
 # Журнал настоящих токенов (usage-tap во фронт-дворе) — локальные данные расхода

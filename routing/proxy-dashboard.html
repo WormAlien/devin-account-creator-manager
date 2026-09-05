@@ -7784,6 +7784,11 @@ const state = {
   xpActiveModel: '',
   xpModelMap: {},
   github: [],
+  // ── Outlook-ящики (вкладка «Outlook-почты») ──
+  // Записи приходят БЕЗ пароля: у них есть hasPassword/hasSession, самого пароля во
+  // фронте нет ни на секунду. olSummary — сводка от того же /ol/list.
+  outlook: [],
+  olSummary: {},
   ghUsage: {},           // ghId -> [{ tag, status, name, recordId }] — где аккаунт уже израсходован
   ghReveal: {},          // id -> { pass:bool, secret:bool, rec:bool }
   ghMenuOpen: null,      // id открытого меню «⋯»
@@ -14228,7 +14233,7 @@ function renderKk() {
         ${noKey ? '' : actBtn(`kkActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
         ${noKey ? '' : actBtn(`kkPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
         ${ghCredBtn(s, 'kk', idJ)}
-        ${actBtn(`kkOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс kktoken)', '🪙', 'violet')}
+        ${actBtn(`kkOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс kktoken)', '🌐', 'violet')}
         ${actBtn(`kkDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
       </td>
     </tr>`;
@@ -14503,10 +14508,10 @@ async function kkOpenLk(id) {
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     toast(data.already
-      ? '🪙 браузер этого аккаунта уже открыт'
+      ? '🌐 браузер этого аккаунта уже открыт'
       : data.mode === 'register'
-      ? '🪙 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
-      : '🪙 браузер аккаунта открыт на балансе', 'success', 7000);
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
   } catch (e) { toast('ЛК: ' + e.message, 'error'); }
 }
 
@@ -19499,9 +19504,12 @@ function olRowHtml(a) {
     ? `<span class="text-[11px] text-azure" title="Снимок storageState есть${sessAge ? ' · снят ' + esc(sessAge) + ' назад' : ''}">есть${sessAge ? ` <span class="text-faint">· ${esc(sessAge)}</span>` : ''}</span>`
     : `<span class="text-[11px] text-dim" title="Снимка нет — «Взять код» откроет профиль и попросит войти руками">нет</span>`;
   const usedChips = (a.usedOn || []).length
-    ? (a.usedOn || []).map(u =>
-        `<span class="text-[9px] px-1.5 py-0.5 rounded bg-amber/10 border border-amber/40 text-amber" title="израсходован здесь${u.at ? ' · ' + esc(olAge(u.at)) + ' назад' : ''}">${esc(u.tag)}</span>`
-      ).join(' ')
+    ? (a.usedOn || []).map(u => {
+        // Кавычки в onclick — как в actBtn: снаружи одинарные, внутри двойные от
+        // JSON.stringify, любую ' в значении гасим сущностью.
+        const call = `olUnmark(${idJ}, ${JSON.stringify(String(u.tag || ''))})`.replace(/'/g, '&#39;');
+        return `<button onclick='${call}' title="израсходован здесь${u.at ? ' · ' + esc(olAge(u.at)) + ' назад' : ''} — клик снимет метку" class="text-[9px] px-1.5 py-0.5 rounded bg-amber/10 border border-amber/40 text-amber hover:bg-amber/20 transition">${esc(u.tag)}</button>`;
+      }).join(' ')
     : `<span class="text-[10px] text-dim" title="ящик ещё никуда не заселён">свободен</span>`;
   const note = a.note
     ? `<span class="text-[10px] text-faint truncate inline-block max-w-[220px] align-middle" title="${esc(a.note)}">${esc(a.note)}</span>`

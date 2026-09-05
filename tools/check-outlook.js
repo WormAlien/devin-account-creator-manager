@@ -566,6 +566,47 @@ if (!html) {
     check(reads.length === 0, `вкладка нигде не читает пароль из записи${reads.length ? ` — строк: ${reads.length}` : ''}`);
     check(/hasPassword/.test(front), 'вкладка показывает факт «пароль есть» через hasPassword');
     check(/ol-add-pass/.test(html), 'поле пароля есть только в форме заведения ящика');
+
+    // Обратная сторона сверки «зовут ↔ объявлено» из check-hub.js: там ловятся вызовы без
+    // объявления, здесь — объявление без вызова.
+    // 🪤 Ровно так потерялась `olUnmark`. Функция и КНОПКА на чипе «израсходован здесь»
+    // написаны 31.08 одной правкой; откат 04.09 забрал разметку кнопки и оставил
+    // объявление. Снять ошибочную метку стало нечем — только удалить ящик вместе с
+    // профилем, — а все проверки были зелёными: функция-то на месте.
+    // Ищем по всему файлу, а не по JS-блоку вкладки: половина вызовов живёт в разметке
+    // (onclick в тулбаре и в строке таблицы) и в showTab, то есть за границами блока.
+    const OLFN = 'ol[A-Z][A-Za-z0-9]*';
+    const declaredFront = new Map();
+    for (const re of [
+        new RegExp('(?:async\\s+)?function\\s+(' + OLFN + ')\\s*\\(', 'g'),
+        new RegExp('(?:const|let|var)\\s+(' + OLFN + ')\\s*=\\s*(?:async\\s*)?(?:function|\\()', 'g'),
+    ]) for (const m of html.matchAll(re)) {
+        if (!declaredFront.has(m[1])) declaredFront.set(m[1], html.slice(0, m.index).split('\n').length);
+    }
+    const htmlLines = html.split('\n');
+    const calledLive = (name) => {
+        const re = new RegExp('\\b' + name + '\\s*\\(', 'g');
+        return htmlLines.some((l) => {
+            let m; re.lastIndex = 0;
+            while ((m = re.exec(l))) {
+                const before = l.slice(0, m.index);
+                if (/\/\/|^\s*\*/.test(before)) continue;                     // упоминание в комментарии — не вызов
+                if (/(?:function|const|let|var)\s+$/.test(before)) continue;  // это само объявление
+                return true;
+            }
+            return false;
+        });
+    };
+    // Счёт объявлений проверяем отдельно: промахнись регексп — список недостижимых выйдет
+    // пустым, и проверка ниже зазеленела бы, ничего не проверив.
+    check(declaredFront.size > 10, `ol*-функции вкладки найдены (${declaredFront.size})`);
+    const unreachable = [...declaredFront.keys()].filter((n) => !calledLive(n)).sort();
+    check(unreachable.length === 0, `у каждой ol*-функции есть живой вызов${unreachable.length
+        ? ' — недостижимы: ' + unreachable.map((n) => `${n} (объявлена в строке ${declaredFront.get(n)})`).join(', ') : ''}`);
+    // Отдельно и по имени: если однажды снесут и кнопку, и функцию, список выше снова
+    // станет пустым, а способа снять ошибочную метку в дашборде опять не будет.
+    check(calledLive('olUnmark') && /onclick='\$\{call\}'/.test(front),
+        'чип «израсходован здесь» — кнопка с olUnmark: метку снимают кликом, не удалением ящика');
 }
 
 // ── 11. Две тихие потери данных, каждая в одну строку ─────────────────────────

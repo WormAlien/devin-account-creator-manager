@@ -1120,18 +1120,49 @@ function handleAccounts(res) {
 const dashApi = require('../internal/dashboard-api');
 const freemodelManager = require('../internal/freemodel-manager');
 
-function readJsonBody(req) {
+// `maxBytes` — потолок на ТЕЛО, в байтах, необязательный. Без него поведение прежнее:
+// сколько прислали, столько и накопим. С ним чтение прекращается на превышении, и
+// ошибка несёт `httpStatus = 413`, чтобы ручка ответила кодом, а не пятисоткой.
+// Потолок именно параметром, а не общей константой: этой функцией читают ~200 ручек
+// дашборда с разными телами (списки аккаунтов, конфиги, снимки), и один предел на всех
+// — отдельное решение с другим риском. Лиговые ручки свой предел передают явно.
+// 🪤 Проверки размера ВНУТРИ ручек (`leagueImgParse`, длина текста) стоят после разбора
+// JSON, то есть после полной буферизации: без этого потолка десятимегабайтное тело
+// сначала целиком оседало в памяти, и лишь потом получало «много».
+function readJsonBody(req, maxBytes) {
     return new Promise((resolve, reject) => {
+        const max = Number(maxBytes) > 0 ? Number(maxBytes) : 0;
         // Копим Buffer'ы и декодируем разом: `body += chunk` резал многобайтовый
         // UTF-8 на границе чанка и превращал кириллицу в U+FFFD.
         const chunks = [];
-        req.on('data', c => chunks.push(c));
+        let size = 0, done = false;
+        const tooBig = () => {
+            const e = new Error(`тело больше ${Math.round(max / 1024)} КБ`);
+            e.httpStatus = 413;
+            return e;
+        };
+        // Дальше не читаем, но и НЕ рвём соединение: ответ 413 отдаёт ручка, а
+        // `req.destroy()` здесь убил бы его вместе с сокетом. Так же поступает
+        // raw-body: unpipe + pause.
+        const stop = () => { done = true; try { req.unpipe?.(); req.pause?.(); } catch (e) {} };
+        // Заявленную длину проверяем ДО чтения: незачем принимать байты, которые всё
+        // равно отвергнем. Заголовку не доверяем — реальный счёт идёт ниже.
+        const declared = Number((req.headers || {})['content-length']);
+        if (max && Number.isFinite(declared) && declared > max) { stop(); return reject(tooBig()); }
+        req.on('data', c => {
+            if (done) return;
+            size += c.length;
+            if (max && size > max) { chunks.length = 0; stop(); return reject(tooBig()); }
+            chunks.push(c);
+        });
         req.on('end', () => {
+            if (done) return;
+            done = true;
             const body = Buffer.concat(chunks).toString('utf8');
             if (!body) return resolve({});
             try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
         });
-        req.on('error', reject);
+        req.on('error', e => { if (!done) { done = true; reject(e); } });
     });
 }
 
@@ -8429,9 +8460,9 @@ function arApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { 
 // Бакет — час для «дня», сутки для остальных. Плюс текущий снимок пулов, чтобы
 // вкладка не дёргала пять ручек сессий ради двух сумм.
 // ═══════════ ЛИГА: свой срез для рейтинга между установками хаба ════════════
-// Одна ручка отдаёт всё, что рисует вкладка «Лига»: токены, деньги, активность и
-// аккаунты в четырёх окнах. Ключей, почт, ссылок и текста промптов здесь НЕТ —
-// только счётчики, поэтому этот же объект уедет на приёмник без вычищения.
+// Одна ручка отдаёт всё, что рисует вкладка «Лига»: токены, деньги (сожжено и налито),
+// активность и аккаунты в четырёх окнах. Ключей, почт, ссылок и текста промптов здесь
+// НЕТ — только счётчики, поэтому этот же объект уедет на приёмник без вычищения.
 const HUB_IDENTITY_FILE = path.join(__dirname, 'hub-identity.json');
 const CC_STATS_CACHE_FILE = path.join(os.homedir(), '.claude', 'stats-cache.json');
 const CC_HISTORY_FILE = path.join(os.homedir(), '.claude', 'history.jsonl');
@@ -8489,28 +8520,219 @@ function hubIdentity() {
         try { fs.writeFileSync(HUB_IDENTITY_FILE, JSON.stringify(doc, null, 2) + '\n', 'utf8'); }
         catch (e) { logLine(`league identity write: ${e.message}`); }
     }
-    return { installId: doc.installId, nick: doc.nick, joined: doc.joined || null };
+    // Аватарка лежит в этом же файле полным data-URL. Пропускаем её через проверку, а
+    // не отдаём как есть: файл правят руками, а мусор из этого поля уедет соседям
+    // вместе со срезом — обмен и есть единственный канал, по которому лицо доходит.
+    return { installId: doc.installId, nick: doc.nick, joined: doc.joined || null,
+        avatar: avatarFromDoc(doc.avatar) };
+}
+// ── Лицо установки: аватарка в hub-identity.json ─────────────────────────────
+// Хранится ПОЛНЫМ data-URL и одним полем: вкладке её можно подставить в `src` без
+// сборки строки на клиенте, а срезу — отдать как есть. Двадцать килобайт — это не
+// вкус, а арифметика конверта: приёмник режет тело среза на 64 КБ, base64 раздувает
+// байты на 4/3, и сам срез уже занимает 6.6 КБ (замер 05.09).
+const LEAGUE_IMG_MAX_BYTES = 20 * 1024;
+const AVATAR_PREFIX = 'data:image/webp;base64,';
+// Предел длины САМОЙ строки base64 — считается из предела байтов, а не наоборот.
+// Нужен, чтобы отсечь раздутое ДО декодирования: десятимегабайтная строка не должна
+// превращаться в семимегабайтный буфер ради ответа «много».
+const LEAGUE_IMG_MAX_B64 = Math.ceil(LEAGUE_IMG_MAX_BYTES / 3) * 4 + 4;
+
+// Магия webp: `RIFF`, четыре байта длины, `WEBP`. Смотрим на БАЙТЫ, а не на mime из
+// префикса data-URL — префикс пишет отправитель, и поверить ему значит согласиться
+// показывать под видом картинки что угодно, включая html из чужого хаба.
+function isWebp(buf) {
+    return Buffer.isBuffer(buf) && buf.length >= 16
+        && buf.toString('latin1', 0, 4) === 'RIFF'
+        && buf.toString('latin1', 8, 12) === 'WEBP';
+}
+// Разбор картинки, пришедшей из браузера (аватарка и вложение чата — одна проверка).
+// Возвращает { buf, bytes } или { error } текстом, который можно показать человеку:
+// «400» без причины не лечится, а причин ровно три — не webp, велика, не base64.
+function leagueImgParse(v, maxBytes) {
+    const lim = maxBytes || LEAGUE_IMG_MAX_BYTES;
+    if (typeof v !== 'string' || !v.trim()) return { error: 'нет картинки: ждём поле b64 с webp' };
+    const raw = v.trim().replace(/^data:[^,]{0,64},/, '');
+    if (raw.length > Math.ceil(lim / 3) * 4 + 4) {
+        return { error: `картинка больше ${Math.round(lim / 1024)} КБ (в base64 пришло ${raw.length} символов)` };
+    }
+    // `Buffer.from(x, 'base64')` не бросает и молча выкидывает недопустимые символы,
+    // поэтому «это не base64» ловится не здесь, а проверкой магии ниже: мусор просто
+    // не начинается на RIFF/WEBP.
+    const buf = Buffer.from(raw, 'base64');
+    if (!isWebp(buf)) return { error: 'это не webp: в начале файла нет RIFF/WEBP' };
+    if (buf.length > lim) {
+        return { error: `картинка ${(buf.length / 1024).toFixed(1)} КБ, а можно не больше ${Math.round(lim / 1024)} КБ` };
+    }
+    return { buf, bytes: buf.length };
+}
+// Аватарка из файла личности: строка уже наша, но проверяем всё равно — файл правят
+// руками, и битое поле уедет соседям вместе со срезом.
+function avatarFromDoc(v) {
+    if (typeof v !== 'string' || !v.startsWith(AVATAR_PREFIX)) return null;
+    if (v.length > AVATAR_PREFIX.length + LEAGUE_IMG_MAX_B64) return null;
+    return isWebp(Buffer.from(v.slice(AVATAR_PREFIX.length), 'base64')) ? v : null;
+}
+// Запись личности СЛИЯНИЕМ, а не целым объектом. Иначе ручка ника затирает аватарку:
+// она писала файл из трёх полей, и лицо пропадало при первом же переименовании.
+// Поля со `null` удаляются — так поле снимается, а не остаётся пустым.
+// Пишем через временный файл и переименование — как сосед по файлу пишет
+// `league-peers.json` (см. `leagueSync`). Прямая запись рвётся на обрыве и оставляет
+// обрезанный JSON, а в нём теряется `installId` — из него считается ВЕСЬ накопленный
+// рейтинг, и новая личность станет второй строкой в таблице вместо своей. Аватарка тут
+// же добавляет к телу до 27 КБ, то есть запись давно не «атомарная по факту».
+// `renameSync` на Windows идёт через `MoveFileExW` с заменой существующего, поэтому
+// подмена целым файлом работает и здесь.
+function hubIdentityWrite(patch) {
+    let doc = {};
+    try {
+        const raw = fs.readFileSync(HUB_IDENTITY_FILE, 'utf8');
+        doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { /* первый запуск */ }
+    const next = { ...doc, ...patch };
+    for (const k of Object.keys(next)) if (next[k] === null || next[k] === undefined) delete next[k];
+    const tmp = HUB_IDENTITY_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, HUB_IDENTITY_FILE);
+    return next;
 }
 // Единственная реализация правил денежных дельт: знаковый расход, отлов сброса
 // счётчика, дедуп наливки, отметка реконструкции. Ею считают и вкладка «Финансы»,
 // и «Лига» — второй копии этих правил в проекте быть не должно, они уже расходились.
+// ── Чтение append-only журналов ХВОСТОМ ─────────────────────────────────────
+// Кеш по одному `mtimeMs` для этих файлов бесполезен: `token-usage.jsonl` пишется на
+// каждый запрос через front-door, значит промах на каждом обращении и перечитывание
+// 4.9 МБ (плюс 6.5 МБ history.jsonl и 1 МБ finance-history) — из-за этого срез
+// собирался 320–400 мс. Журналы дописываются в конец, поэтому помним смещение и
+// читаем только новое. Файл стал короче (его обрезают по размеру) — читаем заново.
+// Неполную последнюю строку держим в `rest`: запись могла застать нас на середине.
+// Через это читаются ВСЕ ТРИ журнала: finance-history (`financeEntries`),
+// token-usage (`tokenJournalCounts`) и history.jsonl (`ccPromptCounts`). Замер 05.09,
+// три прогона по три вызова в одном процессе: ВТОРАЯ сборка среза при доросшем на
+// строку журнале была 178/157/130 мс, стала 11/11/12 мс. Первая по-прежнему читает
+// журналы целиком (~200 мс) — это цена холодного старта процесса, а не запроса.
+// TTL здесь нет и быть не должно: цифры обязаны быть свежими на момент запроса,
+// дешевизна берётся из смещения, а не из задержки обновления.
+
+// Сколько байт хвоста можно декодировать. Обрыв посреди многобайтового символа —
+// не теория: в `history.jsonl` не-ASCII в 14 671 строке из 17 743 (замер 05.09), а
+// `toString('utf8')` на половине символа подставляет U+FFFD и ломает JSON именно той
+// строки. Незаконченные байты не декодируем и смещение на них НЕ двигаем — они
+// доедут следующим чтением целиком.
+function utf8Cut(buf) {
+    for (let i = buf.length - 1, back = 0; i >= 0 && back < 3; i--, back++) {
+        const b = buf[i];
+        if ((b & 0xC0) === 0x80) continue;                  // байт продолжения — идём назад
+        const need = (b & 0xE0) === 0xC0 ? 2 : (b & 0xF0) === 0xE0 ? 3
+            : (b & 0xF8) === 0xF0 ? 4 : 1;
+        return need > buf.length - i ? i : buf.length;
+    }
+    return buf.length;
+}
+// Свежесть файла НЕЛЬЗЯ сводить к размеру. Замерено 05.09 на этой машине: журнал
+// подменили другим ровно того же размера — суммы остались прежними навсегда (20 000
+// против 199 980 фактических на диске), а обрезка с доливкой выше прежнего размера дала
+// чтение с середины строки (битая строка плюс разъехавшиеся суммы). Поэтому признаков
+// свежести три, а не один:
+//   1. `ino` — идентификатор файла из того же `statSync`, то есть даром. Ловит подмену
+//      через `tmp+rename`. На NTFS замерено: не ноль, у десяти файлов подряд десять
+//      разных значений, не меняется ни при дописывании, ни при перезаписи НА МЕСТЕ,
+//      меняется при `rename`. Node отдаёт его округлённым double (не safe integer),
+//      поэтому на одном совпадении `ino` не останавливаемся.
+//   2. Дописывание СТРОГО увеличивает размер. Равный размер при изменившемся `mtime`
+//      или `ino` — это перезапись, а не дописывание: читаем файл целиком. Скорости это
+//      не стоит: у живого append-only журнала размер после записи всегда больше.
+//   3. Якорь — 128 байт перед запомненным офсетом, перечитанные с диска. Совпали — файл
+//      действительно дорос хвостом; не совпали — под нами переписали уже прочитанное,
+//      сбрасываем накопленное. 128, а не 64: на `history.jsonl` замерено, что у 400
+//      строк подряд последние 64 байта дают всего 18 разных значений (конец строки —
+//      это `project` и `sessionId`, они повторяются), а 128 захватывают `timestamp` и
+//      дают 400 разных из 400.
+// Чего набор НЕ ловит, осознанно: правку в середине уже прочитанного, если размер
+// сохранён и последние 128 байт не тронуты. Поймать такое можно только перечитыванием
+// всего прочитанного, то есть ценой тех самых 150 мс, ради которых всё и сделано.
+const TAIL_ANCHOR = 128;
+// Якорь держим сырыми байтами (`latin1` — байт в символ), а не текстом: он сверяется с
+// диском побайтово и не должен зависеть от декодирования UTF-8. Наружу не уезжает —
+// состояние журналов в HTTP-ответы целиком не сериализуется, вкладки собирают ответ
+// по полям.
+function anchorAt(fd, pos, len) {
+    if (len <= 0) return '';
+    const b = Buffer.allocUnsafe(len);
+    const n = fs.readSync(fd, b, 0, len, pos);
+    return b.subarray(0, n).toString('latin1');
+}
+function tailRead(file, st8) {
+    let st;
+    try { st = fs.statSync(file); } catch { return null; }
+    if (st.mtimeMs === st8.mtime && st.size === st8.size && st.ino === st8.ino)
+        return { text: '', reset: false, st };
+    let grew = st8.size > 0 && st.size > st8.size && st.ino === st8.ino;
+    let from = grew ? st8.size : 0;
+    let text = '', got = 0, fresh = '';
+    try {
+        const fd = fs.openSync(file, 'r');
+        try {
+            // Сверка якоря — ДО чтения хвоста: не совпал, значит никакого хвоста нет,
+            // и читать надо файл целиком с нуля.
+            if (grew) {
+                const back = Math.min(TAIL_ANCHOR, from);
+                if (anchorAt(fd, from - back, back) !== st8.tail) { grew = false; from = 0; }
+            }
+            const len = st.size - from;
+            if (len > 0) {
+                const buf = Buffer.allocUnsafe(len);
+                const n = fs.readSync(fd, buf, 0, len, from);
+                got = utf8Cut(buf.subarray(0, n));
+                text = buf.subarray(0, got).toString('utf8');
+                fresh = buf.subarray(0, got).toString('latin1');
+            }
+        } finally { fs.closeSync(fd); }
+    } catch { return null; }
+    // Новый якорь собирается из прежнего и прочитанных байтов: прежний кончался ровно
+    // там, где начался хвост, — второго чтения диска для этого не нужно.
+    st8.tail = ((grew ? st8.tail : '') + fresh).slice(-TAIL_ANCHOR);
+    st8.mtime = st.mtimeMs; st8.size = from + got; st8.ino = st.ino;
+    return { text, reset: !grew, st };
+}
+// Разбор прочитанного хвоста построчно. Последняя строка без `\n` — недописанная,
+// возвращается в `rest` и уйдёт в начало следующего чтения.
+function tailLines(state, text, reset) {
+    if (reset) state.rest = '';
+    const all = state.rest + text;
+    const parts = all.split('\n');
+    state.rest = parts.pop();
+    return parts;
+}
+
 const GRANT_DEDUP_MS = 5000;
+// Записи истории денег держим РАЗОБРАННЫМИ в памяти: агрегировать по окну — это проход
+// по массиву, а не чтение файла. 7 тыс. записей ≈ 0.7 МБ, потолок файла 8 МБ ≈ 40 тыс.
+let FIN_LOG = { mtime: 0, size: 0, ino: 0, tail: '', rest: '', list: [], bad: 0 };
+function financeEntries() {
+    const r = tailRead(FINANCE_HISTORY_FILE, FIN_LOG);
+    if (!r) return FIN_LOG;
+    if (r.reset) { FIN_LOG.list = []; FIN_LOG.bad = 0; }
+    for (const ln of tailLines(FIN_LOG, r.text, r.reset)) {
+        if (!ln) continue;
+        let e; try { e = JSON.parse(ln); } catch (_) { FIN_LOG.bad++; continue; }
+        const ms = Date.parse(e.t);
+        if (!Number.isFinite(ms)) { FIN_LOG.bad++; continue; }
+        FIN_LOG.list.push({ ms, p: e.p, id: e.id, dS: Number(e.dSpent) || 0,
+            dG: Number(e.dGrant) || 0, spent: Number(e.spent) || 0, est: !!e.est });
+    }
+    return FIN_LOG;
+}
 function financeAggregate(keys, hour) {
     const idx = new Map(keys.map((k, i) => [k, i]));
     const buckets = keys.map(k => ({ k, spend: 0, topup: 0, events: 0,
         resets: 0, dupTopup: 0, estSpend: 0, estTopup: 0,
         tin: 0, tout: 0, tcr: 0, tcw: 0, tcost: 0, treq: 0 }));
-    let lines = 0, used = 0, bad = 0;
+    const log = financeEntries();
+    let used = 0;
     const grantSeen = new Map();
-    let raw = '';
-    try { raw = fs.readFileSync(FINANCE_HISTORY_FILE, 'utf8'); } catch (e) { /* истории ещё нет */ }
-    for (const ln of raw.split('\n')) {
-        if (!ln) continue;
-        lines++;
-        let e; try { e = JSON.parse(ln); } catch (_) { bad++; continue; }
-        const d = new Date(e.t);
-        if (isNaN(d.getTime())) { bad++; continue; }
-        const i = idx.get(bucketKey(d, hour));
+    for (const e of log.list) {
+        const i = idx.get(bucketKey(new Date(e.ms), hour));
         if (i == null) continue;                       // вне окна — молча мимо
         used++;
         const b = buckets[i];
@@ -8518,85 +8740,120 @@ function financeAggregate(keys, hour) {
         // пересчитал в минус) выпадал целиком, и месячная трата выходила завышенной
         // на 6.3%. Отдельно ловим СБРОС счётчика: сильный минус при почти нулевом
         // `spent` — это не откат, а новый цикл на ключе, вычитать его нельзя.
-        const dS = Number(e.dSpent) || 0, dG = Number(e.dGrant) || 0;
-        const isReset = dS < -1 && Math.abs(Number(e.spent) || 0) <= Math.abs(dS) * 0.02;
+        const isReset = e.dS < -1 && Math.abs(e.spent) <= Math.abs(e.dS) * 0.02;
         if (isReset) b.resets++;
-        else if (dS) b.spend += dS;
-        if (dG) {
+        else if (e.dS) b.spend += e.dS;
+        if (e.dG) {
             // Одна наливка, записанная дважды за секунды (два чека подряд по одному
             // ключу), удваивала «пополнено» — на месяце это $908 лишних. Отсеянное не
             // выбрасываем, а копим в `dupTopup`, чтобы расхождение было видно.
-            const gk = `${e.p}|${e.id}|${dG.toFixed(4)}`;
-            const tMs = d.getTime();
+            const gk = `${e.p}|${e.id}|${e.dG.toFixed(4)}`;
             const prevMs = grantSeen.get(gk);
-            if (prevMs && tMs - prevMs <= GRANT_DEDUP_MS) b.dupTopup += dG;
-            else b.topup += dG;
-            grantSeen.set(gk, tMs);
+            if (prevMs && e.ms - prevMs <= GRANT_DEDUP_MS) b.dupTopup += e.dG;
+            else b.topup += e.dG;
+            grantSeen.set(gk, e.ms);
         }
         // `est: true` ставит finance-backfill.js — это реконструкция, не измерение.
         // Считаем отдельно, чтобы вкладка могла сказать, какая часть цифры досочинена.
-        if (e.est) { b.estSpend += Math.max(0, dS); b.estTopup += Math.max(0, dG); }
+        if (e.est) { b.estSpend += Math.max(0, e.dS); b.estTopup += Math.max(0, e.dG); }
         b.events++;
     }
-    return { buckets, idx, lines, used, bad };
+    return { buckets, idx, lines: log.list.length, used, bad: log.bad };
 }
-// Журнал front-door: один проход → суммы по часам и по дням. Токены = ВХОД+ВЫХОД;
-// кеш (чтение/запись) копится отдельно и в метрику не мешается. Кеш нельзя внести
-// в кривую «всё время»: по суткам его знает только сводка `modelUsage` целиком, а
-// не по дням, и смена определения посреди окон соврала бы в главной цифре.
-let TOKEN_JOURNAL_CACHE = { mtime: -1, day: new Map(), hour: new Map(),
-    cday: new Map(), chour: new Map(), lines: 0, first: null };
+// Журнал front-door: один проход → суммы по часам и по дням ПЛЮС сами записи. Токены
+// = ВХОД+ВЫХОД; кеш (чтение/запись) копится отдельно и в метрику не мешается. Кеш
+// нельзя внести в кривую «всё время»: по суткам его знает только сводка `modelUsage`
+// целиком, а не по дням, и смена определения посреди окон соврала бы в главной цифре.
+// Читаем ХВОСТОМ: файл дописывается на каждый запрос через front-door, поэтому кеш по
+// одному `mtimeMs` промахивался почти всегда и каждое обращение перечитывало 4.9 МБ —
+// 130…190 мс на пустом месте (замер 05.09, три прогона).
+// Разобранные записи держим в `list`, потому что вкладка «Финансы» до 05.09 читала
+// ЭТОТ ЖЕ файл третьим разом: теперь она агрегирует своё окно проходом по массиву.
+// Память замерена: 29 194 записи = 3.6 МБ heap, 123 Б на запись. `h` и `m` кладём
+// через `pool` — разных значений на весь журнал ровно 9, а без интернирования те же
+// записи весят 5.4 МБ. Потолок: usage-tap режет файл на 32 МБ (MAX_BYTES), при 169 Б
+// на строку это ≈ 190 тыс. записей ≈ 23 МБ heap; холодное чтение ≈300 мс (9 мс/МБ).
+// Режется целыми локальными сутками, выброшенное уходит в `routing/archive/` — раньше
+// был потолок 8 МБ и выброс половины строк по номеру, то есть посреди суток и насмерть.
+// `seen` (все непустые строки) и `lines` (строки с разбираемой датой) — разные числа:
+// вкладка показывает первое, сшивка окон в `leagueSelf` считает по второму.
+let TOK_LOG = { mtime: 0, size: 0, ino: 0, tail: '', rest: '', day: new Map(), hour: new Map(),
+    cday: new Map(), chour: new Map(), lines: 0, first: null,
+    list: [], seen: 0, bad: 0, pool: new Map() };
 function tokenJournalCounts() {
-    let st; try { st = fs.statSync(TOKEN_USAGE_FILE); } catch { return TOKEN_JOURNAL_CACHE; }
-    if (st.mtimeMs === TOKEN_JOURNAL_CACHE.mtime) return TOKEN_JOURNAL_CACHE;
-    const day = new Map(), hour = new Map(), cday = new Map(), chour = new Map();
-    let lines = 0, first = null;
+    const r = tailRead(TOKEN_USAGE_FILE, TOK_LOG);
+    if (!r) return TOK_LOG;
+    // Журнал ротировали (usage-tap срезал целые сутки в архив) → размер меньше
+    // запомненного → tailRead прочитал файл целиком, и накопленное надо обнулить.
+    // Иначе суммы навсегда остались бы с вкладом строк, которых на диске уже нет.
+    if (r.reset) {
+        TOK_LOG.day = new Map(); TOK_LOG.hour = new Map();
+        TOK_LOG.cday = new Map(); TOK_LOG.chour = new Map();
+        TOK_LOG.lines = 0; TOK_LOG.first = null;
+        TOK_LOG.list = []; TOK_LOG.seen = 0; TOK_LOG.bad = 0; TOK_LOG.pool = new Map();
+    }
     const bump = (m, k, v) => m.set(k, (m.get(k) || 0) + v);
-    try {
-        for (const ln of fs.readFileSync(TOKEN_USAGE_FILE, 'utf8').split('\n')) {
-            if (!ln) continue;
-            let e; try { e = JSON.parse(ln); } catch (_) { continue; }
-            const d = new Date(e.t);
-            if (isNaN(d.getTime())) continue;
-            lines++;
-            if (!first) first = d;
-            const dk = dayKey(d), hk = `${dk}T${pad2(d.getHours())}`;
-            bump(day, dk, (Number(e.in) || 0) + (Number(e.out) || 0));
-            bump(hour, hk, (Number(e.in) || 0) + (Number(e.out) || 0));
-            bump(cday, dk, (Number(e.cr) || 0) + (Number(e.cw) || 0));
-            bump(chour, hk, (Number(e.cr) || 0) + (Number(e.cw) || 0));
-        }
-    } catch (e) { /* журнала ещё нет — не ошибка */ }
-    TOKEN_JOURNAL_CACHE = { mtime: st.mtimeMs, day, hour, cday, chour, lines, first };
-    return TOKEN_JOURNAL_CACHE;
+    const pool = TOK_LOG.pool;
+    const intern = v => {
+        const s = String(v || ''); const p = pool.get(s);
+        if (p === undefined) { pool.set(s, s); return s; }
+        return p;
+    };
+    for (const ln of tailLines(TOK_LOG, r.text, r.reset)) {
+        if (!ln) continue;
+        TOK_LOG.seen++;
+        let e; try { e = JSON.parse(ln); } catch (_) { TOK_LOG.bad++; continue; }
+        const d = new Date(e.t);
+        if (isNaN(d.getTime())) continue;
+        TOK_LOG.lines++;
+        // `first` переустанавливать НЕЛЬЗЯ: это самая ранняя запись за всю историю
+        // журнала, а не первая строка последнего хвоста. По ней считается граница
+        // сшивки со stats-cache — сдвинь её, и сутки посчитаются дважды.
+        if (!TOK_LOG.first) TOK_LOG.first = d;
+        const dk = dayKey(d), hk = `${dk}T${pad2(d.getHours())}`;
+        const tin = Number(e.in) || 0, tout = Number(e.out) || 0;
+        const tcr = Number(e.cr) || 0, tcw = Number(e.cw) || 0;
+        bump(TOK_LOG.day, dk, tin + tout);
+        bump(TOK_LOG.hour, hk, tin + tout);
+        bump(TOK_LOG.cday, dk, tcr + tcw);
+        bump(TOK_LOG.chour, hk, tcr + tcw);
+        TOK_LOG.list.push({ ms: d.getTime(), in: tin, out: tout, cr: tcr, cw: tcw,
+            cost: Number(e.cost) || 0, h: intern(e.h), m: intern(e.m) });
+    }
+    return TOK_LOG;
 }
 
 // Активность = промпты человека из ~/.claude/history.jsonl: одна строка на каждое
 // нажатие Enter. Считаем ТОЛЬКО количество; текст промптов не читается и наружу не
-// уезжает. Файл 6.4 МБ и растёт — кеш по mtime.
+// уезжает. Файл 6.5 МБ и растёт — тоже читаем хвостом, не целиком.
+// Журнал действительно append-only, это проверено, а не предположено: на 05.09 в нём
+// 17 743 строки, timestamp монотонно возрастает, повторы промптов (4227) сохранены —
+// значит Claude Code файл не переписывает и не дедупит.
 // Почему не `dailyActivity` из stats-cache: он считает все сообщения диалога
-// (267 тыс. против 17.5 тыс. промптов) и отстаёт — на 05.09 последний день там 01.09.
-let CC_PROMPTS_CACHE = { mtime: -1, day: new Map(), hour: new Map(), total: 0, first: null };
+// (267 тыс. против 17.7 тыс. промптов) и отстаёт — на 05.09 последний день там 01.09.
+let CC_PROMPTS = { mtime: 0, size: 0, ino: 0, tail: '', rest: '', day: new Map(), hour: new Map(),
+    total: 0, first: null };
 function ccPromptCounts() {
-    let st; try { st = fs.statSync(CC_HISTORY_FILE); } catch { return CC_PROMPTS_CACHE; }
-    if (st.mtimeMs === CC_PROMPTS_CACHE.mtime) return CC_PROMPTS_CACHE;
-    const day = new Map(), hour = new Map();
-    let total = 0, first = null;
-    try {
-        for (const ln of fs.readFileSync(CC_HISTORY_FILE, 'utf8').split('\n')) {
-            if (!ln) continue;
-            let e; try { e = JSON.parse(ln); } catch (_) { continue; }
-            const d = new Date(Number(e.timestamp) || 0);
-            if (isNaN(d.getTime()) || d.getFullYear() < 2024) continue;
-            total++;
-            if (!first) first = d;
-            const dk = dayKey(d), hk = `${dk}T${pad2(d.getHours())}`;
-            day.set(dk, (day.get(dk) || 0) + 1);
-            hour.set(hk, (hour.get(hk) || 0) + 1);
-        }
-    } catch (e) { /* истории нет — активность просто нулевая */ }
-    CC_PROMPTS_CACHE = { mtime: st.mtimeMs, day, hour, total, first };
-    return CC_PROMPTS_CACHE;
+    const r = tailRead(CC_HISTORY_FILE, CC_PROMPTS);
+    if (!r) return CC_PROMPTS;
+    // Этот журнал режем не мы, но если Claude Code его когда-нибудь укоротит, счётчик
+    // обязан пересобраться, а не остаться с промптами, которых на диске уже нет.
+    if (r.reset) {
+        CC_PROMPTS.day = new Map(); CC_PROMPTS.hour = new Map();
+        CC_PROMPTS.total = 0; CC_PROMPTS.first = null;
+    }
+    for (const ln of tailLines(CC_PROMPTS, r.text, r.reset)) {
+        if (!ln) continue;
+        let e; try { e = JSON.parse(ln); } catch (_) { continue; }
+        const d = new Date(Number(e.timestamp) || 0);
+        if (isNaN(d.getTime()) || d.getFullYear() < 2024) continue;
+        CC_PROMPTS.total++;
+        if (!CC_PROMPTS.first) CC_PROMPTS.first = d;
+        const dk = dayKey(d), hk = `${dk}T${pad2(d.getHours())}`;
+        CC_PROMPTS.day.set(dk, (CC_PROMPTS.day.get(dk) || 0) + 1);
+        CC_PROMPTS.hour.set(hk, (CC_PROMPTS.hour.get(hk) || 0) + 1);
+    }
+    return CC_PROMPTS;
 }
 // stats-cache самого Claude Code — единственный источник токенов ДО появления
 // журнала хаба (тот живёт с 25.08). `tokensByModel` — это вход+выход, ровно та же
@@ -8670,7 +8927,13 @@ function leagueAccounts() {
     // упиралась бы в 32 при итоге 174 — как и было в первом прогоне.
     let run = 0;
     const cum = [...byDay.keys()].sort().map(k => { run += byDay.get(k); return [k, run]; });
-    return { bought, boughtCreds, reg, perPool, cum, dated: run };
+    // Отдаём и ПРИРОСТ по дням (`add`), а не только накопление. Причина: `bought + reg`
+    // — это УРОВЕНЬ счётчика, он от окна не зависит по определению, и на витрине все
+    // три плитки («моё · сутки», «неделя», «всё время») показывали одно и то же 174
+    // (замер 05.09). Осмысленный ответ на «за сутки» — прирост внутри окна, а взять его
+    // можно только из настоящих дат заведения, день в день. Разрешение суточное:
+    // `added`/`created` без часа, поэтому «за сутки» = «заведено сегодня».
+    return { bought, boughtCreds, reg, perPool, cum, add: byDay, dated: run };
 }
 // Деньги на руках: сумма ПОЛОЖИТЕЛЬНЫХ остатков по живым ключам денежных шлюзов.
 // Отрицательный остаток — промах угадывания выдачи, в сумму он не идёт: ровно это
@@ -8692,9 +8955,11 @@ function leagueBalance() {
     return { balance: round2(balance), spent: round2(spent), keys, unknown };
 }
 
-// Свой срез целиком. Метрики: токены (вход+выход), деньги (расход), активность
-// (промпты), аккаунты (накопительно). Окна: скользящие сутки по часам, 7 и 30 дней
-// по суткам, всё время по суткам.
+// Свой срез целиком. Метрики: токены (вход+выход), деньги (сожжено `sp` и налито `tu`),
+// активность (промпты), аккаунты (кривая — УРОВЕНЬ счётчика, итоги в `tot` — прирост
+// внутри окна). Окна: скользящие сутки по часам, 7 и 30 дней по суткам, всё время по
+// суткам. Накопительную метрику нельзя итожить уровнем: он от окна не зависит, и
+// «за сутки», «за неделю», «за всё время» выходили одним числом.
 function leagueSelf() {
     const id = hubIdentity();
     const tj = tokenJournalCounts(), pr = ccPromptCounts(), sc = ccDailyTokens();
@@ -8720,15 +8985,20 @@ function leagueSelf() {
     // Токены по дням: где есть журнал хаба — берём его (шире и свежее), раньше —
     // stats-cache. Первые сутки журнала неполные (он начался днём), поэтому граница
     // сдвинута на сутки вперёд, иначе 25.08 просел бы вдвое.
+    // 🪤 Третье условие обязательно: сутки, которые есть ТОЛЬКО в журнале (stats-cache
+    // о них не знает — он отстаёт и видит один Claude Code), иначе молча становились
+    // нулём. Замер 05.09: при обрезке журнала так обнулялись 02.09 и 03.09 — 1,83 млрд
+    // токенов. Неполные сутки журнала всё равно лучше нуля.
     const cut = tj.first ? dayKey(new Date(tj.first.getTime() + 864e5)) : null;
     const tokDay = new Map(sc.day);
-    for (const [k, v] of tj.day) if (!cut || k >= cut) tokDay.set(k, v);
+    for (const [k, v] of tj.day) if (!cut || k >= cut || !sc.day.has(k)) tokDay.set(k, v);
 
     const hKeys = timeKeys(24, true), k7 = timeKeys(7), k30 = timeKeys(30);
     const faDay = financeAggregate(allKeys, false);
     const faHour = financeAggregate(hKeys.keys, true);
     const spDay = new Map(faDay.buckets.map(b => [b.k, b.spend]));
     const topupDay = new Map(faDay.buckets.map(b => [b.k, b.topup]));
+    const dupDay = new Map(faDay.buckets.map(b => [b.k, b.dupTopup]));
     const proj = (m, keys) => keys.map(k => Math.round((m.get(k) || 0)));
     const proj2 = (m, keys) => keys.map(k => round2(m.get(k) || 0));
     // Накопительный счётчик аккаунтов: в дни без закупок держит предыдущее значение.
@@ -8751,23 +9021,55 @@ function leagueSelf() {
         d30: proj(pr.day, k30.keys), all: proj(pr.day, allKeys) };
     const accCurve = { h24: new Array(24).fill(acc.bought + acc.reg),
         d7: accAt(k7.keys), d30: accAt(k30.keys), all: accAt(allKeys) };
+    // Налив — ровно та величина, что рисует вкладка «Финансы»: `topup` из
+    // financeAggregate, где уже применён дедуп (одна наливка, записанная дважды за
+    // секунды, давала +$1030.88 за всё время; отсеянное лежит в `dupTopup` и видно в
+    // `src`). Своего счёта наливки здесь нет намеренно — вторая реализация правил в
+    // этом проекте уже расходилась с первой. Дельты ЗНАКОВЫЕ, как у расхода: откат
+    // выданной квоты вычитается, поэтому отдельные ЧАСОВЫЕ бакеты бывают
+    // отрицательными (05.09: 6 часов из 24 на −$10.78 при +$9405.47 за сутки), а вот
+    // суточных отрицательных нет ни одного из 120 — откаты закрываются тем же днём.
+    const tu = { h24: proj2(new Map(faHour.buckets.map(b => [b.k, b.topup])), hKeys.keys),
+        d7: proj2(topupDay, k7.keys), d30: proj2(topupDay, k30.keys), all: proj2(topupDay, allKeys) };
+    // Прирост аккаунтов за окно — суммой по ФАКТИЧЕСКИМ датам заведения, а не
+    // вычитанием концов кривой `acc`: кривая накопительная и в окне начинается не с
+    // нуля (её затравка — уровень на начало окна), так что «конец минус начало» потеряло
+    // бы всё, что заведено в первый день окна. Даты суточные, часового разреза у них
+    // нет, поэтому `accD` — это «заведено сегодня»; ноль здесь нормальный ответ, а не
+    // поломка (05.09 как раз ноль: последняя закупка 01.09).
+    const accAdd = keys => keys.reduce((s, k) => s + (acc.add.get(k) || 0), 0);
 
     const week = sum(act.d7);
     return {
         nick: id.nick, installId: id.installId, ver: hubBuild().ver, sha: hubBuild().sha,
+        // Лицо едет вместе со счётчиками: обмен срезами — единственный канал между
+        // установками, взять аватарку соседа больше негде. Цена — до 27.3 КБ из 64,
+        // которыми приёмник режет тело (замер: срез без лица 6.6 КБ, с максимальной
+        // аватаркой 33.9 КБ, см. tools/check-league-chat.js).
+        avatar: id.avatar || null,
         stamp: new Date().toISOString(), tzOffsetMin: -new Date().getTimezoneOffset(),
         // Ключи бакетов отдаём ЦЕЛИКОМ, а не подписями для оси: соседей надо
         // совмещать по времени, а не по индексу — у каждой установки своя дата
         // первого дня, и «всё время» у всех разной длины. Подпись клиент сделает сам.
         keys: { h24: hKeys.keys, d7: k7.keys, d30: k30.keys, all: allKeys },
-        tok, sp, act, acc: accCurve,
+        tok, sp, act, acc: accCurve, tu,
         tot: {
             tokD: sum(tok.h24), tokW: sum(tok.d7), tokM: sum(tok.d30), tokA: sum(tok.all),
             spD: round2(sum(sp.h24)), spW: round2(sum(sp.d7)),
             spM: round2(sum(sp.d30)), spA: round2(sum(sp.all)),
+            // Налито (сожжено — это `sp*`). Раньше в срезе был только расход, и вкладка
+            // не могла показать, откуда деньги взялись: замер 05.09 — за неделю сожжено
+            // $6970 при наливе $17559, без второй цифры первая читается как убыток.
+            tuD: round2(sum(tu.h24)), tuW: round2(sum(tu.d7)),
+            tuM: round2(sum(tu.d30)), tuA: round2(sum(tu.all)),
             bal: money.balance, spentAll: money.spent,
             ppd: Math.round(week / 7), promptsAll: pr.total, streak: ccStreak(pr.day),
             bought: acc.bought, reg: acc.reg, keys: money.keys, accDated: acc.dated,
+            // Прирост аккаунтов по окнам. `accA` — уровень (`bought + reg`), остальные
+            // три — сколько заведено ВНУТРИ окна: 0 / 21 / 174 / 174 на 05.09. До этого
+            // во всех трёх плитках стояло 174, потому что итогом брался уровень.
+            accD: accAdd([today]), accW: accAdd(k7.keys),
+            accM: accAdd(k30.keys), accA: acc.bought + acc.reg,
         },
         src: {
             journalFirst: tj.first ? dayKey(tj.first) : null, journalLines: tj.lines,
@@ -8776,7 +9078,15 @@ function leagueSelf() {
             cacheTokD: sum(hKeys.keys.map(k => tj.chour.get(k) || 0)),
             cacheTokW: sum(k7.keys.map(k => tj.cday.get(k) || 0)),
             topupW: round2(sum(k7.keys.map(k => topupDay.get(k) || 0))),
-            dupTopupW: round2(sum(faDay.buckets.filter(b => k7.keys.includes(b.k)).map(b => b.dupTopup))),
+            // Отсеянные дедупом дубли наливки — по всем четырём окнам, иначе цифру
+            // «налито» не с чем сверить: за всё время дедуп снял $1030.88, из них
+            // $1024.16 пришлось на последнюю неделю. Суточное считается по ЧАСОВОМУ
+            // окну (как `tuD`), поэтому его дедуп независим от суточного — это цена
+            // того, что окна агрегируются каждое своим проходом.
+            dupTopupD: round2(sum(faHour.buckets.map(b => b.dupTopup))),
+            dupTopupW: round2(sum(k7.keys.map(k => dupDay.get(k) || 0))),
+            dupTopupM: round2(sum(k30.keys.map(k => dupDay.get(k) || 0))),
+            dupTopupA: round2(sum(allKeys.map(k => dupDay.get(k) || 0))),
             boughtCreds: acc.boughtCreds, perPool: acc.perPool,
         },
     };
@@ -8799,13 +9109,32 @@ function hubBuild() {
 // Соседи по лиге. Приёмника пока нет — файл появится, когда поднимем его на Финке;
 // до тех тех пор лига честно показывает одну строку и объясняет, чего не хватает.
 // Формат файла: { updated: ISO, peers: [ <тот же объект, что отдаёт leagueSelf> ] }
+// Аватарка СОСЕДА проходит ту же строгую проверку, что своя (`avatarFromDoc`: префикс,
+// длина, магия RIFF/WEBP по декодированным байтам), и негодная становится `null`.
+// Своё поле проверяется ровно так же — а чужое приехало с другой машины через приёмник
+// и попадает во вкладке прямо в `src`. Клиентская регулярка проверкой не считается: в
+// этом проекте уже был XSS через подстановку чужого значения, и обязан проверять тот,
+// кто отдаёт. Цена — декодирование до 27 КБ base64 на соседа при сборке ответа.
 const LEAGUE_PEERS_FILE = path.join(__dirname, 'league-peers.json');
 function leaguePeers() {
     try {
         const raw = fs.readFileSync(LEAGUE_PEERS_FILE, 'utf8');
         const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         const peers = Array.isArray(doc) ? doc : (doc.peers || []);
-        return { updated: (doc && doc.updated) || null, peers: peers.filter(p => p && p.installId) };
+        return {
+            updated: (doc && doc.updated) || null,
+            // 🔴 Признак живой строки — `installId` ИЛИ `rid`, и второе тут не для красоты.
+            // С 05.09 публичная выдача приёмника (`peerPublic`) `installId` не содержит вовсе:
+            // строки склеиваются по `rid`, а лица, версии и часовой пояс отдаёт только
+            // `GET /group/<gid>` и только членам группы. Фильтр по одному `installId`
+            // выбрасывал бы ВСЕХ соседей — рейтинг во вкладке опустел бы молча, и выглядело
+            // бы это как «приёмник не отвечает».
+            // ⚠️ Склейку по `installId` здесь НЕ восстанавливать: это ровно тот фильтр,
+            // который дизайн запрещает обходить. Кто есть кто — знает состав группы, и знает
+            // его только член этой группы.
+            peers: peers.filter(p => p && (p.installId || p.rid))
+                .map(p => ({ ...p, avatar: avatarFromDoc(p.avatar) })),
+        };
     } catch { return { updated: null, peers: [] }; }
 }
 
@@ -8837,14 +9166,37 @@ function leagueConfig() {
 }
 let LEAGUE_SYNC_LAST = { at: null, ok: null, error: null, peers: 0 };
 
+// Свой агент без переиспользования TLS-сессий. Это не оптимизация, а условие
+// работоспособности пина: на возобновлённой сессии сервер НЕ присылает сертификат
+// заново, и `getPeerCertificate()` отдаёт пустой объект — отпечаток сравнивать не с
+// чем. Живьём это выглядело так: первый обмен прошёл, следующий через 10 минут упал
+// с «отпечаток не совпал», причём в ошибке отпечаток был пустой. Один запрос раз в
+// десять минут — рукопожатие целиком тут ничего не стоит.
+const LEAGUE_AGENT = new https.Agent({ keepAlive: false, maxCachedSessions: 0 });
+
 // Запрос к приёмнику. Не `fetch`, потому что нужен SNI отдельно от адреса соединения:
 // connect по `cfg.ip`, проверка сертификата — по имени из `cfg.url`. Отключать
 // проверку нельзя: секрет ходит в заголовке, и MITM тут стоит ровно всего.
-function leagueReq(cfg, pathname, method, bodyStr) {
+// `opt`: { raw: true } — отдать тело БАЙТАМИ (вложения чата это webp, и накопление
+// строкой прогоняет его через utf8-декодер и портит), { timeoutMs } — свой таймаут:
+// за чатом стоит человек, и вкладка не должна висеть двадцать секунд на молчащем
+// приёмнике. { headers } — добавить свои заголовки запроса (нужно ровно для условного
+// `If-None-Match`: без него повторное прослушивание голосового тянет файл заново через
+// Швейцарию вместо ответа 304 в триста байт). В режиме `raw` наружу отдаются и ЗАГОЛОВКИ
+// ответа: `ETag` и `Content-Disposition` приёмника нужны отдаче как есть, а второй раз
+// придумать имя файла хабу нечем — он его не хранит. Второго транспорта в файле быть не
+// должно: проверка отпечатка живёт ровно здесь, и её копия неизбежно разойдётся с этой.
+function leagueReq(cfg, pathname, method, bodyStr, opt) {
+    const o = opt || {};
+    const tmo = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : 20000;
     const u = new URL(cfg.url + pathname);
     const tls = u.protocol === 'https:';
     const lib = tls ? https : http;
     const headers = { 'X-League-Key': cfg.key };
+    // Свои заголовки — ПОСЛЕ ключа и без права его перебить: ключ ставит хаб, и только хаб.
+    for (const [k, v] of Object.entries(o.headers || {})) {
+        if (v !== undefined && v !== null && !/^x-league-key$/i.test(k)) headers[k] = v;
+    }
     if (bodyStr) {
         headers['Content-Type'] = 'application/json';
         headers['Content-Length'] = Buffer.byteLength(bodyStr);
@@ -8853,8 +9205,9 @@ function leagueReq(cfg, pathname, method, bodyStr) {
         host: cfg.ip || u.hostname,
         port: u.port || (tls ? 443 : 80),
         path: u.pathname + u.search,
-        method, headers, timeout: 20000,
+        method, headers, timeout: tmo,
     };
+    if (tls) opts.agent = LEAGUE_AGENT;
     if (tls) {
         // Пин вместо доверия к CA и БЕЗ SNI. Причина не в паранойе, а в замере 05.09:
         // happ-tun смотрит SNI в ClientHello и уводит `*.xgate.online` по правилу
@@ -8868,6 +9221,17 @@ function leagueReq(cfg, pathname, method, bodyStr) {
     }
     return new Promise((resolve, reject) => {
         const req = lib.request(opts, res => {
+            // Бинарный режим для вложений: копим Buffer'ы и склеиваем. Поток отсюда в
+            // браузер был бы экономнее, но проверка отпечатка и внятная ошибка при
+            // обрыве стоят дороже двадцати килобайт памяти — картинка целиком уже
+            // ограничена размером webp, который мы согласны принять.
+            if (o.raw) {
+                const chunks = [];
+                res.on('data', c => chunks.push(c));
+                res.on('end', () => resolve({ status: res.statusCode, buf: Buffer.concat(chunks),
+                    type: String(res.headers['content-type'] || ''), headers: res.headers }));
+                return;
+            }
             let data = '';
             res.on('data', c => { data += c; });
             res.on('end', () => resolve({ status: res.statusCode, body: data }));
@@ -8879,11 +9243,13 @@ function leagueReq(cfg, pathname, method, bodyStr) {
                 try { got = (s.getPeerCertificate().fingerprint256 || ''); } catch (e) {}
                 const norm = v => String(v).replace(/[^A-Fa-f0-9]/g, '').toUpperCase();
                 if (norm(got) !== norm(cfg.pin)) {
-                    req.destroy(new Error(`отпечаток приёмника не совпал: ${got.slice(0, 23)}…`));
+                    req.destroy(new Error(got
+                        ? `отпечаток приёмника не совпал: ${got.slice(0, 23)}…`
+                        : 'приёмник не предъявил сертификат (возобновлённая TLS-сессия?)'));
                 }
             }));
         }
-        req.on('timeout', () => req.destroy(new Error('таймаут 20 с')));
+        req.on('timeout', () => req.destroy(new Error(`таймаут ${Math.round(tmo / 1000)} с`)));
         req.on('error', reject);
         if (bodyStr) req.write(bodyStr);
         req.end();
@@ -8926,6 +9292,22 @@ setTimeout(leagueTick, 60_000).unref?.();
 // GET /__switch/api/league — свой срез + соседи одним ответом.
 async function handleLeague(req, res) {
     try {
+        // ⚠ Wildcard-CORS остался на ОДНОЙ читающей ручке лиги — этой. С `/chat` и
+        // `/chat/att/*` он снят 05.09 вместе с приватностью по группам: два утверждения
+        // — «чужие переписки не видит никто» и «любой открытый сайт читает мой чат» —
+        // вместе не живут (дизайн § 3). Здесь витрина рейтинга, и здесь он остаётся.
+        // Проверено 05.09: снаружи страницы дашборда эти ручки не дёргает ничто —
+        // статуслайн хаба не касается, в репо все вызовы это Node и curl (CORS им не
+        // нужен), юзерскриптов нет, абсолютных ссылок на `:8200` в дашборде и его
+        // бэкапах нет, а относительные запросы страницы остаются same-origin и через
+        // фронт-дор `:20100`. Заголовок держится ровно на одном: превью вкладки по
+        // `:8899` / `file://` (см. `proxy-dashboard.html` про CORS у `/gh/keys`).
+        // 🪤 Что здесь ВИДНО чужой странице: ники, числа расхода и токенов, состояние
+        // обмена. `installId` соседей в публичной выдаче приёмника больше нет (строки
+        // склеиваются по `rid`), лиц и версий сборки — тоже; они приезжают только из
+        // `GET /group/<gid>` и только членам. То есть цена wildcard'а здесь стала ровно
+        // «чужой сайт видит доску рейтинга», а не «читает переписку». Расширять нельзя.
+        // Пишущие ручки CORS не ставят намеренно: чужая страница читать может, писать нет.
         res.setHeader('Access-Control-Allow-Origin', '*');
         const me = leagueSelf();
         const nb = leaguePeers();
@@ -8953,17 +9335,1088 @@ async function handleLeagueSync(req, res) {
 
 // POST /__switch/api/league/nick { nick } → сохраняет ник рядом с installId.
 async function handleLeagueNick(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
     try {
-        const body = await readJsonBody(req);
+        const body = await readJsonBody(req, LEAGUE_BODY_MAX);
         const nick = leagueNickClean(body && body.nick);
         if (!nick) return jsonRes(res, 400, { error: 'ник — от 2 до 20 символов' });
         const cur = hubIdentity();
-        const doc = { installId: cur.installId, nick, joined: cur.joined || new Date().toISOString() };
-        fs.writeFileSync(HUB_IDENTITY_FILE, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+        // Слиянием, а не целым объектом: аватарка лежит в этом же файле, и запись
+        // тремя полями стирала её при каждой смене ника.
+        const doc = hubIdentityWrite({ installId: cur.installId, nick,
+            joined: cur.joined || new Date().toISOString() });
         logLine(`league nick → ${nick}`);
         jsonRes(res, 200, { ok: true, nick, installId: doc.installId });
-    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    } catch (e) {
+        if (e && e.httpStatus === 413) return jsonRes(res, 413, { error: e.message });
+        if (e instanceof SyntaxError) return jsonRes(res, 400, { error: 'тело не JSON' });
+        jsonRes(res, 500, { error: e.message });
+    }
 }
+
+// ═══════════ ЛИГА: чат и лицо ═══════════════════════════════════════════════
+// Почему чат ходит ЧЕРЕЗ хаб, а не из браузера прямо в приёмник: приёмник стоит за
+// самоподписанным сертификатом и проверяется по отпечатку (`cfg.pin`), а браузер
+// пиннинг не умеет — он умеет только «доверять CA», и такой запрос падает молча, без
+// внятной ошибки во вкладке. Плюс секрет приёмника: в браузер он не уходит никогда,
+// значит и подписать запрос браузер не может. Отсюда правило: вкладка ходит только на
+// свой localhost, наружу достаёт хаб.
+//
+// Ручки приёмника, которые здесь проксируются:
+//   POST /chat {installId, nick, gid?, text, att?: {b64, dur?, name?}} → {ok, seq, gid?}
+//   GET  /chat?gid=<32 hex>&since=<seq>&gseq=<номер>[&tail=1][&before=<seq>]
+//                                        → {gid, seq, gseq, firstSeq, cold, more, messages,
+//                                           gone, notMember?}
+//   GET  /chat?cur=<gid>:<seq>:<gseq>[,…] → {updated, groups: {<gid>: {…}}, unknown: []}
+//   GET  /chat?since=<seq>&gseq=<номер>   → та же форма без группы — НАСЛЕДУЕМАЯ раскладка
+//   GET  /chat/att/<gid>/<seq>.<ext>      → байты вложения (картинка, звук, файл)
+//   GET  /chat/att/<seq>.<ext>            → то же в наследуемой раскладке
+// ⚠️ Формы БЕЗ группы живые, а не отброшенные: режим приёмника выбирает раскладка данных на
+// ноде (есть ли `members.json`), перевод делает `tools/league-migrate.js` отдельным шагом, и
+// пока он не выполнен, наследуемая форма — единственная, которую приёмник понимает. Хаб этого
+// со своей стороны не видит и не угадывает: он пробрасывает то, что попросила вкладка, а
+// расхождение объясняет приёмник своим 400.
+const LEAGUE_CHAT_TIMEOUT_MS = 10000;
+const LEAGUE_ATT_TIMEOUT_MS = 15000;
+const LEAGUE_TEXT_MAX = 2000;
+// Потолок вложения — тот же, что у приёмника (`MAX_ATT` в league-receiver.js). Держим
+// одно число намеренно: меньше — хаб молча откажет в том, что приёмник принимает,
+// больше — потащим по сети то, что там всё равно получит 413.
+const LEAGUE_ATT_MAX_BYTES = 2 * 1024 * 1024;
+// Аватарку приёмник мерит ТЕМ ЖЕ потолком и в той же единице — 20 КБ декодированных
+// байт (`MAX_AVATAR` в league-receiver.js, с 05.09). Отдельной константы под «предел
+// приёмника» здесь больше нет: она повторяла `LEAGUE_IMG_MAX_BYTES`, ничего не
+// сравнивала и врала в комментарии, будто приёмник считает длину строки data-URL.
+// Своё число одно — `LEAGUE_IMG_MAX_BYTES`, и расхождению не из чего возникнуть.
+const LEAGUE_NO_RECEIVER = 'приёмник не настроен: нет routing/league-config.json';
+// Потолки на ТЕЛО лиговых запросов, ровно как у приёмника: 64 КБ на срез и мелкие
+// записи (`MAX_BODY`), 3 МБ на чат (`MAX_CHAT_BODY` — вложение 2 МБ в base64 весит
+// ~2.67 МБ плюс текст и поля). Больше приёмника ставить нечего: то, что он отобьёт
+// своим 413, незачем сначала тащить по сети. Меньше — откажем в том, что он принимает.
+const LEAGUE_BODY_MAX = 64 * 1024;
+const LEAGUE_CHAT_BODY_MAX = 3 * 1024 * 1024;
+
+// ── Группы, участники, приглашения: формы идентификаторов ────────────────────
+// 🔴 Всё, что из браузера попадает в ПУТЬ или в строку запроса к приёмнику, обязано
+// сначала пройти один из этих предикатов. Формы списаны с приёмника (`GID_RE`, `MID_RE`,
+// ключ карты `invites.json`) и должны с ним совпадать:
+//   · 32 hex — группа. Ровно она уезжает в путь вложения и в `gid=` чата;
+//   · 16 hex — участник. Уезжает в путь исключения из группы;
+//   · 64 hex — приглашение. Это sha256 КОДА, а не сам код: код существует открытым текстом
+//     один раз, в ответе на выдачу, и в путь запроса не попадает никогда.
+// Только строчные — как у приёмника: `GID_RE` там тоже `[a-f0-9]`, и пускать заглавные
+// значило бы отдавать наружу путь, который он всё равно не разберёт.
+const LEAGUE_GID_RE = /^[a-f0-9]{32}$/;
+const LEAGUE_MID_RE = /^[a-f0-9]{16}$/;
+const LEAGUE_INV_RE = /^[a-f0-9]{64}$/;
+const leagueGidOk = v => typeof v === 'string' && LEAGUE_GID_RE.test(v);
+// Пределы на список групп в теле приглашения хаб НЕ повторяет (у приёмника это 1..8), как не
+// повторяет и число групп в `cur=` (16): два числа на одну границу однажды разъезжаются, а его
+// 400 доезжает до вкладки как есть. Здесь проверяется только ФОРМА того, что уедет в путь.
+
+// ── Вложение: имя, длительность, сигнатуры ───────────────────────────────────
+// Видов вложения три (картинка, голосовое, произвольный файл), а конверт один:
+// `att: { mime, b64, dur, name }`. Хаб обязан пропустить его ЦЕЛИКОМ — `dur` это
+// единственный источник длительности голосового (webm от MediaRecorder её в заголовке не
+// несёт), `name` — единственный источник имени файла (из байтов оно не выводится). До 05.09
+// хаб пересобирал вложение как `{ b64 }`, и оба поля до приёмника не доезжали вообще.
+// Доверия к ним нет ни на грош: оба пришли из браузера.
+//
+// Потолок имени — 120 символов, как `MAX_ATT_NAME` у приёмника. Своего числа тут нет.
+const LEAGUE_ATT_NAME_MAX = 120;
+// 🪤 Зарезервированные имена Windows. На ноде они не выстрелят (файл лежит под номером
+// сообщения), но имя уедет в браузер владельца и в его папку загрузок — а он на Windows, и в
+// этом проекте файл с именем `nul` уже ломал работу с git.
+const LEAGUE_WIN_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+// Имя файла: ЧИСТИМ, а не отбиваем сообщение. Негодное превращается в пустую строку, и поле
+// просто не уезжает — потерять текст из-за кривого имени хуже, чем потерять имя.
+// Что вырезается и почему:
+//   · управляющие, CR/LF/NUL — рвут заголовок `Content-Disposition` (Node бросает на них
+//     `ERR_INVALID_CHAR`) и уезжают в лог ноды;
+//   · 🔴 класс `Cf` (U+202E и родня) — символы направления письма: ИМИ ПОДМЕНЯЕТСЯ ВИДИМОЕ
+//     имя, на экране одно, на диске другое. Chromium вырезает их у себя не случайно;
+//   · разделители пути, кавычка и точка с запятой — рамка того же заголовка и обход каталога
+//     прямым текстом.
+// Отличие от приёмникового `attName`: тот при пустом результате подставляет `file.<ext>`,
+// потому что ему нужно имя для вывода расширения. Хабу выдумывать имя незачем — он его
+// пробрасывает, и «нет имени» это честный ответ.
+function leagueAttName(v) {
+    if (typeof v !== 'string') return '';
+    let t = v.replace(/\p{Cc}|\p{Cf}/gu, '')
+        .replace(/[\\/]+/g, '_').replace(/[";]/g, '_').trim();
+    // Точки по краям: `..` целиком, хвостовая точка (Windows её съедает молча).
+    t = t.replace(/^\.+$/, '').replace(/\.+$/, '');
+    if (LEAGUE_WIN_RESERVED.test(t)) t = '_' + t;
+    if (t.length > LEAGUE_ATT_NAME_MAX) {
+        // Режем ОСНОВУ, а не хвост: расширение важнее середины имени.
+        const dot = t.lastIndexOf('.');
+        const ext = dot > 0 ? t.slice(dot, dot + 9) : '';
+        t = t.slice(0, LEAGUE_ATT_NAME_MAX - ext.length) + ext;
+    }
+    return t;
+}
+// Длительность голосового — ПОДСКАЗКА отправителя в секундах, и проверить её нечем ни хабу,
+// ни приёмнику. Отсюда: целое 1…120 — ровно то, что может произвести единственный клиент
+// (вкладка глушит запись на 120 с, `LGC_VOICE_MS`). Негодное — поля нет, и плеер покажет
+// длительность сам, дослушав файл. У приёмника граница шире (20 минут) под будущий длинный
+// звук; здесь стоит клиентская, потому что всё, что выше, нашим звуком быть не может.
+const LEAGUE_ATT_DUR_MAX = 120;
+function leagueAttDur(v) {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) && n >= 1 && n <= LEAGUE_ATT_DUR_MAX ? n : null;
+}
+// Сигнатуры, которые хаб умеет ПРОВЕРИТЬ. Список — копия приёмникового (`ATT_SNIFF` в
+// league-receiver.js) и обязан с ним совпадать: тип отдаётся по БАЙТАМ, а не по заголовку
+// приёмника и не по расширению в запросе. Заголовок — заявление (байты приехали к приёмнику
+// от соседа), расширение — тем более.
+// Порядок значим дважды, как и там: `RIFF` начинают и webp, и wav — различает их слово на
+// 8-м байте; кадровая синхронизация mp3 — самая слабая проверка из всех (11 бит), поэтому
+// последняя и не может перекрыть формат с настоящей магией.
+// 🪤 Появился формат у приёмника — добавить и сюда. Не добавили: он уедет не плеером, а
+// скачиванием (`octet-stream` + `attachment`), то есть деградацией, а не дырой.
+// Поиск по этой таблице обычным объектом безопасен ровно потому, что ключ прошёл
+// `leagueAttExtOk`: среди свойств Object.prototype нет ни одного из [a-z0-9] длиной до восьми
+// (`toString` и `valueOf` с большой буквы, остальные длиннее или с подчёркиваниями). Поднимешь
+// предел длины или пустишь заглавные — это перестанет быть правдой.
+const LEAGUE_ATT_MIME = { webp: 'image/webp', wav: 'audio/wav', webm: 'audio/webm',
+    ogg: 'audio/ogg', m4a: 'audio/mp4', mp3: 'audio/mpeg' };
+const leagueMagic = (b, s, off = 0) => b.length >= off + s.length
+    && b.toString('latin1', off, off + s.length) === s;
+const LEAGUE_ATT_SNIFF = [
+    ['webp', b => isWebp(b)],
+    ['wav', b => b.length > 12 && leagueMagic(b, 'RIFF') && leagueMagic(b, 'WAVE', 8)],
+    ['webm', b => b.length > 16 && b[0] === 0x1A && b[1] === 0x45 && b[2] === 0xDF && b[3] === 0xA3],
+    ['ogg', b => b.length > 16 && leagueMagic(b, 'OggS')],
+    ['m4a', b => b.length > 16 && leagueMagic(b, 'ftyp', 4)],
+    ['mp3', b => b.length > 16 && (leagueMagic(b, 'ID3') || (b[0] === 0xFF && (b[1] & 0xE0) === 0xE0))],
+];
+// Расширение ПО БАЙТАМ или null. `null` — не ошибка: у произвольного файла сигнатуры нет и
+// быть не может, для него отдельная ветка отдачи.
+function leagueAttSniff(buf) {
+    if (!Buffer.isBuffer(buf)) return null;
+    for (const [ext, test] of LEAGUE_ATT_SNIFF) if (test(buf)) return ext;
+    return null;
+}
+// 🔴 Белый список расширений: строго [a-z0-9], до восьми символов. Это единственное, что
+// попадает в путь запроса к приёмнику кроме числа, — поэтому проверка отдельным предикатом, а
+// не внутри длинной регулярки маршрута: `..`, `/`, `\`, `%2f` и точка в этот класс не входят,
+// и собрать путь наружу каталога нечем. Тот же предикат стоит у приёмника (`attExtOk`) и во
+// вкладке: три границы, одна форма.
+const leagueAttExtOk = e => typeof e === 'string' && /^[a-z0-9]{1,8}$/.test(e);
+// 🔴 Путь вложения у приёмника собирается ОДНОЙ функцией, и она единственное место, где эти
+// три значения склеиваются в строку. Форм две, и вторая появилась 05.09 вместе с группами:
+//   · `/chat/att/<номер>.<расширение>` — наследуемая раскладка (плоский журнал). В режиме
+//     личности приёмник отвечает на неё 400 «у вложения теперь есть группа»;
+//   · `/chat/att/<группа>/<номер>.<расширение>` — раскладка по группам. В наследуемом режиме
+//     приёмник такой путь не разбирает вовсе.
+// Хаб не знает, что лежит на ноде (перевод данных делает `tools/league-migrate.js` отдельным
+// шагом), и угадывать не должен: он пробрасывает ту форму, которую попросила вкладка, а
+// расхождение объясняет приёмник своим кодом. Отсюда единственное требование к этой функции —
+// в неё не попадает НИЧЕГО, кроме проверенного `gid`, результата `Number()` и расширения из
+// белого списка.
+function leagueAttPath(gid, seq, ext) {
+    return `/chat/att/${gid ? gid + '/' : ''}${Number(seq)}.${ext}`;
+}
+// `Content-Disposition` произвольного файла. Поля два, и оба обязательны:
+//   · `filename="…"` — только ASCII. Замер на Node v24.16.0: любой символ выше U+00FF, а
+//     также CR, LF и NUL в значении заголовка дают `ERR_INVALID_CHAR`, то есть кириллицу в
+//     это поле не положить физически;
+//   · `filename*=UTF-8''<процентное>` — настоящее имя. 🪤 `encodeURIComponent` оставляет
+//     `'()*` нетронутыми, а в допустимом наборе их нет, и апостроф ломает саму рамку
+//     `кодировка'язык'значение` — докодируем руками, иначе `it's mine.md` даёт битый заголовок.
+// 🔴 `attachment` — не украшение: от исполнения чужого html с нашего origin спасает именно он.
+// `nosniff` заменой НЕ является: при заявленном типе HTML или XML вычисленный тип равен
+// заявленному и алгоритм останавливается, а блокировка по `nosniff` касается только скриптов и
+// стилей. И у самого `attachment` есть граница — его читает только НАВИГАЦИЯ, на `<img>`,
+// `<script>` и `fetch` он не влияет вовсе.
+function leagueAttDisp(name) {
+    const nm = leagueAttName(name) || 'file.bin';
+    const ascii = nm.replace(/[^\w.\-]+/g, '_').slice(0, LEAGUE_ATT_NAME_MAX) || 'file.bin';
+    const pct = encodeURIComponent(nm)
+        .replace(/['()*]/g, ch => '%' + ch.charCodeAt(0).toString(16).toUpperCase());
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${pct}`;
+}
+// Имя из ответа приёмника. Другого источника у хаба нет — имён он не хранит, а приёмник ставит
+// их сам (санировал при приёме). Но заголовок пришёл ПО СЕТИ, поэтому имя вынимается и идёт
+// через свой санитайзер, а не переклеивается строкой: иначе `%E2%80%AE` внутри `filename*`
+// вернёт символ подмены направления письма в папку загрузок владельца, а `inline` от будущей
+// правки приёмника молча снимет скачивание. Для честного имени результат совпадает с
+// присланным байт в байт — правила кодирования у нас с ним одни и те же.
+// `filename*` сильнее `filename` (RFC 6266): в нём настоящее имя, в ASCII-поле — огрубление.
+function leagueAttDispName(headers, fallback) {
+    const raw = String((headers && headers['content-disposition']) || '');
+    let nm = '';
+    const star = /filename\*\s*=\s*UTF-8''([^;\s]+)/i.exec(raw);
+    if (star) { try { nm = leagueAttName(decodeURIComponent(star[1])); } catch { nm = ''; } }
+    if (!nm) {
+        const plain = /filename\s*=\s*"([^"]*)"/i.exec(raw);
+        if (plain) nm = leagueAttName(plain[1]);
+    }
+    return nm || fallback;
+}
+// Байты вложения из браузера: только границы, без решений о типе — тип решают сигнатуры, и
+// решает их приёмник. Своё число здесь ровно одно, `LEAGUE_ATT_MAX_BYTES` (2 МиБ, самый
+// большой из его пределов — картинка): внешняя рамка, чтобы не тащить по сети то, что всё
+// равно получит 413. Частных пределов звука и файла (по 512 КиБ) хаб НЕ повторяет намеренно:
+// два числа на одну границу — готовое расхождение, а его 413 доезжает до вкладки как есть.
+function leagueAttBytes(v, maxBytes) {
+    const lim = maxBytes || LEAGUE_ATT_MAX_BYTES;
+    if (typeof v !== 'string' || !v.trim()) return { error: 'нет байтов: ждём base64 в поле b64' };
+    const raw = v.trim().replace(/^data:[^,]{0,64},/, '');
+    // Отсекаем раздутое ДО декодирования: десятимегабайтная строка не должна превращаться в
+    // семимегабайтный буфер ради ответа «много».
+    if (raw.length > Math.ceil(lim / 3) * 4 + 4) {
+        return { error: `вложение больше ${Math.round(lim / 1024)} КБ`
+            + ` (в base64 пришло ${raw.length} символов)` };
+    }
+    // `Buffer.from(x, 'base64')` не бросает и молча выкидывает недопустимые символы — поэтому
+    // «это не base64» ловится пустотой, а не исключением.
+    const buf = Buffer.from(raw, 'base64');
+    if (!buf.length) return { error: 'вложение не разобралось как base64' };
+    if (buf.length > lim) {
+        return { error: `вложение ${(buf.length / 1024).toFixed(1)} КБ,`
+            + ` а можно не больше ${Math.round(lim / 1024)} КБ` };
+    }
+    return { buf, bytes: buf.length };
+}
+// Кеш и отпечаток вложения — одним местом на все три ответа (медиа, файл, 304).
+// 🔴 Суточный `public, max-age=86400`, стоявший здесь до 05.09, СНЯТ: картинка снятого
+// сообщения открывалась из дискового кеша браузера ещё сутки — удаление выглядело сделанным,
+// а байты оставались доступны. У приёмника на этот счёт `no-store`, и это осознанно.
+// Но в браузер `no-store` ставить нельзя: он запрещает СОХРАНЯТЬ, а значит условный запрос из
+// него не родится вовсе — `ETag` станет мёртвым весом, и каждое повторное прослушивание снова
+// потянет файл целиком через Швейцарию. `no-cache` даёт ровно нужное: хранить можно, ОТДАВАТЬ
+// только после проверки. Повтор стоит 304 (~300 Б), а снятое сообщение проверку не проходит —
+// приёмник отвечает 404, и из кеша оно не покажется.
+// `ETag` приёмника пробрасываем как есть: у него это `"<номер>-<размер>"`, номер не
+// переиспользуется, файл после записи не переписывается — отпечаток точный, а не эвристика.
+// Цена `no-cache` посчитана, а не прикинута: перерисовка ленты идёт одним innerHTML, но запрос
+// рождают только ВИДИМЫЕ картинки (`loading="lazy"`), а плееры молчат до нажатия
+// (`preload="none"`). Худший случай — 20 сообщений в минуту (предел приёмника) × ~5 видимых
+// картинок = ~100 условных запросов в минуту против его же предела 600 на ключ, и каждый по
+// ~300 Б. Суточный кеш стоил бы дешевле в запросах и дороже в главном: снятое сообщение
+// открывалось бы из кеша.
+// Проверяем только форму: заголовок пришёл по сети, а Node на управляющих символах и на всём
+// выше U+00FF в значении бросает `ERR_INVALID_CHAR` — чужая строка тут стоила бы 502 на
+// каждой картинке.
+function leagueAttCacheHead(r) {
+    const head = { 'Cache-Control': 'no-cache' };
+    const tag = (r && r.headers && r.headers.etag) || '';
+    const plain = typeof tag === 'string' && tag.length <= 120 && /^(W\/)?"[^"]+"$/.test(tag)
+        && ![...tag].some(ch => ch.codePointAt(0) < 32 || ch.codePointAt(0) > 126);
+    if (plain) head.ETag = tag;
+    return head;
+}
+
+// ── Кто имеет право ПИСАТЬ в лигу ────────────────────────────────────────────
+// Ограда стоит на КАЖДОЙ пишущей ручке лиги: ник, аватарка (постановка и снятие), отправка
+// в чат, удаление сообщений, а с 05.09 ещё и личность с группами — выдача и погашение
+// приглашения, размен приглашения, создание группы, добавление и исключение участника,
+// выход из лиги. На читающих её нет намеренно: они и так ничего не меняют, а `GET /peers`
+// у приёмника вообще публичная.
+// 🪤 Ставя новую пишущую ручку, ставь и ограду. Забыть её здесь стоит дорого: сервер слушает
+// все интерфейсы и авторизации не имеет вовсе, то есть «простой» межсайтовый POST доедет.
+//
+// Зачем, если CORS на записи не выставлен. Прежний довод «без CORS чужая страница не
+// напишет» верен только для запросов С предполётной проверкой. «Простой» запрос
+// (POST + `text/plain`, или `<form>` с другого сайта) уходит БЕЗ предполёта: ответ чужая
+// страница действительно не прочитает, но запись уже случится. А сервер слушает все
+// интерфейсы и авторизации не имеет вовсе.
+//
+// Два условия, и оба обязаны молчать на не-браузере:
+//   · `Sec-Fetch-Site` ставит сам браузер, из страницы его не подделать. ЕСТЬ заголовок —
+//     обязан быть `same-origin`. Нет — клиент не браузер, и отсутствие не притворяется
+//     доказательством: наши `tools/check-*.js`, `tools/league-join.js` и curl не
+//     отправляют `Sec-Fetch-*` вообще, а ломать их этой правкой нельзя.
+//   · `Origin` — подстраховка для браузера без `Sec-Fetch-*` (Safari до 16.4): есть
+//     `Origin` и он не наш `Host` — отказ. Сверяем host:port, схему не сверяем: хаб
+//     слушает только http, а сравнение со схемой дало бы ложный отказ за прокси.
+// Плюс `Content-Type: application/json` — но ТОЛЬКО когда тело есть. «Простым» такой
+// тип быть не может, он сам требует предполёта; а DELETE ходит без тела и без типа и от
+// браузера (`fetch(url, { method: 'DELETE' })` во вкладке), и от наших скриптов, и
+// требовать тип у пустого тела значило бы сломать ровно тех, кого защищаем.
+// Возвращает `false`, уже ответив клиенту: вызывающему остаётся `return`.
+function leagueWriteGuard(req, res) {
+    const h = (req && req.headers) || {};
+    const site = String(h['sec-fetch-site'] || '').toLowerCase();
+    if (site && site !== 'same-origin') {
+        jsonRes(res, 403, { error: 'писать в лигу можно только со страницы самого хаба'
+            + ` (Sec-Fetch-Site: ${site})` });
+        return false;
+    }
+    const origin = String(h.origin || '');
+    if (!site && origin) {
+        const host = String(h.host || '').toLowerCase();
+        const oHost = origin.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+        if (!host || oHost !== host) {
+            jsonRes(res, 403, { error: 'писать в лигу можно только со страницы самого хаба'
+                + ' (чужой Origin)' });
+            return false;
+        }
+    }
+    const hasBody = Number(h['content-length']) > 0 || !!h['transfer-encoding'];
+    if (hasBody && !/^application\/json\b/i.test(String(h['content-type'] || ''))) {
+        jsonRes(res, 415, { error: 'тело лиговой записи принимается только как application/json' });
+        return false;
+    }
+    return true;
+}
+// Три поля вместе, потому что без любого из них запрос бессмыслен: адрес без ключа
+// получит 401, ключ без адреса некуда посылать.
+function leagueChatReady(c) { return !!(c.enabled && c.url && c.key); }
+
+// Ответ приёмника → браузеру. Тело и код отдаём КАК ЕСТЬ, когда приёмник ответил:
+// его «нет» (429 «один в минуту», 413 «длинно») вкладке важнее нашей обёртки. Свой
+// код 502 ставим только там, где ответа нет вовсе — не-JSON, обрыв, таймаут: это
+// разные беды, и вкладка обязана их различать.
+function leaguePass(res, r, what) {
+    let doc = null;
+    try { doc = JSON.parse(r.body); } catch { /* приёмник ответил не JSON */ }
+    if (doc && typeof doc === 'object') return jsonRes(res, r.status, doc);
+    return jsonRes(res, 502, {
+        error: `приёмник ответил не JSON на ${what} (код ${r.status})`,
+        receiverStatus: r.status, body: String(r.body || '').slice(0, 300),
+    });
+}
+// Обрыв, таймаут, несовпавший отпечаток. `e.message` здесь всегда наш собственный
+// текст, и секрета в нём нет: ключ живёт только в заголовке запроса.
+function leagueFail(res, e, what) {
+    logLine(`league ${what}: ${e.message}`);
+    return jsonRes(res, 502, { error: `приёмник недоступен: ${e.message}` });
+}
+
+// GET /__switch/api/league/chat — прочитать новое и узнать о пропавшем. Форм запроса ДВЕ, и
+// выбирает их вкладка, а не хаб:
+//   · `?gid=<32 hex>&since=<seq>&gseq=<номер>` — одна группа. Ответ как раньше плюс `gid`,
+//     а если тебя в группе нет — `notMember: true` при коде 200;
+//   · `?cur=<gid>:<seq>:<gseq>[,…]` — все свои группы одним запросом. Ответ другой формы:
+//     `{updated, groups: {<gid>: {…}}, unknown: []}`, и страница в 200 сообщений делится
+//     между группами по кругу, чтобы болтливая не заслоняла тихие.
+// Плюс два необязательных: `tail=1` (отдай хвост — первое открытие группы иначе стоит восьми
+// страниц с дна журнала) и `before=<seq>` (прокрутка назад).
+// Курсоров ДВА, и второй тут не для симметрии: `since` умеет только «новее чем», то есть про
+// снятое сообщение он не скажет никогда. Пропажу приёмник перечисляет надгробиями новее
+// клиентского `gseq` (`gone`), а когда перечислить не может — признаётся полем `cold`.
+// 🔴 Хаб на этом пути ПРОКСИ: числа и проверенные `gid` наружу, ответ внутрь как есть. Ни
+// `gid`, ни `cur` он НЕ подставляет по умолчанию — «у чата теперь есть где» это отказ
+// приёмника (400), и подменять его тихим дефолтом значит раздавать чат друзей всякому, кто
+// ходит по старому контракту. По той же причине отсутствие группы здесь не отбивается своим
+// 400: пока данные на ноде не переведены (`members.json` нет), приёмник работает по старому
+// контракту, и запрос без группы — единственный, который у него вообще есть.
+async function handleLeagueChatGet(req, res) {
+    // 🔴 Wildcard-CORS СНЯТ 05.09 вместе с приватностью по группам. Прежний довод («вкладку
+    // смотрят из черновика по file://») остался в силе, но два утверждения — «чужие переписки
+    // не видит никто» и «любой открытый сайт читает мой чат через мой же хаб» — вместе не
+    // живут, и выбор сделан в пользу первого (см. дизайн § 3). Заголовок держится теперь
+    // только на общем обзоре лиги (`handleLeague`): там витрина рейтинга, а не переписка.
+    // Цена снятия названа честно: превью чата по `:8899` / `file://` перестаёт работать, и
+    // проверка «на чтении есть CORS» в tools/check-league-chat.js обязана быть снята той же
+    // правкой — файл чужой, поэтому это согласуется, а не правится отсюда.
+    const c = leagueConfig();
+    // Приёмник не настроен — это НЕ ошибка: вкладка обязана показать «чата пока нет»,
+    // а не сломаться на первом же опросе. Поэтому 200 и пустой список.
+    if (!leagueChatReady(c)) {
+        return jsonRes(res, 200, { messages: [], seq: 0,
+            receiver: { configured: false, note: LEAGUE_NO_RECEIVER } });
+    }
+    // База в `new URL` — заглушка: нужны только searchParams, а от порта прослушки
+    // этот разбор зависеть не должен (иначе регресс не сможет позвать ручку без
+    // поднятого сервера). Оба курсора пересобираем ЧИСЛАМИ — строка из браузера в путь
+    // запроса к приёмнику не попадает.
+    const q = new URL(req.url, 'http://hub.local').searchParams;
+    const cur = k => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(Number(q.get(k)) || 0)));
+    const since = cur('since');
+    const gseq = cur('gseq');
+    // Хвост запроса собирается из проверенных кусков, а не переклеивается из присланного:
+    // `tail` только точное `1`, `before` только числом, `gid` только 32 hex.
+    let tail = q.get('tail') === '1' ? '&tail=1' : '';
+    const before = cur('before');
+    if (before > 0) tail += `&before=${before}`;
+    let where = '';
+    const curRaw = q.get('cur');
+    const gid = q.get('gid');
+    if (curRaw !== null) {
+        // Карта курсоров ПЕРЕСОБИРАЕТСЯ из разобранных значений: каждая запись это 32 hex и
+        // два целых, всё остальное — свой 400 с описанием ожидаемого. Присланное в ответ не
+        // возвращаем: он уедет в разметку вкладки. Молчаливо отбросить кривую запись нельзя —
+        // молча отброшенная группа никогда не обновится, и заметить это неоткуда.
+        const parts = String(curRaw).split(',').map(s => s.trim()).filter(Boolean);
+        const out = [];
+        for (const p of parts) {
+            const m = /^([a-f0-9]{32}):(\d{1,15}):(\d{1,15})$/.exec(p);
+            if (!m) {
+                return jsonRes(res, 400, { error: 'ждём cur=<32 hex>:<seq>:<gseq>[,…]' });
+            }
+            out.push(`${m[1]}:${Number(m[2])}:${Number(m[3])}`);
+        }
+        if (!out.length) return jsonRes(res, 400, { error: 'пустой cur=' });
+        // Числа `since`/`gseq` в этой форме бессмысленны — они внутри карты. Наружу уходит
+        // ровно `cur=`, а не оба контракта сразу: приёмник читает `cur` первым, и лишние
+        // параметры сбивали бы с толку в его же логах.
+        where = `/chat?cur=${out.join(',')}`;
+    } else if (gid !== null) {
+        if (!leagueGidOk(gid)) return jsonRes(res, 400, { error: 'gid — 32 символа [a-f0-9]' });
+        where = `/chat?gid=${gid}&since=${since}&gseq=${gseq}`;
+    } else {
+        where = `/chat?since=${since}&gseq=${gseq}`;
+    }
+    try {
+        const r = await leagueReq(c, where + tail, 'GET', null,
+            { timeoutMs: LEAGUE_CHAT_TIMEOUT_MS });
+        // Тело приёмника уходит в браузер целиком: `gid`, `gseq`, `firstSeq`, `cold`, `coldWhy`,
+        // `more`, `notMember`, `groups`, `unknown` — хаб их не пересобирает и не досочиняет.
+        // Приёмник прежней сборки лишний параметр просто не заметит и ответит без новых полей —
+        // и это законный ответ, вкладка его переживает (проверено `lgChatTake` на ответе без них).
+        return leaguePass(res, r, 'чтение чата');
+    } catch (e) { return leagueFail(res, e, 'чат (чтение)'); }
+}
+
+// POST /__switch/api/league/chat { text, att? } — написать в чат.
+// `installId` и `nick` из тела не читаются ВООБЩЕ: их ставит хаб из hubIdentity().
+// Иначе любая страница, открытая в браузере, напишет в лигу под чужим именем с нашей
+// машины — и подписано это будет нами.
+async function handleLeagueChatPost(req, res) {
+    // CORS здесь намеренно НЕ включён (в отличие от чтения). Но одного этого мало:
+    // «простой» межсайтовый запрос уходит без предполёта и до обработчика доезжает,
+    // поэтому источник проверяется явно — см. leagueWriteGuard. Черновик вкладки по
+    // file:// писать не сможет: это цена того, что чужая открытая страница не сможет тоже.
+    if (!leagueWriteGuard(req, res)) return;
+    const c = leagueConfig();
+    if (!leagueChatReady(c)) return jsonRes(res, 503, { error: LEAGUE_NO_RECEIVER });
+    try {
+        const body = await readJsonBody(req, LEAGUE_CHAT_BODY_MAX);
+        const text = String((body && body.text) || '').trim();
+        if (text.length > LEAGUE_TEXT_MAX) {
+            return jsonRes(res, 400, { error: `сообщение длиннее ${LEAGUE_TEXT_MAX} символов` });
+        }
+        const id = hubIdentity();
+        const out = { installId: id.installId, nick: id.nick, text };
+        // 🔴 Группа — единственное поле тела, которое хаб берёт ИЗ БРАУЗЕРА, и берёт только по
+        // форме (32 hex). Подделать ею автора нельзя: право писать приёмник проверяет по ЗАПИСИ
+        // участника (`inGroup`), то есть чужая группа даёт 403, а не запись в чужую переписку.
+        // Нет группы — поля нет: в наследуемом режиме её и не должно быть, а в режиме личности
+        // приёмник ответит своим 400 «у чата теперь есть где». Придумывать группу по умолчанию
+        // хабу нечем и незачем — список своих групп знает только приёмник (`GET /me`).
+        const gidRaw = body && body.gid !== undefined && body.gid !== null && body.gid !== ''
+            ? String(body.gid) : '';
+        if (gidRaw) {
+            if (!leagueGidOk(gidRaw)) return jsonRes(res, 400, { error: 'gid — 32 символа [a-f0-9]' });
+            out.gid = gidRaw;
+        }
+        // Вложение: из браузера принимаем и голую строку base64, и `{ b64, mime, dur, name }` —
+        // обе формы живые. Наружу уходит форма приёмника (`m.att.b64`), причём ИСХОДНОЙ
+        // строкой: пересборка base64 здесь ничего не даёт, а расхождение с байтами, которые
+        // приёмник запишет в файл, — даст.
+        // 🔴 Проверка «это webp» здесь СНЯТА 05.09, и это починка, а не ослабление: она
+        // отбивала кодом 400 голосовое (webm) и любой файл — ровно то, что вкладка умеет
+        // отправлять, а приёмник принимать. Тип вложения решают БАЙТЫ, и решает их приёмник по
+        // сигнатуре; он же держит частные пределы веса (звук и файл по 512 КиБ) и отвечает на
+        // промах своим 413 с внятным текстом, который доезжает до вкладки как есть.
+        // Заявленный `mime` наружу не уходит вовсе — приёмник его не читает by design.
+        const attObj = body && body.att && typeof body.att === 'object' ? body.att : null;
+        const attRaw = attObj ? attObj.b64 : (body ? body.att : undefined);
+        if (attRaw !== undefined && attRaw !== null && attRaw !== '') {
+            const a = leagueAttBytes(attRaw, LEAGUE_ATT_MAX_BYTES);
+            if (a.error) return jsonRes(res, 400, { error: `вложение: ${a.error}` });
+            out.att = { b64: attRaw };
+            // `dur` и `name` — ПРОБРОСОМ, каждое со своей проверкой, и негодное отбрасывается
+            // молча: потерять текст из-за кривого имени хуже, чем потерять имя. Какое из полей
+            // осмысленно (длительность — у звука, имя — у файла), решает приёмник по сигнатуре
+            // и лишнее выбрасывает сам. Решать это здесь значило бы завести второй список
+            // форматов, а два списка на одну границу однажды разъезжаются.
+            const dur = leagueAttDur(attObj && attObj.dur);
+            if (dur) out.att.dur = dur;
+            const nm = leagueAttName(attObj && attObj.name);
+            if (nm) out.att.name = nm;
+        }
+        // Пустое проверяем ПОСЛЕ вложения: картинка без подписи — законное сообщение,
+        // приёмник такое принимает (`if (!text && !att)` у него же). Отсеки текст
+        // раньше — и «отправить одну картинку» перестанет работать через хаб.
+        if (!text && !out.att) return jsonRes(res, 400, { error: 'пустое сообщение' });
+        const r = await leagueReq(c, '/chat', 'POST', JSON.stringify(out),
+            { timeoutMs: LEAGUE_CHAT_TIMEOUT_MS });
+        return leaguePass(res, r, 'отправку в чат');
+    } catch (e) {
+        // 413 — свой, от потолка тела: приёмник до него не звался, и «приёмник
+        // недоступен» здесь было бы ложью.
+        if (e && e.httpStatus === 413) return jsonRes(res, 413, { error: e.message });
+        if (e instanceof SyntaxError) return jsonRes(res, 400, { error: 'тело не JSON' });
+        return leagueFail(res, e, 'чат (отправка)');
+    }
+}
+
+// DELETE /__switch/api/league/chat/<seq>?gid=… — убрать одно сообщение;
+// DELETE /__switch/api/league/chat?gid=…&mine=1 — убрать все свои в этой группе;
+// DELETE /__switch/api/league/chat?gid=…&all=1  — вычистить журнал группы целиком.
+// `installId` подставляет ХАБ, из браузера он не принимается: иначе можно удалить
+// чужое, выдав себя за автора. В режиме личности приёмник это значение не читает вовсе —
+// «своё» он определяет по записи участника, — но отправлять его хаб продолжает: в
+// наследуемом режиме это единственный признак «мои», и та кнопка живая.
+// 🔴 Права в режиме личности проверяет ПРИЁМНИК, и они разные: свои сообщения снимает любой
+// член группы, чужое — только автор или создатель группы и только с `force=1`, а `all=1`
+// (журнал группы целиком) — право одного создателя. Хаб их не дублирует и не подменяет: его
+// отказ и отказ по праву должны быть различимы во вкладке.
+// 🔴 Разбор пути — строгий, и это не вкусовщина. До 05.09 «всё остальное» означало
+// «удалить ВСЕ мои сообщения»: маршрут ловит запрос ПРЕФИКСОМ, поэтому в эту ветку
+// падали `/chat/5/`, `/chat/abc`, `/chat/1234567890123456` (16 цифр мимо регулярки) и
+// даже `/chat/att/5.webp`. Любой промах в сборке URL кнопки удаления стирал человеку
+// всю его переписку — молча и с кодом 200. Теперь неразобранный хвост это 400, а
+// массовые ветки включаются ТОЛЬКО явным `mine=1` / `all=1`.
+// ⚠️ Группа проверяется по ФОРМЕ и пробрасывается; её ОТСУТСТВИЕ своим 400 здесь не
+// отбивается. Причина: пока `members.json` на ноде нет, приёмник работает по старому
+// контракту, и запрос без группы у него единственный законный. В режиме личности он сам
+// отвечает 400 «смысл „весь журнал“ без группы не определён» — и это честнее, чем хаб,
+// угадывающий раскладку данных, которую он не видит.
+const LEAGUE_CHAT_BASE = '/__switch/api/league/chat';
+async function handleLeagueChatDelete(req, res) {
+    // Удаление — тоже запись, и самая необратимая из четырёх: `mine=1` снимает всю
+    // свою переписку. Источник проверяется ДО разбора пути; на пустых заголовках
+    // (Node, curl) ограда молчит — см. leagueWriteGuard.
+    if (!leagueWriteGuard(req, res)) return;
+    try {
+        const c = leagueConfig();
+        if (!c.enabled || !c.url || !c.key) {
+            return jsonRes(res, 200, { ok: false, removed: 0,
+                receiver: { configured: false, note: 'приёмник не настроен' } });
+        }
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const me = hubIdentity().installId;
+        if (!q.pathname.startsWith(LEAGUE_CHAT_BASE)) {
+            return jsonRes(res, 400, { error: 'не наш путь для удаления сообщений' });
+        }
+        // Группа — до разбора пути: она нужна всем трём ветвям одинаково.
+        const gidRaw = q.searchParams.get('gid');
+        if (gidRaw !== null && !leagueGidOk(gidRaw)) {
+            return jsonRes(res, 400, { error: 'gid — 32 символа [a-f0-9]' });
+        }
+        const gid = gidRaw === null ? '' : `&gid=${gidRaw}`;
+        // Хвост после базы. Пустой (или одиночный `/`) — это ручка всего журнала;
+        // `/<цифры>` — одно сообщение; всё прочее не разобрано, и додумывать нельзя.
+        const tail = q.pathname.slice(LEAGUE_CHAT_BASE.length);
+        const seqM = /^\/(\d{1,15})$/.exec(tail);
+        let path;
+        if (seqM) {
+            const seq = Number(seqM[1]);
+            if (!Number.isSafeInteger(seq) || seq < 1) {
+                return jsonRes(res, 400, { error: 'номер сообщения — целое число больше нуля' });
+            }
+            path = `/chat/${seq}?installId=${encodeURIComponent(me)}${gid}`
+                + (q.searchParams.get('force') === '1' ? '&force=1' : '');
+        } else if (tail !== '' && tail !== '/') {
+            // Текст запроса в ответ НЕ возвращаем: он приходит из браузера, а ответ
+            // вкладка кладёт в разметку. Ошибка описывает ожидаемое, а не присланное.
+            return jsonRes(res, 400, { error: 'путь не разобран: ждём /league/chat/<номер> из цифр '
+                + 'либо /league/chat?mine=1 (все свои) или ?all=1 (весь журнал)' });
+        } else if (q.searchParams.get('all') === '1') {
+            path = `/chat?all=1${gid}`;
+        } else if (q.searchParams.get('mine') === '1') {
+            // `mine=1` уезжает наружу вместе с `installId`: в наследуемом режиме работает
+            // второе, в режиме личности первое — и оба варианта означают одно и то же.
+            path = `/chat?installId=${encodeURIComponent(me)}&mine=1${gid}`;
+        } else {
+            // Раньше здесь стояло массовое удаление своих. Молчаливое расширение до
+            // «всех моих» — единственная ошибка в этой ручке, которая теряет данные.
+            return jsonRes(res, 400, { error: 'нужен номер сообщения в пути либо явный '
+                + 'mine=1 (удалить все свои) или all=1 (вычистить журнал целиком)' });
+        }
+        const r = await leagueReq(c, path, 'DELETE', null, { timeoutMs: 15000 });
+        res.writeHead(r.status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(r.body);
+    } catch (e) { jsonRes(res, 502, { error: `приёмник: ${e.message}` }); }
+}
+
+// GET /__switch/api/league/chat/att/<seq>.<ext>          — вложение (наследуемая раскладка);
+// GET /__switch/api/league/chat/att/<gid>/<seq>.<ext>    — вложение в группе (с 05.09).
+// Картинка, голосовое или произвольный файл. До 05.09 регулярка пропускала ТОЛЬКО `.webp`, и
+// это было безопасное состояние: скачивание чего угодно другого отвечало 400, то есть звук и
+// файлы через хаб физически не ходили ни в одну сторону, сколько бы ни умели вкладка и приёмник.
+// Расширение пущено в путь вместе с заголовками отдачи — по-другому этого сделать нельзя:
+//   · тип по СИГНАТУРЕ и только для проверенных байтов (картинка, звук);
+//   · всё прочее — `application/octet-stream` И `Content-Disposition: attachment`.
+// Обе формы адреса живут одновременно НАМЕРЕННО: раскладку данных на ноде хаб не видит, а
+// плоский адрес в режиме личности приёмник отбивает своим 400 «у вложения теперь есть группа» —
+// и этот отказ доезжает до вкладки как есть. Права на чтение вложения проверяет ТОЖЕ приёмник
+// (членство в группе по записи участника); хаб их не дублирует, но и не глотает его отказ.
+async function handleLeagueAtt(req, res) {
+    // 🔴 Wildcard-CORS СНЯТ 05.09 вместе с приватностью по группам: адрес вложения — это канал
+    // в переписку, и «любой открытый сайт качает картинки из моего чата» с приватными группами
+    // не совместимо. Для самого дашборда заголовок и не нужен: картинка тянется относительным
+    // путём, same-origin. Разбор решения — в `handleLeagueChatGet` и в дизайне § 3.
+    // 🔴 Разбор пути — три проверки, и все несущие. Группа: только `leagueGidOk`, то есть
+    // 32 символа [a-f0-9]. Номер: только цифры, дальше в путь идёт результат `Number()`, а не
+    // текст запроса. Расширение: только `leagueAttExtOk`, то есть [a-z0-9] до восьми символов.
+    // Куски захватываются НАРОЧНО широко, чтобы попытка обхода доехала до предиката и получила
+    // внятный 400, а не молча не совпала с регуляркой: `att/../../secret`, `att/../1.webp`,
+    // `att/1.webp/../../x`, `%2e%2e%2f`, `..\..\`, `%00` — ни один такой кусок через
+    // [a-f0-9]{32} и [a-z0-9]{1,8} не проходит, и в путь к приёмнику не попадает ничего, кроме
+    // группы, числа и расширения из белого списка (склейка — `leagueAttPath`, одна на файл).
+    // Имя файла из запроса в путь не идёт вообще: его в запросе и нет — на диске приёмника файл
+    // лежит под номером сообщения, а имя приезжает отдельным полем ленты.
+    const m = /^\/__switch\/api\/league\/chat\/att\/(?:([^/?]{1,64})\/)?([^./?]{1,32})\.([^/?]{1,64})(?:\?|$)/
+        .exec(req.url);
+    // Форму пути называет КАЖДЫЙ отказ этой ручки, а не только первый. Во-первых, так отказ
+    // сам себя объясняет, во-вторых, на подстроку `chat/att` в тексте ошибки стоит приёмочная
+    // проверка живого хаба (tools/check-after-restart.js, проба `att/nan.webp`) — без неё
+    // «маршрут вложения не доехал» и «номер не разобрался» стали бы неотличимы.
+    const want = ' — ждём /chat/att/<номер>.<расширение>'
+        + ' либо /chat/att/<группа>/<номер>.<расширение>';
+    if (!m) return jsonRes(res, 400, { error: `путь не разобран${want}` });
+    // Группы в адресе может не быть (наследуемая раскладка), но если она есть — она обязана
+    // быть группой, а не «чем-то похожим». `undefined` от необязательной группы в путь не
+    // попадает: `leagueAttPath` собирает плоскую форму.
+    const gid = m[1] === undefined ? '' : m[1];
+    if (gid && !leagueGidOk(gid)) {
+        return jsonRes(res, 400, { error: `группа вложения — 32 символа a-f0-9${want}` });
+    }
+    if (!/^\d{1,15}$/.test(m[2])) {
+        return jsonRes(res, 400, { error: `номер вложения — целое число${want}` });
+    }
+    const seq = Number(m[2]);
+    if (!Number.isSafeInteger(seq) || seq < 1) {
+        return jsonRes(res, 400, { error: `номер вложения — целое число больше нуля${want}` });
+    }
+    const ext = m[3];
+    if (!leagueAttExtOk(ext)) {
+        // Присланный хвост в ответ не возвращаем: он приходит из браузера, а ответ вкладка
+        // кладёт в разметку. Ошибка описывает ожидаемое, а не присланное.
+        return jsonRes(res, 400, { error: `расширение вложения — до восьми символов a-z0-9${want}` });
+    }
+    const c = leagueConfig();
+    if (!leagueChatReady(c)) return jsonRes(res, 404, { error: LEAGUE_NO_RECEIVER });
+    try {
+        // Условный запрос пробрасываем внутрь: приёмник считает `ETag` как `"<номер>-<размер>"`
+        // и на совпадении отвечает 304. Без этого проброса повторное прослушивание голосового
+        // каждый раз тянуло бы файл целиком через Швейцарию.
+        const r = await leagueReq(c, leagueAttPath(gid, seq, ext), 'GET', null,
+            { raw: true, timeoutMs: LEAGUE_ATT_TIMEOUT_MS,
+                headers: { 'If-None-Match': req.headers['if-none-match'] } });
+        // 🔴 304 обязан доехать до браузера кодом 304, а не превратиться в 502 «приёмник не
+        // отдал»: иначе проброс условного запроса выше становится вредительством — файл не
+        // пришёл, и ошибка на месте картинки.
+        if (r.status === 304) {
+            res.writeHead(304, leagueAttCacheHead(r));
+            return res.end();
+        }
+        if (r.status !== 200) {
+            // 🔴 Отказ приёмника доезжает СВОИМ кодом, а не превращается в общий 502. Кодов
+            // четыре, и каждый значит своё: 400 — «у вложения теперь есть группа» (плоский адрес
+            // после перевода данных), 403 — «ты не в этой группе» (членство проверяет он, и это
+            // не поломка), 404 — вложения нет (снято вместе с сообщением или выпало по обрезке),
+            // 429 — его предел на отдачу файлов. Подменять их своим 502 значило бы врать вкладке
+            // про недоступность приёмника, который ответил внятно и по делу.
+            // Текст берём ЕГО, когда он прислал JSON: наш пересказ здесь только терял бы причину.
+            let doc = null;
+            try { doc = JSON.parse(r.buf.toString('utf8')); } catch { /* не JSON — свой текст */ }
+            const own = r.status >= 400 && r.status < 500;
+            if (own && doc && typeof doc === 'object') {
+                return jsonRes(res, r.status, { ...doc, receiverStatus: r.status });
+            }
+            return jsonRes(res, own ? r.status : 502,
+                { error: `приёмник не отдал вложение ${seq} (код ${r.status})`, receiverStatus: r.status });
+        }
+        // Сигнатуру смотрим ПЕРЕД отдачей и на БАЙТАХ. Заявленный приёмником `Content-Type`
+        // здесь не читается вовсе: байты пришли к нему от соседа, его заголовок — пересказ, а
+        // отдавать чужой html со своего origin под видом картинки нельзя.
+        const sniff = leagueAttSniff(r.buf);
+        const inline = LEAGUE_ATT_MIME[ext];
+        if (inline) {
+            // Расширение обещает проверяемое медиа — байты обязаны это подтвердить, и ИМЕННО
+            // этим форматом. Расхождение (webp в пути, html или mp3 в байтах) наружу не идёт:
+            // приёмник такого не записывает, значит это либо подмена, либо порча.
+            if (sniff !== ext) {
+                return jsonRes(res, 502, { error: `вложение ${seq} — не ${ext}:`
+                    + ' байты не подтверждают расширение' });
+            }
+            res.writeHead(200, { 'Content-Type': inline, 'Content-Length': r.buf.length,
+                'X-Content-Type-Options': 'nosniff', ...leagueAttCacheHead(r) });
+            return res.end(r.buf);
+        }
+        // Непроверяемое — только байтами на скачивание. Даже если сигнатура что-то узнала:
+        // расширение в пути и байты в теле должны говорить одно и то же, и `octet-stream` тут
+        // не осторожность, а единственный честный ответ. `attachment` обязателен — от
+        // исполнения чужого html с нашего origin спасает он, а не `nosniff` (см. leagueAttDisp).
+        res.writeHead(200, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': r.buf.length,
+            'Content-Disposition': leagueAttDisp(leagueAttDispName(r.headers, `${seq}.${ext}`)),
+            'X-Content-Type-Options': 'nosniff',
+            ...leagueAttCacheHead(r),
+        });
+        return res.end(r.buf);
+    } catch (e) { return leagueFail(res, e, `вложение ${seq}`); }
+}
+
+// POST /__switch/api/league/avatar { b64 } — своё лицо. Кладём в hub-identity.json,
+// оттуда его берёт срез, а разносит обмен: отдельной ручки у приёмника для этого нет.
+async function handleLeagueAvatar(req, res) {
+    // CORS не включаем намеренно — как и у отправки в чат: это запись, и делать её
+    // должен дашборд со своего origin, а не любая открытая в браузере страница.
+    // Отсутствие CORS чужую запись не отменяет (простой запрос идёт без предполёта),
+    // поэтому источник проверяется явно.
+    if (!leagueWriteGuard(req, res)) return;
+    try {
+        const body = await readJsonBody(req, LEAGUE_BODY_MAX);
+        const img = leagueImgParse(body && body.b64);
+        if (img.error) return jsonRes(res, 400, { error: img.error });
+        // base64 пересобираем из ДЕКОДИРОВАННЫХ байтов, а не пишем присланную строку:
+        // так в файл не попадут переводы строк, base64url и прочий разброс
+        // кодировщиков, и поле остаётся ровно тем, что подставляется в `src`.
+        const url = AVATAR_PREFIX + img.buf.toString('base64');
+        hubIdentityWrite({ avatar: url });
+        logLine(`league avatar → ${img.bytes} Б`);
+        const out = { ok: true, bytes: img.bytes };
+        // Предупреждение о расхождении границ снято 05.09: приёмник теперь мерит
+        // ДЕКОДИРОВАННЫЕ байты тем же потолком 20 КБ, что и хаб. Единица одна на оба
+        // конца — расхождению больше не из чего возникнуть, и врать «соседям не уедет»
+        // при укладывающейся аватарке нельзя. Проверка границы осталась там же, у него.
+        return jsonRes(res, 200, out);
+    } catch (e) {
+        if (e && e.httpStatus === 413) return jsonRes(res, 413, { error: e.message });
+        if (e instanceof SyntaxError) return jsonRes(res, 400, { error: 'тело не JSON' });
+        return jsonRes(res, 500, { error: e.message });
+    }
+}
+
+// DELETE /__switch/api/league/avatar — снять лицо. Тела нет и не ждём: снимать нечего
+// кроме одного поля. Кнопка «убрать лицо» во вкладке бьёт ровно сюда и считает успехом
+// только `200 {ok:true}` — контракт клиента, менять его нельзя.
+// Почему отдельная ручка, а не `POST { b64: null }`: постановка требует ГОДНОГО webp
+// (`leagueImgParse` отбивает пустое первым же условием), то есть снять лицо через неё
+// нельзя в принципе. `hubIdentityWrite` умеет удалять поле значением `null` — до этой
+// ручки так его не звал никто, и возможность лежала мёртвой.
+// Идемпотентна: лица не было — всё равно `ok`, потому что запрошенное состояние
+// достигнуто. Отличить два случая можно по `had`, врать про «снято» не приходится.
+async function handleLeagueAvatarDelete(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
+    try {
+        const had = !!hubIdentity().avatar;
+        // `null`, а не пустая строка: пустую `avatarFromDoc` не пропустит, но поле
+        // осталось бы в файле и уехало бы в срез мусором.
+        hubIdentityWrite({ avatar: null });
+        logLine(`league avatar снят${had ? '' : ' (его и не было)'}`);
+        return jsonRes(res, 200, { ok: true, had });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// ═══════════ ЛИГА: личность, группы, приглашения ════════════════════════════
+// Ручки приёмника, которые здесь проксируются (все — режим личности, в наследуемом он на
+// них отвечает 409 «каталог данных ещё не переведён»):
+//   GET    /me                          → своя запись и список своих групп
+//   DELETE /me                          → уйти из лиги целиком (status: left)
+//   GET    /peers                       → витрина рейтинга (публичная, без `installId` и лиц)
+//   POST   /invite {groups?,ttlHours?,uses?} → код приглашения, показывается ОДИН раз
+//   GET    /invite                      → свои непогашенные приглашения
+//   DELETE /invite/<64 hex>             → погасить приглашение
+//   POST   /join {code|invite}          → разменять приглашение (БЕЗ ключа)
+//   POST   /group {title}               → создать группу
+//   GET    /group/<32 hex>              → состав группы: лица, `installId`, версии — членам
+//   POST   /group/<32 hex>/member {memberId} → добавить (может любой член)
+//   DELETE /group/<32 hex>/member/<16 hex>[?purge=1] → исключить (создатель) или уйти самому
+//
+// 🔴 Хаб здесь ПРОКСИ, и это не лень, а граница ответственности: все права (кто может
+// приглашать, кто исключать, кто чистить журнал) живут у приёмника и опираются на ЗАПИСЬ
+// участника, которой у хаба нет. Дублировать их значило бы завести вторую копию правил,
+// которая однажды разойдётся с первой и начнёт отказывать в том, что приёмник разрешает
+// (или наоборот). Хаб делает ровно три вещи: проверяет ФОРМУ того, что уедет в путь,
+// закрывает записи оградой источника и собирает строку приглашения — её приёмник собрать
+// не может, потому что своего внешнего адреса не знает, а у хаба он в конфиге.
+// Своих кодов ответа у этого блока два: 400 на кривую форму (до сети) и 503 «приёмник не
+// настроен». Всё остальное — ответ приёмника как есть, включая 401 «токен не принят», 403
+// по праву и 409 «данные ещё не переведены».
+// CORS на этих ручках НЕТ намеренно: wildcard остался только на общем обзоре лиги
+// (`handleLeague`), где витрина рейтинга. `/me` и `/group/<gid>` отдают `installId`, лица и
+// версии сборки — им чужой origin противопоказан по построению.
+
+// `/join` — единственная ручка, которой ключ не нужен: свежая установка его ещё не имеет,
+// и весь смысл размена в том, чтобы его получить. Адрес приёмника при этом обязателен —
+// без него запрос некуда посылать.
+function leagueJoinReady(c) { return !!(c.enabled && c.url); }
+// Тело записи — по БЕЛОМУ списку полей. Не «пробросить как пришло»: тело приходит из
+// браузера, а у приёмника поля тела читаются по имени, и лишнее там однажды станет значимым.
+// Значения не переписываем — их проверяет он, и его 400 доезжает до вкладки как есть.
+function leagueBodyPick(body, keys) {
+    const out = {};
+    if (!body || typeof body !== 'object') return out;
+    for (const k of keys) if (body[k] !== undefined) out[k] = body[k];
+    return out;
+}
+// Один транспорт на все ручки этого блока. Второго быть не должно: проверка отпечатка живёт
+// в `leagueReq`, и её копия неизбежно разойдётся с оригиналом.
+async function leagueProxy(res, pathname, method, bodyObj, what, opt) {
+    const o = opt || {};
+    const c = leagueConfig();
+    const ready = o.join ? leagueJoinReady(c) : leagueChatReady(c);
+    if (!ready) return jsonRes(res, 503, { error: LEAGUE_NO_RECEIVER });
+    try {
+        const r = await leagueReq(c, pathname, method,
+            bodyObj === undefined || bodyObj === null ? null : JSON.stringify(bodyObj),
+            { timeoutMs: LEAGUE_CHAT_TIMEOUT_MS });
+        return leaguePass(res, r, what);
+    } catch (e) { return leagueFail(res, e, what); }
+}
+// Тело записи прочитать и не соврать про причину: 413 от своего потолка, 400 на не-JSON.
+// Возвращает `null`, УЖЕ ответив клиенту.
+async function leagueReadBody(req, res) {
+    try { return { body: await readJsonBody(req, LEAGUE_BODY_MAX) }; }
+    catch (e) {
+        if (e && e.httpStatus === 413) jsonRes(res, 413, { error: e.message });
+        else if (e instanceof SyntaxError) jsonRes(res, 400, { error: 'тело не JSON' });
+        else jsonRes(res, 500, { error: e.message });
+        return null;
+    }
+}
+// ── Строка приглашения: собирает ХАБ ────────────────────────────────────────
+// 🔴 Приёмник отдаёт `{code, id, expires}` и добавляет готовый блоб `xgl1_…` ТОЛЬКО если знает
+// свой внешний адрес (`LEAGUE_URL`/`PUBLIC_URL` в окружении сервиса). Обычно не знает — и это
+// правильно: адрес, по которому к нему ходят, известен не ему, а тому, кто ходит. У хаба в
+// `routing/league-config.json` лежат и `url`, и `pin`, причём ПРОВЕРЕННЫЕ: именно ими он
+// разговаривает с приёмником прямо сейчас, включая сверку отпечатка на каждом рукопожатии.
+// Значит строку подключения собирает он.
+// Формат — тот же, что у приёмника (`inviteBlob`), иначе `POST /join` его не разберёт:
+//   `xgl1_` + base64url(JSON { v: 1, u: <адрес>, p: <отпечаток hex UPPER>, c: <код> })
+// Почему адрес и отпечаток внутри строки, а не отдельно: это не секреты (отпечаток описывает
+// публичный сертификат, адрес и так виден в трафике), зато именно они превращали подключение
+// в ручную сверку 64 hex-символов, где ошибка выглядит как «приёмник не отвечает».
+// 🔴 Что в блобе секретно — КОД. Он существует открытым текстом ровно один раз, в ответе на
+// выдачу; на диске приёмника лежит только его sha256. Отсюда два запрета: код и блоб не
+// попадают в лог НИКОГДА (в лог уезжает `id`, то есть хеш), и в ответ браузеру не уезжает
+// ничего, кроме того, что человек передаёт другу.
+const LEAGUE_BLOB_PREFIX = 'xgl1_';
+function leagueInviteBlob(c, code) {
+    const url = String((c && c.url) || '').replace(/\/+$/, '');
+    if (!url || typeof code !== 'string' || !code) return '';
+    // Отпечаток канонизируем так же, как `leagueReq` перед сверкой: hex без разделителей,
+    // заглавными. В конфиге он лежит с двоеточиями (95 символов), у приёмника считается
+    // сплошным — и обе стороны нормализуют, но в блоб кладём одну форму, а не «как лежало».
+    const pin = String((c && c.pin) || '').replace(/[^A-Fa-f0-9]/g, '').toUpperCase();
+    const body = { v: 1, u: url, ...(pin ? { p: pin } : {}), c: code };
+    return LEAGUE_BLOB_PREFIX + Buffer.from(JSON.stringify(body), 'utf8').toString('base64url');
+}
+// Оговорка, которая стоит трёх строк и снимает целый класс «у друга не работает»: адрес из
+// нашего конфига может быть локальным. Тогда строка технически верна и бесполезна — друг по
+// ней не дойдёт. Молчать об этом нельзя, но и отказывать в выдаче незачем: код-то рабочий.
+const LEAGUE_LOCAL_HOST = /^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1)/i;
+function leagueBlobHint(url) {
+    let host = '';
+    try { host = new URL(String(url)).host; } catch { return 'адрес приёмника в конфиге не разбирается'; }
+    return LEAGUE_LOCAL_HOST.test(host)
+        ? 'адрес приёмника в конфиге локальный — по такой строке друг с другой машины не дойдёт'
+        : '';
+}
+
+// GET /__switch/api/league/me — своя запись у приёмника: `memberId`, ник, статус, список групп.
+// Отдельная ручка, а не поле `/health`: на здоровье висят приёмка выката и доказательство
+// подключения в `league-join.js`, и авторизация там ломает все три сразу.
+async function handleLeagueMe(req, res) {
+    return leagueProxy(res, '/me', 'GET', null, 'свою запись в лиге');
+}
+// DELETE /__switch/api/league/me — уйти из лиги целиком. После этого приёмник отвечает 401 на
+// всё, кроме `/peers` и `/join`, а вернуться можно только по новому приглашению.
+// 🔴 Путь сверяется ЦЕЛИКОМ (в маршруте), а не префиксом. Причина ровно та же, что у снятия
+// лица: подпутей у этой ручки нет, а `startsWith` пустил бы сюда запрос с хвостом — то есть
+// промах в сборке URL кнопки означал бы выход из лиги, молча и с кодом 200.
+async function handleLeagueMeDelete(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
+    return leagueProxy(res, '/me', 'DELETE', null, 'выход из лиги');
+}
+// GET /__switch/api/league/peers — витрина рейтинга ЖИВЬЁМ, минуя кеш `league-peers.json`.
+// 🪤 Ручка у приёмника публичная, но ключ хаб всё равно предъявляет (его ставит `leagueReq`), и
+// это меняет ответ: свою строку приёмник не возвращает. Для вкладки так и надо — своё она берёт
+// из `leagueSelf()`, — но общий вид собирается из ДВУХ источников, и второй здесь не появится.
+// 🔴 `installId`, лица, `ver`, `sha` и часовой пояс из этой выдачи исчезли by design: строки
+// склеиваются по `rid`, а всё перечисленное отдаёт только `GET /group/<gid>` и только членам.
+// Восстанавливать склейку на хабе НЕЛЬЗЯ: это ровно тот фильтр, который дизайн запрещает
+// обходить, и обойти его здесь значит вернуть раздачу `installId` незнакомцу.
+async function handleLeaguePeers(req, res) {
+    return leagueProxy(res, '/peers', 'GET', null, 'витрину рейтинга');
+}
+
+// GET /__switch/api/league/group/<gid> — состав группы. Единственное место, где наружу уезжают
+// лицо, `installId`, версия сборки и часовой пояс, и только членам этой группы.
+async function handleLeagueGroupGet(req, res, gid) {
+    if (!leagueGidOk(gid)) return jsonRes(res, 400, { error: 'gid — 32 символа [a-f0-9]' });
+    return leagueProxy(res, `/group/${gid}`, 'GET', null, 'состав группы');
+}
+// POST /__switch/api/league/group { title } — создать группу. Создатель получает право
+// исключать и чистить журнал; проверяет это приёмник по своей записи, не хаб.
+async function handleLeagueGroupCreate(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
+    const b = await leagueReadBody(req, res);
+    if (!b) return;
+    return leagueProxy(res, '/group', 'POST', leagueBodyPick(b.body, ['title']), 'создание группы');
+}
+// POST /__switch/api/league/group/<gid>/member { memberId } — добавить участника. Может любой
+// член группы (требование владельца), и `memberId` едет в ТЕЛЕ, а не в пути: форму его проверит
+// приёмник, а обхода каталога телом не бывает.
+async function handleLeagueGroupMemberAdd(req, res, gid) {
+    if (!leagueWriteGuard(req, res)) return;
+    if (!leagueGidOk(gid)) return jsonRes(res, 400, { error: 'gid — 32 символа [a-f0-9]' });
+    const b = await leagueReadBody(req, res);
+    if (!b) return;
+    return leagueProxy(res, `/group/${gid}/member`, 'POST',
+        leagueBodyPick(b.body, ['memberId']), 'добавление в группу');
+}
+// DELETE /__switch/api/league/group/<gid>/member/<mid>[?purge=1] — исключить участника или уйти
+// самому. `purge=1` вычищает ещё и его сообщения из журнала группы — право создателя.
+// Оба идентификатора идут в ПУТЬ, поэтому оба проверяются формой до сети.
+async function handleLeagueGroupMemberDelete(req, res, gid, mid, purge) {
+    if (!leagueWriteGuard(req, res)) return;
+    if (!leagueGidOk(gid)) return jsonRes(res, 400, { error: 'gid — 32 символа [a-f0-9]' });
+    if (typeof mid !== 'string' || !LEAGUE_MID_RE.test(mid)) {
+        return jsonRes(res, 400, { error: 'memberId — 16 символов [a-f0-9]' });
+    }
+    return leagueProxy(res, `/group/${gid}/member/${mid}${purge ? '?purge=1' : ''}`,
+        'DELETE', null, 'исключение из группы');
+}
+// GET /__switch/api/league/invite — свои непогашенные приглашения (плюс любые, ведущие в
+// группы, которые ты создал: гасить чужое — право создателя, значит он обязан это видеть).
+// Кодов здесь нет и быть не может: приёмник хранит только их хеши.
+async function handleLeagueInviteList(req, res) {
+    return leagueProxy(res, '/invite', 'GET', null, 'список приглашений');
+}
+// POST /__switch/api/league/invite { groups?, ttlHours?, uses? } — выдать приглашение.
+// Хаб добавляет к ответу приёмника ОДНО поле — `blob`, готовую строку `xgl1_…`, которую человек
+// вставляет другу. Остальное (`code`, `id`, `expires`, `groups`, `maxUses`, `note`) уезжает как
+// есть: пересобирать ответ приёмника хабу нечем и незачем.
+// 🔴 В лог — только `id` (это sha256 кода) и число групп. Ни кода, ни блоба, ни пина: блоб
+// содержит код целиком, то есть напечатанный в `journalctl` блоб равен напечатанному коду.
+async function handleLeagueInviteCreate(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
+    const b = await leagueReadBody(req, res);
+    if (!b) return;
+    const c = leagueConfig();
+    if (!leagueChatReady(c)) return jsonRes(res, 503, { error: LEAGUE_NO_RECEIVER });
+    try {
+        const r = await leagueReq(c, '/invite', 'POST',
+            JSON.stringify(leagueBodyPick(b.body, ['groups', 'ttlHours', 'uses'])),
+            { timeoutMs: LEAGUE_CHAT_TIMEOUT_MS });
+        let doc = null;
+        try { doc = JSON.parse(r.body); } catch { /* приёмник ответил не JSON */ }
+        if (!doc || typeof doc !== 'object') return leaguePass(res, r, 'выдачу приглашения');
+        // Отказ (нет своей группы, кончилась квота, не переведены данные) уезжает как есть —
+        // строку подключения собирать не из чего, а подмешивать в отказ свои поля значит
+        // сбивать вкладку с толку.
+        if (r.status !== 200 || typeof doc.code !== 'string' || !doc.code) {
+            return jsonRes(res, r.status, doc);
+        }
+        const blob = leagueInviteBlob(c, doc.code);
+        const out = { ...doc };
+        if (blob) {
+            // Свой блоб СИЛЬНЕЕ приёмникового: у нас адрес и отпечаток проверены живым
+            // рукопожатием, а у него это переменная окружения, выставленная при выкате.
+            out.blob = blob;
+            const hint = leagueBlobHint(c.url);
+            if (hint) out.blobNote = hint;
+        } else if (!out.blob) {
+            out.blobNote = 'строку подключения собрать нечем: в routing/league-config.json нет url';
+        }
+        logLine(`league приглашение выдано: id ${String(doc.id || '').slice(0, 8)},`
+            + ` групп ${Array.isArray(doc.groups) ? doc.groups.length : 0}`
+            + `, строка подключения ${blob ? 'собрана' : 'не собрана'}`);
+        return jsonRes(res, 200, out);
+    } catch (e) { return leagueFail(res, e, 'приглашение (выдача)'); }
+}
+// DELETE /__switch/api/league/invite/<id> — погасить приглашение до размена. `id` это sha256
+// кода, 64 hex: он и лежит ключом в `invites.json`, и приезжает в списке. Сам код сюда не
+// приходит и не должен: гасить по коду значило бы возить секрет в пути запроса.
+async function handleLeagueInviteRevoke(req, res, id) {
+    if (!leagueWriteGuard(req, res)) return;
+    if (typeof id !== 'string' || !LEAGUE_INV_RE.test(id)) {
+        return jsonRes(res, 400, { error: 'идентификатор приглашения — 64 символа [a-f0-9]'
+            + ' (это sha256 кода, он приезжает в GET /invite)' });
+    }
+    return leagueProxy(res, `/invite/${id}`, 'DELETE', null, 'погашение приглашения');
+}
+// POST /__switch/api/league/join { code } | { invite: 'xgl1_…' } — разменять приглашение.
+// 🔴 Ключа эта ручка не требует (у приёмника она публичная): в этом и смысл — свежая установка
+// токена ещё не имеет и получает его здесь. Поэтому и готовность проверяется по-другому: нужен
+// адрес, ключ не нужен.
+// ⚠️ В ответе приходит СВОЙ токен, показанный один раз. Он уезжает в браузер как есть — иначе
+// человеку его взять негде, — но в лог не попадает ни он, ни код, ни блоб. Токен из ответа в
+// `routing/league-config.json` кладёт человек (или `tools/league-join.js`, который заодно
+// доказывает связь рукопожатием): писать конфиг живого хаба из браузерного запроса — не та
+// цена, которую стоит платить за одно нажатие.
+async function handleLeagueJoin(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
+    const b = await leagueReadBody(req, res);
+    if (!b) return;
+    const body = leagueBodyPick(b.body, ['code', 'invite']);
+    if (!body.code && !body.invite) {
+        return jsonRes(res, 400, { error: 'нужен code или invite (строка xgl1_…)' });
+    }
+    logLine('league размен приглашения: запрос отправлен приёмнику');
+    return leagueProxy(res, '/join', 'POST', body, 'размен приглашения', { join: true });
+}
+// ── Маршруты личности, групп и приглашений ──────────────────────────────────
+// Одной функцией, а не десятью строками в общей таблице: у половины путей есть параметр
+// (`<gid>`, `<mid>`, `<id>`), и разбор регуляркой прямо в таблице означал бы десять регулярок
+// вперемешку с равенствами строк — а порядок строк в той таблице уже несущий (вложение раньше
+// чата, чат раньше общего обзора). Возвращает `true`, если запрос СВОЙ и уже обработан.
+// 🪤 Хвост берём из `pathname`, а не из `req.url`: иначе `?purge=1` попал бы в сравнение путей,
+// и точное равенство `/me` перестало бы срабатывать на `/me?x=1`.
+// Метод, не подходящий к известному пути, получает 405 — иначе `POST /league/me` провалился бы
+// мимо всей лиговой таблицы (общий обзор ловит только GET) в остальной обработчик хаба, и
+// причина отказа стала бы неузнаваемой.
+const LEAGUE_API_BASE = '/__switch/api/league';
+function leagueApiRoute(req, res) {
+    let tail;
+    try { tail = new URL(req.url, 'http://hub.local').pathname.slice(LEAGUE_API_BASE.length); }
+    catch { return false; }
+    const M = req.method;
+    const only = (...ms) => {
+        jsonRes(res, 405, { error: `для этой ручки лиги ждём ${ms.join(' или ')}` });
+        return true;
+    };
+    if (tail === '/me') {
+        if (M === 'GET') { handleLeagueMe(req, res); return true; }
+        if (M === 'DELETE') { handleLeagueMeDelete(req, res); return true; }
+        return only('GET', 'DELETE');
+    }
+    if (tail === '/peers') {
+        if (M === 'GET') { handleLeaguePeers(req, res); return true; }
+        return only('GET');
+    }
+    if (tail === '/join') {
+        if (M === 'POST') { handleLeagueJoin(req, res); return true; }
+        return only('POST');
+    }
+    if (tail === '/invite') {
+        if (M === 'GET') { handleLeagueInviteList(req, res); return true; }
+        if (M === 'POST') { handleLeagueInviteCreate(req, res); return true; }
+        return only('GET', 'POST');
+    }
+    const inv = /^\/invite\/([^/]{1,128})$/.exec(tail);
+    if (inv) {
+        if (M === 'DELETE') { handleLeagueInviteRevoke(req, res, inv[1]); return true; }
+        return only('DELETE');
+    }
+    if (tail === '/group') {
+        if (M === 'POST') { handleLeagueGroupCreate(req, res); return true; }
+        return only('POST');
+    }
+    const grp = /^\/group\/([^/]{1,64})$/.exec(tail);
+    if (grp) {
+        if (M === 'GET') { handleLeagueGroupGet(req, res, grp[1]); return true; }
+        return only('GET');
+    }
+    const gAdd = /^\/group\/([^/]{1,64})\/member$/.exec(tail);
+    if (gAdd) {
+        if (M === 'POST') { handleLeagueGroupMemberAdd(req, res, gAdd[1]); return true; }
+        return only('POST');
+    }
+    const gDel = /^\/group\/([^/]{1,64})\/member\/([^/]{1,64})$/.exec(tail);
+    if (gDel) {
+        if (M === 'DELETE') {
+            const purge = new URL(req.url, 'http://hub.local').searchParams.get('purge') === '1';
+            handleLeagueGroupMemberDelete(req, res, gDel[1], gDel[2], purge);
+            return true;
+        }
+        return only('DELETE');
+    }
+    return false;
+}
+// <!-- LEAGUE_GROUPS_TAIL -->
+
 async function handleFinanceHistory(req, res) {
     try {
         // CORS нужен только пока вкладку смотрят из черновика по file:// — внутри
@@ -8979,34 +10432,32 @@ async function handleFinanceHistory(req, res) {
         const fa = financeAggregate(keys, !!conf.hour);
         const buckets = fa.buckets, idx = fa.idx;
         const parsed = fa.used, skipped = fa.bad, histLines = fa.lines;
-        const keyOfTs = ts => { const d = new Date(ts); return isNaN(d.getTime()) ? null : bucketKey(d, !!conf.hour); };
-        // Настоящие токены из журнала front-door. Читается тем же способом, что
-        // finance-history: построчно, битые строки молча мимо. Файла может не быть
-        // вовсе (front-door старой сборки) — тогда бакеты остаются с нулями, и
-        // вкладка сама падает на прежнюю оценку по расходу.
+        // Настоящие токены из журнала front-door. Тем же способом, что finance-history:
+        // журнал уже разобран в память хвостовым чтением, здесь только проход по
+        // массиву записей. До 05.09 на этом месте лежало ТРЕТЬЕ полное чтение
+        // token-usage.jsonl (4.9 МБ) — вкладку это стоило ~110 мс на каждое обращение.
+        // Файла может не быть вовсе (front-door старой сборки) — тогда бакеты остаются
+        // с нулями, и вкладка сама падает на прежнюю оценку по расходу.
         const tokens = { file: path.basename(TOKEN_USAGE_FILE), lines: 0, used: 0, bad: 0,
             harness: {}, model: {}, in: 0, out: 0, cr: 0, cw: 0, cost: 0, req: 0 };
         try {
-            const tl = fs.readFileSync(TOKEN_USAGE_FILE, 'utf8').split('\n');
-            for (const ln of tl) {
-                if (!ln) continue;
-                tokens.lines++;
-                let e; try { e = JSON.parse(ln); } catch (_) { tokens.bad++; continue; }
-                const tk = keyOfTs(e.t);
-                const i = tk == null ? null : idx.get(tk);
+            const tj = tokenJournalCounts();
+            tokens.lines = tj.seen; tokens.bad = tj.bad;
+            for (const e of tj.list) {
+                const i = idx.get(bucketKey(new Date(e.ms), !!conf.hour));
                 if (i == null) continue;
                 tokens.used++;
                 const b = buckets[i];
-                b.tin += Number(e.in) || 0;   b.tout += Number(e.out) || 0;
-                b.tcr += Number(e.cr) || 0;   b.tcw += Number(e.cw) || 0;
-                b.tcost += Number(e.cost) || 0; b.treq++;
-                tokens.in += Number(e.in) || 0;   tokens.out += Number(e.out) || 0;
-                tokens.cr += Number(e.cr) || 0;   tokens.cw += Number(e.cw) || 0;
-                tokens.cost += Number(e.cost) || 0; tokens.req++;
+                b.tin += e.in;   b.tout += e.out;
+                b.tcr += e.cr;   b.tcw += e.cw;
+                b.tcost += e.cost; b.treq++;
+                tokens.in += e.in;   tokens.out += e.out;
+                tokens.cr += e.cr;   tokens.cw += e.cw;
+                tokens.cost += e.cost; tokens.req++;
                 // Разрез по харнессу и модели: у владельца одновременно Claude Code,
                 // opencode и разовые скрипты, и «кто сжёг» — половина вопроса.
-                if (e.h) tokens.harness[e.h] = (tokens.harness[e.h] || 0) + ((Number(e.in) || 0) + (Number(e.out) || 0));
-                if (e.m) tokens.model[e.m] = (tokens.model[e.m] || 0) + ((Number(e.in) || 0) + (Number(e.out) || 0));
+                if (e.h) tokens.harness[e.h] = (tokens.harness[e.h] || 0) + (e.in + e.out);
+                if (e.m) tokens.model[e.m] = (tokens.model[e.m] || 0) + (e.in + e.out);
             }
         } catch (e) { /* журнала ещё нет — не ошибка */ }
         // Текущие суммы по пулам — из тех же файлов, что читает сайдбар.
@@ -17537,6 +18988,23 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league/nick')) return jsonRes(res, 405, { error: 'POST' });
     if (req.method === 'POST' && req.url === '/__switch/api/league/nick') return handleLeagueNick(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/league/sync') return handleLeagueSync(req, res);
+    // Чат лиги. Порядок строк важен: ручка вложения — подпуть `/chat`, а `/chat` —
+    // подпуть `/league`, который ниже ловит startsWith'ом всё остальное. Переставь —
+    // и вложение начнёт отвечать срезом.
+    if (req.method === 'DELETE' && req.url.startsWith('/__switch/api/league/chat')) return handleLeagueChatDelete(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league/chat/att/')) return handleLeagueAtt(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league/chat')) return handleLeagueChatGet(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/league/chat') return handleLeagueChatPost(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/league/avatar') return handleLeagueAvatar(req, res);
+    // Снятие лица. Путь сверяется ЦЕЛИКОМ, как у постановки: `startsWith` тут ни к чему,
+    // подпутей у аватарки нет, а строгое равенство не даст запросу с хвостом молча
+    // попасть в удаление.
+    if (req.method === 'DELETE' && req.url === '/__switch/api/league/avatar') return handleLeagueAvatarDelete(req, res);
+    // Личность, группы, приглашения — своим разбором (`leagueApiRoute`), и СТРОГО между чатом и
+    // общим обзором. Выше стоять не может: `/chat` тоже начинается с `/league/`, а разбор путей
+    // с параметром съел бы его. Ниже — тем более: общий обзор ловит `startsWith` по любому GET,
+    // и `GET /league/me` начал бы отвечать срезом.
+    if (req.url.startsWith(LEAGUE_API_BASE + '/') && leagueApiRoute(req, res)) return;
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league')) return handleLeague(req, res);
 
     // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157/:20158) — реальное время без рестарта.

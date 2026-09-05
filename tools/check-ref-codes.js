@@ -45,18 +45,24 @@ if (rc) {
     }
     // Решение владельца 23.08: XPeach легаси и в списки, которые видит человек, не
     // попадает. С 24.08 к нему добавился SeekAi (реселл веб-Клода: подменяет системный
-    // промпт, для Claude Code непригоден). Резолв для обоих обязан остаться —
-    // `<prov>/open-session.js` просит url().
+    // промпт, для Claude Code непригоден), с 05.09 — TrueSOTA. 🪤 У TrueSOTA причина
+    // ДРУГАЯ: шлюз рабочий, но узкий — наш системный промпт исполняют только
+    // `claude-opus-5` и `claude-opus-5-thinking`, остальные 16 моделей каталога это реселл
+    // Kiro. Резолв для всех трёх обязан остаться — `<prov>/open-session.js` просит url().
     chk(Array.isArray(rc.ACTIVE_PROVIDERS), 'ACTIVE_PROVIDERS экспортирован');
     chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('xpeach'),
         'XPeach НЕ в живом наборе — легаси, в настройках ему места нет');
     chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('seekai'),
         'SeekAi НЕ в живом наборе — легаси с 24.08');
-    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 7,
-        'живых провайдеров семь (ar/go/jw/tb/truesota/kktoken/hcnsec)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
+    chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('truesota'),
+        'TrueSOTA НЕ в живом наборе — легаси с 05.09 (шлюз рабочий, но узкий: opus-only)');
+    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 6,
+        'живых провайдеров шесть (ar/go/jw/tb/kktoken/hcnsec)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
     // TrueSOTA заведён 2026-08-25 БЕЗ дефолтного кода: аккаунта на шлюзе ещё не было.
     // Поэтому url() обязан отдавать корень, а не ссылку с пустым `aff=` — иначе панель
     // примет битый параметр за код, и реф-кредит потеряется вообще (см. ref-codes.js § url).
+    // Легаси-статус 05.09 на резолве не сказывается: `url('truesota')` просит
+    // `truesota/open-session.js`, и проверки ниже остаются в силе.
     chk(rc.PROVIDERS.includes('truesota'), 'провайдер truesota в списке');
     chk(rc.url('truesota') === 'https://true-sota.com/',
         'url(truesota) без кода = корень сайта', rc.url('truesota'));

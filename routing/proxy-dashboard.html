@@ -546,11 +546,6 @@ function randomThemeId() {
         <span class="flex-1">JustWoker</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-justwoker">—</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="truesota" title="sub2api: подписочная квота как API. Годятся только claude-opus-5 и claude-opus-5-thinking — остальные модели каталога подменяют системный промпт промптом Kiro">
-        <span class="w-5 text-center text-[14px]">🛰️</span>
-        <span class="flex-1">TrueSOTA</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-truesota">—</span>
-      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="kktoken" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
         <span class="w-5 text-center text-[14px]">🪙</span>
         <span class="flex-1">KKtoken</span>
@@ -640,7 +635,16 @@ function randomThemeId() {
         </div>
       </div>
 
-      <!-- Чтим память (deprecated: XPeach, SeekAi, FreeModel, TokenRouter, Devin, Notion) -->
+      <!-- Чтим память (deprecated: XPeach, SeekAi, TrueSOTA, FreeModel, TokenRouter, Devin, Notion) -->
+      <!-- 🪤 TrueSOTA (05.09, решение владельца) попал сюда по ДРУГОЙ причине, чем XPeach и
+           SeekAi: шлюз РАБОЧИЙ, но узкий — наш системный промпт исполняют только
+           claude-opus-5 и claude-opus-5-thinking, остальные 16 моделей каталога это реселл
+           Kiro с чужим префиксом. Место в сайдбаре это не оправдывает. Код, пул, keepalive
+           :20160 и резолв реф-ссылки (её просит truesota/open-session.js) не тронуты, вкладка
+           открывается отсюда: группа включается глазком 🕯 в «Настроить вкладки». Кнопки
+           внутри группы в список менеджера вкладок не попадают (getMainNavButtons берёт
+           только прямых детей #main-nav), поэтому вернуть её в основную группу — правка
+           здесь, и её ловит перевёрнутая проверка в tools/check-truesota.js. -->
       <div data-extra-nav="memory" class="mt-4 pt-3 border-t border-line-soft">
         <div class="w-full px-3 py-1.5 text-xs text-dim flex items-center gap-2 cursor-pointer select-none"
              onclick="const s=this.nextElementSibling;const c=this.querySelector('.chev');s.classList.toggle('hidden');c.classList.toggle('rotate-90')">
@@ -655,6 +659,10 @@ function randomThemeId() {
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="seekai" title="реселл веб-Клода под видом API: свой system-промпт шлюза перебивает наш, для Claude Code непригоден (замер 24.08)">
             🔎 SeekAi
             <span class="text-[10px] font-mono opacity-50" id="nav-count-seekai">—</span>
+          </button>
+          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="truesota" title="sub2api: подписочная квота как API. Годятся только claude-opus-5 и claude-opus-5-thinking — остальные модели каталога подменяют системный промпт промптом Kiro">
+            🛰️ TrueSOTA
+            <span class="text-[10px] font-mono opacity-50" id="nav-count-truesota">—</span>
           </button>
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="freemodel" title="автореги свёрнуты — аккаунты и ротатор :20126 остались на месте">
             🆓 FreeModel

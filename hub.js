@@ -620,13 +620,30 @@ function statusBlock({ compact = false } = {}) {
         (dash.up ? dim(`  pid ${dash.pids.join(',')}  `) + link(url, cyan(url)) : dim('  ' + url)));
 
     const alive = rest.filter(r => r.up);
-    const downSvc = rest.filter(r => !r.up && r.role === 'service');
+    // 🪤 «Лежит» и «не нужен сейчас» — разные вещи, и красным можно только первое.
+    // Пока в знаменателе стояли ВСЕ известные порты, а в «лежат:» — любой неподнятый
+    // сервис, табло писало «5/16 · лежат: FM-ротатор, FM-OpenAI, VyceAI» на полностью
+    // штатном состоянии: 11 из 16 — это keepalive неактивных шлюзов, которые поднимает
+    // активация, а три конвертера с 05.09 поднимает выбор провайдера. Владелец: «пугающе
+    // выглядит» — и был прав, цифра описывала не поломку, а устройство стека.
+    //
+    // Теперь: в знаменателе только то, что ДОЛЖНО быть живым сейчас (живые + сервисы,
+    // которых ждут, + дети, которых дашборд поднимает сам), красным — только настоящая
+    // недостача, а ленивые названы отдельной серой строкой. Принцип «лежащий обязан быть
+    // назван» сохранён: молчать о них нельзя, иначе «а куда делся FM-ротатор».
+    const lazyDown = rest.filter(r => !r.up && r.role === 'service' && r.expected === false);
+    const downSvc = rest.filter(r => !r.up && r.role === 'service' && r.expected !== false);
+    const need = rest.filter(r => r.up || r.respawn || (r.role === 'service' && r.expected !== false));
     const names = alive.map(r => r.name.replace(' keepalive', '')).join(' · ') || 'никого';
     const room = Math.max(20, W() - (compact ? 34 : 24));
+    const tally = `  ${alive.length}/${need.length}`;
     line(`  ${dim('живы:')} ${alive.length ? green(DOT_ON) + ' ' : ''}` +
         (names.length > room ? names.slice(0, room - 1) + '…' : names) +
-        dim(`  ${alive.length}/${rest.length}`) +
+        (downSvc.length ? red(tally) : dim(tally)) +
         (downSvc.length ? '  ' + red('лежат: ' + downSvc.map(r => `${r.name} :${r.port}`).join(', ')) : ''));
+    if (lazyDown.length) {
+        line(`  ${dim('ждут выбора провайдера:')} ${grey(lazyDown.map(r => r.name).join(' · '))}`);
+    }
 
     // Права видны ДО того, как что-то нажато. Элевированный хаб — не благо: его дети
     // тоже станут элевированными, и следующий обычный запуск их уже не убьёт. Поэтому

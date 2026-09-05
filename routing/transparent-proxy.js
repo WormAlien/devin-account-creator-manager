@@ -7374,7 +7374,7 @@ async function arProxySpawn(opts = {}) {
         // освободится: он отпускается не мгновенно, а иначе проверка ниже прочитает его
         // как занятый, спавн молча выйдет — и конвертера не будет вообще.
         if (opts.force) {
-            const killed = killPortListeners(AR_PROXY_PORT);
+            const killed = await stopPortSoftly(AR_PROXY_PORT);
             for (let i = 0; i < 20 && killed; i += 1) {
                 if (await portIsFree(AR_PROXY_PORT)) break;
                 await napMs(100);
@@ -16428,6 +16428,35 @@ function portIsFree(port) {
 
 const napMs = (ms) => new Promise(r => setTimeout(r, ms));
 
+// ── Мягкая остановка порта перед убийством (2026-09-06) ───────────────────────
+// Зачем: `killPortListeners` бьёт наотмашь `taskkill /F`, и каждый запрос в полёте
+// превращается для Claude Code в `Connection closed mid-response` — класс, который
+// клиент НЕ повторяет и таймера попыток не показывает: часть ответа уже отрисована,
+// переигрывать нечего. Поэтому сначала просим `POST /__drain`: прокси закрывает
+// слушателя, дожимает начатое и выходит сам, закрывая сокеты FIN вместо RST.
+// 🪤 Потолок ровно 1 секунда и не больше — рестарт по кнопке не должен ждать
+// (решение владельца 05.09, коммит «рестарт не ждёт»). Ответы длиннее секунды всё
+// равно обрываются, и это осознанная цена, а не недоделка.
+// 🪤 Кто про `/__drain` не знает — ответит 404 или ничем, и мы гасим как раньше.
+// Зомби (порт занят, `/status` молчит) сюда НЕ отдаём: у них дренаж заведомо съест
+// секунду впустую.
+async function stopPortSoftly(port) {
+    const drained = await new Promise(resolve => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/__drain', timeout: 1000 },
+            r => { r.resume(); resolve(r.statusCode === 200); });
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.on('error', () => resolve(false));
+        req.end();
+    });
+    if (drained) {
+        for (let i = 0; i < 10; i += 1) {                 // 10 × 100 мс = тот самый потолок 1 с
+            if (await portIsFree(port)) return 0;          // вышел сам — убивать некого
+            await napMs(100);
+        }
+    }
+    return killPortListeners(port);
+}
+
 // Порт → как его поднять. Один список на кнопку «перезапустить» в Health и на
 // boot-респавн активного бэкенда, чтобы новый keepalive не забыли ни там, ни там.
 function keepaliveInstances() {
@@ -16495,7 +16524,7 @@ async function keepaliveBring(port, opts = {}) {
     let killed = 0;
 
     if (opts.force) {
-        killed = killPortListeners(port);
+        killed = await stopPortSoftly(port);
     } else {
         const alive = await portAnswers(port, statusPath);
         if (alive) return { ok: true, already: true, name: inst.name, port, status: alive };
@@ -16594,7 +16623,7 @@ async function bootSweepStaleChildren() {
         const port = Number(p);
         if (keep.has(port)) continue;
         if (await portIsFree(port)) continue;
-        const killed = killPortListeners(port);
+        const killed = await stopPortSoftly(port);
         if (killed) swept.push(`${inst.name} :${port}`);
     }
     // Конвертеры Custom-провайдеров (20150–20250) — тот же расклад, но АКТИВНЫЙ не
@@ -16605,7 +16634,7 @@ async function bootSweepStaleChildren() {
             const port = Number(prov.proxyPort);
             if (!port || port === active || keep.has(port)) continue;
             if (await portIsFree(port)) continue;
-            const killed = killPortListeners(port);
+            const killed = await stopPortSoftly(port);
             if (killed) swept.push(`конвертер ${prov.name || prov.id} :${port}`);
         }
     } catch (e) { logLine(`boot sweep: конвертеры пропущены — ${e.message}`); }
@@ -16624,7 +16653,7 @@ async function bootRecreateActiveCustomProxy() {
     let prov = null;
     try { prov = customLoad().providers.find(p => Number(p.proxyPort) === port) || null; } catch { }
     if (!prov) return null;                                 // чужой порт (omniroute и пр.)
-    const killed = killPortListeners(port);
+    const killed = await stopPortSoftly(port);
     for (let i = 0; i < 20 && killed; i += 1) {
         if (await portIsFree(port)) break;
         await napMs(100);

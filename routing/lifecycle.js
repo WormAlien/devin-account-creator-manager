@@ -356,6 +356,48 @@ function askDrainOnce(port) {
     });
 }
 
+// ── Front-door: не гасить, если его код не менялся (2026-09-06) ───────────────
+// Единственная причина перезапускать front-door — новый код. Всё остальное он
+// подхватывает живьём: активный бэкенд читается из active-backend.json, и смена
+// провайдера 05.09 в 19:44 прошла без его рестарта вообще.
+// А цену каждого убийства платит человек: front-door — единственный вход Claude Code,
+// и любой запрос в полёте превращается в `Connection closed mid-response`. Этот класс
+// клиент НЕ повторяет и таймера попыток не показывает: часть ответа уже отрисована,
+// переигрывать нечего. То есть один рестарт хаба = по одному оборванному ответу у
+// каждого, кто в этот момент чего-то ждёт.
+// Поэтому решает ОТПЕЧАТОК КОДА, а не привычка: процесс старше файла — гасим, как
+// раньше, и гарантия 21.08 («рестарт обязан означать свежий код у всех детей») цела;
+// процесс новее файла — оставляем жить.
+// 🪤 Возраст берём у самого процесса (`uptime_ms` из его статуса): PID времени старта
+// не даёт, а PowerShell ради одной цифры — секунда на пустом месте.
+// 🪤 Любая неясность трактуется в пользу убийства: не ответил, нет `uptime_ms`, нет
+// файла — гасим. Иначе первая же осечка проверки оставила бы старый код жить молча,
+// а это ровно та беда, от которой `respawn: true` и появился.
+function getStatusJson(port, urlPath, timeoutMs) {
+    return new Promise(resolve => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: urlPath, timeout: timeoutMs }, r => {
+            let body = '';
+            r.on('data', c => { body += c; });
+            r.on('end', () => {
+                if (r.statusCode !== 200) return resolve(null);
+                try { resolve(JSON.parse(body)); } catch (e) { resolve(null); }
+            });
+        });
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('error', () => resolve(null));
+        req.end();
+    });
+}
+
+async function frontdoorCodeIsCurrent() {
+    const st = await getStatusJson(frontdoorPort(), '/__frontdoor/api/status', 1500);
+    const up = Number(st && st.uptime_ms);
+    if (!Number.isFinite(up) || up <= 0) return false;
+    let mtimeMs;
+    try { mtimeMs = fs.statSync(path.join(ROUTING, 'frontdoor-proxy.js')).mtimeMs; } catch (e) { return false; }
+    return (Date.now() - up) > mtimeMs;
+}
+
 // Оставлено для вызовов, которым нужен дренаж ОДНОГО порта с ожиданием.
 async function askDrain(port, waitMs) {
     if (!await askDrainOnce(port)) return false;
@@ -622,7 +664,15 @@ async function drainAll(ports, waitMs, on = () => {}) {
 }
 
 async function stop({ phase = 'stop', on = () => {} } = {}) {
-    const plan = killPlan(phase);
+    let plan = killPlan(phase);
+    // Рестарт не трогает front-door, если в процессе уже свежий код — см. выше
+    // § frontdoorCodeIsCurrent. На `stop` это НЕ распространяется: «остановил» обязано
+    // означать освобождённые порты, иначе следующий старт упрётся в EADDRINUSE.
+    if (phase === 'restart' && await frontdoorCodeIsCurrent()) {
+        const fd = frontdoorPort();
+        plan = plan.filter(i => i.port !== fd);
+        on({ type: 'note', text: `front-door :${fd} оставлен жить — код в процессе свежий, рвать живые сессии незачем` });
+    }
     // Сначала по-хорошему и всем сразу: кто простаивает — выйдет сам за десятки
     // миллисекунд, кто отвечает клиенту — дожмёт. Только потом расстрел отставших.
     await drainAll(plan.map(i => i.port), DRAIN_WAIT_MS, on);

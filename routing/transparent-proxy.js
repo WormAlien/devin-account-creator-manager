@@ -6461,7 +6461,7 @@ async function handleOlImport(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// POST /__switch/api/ol/add { email, password, kind?, note? } — одна запись руками.
+// POST /__switch/api/ol/add { email, password, kind?, note?, nickname? } — одна запись руками.
 async function handleOlAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -6475,7 +6475,10 @@ async function handleOlAdd(req, res) {
         if (arr.some(e => String(e.email || '').toLowerCase() === email))
             return jsonRes(res, 409, { error: 'такой ящик уже есть' });
         const e = olNewEntry(
-            { email, password, kind: body.kind, note: body.note },
+            // `nickname` из тела принимаем: форма ручного добавления во фронте его шлёт,
+            // и без этой строки подпись молча терялась бы — запись сохранялась, а имя нет
+            // (olNewEntry сам обрежет пробелы и откатится на локальную часть адреса).
+            { email, password, kind: body.kind, note: body.note, nickname: body.nickname },
             Date.now(), arr.length, new Set(arr.map(x => String(x.id))),
         );
         arr.push(e);
@@ -6788,10 +6791,18 @@ async function olHealthRun(scope) {
             // Пишем инкрементально, запись за записью: обрыв на середине (рестарт прокси)
             // не теряет уже пройденное. Отдельного поля под вердикт в схеме НЕТ и не нужно —
             // он считается из sessionAt при чтении, а производное поле на диске гниёт молча.
+            //
+            // 🪤 `sessionAt` при отсутствии снимка НЕ обнуляем. open-session.js ставит эту
+            // дату и тогда, когда storageState не снялся (окно закрыли раньше, снимок упал), —
+            // то есть это единственный след того, что в ящик реально входили. Обнуление
+            // стёрло бы его и показало бы залогиненный ящик как «никогда не открывали»:
+            // расчёт возраста выше и olSafe без снимка откатываются ровно на этот sessionAt,
+            // и вкладка 📧 нарисовала бы «сессии нет». Обновляем только вверх, по факту
+            // существующего файла.
             try {
                 olPatch(t.id, x => {
                     x.lastCheck = new Date().toISOString();
-                    x.sessionAt = st ? new Date(st.mtimeMs).toISOString() : null;
+                    if (st) x.sessionAt = new Date(st.mtimeMs).toISOString();
                 });
             } catch {}
             olHealthJob.done++;

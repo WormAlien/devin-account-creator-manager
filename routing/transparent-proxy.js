@@ -11882,9 +11882,12 @@ async function handleHnSessionOpen(req, res) {
         // Привязанный ящик уезжает туда же: скрипт откроет почту ВТОРЫМ ТАБОМ, чтобы код
         // подтверждения (`email_verification=true`) был на том же шаге, а не в другом
         // браузере. Путь снимка отдаём готовым — искать его скрипту неоткуда, пул закрыт.
+        // Пароль ящика тоже: снимка сессии может не быть (в ящик ещё не входили), и тогда
+        // вторая вкладка приедет на форму Microsoft — пустая она бесполезна.
         const olBox = target.outlookId ? olPool.load().find(e => e.id === target.outlookId) : null;
         const olEnv = olBox ? {
             HN_OL_EMAIL: String(olBox.email || ''),
+            HN_OL_PASS: String(olBox.password || ''),
             HN_OL_SNAPSHOT: olSessionFile(olBox.id),
         } : {};
         if (target.outlookId && !olBox) {

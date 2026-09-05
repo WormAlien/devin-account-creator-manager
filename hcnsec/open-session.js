@@ -106,8 +106,16 @@ function loadImportedSession() {
 // её срезает — `login.live.com` получил бы host-only куку вместо доменной и всё равно
 // попросил бы логин. Снимок уже в форме Playwright, с доменами и путями.
 const OL_EMAIL = String(process.env.HN_OL_EMAIL || '');
+const OL_PASS = String(process.env.HN_OL_PASS || '');
 const OL_SNAPSHOT = String(process.env.HN_OL_SNAPSHOT || '');
 const OL_MAIL_URL = 'https://outlook.live.com/mail/0/';
+// Селекторы формы Microsoft — те же, что в outlook/open-session.js, и по той же причине:
+// форма переписана на Fluent v2, живут `#usernameEntry` / `#passwordEntry` /
+// `[data-testid="primaryButton"]`, а старых `loginfmt` / `i0116` / `idSIButton9` на
+// странице нет вовсе (замер 31.08). Легаси-варианты стоят последними как страховка.
+const OL_EMAIL_SEL = ['#usernameEntry', 'input[name="loginfmt"]', 'input[type="email"]', 'input[autocomplete~="username"]', '#i0116'];
+const OL_NEXT_SEL = ['[data-testid="primaryButton"]', '#idSIButton9', 'button[type="submit"]'];
+const OL_PASS_SEL = ['#passwordEntry', 'input[autocomplete="current-password"]', 'input[name="passwd"]', 'input[type="password"]', '#i0118'];
 
 function maskMail(a) {
   const s = String(a || '');
@@ -116,37 +124,83 @@ function maskMail(a) {
   return s.slice(0, 2) + '***' + s.slice(at);
 }
 
+async function firstVisible(page, sels) {
+  for (const s of sels) {
+    try {
+      const el = page.locator(s).first();
+      if (await el.isVisible({ timeout: 400 })) return el;
+    } catch {}
+  }
+  return null;
+}
+
+// Вкладка открывается ВСЕГДА, когда к записи привязан ящик, — снимок сессии только меняет,
+// куда она приедет. Так просил владелец: две вкладки, регистрация и почта, в одном окне.
 async function openMailTab(context) {
-  if (!OL_EMAIL) return;                       // ящик не привязан — вкладка не нужна
-  if (!OL_SNAPSHOT || !fs.existsSync(OL_SNAPSHOT)) {
-    console.log(`📭 ящик ${maskMail(OL_EMAIL)} привязан, но снимка сессии нет — код письмом взять негде.`);
-    console.log('   Войди в него один раз кнопкой 🌐 в менеджере 📧, дальше он откроется сам.');
-    return;
+  if (!OL_EMAIL) return;                       // ящик не привязан — второй вкладке неоткуда взяться
+  let injected = 0;
+  // 🪤 Куки берём из СНИМКА ящика, а не из его профиля: в профиле Chromium доменные куки
+  // лежат с ведущей точкой в `host_key`, а readProfileCookies её срезает — login.live.com
+  // получил бы host-only куку и всё равно попросил логин. Снимок уже в форме Playwright.
+  if (OL_SNAPSHOT && fs.existsSync(OL_SNAPSHOT)) {
+    try {
+      const ss = JSON.parse(fs.readFileSync(OL_SNAPSHOT, 'utf8'));
+      // Только почтовые домены. Куки шлюза из снимка ящика в этот профиль попасть не
+      // должны: тут своя сессия панели, и чужая её перетрёт.
+      const MAIL_HOSTS = /(^|\.)(live|office|office365|microsoft|microsoftonline|outlook)\.com$/i;
+      const mail = (Array.isArray(ss && ss.cookies) ? ss.cookies : [])
+        .filter(c => MAIL_HOSTS.test(String(c.domain || '').replace(/^\./, '')));
+      if (mail.length) { await context.addCookies(mail); injected = mail.length; }
+    } catch (e) {
+      console.log(`⚠️  снимок ящика не применился (${e.message.split('\n')[0]}) — открою форму входа`);
+    }
   }
-  let cookies = [];
+
+  let tab;
   try {
-    const ss = JSON.parse(fs.readFileSync(OL_SNAPSHOT, 'utf8'));
-    cookies = Array.isArray(ss && ss.cookies) ? ss.cookies : [];
-  } catch (e) {
-    console.log(`⚠️  снимок ящика не читается (${e.message}) — вкладку почты не открываю`);
-    return;
-  }
-  // Только почтовые домены. Куки шлюза из снимка ящика в этот профиль попасть не должны:
-  // там своя сессия панели, и чужая её перетрёт.
-  const MAIL_HOSTS = /(^|\.)(live|office|office365|microsoft|microsoftonline|outlook)\.com$/i;
-  const mail = cookies.filter(c => MAIL_HOSTS.test(String(c.domain || '').replace(/^\./, '')));
-  if (!mail.length) {
-    console.log('⚠️  в снимке ящика нет почтовых кук — вкладку почты не открываю');
-    return;
-  }
-  try {
-    await context.addCookies(mail);
-    const tab = await context.newPage();
+    tab = await context.newPage();
     await tab.goto(OL_MAIL_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    console.log(`📬 вторая вкладка: почта ${maskMail(OL_EMAIL)} (${mail.length} кук из снимка)`);
-    console.log('   Код из письма — там же; в дашборде та же операция это кнопка 📩 «Взять код».');
   } catch (e) {
     console.log(`⚠️  вкладка почты не открылась: ${e.message}`);
+    return;
+  }
+  if (injected) {
+    console.log(`📬 вторая вкладка: почта ${maskMail(OL_EMAIL)} (${injected} кук из снимка)`);
+    console.log('   Код из письма — там же; в дашборде та же операция это кнопка 📩 «Взять код».');
+    return;
+  }
+
+  // Снимка нет (или он не дал почтовых кук) — Microsoft уведёт на логин. Подставляем адрес
+  // и пароль ящика сами, чтобы вкладка была полезной, а не пустой формой.
+  console.log(`📭 снимка сессии ящика нет — вторая вкладка открыта на входе ${maskMail(OL_EMAIL)}`);
+  if (!OL_PASS) console.log('   Пароль ящика в записи не найден — введи руками.');
+  for (let i = 0; i < 20; i++) {               // ~30 с: форма грузится не мгновенно
+    const mail = await firstVisible(tab, OL_EMAIL_SEL);
+    if (mail) {
+      try {
+        await mail.fill(OL_EMAIL);
+        // 🪤 «Далее» и «Вход» — ОДНА И ТА ЖЕ кнопка `primaryButton`. Поэтому клик ровно
+        // один, сразу после адреса: второй отправил бы пароль мимо капчи.
+        const next = await firstVisible(tab, OL_NEXT_SEL);
+        if (next) await next.click({ timeout: 5000 }); else await mail.press('Enter');
+        console.log('🔐 адрес ящика подставлен, нажато «Далее»');
+      } catch (e) { console.log(`ℹ️  адрес подставить не удалось (${e.message.split('\n')[0]})`); }
+      break;
+    }
+    await tab.waitForTimeout(1500).catch(() => {});
+  }
+  if (!OL_PASS) return;
+  for (let i = 0; i < 20; i++) {
+    const pw = await firstVisible(tab, OL_PASS_SEL);
+    if (pw) {
+      try {
+        await pw.fill(OL_PASS);
+        console.log('🔐 пароль ящика подставлен. Кнопку входа НЕ жму: дальше Microsoft может');
+        console.log('   спросить капчу или код на резервную почту — допройди сам.');
+      } catch (e) { console.log(`ℹ️  пароль подставить не удалось (${e.message.split('\n')[0]})`); }
+      break;
+    }
+    await tab.waitForTimeout(1500).catch(() => {});
   }
 }
 

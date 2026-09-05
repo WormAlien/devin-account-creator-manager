@@ -1,0 +1,28 @@
+[
+  {
+    "id": "ol_1787000000000_0",
+    "email": "example.mailbox@outlook.com",
+    "password": "пароль-от-ящика",
+    "kind": "personal",
+    "nickname": "example",
+    "status": "unknown",
+    "note": "резервная почта · дата покупки — всё, что магазин дал сверх пары",
+    "addedAt": "2026-08-31T00:00:00.000Z",
+    "sessionAt": null,
+    "lastCheck": null,
+    "usedOn": []
+  },
+  {
+    "id": "ol_1787000000000_1",
+    "email": "student.example@some-university.edu",
+    "password": "пароль-от-ящика",
+    "kind": "student",
+    "nickname": "student.example",
+    "status": "live",
+    "note": "",
+    "addedAt": "2026-08-31T00:00:00.000Z",
+    "sessionAt": "2026-08-31T01:00:00.000Z",
+    "lastCheck": "2026-08-31T01:00:00.000Z",
+    "usedOn": [{ "tag": "hcnsec", "at": "2026-08-31T01:05:00.000Z" }]
+  }
+]

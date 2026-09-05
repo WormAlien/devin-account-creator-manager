@@ -20,7 +20,11 @@
  *   6. ротация НЕ трогает settings.json (иначе бэкап и запись на каждый отказ);
  *   7. в прокси проверка «нет баланса» стоит РАНЬШЕ isTransientBody — иначе
  *      китайский текст съест RETRY_NO_ZH, а английский уйдёт в три пустых ретрая;
- *   8. таблицы хостов дашборда и прокси совпадают (иначе прокси звонит в никуда).
+ *   8. таблицы хостов дашборда и прокси совпадают (иначе прокси звонит в никуда);
+ *   9. фронт: подмену видно без F5 (перерисовка НЕ ждёт тумблера «Автообновление»), а
+ *      объявляет её журнал шлюза в «Истории уведомлений» — локальный тост из детектора
+ *      убран 24.08 по просьбе владельца, он давал на одно событие вторую строку без
+ *      причины отказа.
  *
  * Как: вырезает ТЕКСТ функций ротации из transparent-proxy.js и прогоняет их в
  * песочнице с заглушками fs/баланса. Ни одного сетевого запроса, живые пулы и
@@ -73,6 +77,18 @@ function cutConst(text, name) {
     const m = new RegExp(`^const ${name} = [^\\n]+$`, 'm').exec(text);
     if (!m) throw new Error(`не нашёл константу ${name}`);
     return m[0];
+}
+// Многострочная константа-объект (`const X = {\n ... \n};`): cutConst умеет только одну
+// строку, а cutFn ждёт список параметров в скобках, которого у объекта нет.
+function cutObjConst(text, name) {
+    const start = text.indexOf(`const ${name} = {`);
+    if (start < 0) throw new Error(`не нашёл объект-константу ${name}`);
+    let depth = 0;
+    for (let i = text.indexOf('{', start); i < text.length; i += 1) {
+        if (text[i] === '{') depth += 1;
+        else if (text[i] === '}') { depth -= 1; if (depth === 0) return `${text.slice(start, i + 1)};`; }
+    }
+    throw new Error(`не смог закрыть объект-константу ${name}`);
 }
 
 const parts = [
@@ -401,6 +417,9 @@ async function main() {
         const sideDetectRotation = factory({
             MONEY_PROVIDERS: { gorouter: { label: 'GoRouter', sym: '$', reload: () => { calls.reload += 1; } } },
             localStorage: { getItem: () => 'gorouter' },
+            // `toast` подставлен не ради тоста, а ради его ОТСУТСТВИЯ: локальный тост
+            // убран 24.08 (см. ниже), и если его вернут «для наглядности» — заглушка
+            // это поймает.
             toast: (m) => calls.toasts.push(m),
             console,
             // Тумблер выключен. Если функция его спросит — тест это увидит и упадёт.
@@ -413,7 +432,7 @@ async function main() {
         check(sideDetectRotation('gorouter', before) === false,
             'первый тик после загрузки страницы подменой не считается');
         check(calls.reload === 0 && calls.toasts.length === 0,
-            'на первом тике таблица не перерисовывается и тоста нет');
+            'на первом тике таблица не перерисовывается и никто ничего не объявляет');
         check(sideDetectRotation('gorouter', before) === false,
             'тот же активный ключ — не событие');
         check(calls.reload === 0, 'без смены ключа таблицу не трогаем (не прыгает под курсором)');
@@ -421,12 +440,17 @@ async function main() {
         check(calls.reload === 1, 'таблица открытой вкладки перерисована ровно один раз');
         check(calls.autoRefAsked === 0,
             'перерисовка НЕ спрашивает тумблер «Автообновление» — иначе метка снова врала бы до F5');
-        check(calls.toasts.length === 1 && /melodicknot/.test(calls.toasts[0]) && /\$79/.test(calls.toasts[0]),
-            `тост называет новый аккаунт и его баланс (${calls.toasts[0] || '—'})`);
+        // 🪤 Тоста в детекторе БОЛЬШЕ НЕТ — просьба владельца 24.08 («хочу, чтобы лог не был
+        //    отдельным, а был в нашей Истории уведомлений»). Локальный тост давал на одно
+        //    событие вторую строку, и без причины отказа. Проверяем ОТСУТСТВИЕ; кто теперь
+        //    называет аккаунт и его баланс — блок 13б.
+        check(calls.toasts.length === 0,
+            `детектор молчит: объявлять подмену — дело журнала (тостов: ${calls.toasts.length})`);
         check(sideDetectRotation('gorouter', after) === false && calls.reload === 1,
             'повторный тик после подмены ничего не перерисовывает');
         // Вкладка шлюза закрыта — перерисовывать нечего, но событие всё равно событие:
-        // тост нужен, а таблицу подтянет refreshNavCounts при открытии.
+        // возврат `true` форсирует перечит статуса, и свежая запись журнала доезжает в
+        // историю сразу, а таблицу подтянет refreshNavCounts при открытии вкладки.
         {
             const w = factory({
                 MONEY_PROVIDERS: { gorouter: { label: 'GoRouter', sym: '$', reload: () => { calls.reload += 1; } } },
@@ -436,11 +460,67 @@ async function main() {
                 autoRefreshEnabled: () => false,
             });
             const hits = calls.reload;
+            const toastsWere = calls.toasts.length;
             w('gorouter', before);
-            w('gorouter', after);
+            const seen = w('gorouter', after);
             check(calls.reload === hits, 'на чужой открытой вкладке таблица шлюза не перерисовывается');
-            check(calls.toasts.length === 2, 'тост о подмене приходит и с другой вкладки');
+            check(seen === true,
+                'подмена с чужой вкладки — всё равно событие: `true` форсирует перечит статуса, иначе запись журнала ждала бы своего тика');
+            check(calls.toasts.length === toastsWere,
+                `и с чужой вкладки детектор молчит (тостов добавилось: ${calls.toasts.length - toastsWere})`);
         }
+    }
+
+    // 13б. Кто объявляет подмену теперь. Тост из sideDetectRotation убран 24.08 по просьбе
+    //      владельца, но сама проверка обязана жить: подмена не должна проходить молча —
+    //      человек узнаёт, НА КОГО переехали и СКОЛЬКО там денег. Источник честнее локального
+    //      детекта: журнал `recent` из `/auto/status` помнит подмены, случившиеся при закрытой
+    //      странице, и знает ПРИЧИНУ отказа. Строку журнала пишет moneyRotate в
+    //      transparent-proxy.js (`st.recent.unshift({ ts, reason, from, to, balance, needUsd })`) —
+    //      здесь ровно её форма, чтобы разъезд производителя и потребителя было видно.
+    {
+        const histParts = [
+            cutObjConst(htmlSrc, 'MONEY_ROTATE_REASON'),
+            cutConst(htmlSrc, '_moneyRotateSeen'),
+            cutFn(htmlSrc, 'function moneyRotateToHistory('),
+        ].join('\n');
+        const world = { renders: 0, state: { toastLog: [] }, moneyAutoLast: {} };
+        const toHistory = new Function('deps', `
+            const { MONEY_PROVIDERS, moneyAutoLast, state, renderLogPanel } = deps;
+            ${histParts}
+            return moneyRotateToHistory;
+        `)({
+            MONEY_PROVIDERS: { gorouter: { label: 'GoRouter', sym: '$' } },
+            moneyAutoLast: world.moneyAutoLast,
+            state: world.state,
+            renderLogPanel: () => { world.renders += 1; },
+        });
+
+        world.moneyAutoLast.gorouter = { recent: [{
+            ts: Date.now(), reason: 'out-of-balance',
+            from: 'cicidewiy', to: 'melodicknot', balance: 79, needUsd: 0.8,
+        }] };
+        toHistory('gorouter');
+        const line = (world.state.toastLog[0] || {}).text || '';
+        check(/melodicknot/.test(line) && /\$79\.00/.test(line),
+            `история называет новый аккаунт и его баланс (${line || '—'})`);
+        check(/cicidewiy/.test(line),
+            'и с какого аккаунта ушли — иначе цепочку подмен по истории не собрать');
+        check(/нет баланса/.test(line),
+            'в строке есть причина отказа — то, чего локальный тост не знал вовсе');
+        check(world.renders === 1, `панель истории перерисована один раз (было ${world.renders})`);
+        // Статус опрашивается каждые 10 с и отдаёт те же 20 записей: без дедупа история
+        // набивалась бы копиями одного события каждые десять секунд.
+        toHistory('gorouter');
+        check(world.state.toastLog.length === 1 && world.renders === 1,
+            `повтор того же журнала историю не двоит (записей: ${world.state.toastLog.length})`);
+        // И событие обязано доезжать в тот же тик: детектор рядом с импортом журнала, а его
+        // `true` форсирует перечит статуса — иначе свежая запись ждала бы следующего опроса.
+        const tick = cutFn(htmlSrc, 'async function sideBalanceTick(');
+        check(/sideDetectRotation\(/.test(tick) && /moneyRotateToHistory\(/.test(tick),
+            'детектор подмены и импорт журнала в историю стоят в одном тике');
+        check(/moneyAutoFetch\([^)]*rotated/.test(tick),
+            'возврат детектора форсирует перечит статуса — moneyAutoFetch(..., rotated)');
     }
 
     // 14. Тумблер ОДИН на все шлюзы. Был по шлюзу, и смена провайдера читалась как

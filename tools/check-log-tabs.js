@@ -95,5 +95,24 @@ const clear = cutFn(HTML, 'function clearLog(');
 check(/logMode === 'gift'/.test(clear) && /giftLines = \[\]/.test(clear) && !/unlink|delete/i.test(clear),
     '«Очистить» на вкладке прогонов чистит вид, а файлы на диске не трогает');
 
-console.log(fail ? `\n❌ ${fail} провалено` : '\nПанель логов: четыре трубы, прогоны подарка читаются из файлов.');
+// ── 6. панель свёрнута по умолчанию (решение владельца 05.09) ──
+// 🪤 Раньше на DOMContentLoaded висел САМ `toggleLogPanel` с комментарием «open by
+// default»: он переключает, то есть из закрытой панели делал открытую на каждой загрузке,
+// и свернуть её насовсем было нельзя вообще. Плюс открытая панель включает поллинг логов.
+check(/<div id="log-panel" class="hidden/.test(HTML),
+    'разметка панели логов начинается с hidden — до любого JS она свёрнута');
+check(!/DOMContentLoaded', toggleLogPanel\)/.test(HTML),
+    'на DOMContentLoaded НЕ висит сам toggleLogPanel — он переключает, а не восстанавливает');
+check(/DOMContentLoaded', restoreLogPanel\)/.test(HTML),
+    'на загрузке зовётся restoreLogPanel — читает сохранённое состояние');
+const restore = cutFn(HTML, 'function restoreLogPanel(');
+check(/_lsGet\(LOG_PANEL_LS\) === '1'/.test(restore),
+    'разворачивается только при явном \'1\' в хранилище — отсутствие ключа значит свёрнуто');
+const toggle = cutFn(HTML, 'function toggleLogPanel(');
+check(/_lsSet\(LOG_PANEL_LS, logPanelOpen \? '1' : '0'\)/.test(toggle),
+    'выбор владельца сохраняется — свернул значит свернул, F5 не возвращает');
+check(/stopLogPoll\(\)/.test(toggle),
+    'при сворачивании поллинг логов останавливается — иначе свёрнутая панель продолжала бы гонять сеть');
+
+console.log(fail ? `\n❌ ${fail} провалено` : '\nПанель логов: четыре трубы, прогоны подарка читаются из файлов, по умолчанию свёрнута.');
 process.exit(fail ? 1 : 0);

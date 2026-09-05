@@ -23809,6 +23809,8 @@ function launchTokenrouterCreate() {
 
 // ═══════════════════ LOG PANEL ════════════════════════════════════════
 let logPanelOpen = false;
+// Ключ состояния панели логов. Дефолт при отсутствии ключа — свёрнуто.
+const LOG_PANEL_LS = 'hub_log_panel_open';
 // 'toasts' — история уведомлений; 'server' — лог дашборда; 'keepalive' — SSE-прокси;
 // 'gift' — прогоны автоподарка из файлов logs/ar-checkin-*.log.
 let logMode = 'toasts';
@@ -23832,6 +23834,9 @@ function toggleLogPanel() {
   const panel = $('log-panel');
   const btn = $('log-toggle-btn');
   logPanelOpen = !logPanelOpen;
+  // Состояние переживает F5, как и выбранный порядок сортировки: дашборд живёт открытым
+  // сутками, а Ctrl+Shift+R после каждой правки UI частый — свернул логи, значит свернул.
+  _lsSet(LOG_PANEL_LS, logPanelOpen ? '1' : '0');
   if (logPanelOpen) {
     panel.classList.remove('hidden');
     btn.classList.add('text-emerald');
@@ -23842,6 +23847,16 @@ function toggleLogPanel() {
     btn.classList.remove('text-emerald');
     stopLogPoll();
   }
+}
+
+// Восстановление на загрузке. По умолчанию — СВЁРНУТО (решение владельца 05.09): панель
+// занимает 260 px внизу сайдбара и включает поллинг логов, а нужна она в разборе, а не
+// постоянно. Разворачиваем только если владелец сам оставил её открытой.
+// 🪤 Здесь именно чтение состояния, а не `toggleLogPanel()` на DOMContentLoaded: тот
+// переключает, то есть из закрытой панели делал открытую на КАЖДОЙ загрузке — свернуть
+// её насовсем было нельзя.
+function restoreLogPanel() {
+  if (_lsGet(LOG_PANEL_LS) === '1') toggleLogPanel();
 }
 
 function stopLogPoll() {
@@ -25406,8 +25421,8 @@ applyTabsConfig();
   if (_tab === 'switcher') _tab = 'claude';
   showTab(_tab);
 }
-// log panel open by default
-document.addEventListener('DOMContentLoaded', toggleLogPanel);
+// Панель логов: по умолчанию свёрнута, разворачивается только если владелец так оставил.
+document.addEventListener('DOMContentLoaded', restoreLogPanel);
 // Журнал подмен собираем СРАЗУ по всем пяти шлюзам, а не только по открытой вкладке.
 // Карточка была привязана к вкладке — историю привязывать нельзя: подмена случается на
 // АКТИВНОМ шлюзе, а сидеть в этот момент можно на любом. Пять статусов — чтение памяти

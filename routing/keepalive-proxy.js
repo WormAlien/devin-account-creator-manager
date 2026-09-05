@@ -1331,6 +1331,13 @@ const server = http.createServer((req, res) => {
     if (res.socket) res.socket.setNoDelay(true);
     res.flushHeaders();
     armTimer();
+    // 🪤 С этой секунды клиент ждёт на пингах — с неё же обязан тикать страж пустого
+    // потока. Замер 05.09: страж взводился только из forward(), то есть по заголовкам
+    // шлюза, а на kktoken они приходят и через 143с. Пока их нет, границы не было вовсе:
+    // 18 запросов за смену пинговались дольше 180с, и один клиент бросил сам на 275-й
+    // секунде с `Stream idle timeout - no chunks received`. Строк стража в логе при этом
+    // ноль — он просто не был взведён.
+    armEmptyGuard(null);
     log(`${req.method} ${reqPath} пре-коммит SSE (${cfg.preCommitMs}ms тишины)`);
   };
 
@@ -1710,7 +1717,7 @@ const server = http.createServer((req, res) => {
     clearEmptyGuard();
     emptyTimer = setTimeout(() => {
       emptyTimer = null;
-      if (contentSent || aborted || finished === false) return;
+      if (contentSent || aborted) return;
       if (!retryEmptyStream(`${cfg.emptyStreamMs}мс без единого байта содержимого`, stream)) {
         log(`${req.method} ${reqPath} пустой поток: переигрывать больше нечем (лимит ${EMPTY_MAX_RETRIES}) — жду шлюз как есть`);
       }
@@ -2315,7 +2322,7 @@ if (process.argv[2] === 'selftest') {
     'у удержания есть потолок повторов — на плоском тарифе каждая дошедшая попытка платная');
   assert.ok(/probePath\(t\.hostname, t\.port/.test(holdSrc),
     'перед повтором проверяем путь, а не стреляем в мёртвую сеть');
-  assert.ok(/bonusAttempts \+= 1;\n\s*log\(`\$\{req\.method\} \$\{reqPath\} путь до/.test(holdSrc),
+  assert.ok(/bonusAttempts \+= 1;\s*log\(`\$\{req\.method\} \$\{reqPath\} путь до/.test(holdSrc),
     'подаренная удержанием попытка не съедает бюджет ретраев на транзиентную 500');
   // Форма отказа: 529 overloaded_error, а не 502 proxy_error — иначе подагент умирает
   // вместо того, чтобы повторить сам.
@@ -2378,13 +2385,17 @@ if (process.argv[2] === 'selftest') {
     'переигрываем пустой поток только пока клиенту не ушло содержимое');
   assert.ok(/if \(emptyRetries >= EMPTY_MAX_RETRIES\) return false;/.test(holdSrc),
     'у переигровки пустого потока есть потолок');
-  assert.ok(/finished = false;.*\n\s*winner = null;/.test(holdSrc),
+  assert.ok(/finished = false;[^\n]*\s*winner = null;/.test(holdSrc),
     'пустой победитель снимается, иначе повтор не стартует');
   assert.ok(/if \(!contentSent\) \{ contentSent = true; clearEmptyGuard\(\); \}/.test(holdSrc),
     'первый байт содержимого закрывает страховку — дальше поток неприкосновенен');
   assert.strictEqual((holdSrc.match(/armEmptyGuard\(stream\);/g) || []).length, 2,
     'страховка ставится на обеих SSE-ветках: и после пре-коммита, и на прямом ответе');
-  assert.ok(/clientSSE = true;\n\s*armEmptyGuard\(stream\);/.test(holdSrc),
+  assert.ok(/armEmptyGuard\(null\);/.test(holdSrc),
+    'страж взводится и на пре-коммите: до заголовков шлюза границы иначе нет вовсе');
+  assert.ok(!/finished === false\) return;/.test(holdSrc),
+    'условие «победитель выбран» снято — именно оно глушило стража до прихода заголовков');
+  assert.ok(/clientSSE = true;\s*armEmptyGuard\(stream\);/.test(holdSrc),
     'на прямой SSE-ветке канал помечается открытым — иначе повтор полез бы писать заголовки заново');
   // ── Удержание не-стримового запроса пробелами (2026-09-04) ──────────────────
   applyPatch({ jsonHoldMs: 20000 });
@@ -2432,7 +2443,7 @@ if (process.argv[2] === 'selftest') {
 
   // 🪤 Наш таймаут сокета в этой сцене бесполезен: после заголовков стоит finished, а
   // обработчик timeout под этим флагом выходит молча. Значит страховка обязана быть своя.
-  assert.ok(/upReq\.on\('timeout', \(\) => \{\s*\n\s*if \(finished \|\| aborted\) return;/.test(holdSrc),
+  assert.ok(/upReq\.on\('timeout', \(\) => \{\s*if \(finished \|\| aborted\) return;/.test(holdSrc),
     'upstreamTimeoutMs не спасает начатый поток — это и есть причина отдельной страховки');
 
   // ВОССТАНОВЛЕНИЕ — строго последним: любой applyPatch выше пишет в CONFIG_FILE,

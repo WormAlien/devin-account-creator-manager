@@ -342,6 +342,50 @@ function ask(port, model) {
       checks += 5;
     }
 
+    // ── Сцена 10: шлюз молчит ДО заголовков — страж обязан тикать с пре-коммита ──
+    // Тот самый живой отказ 05.09: клиент висел на пингах 275 с и сдался сам, а страж
+    // пустого потока в логе не появился ни разу — он взводился только по заголовкам
+    // шлюза, которых ещё не было. Здесь заглушка не отвечает вовсе на первый запрос.
+    {
+      const [P, U] = [28361, 28362];
+      const gw = stubGateway(U, 'open-forever', 1);
+      // Заглушка режима 'open-forever' на первом запросе даже заголовков не отдаёт:
+      // подменяем ей поведение — просто держим сокет молча.
+      gw.srv.removeAllListeners('request');
+      let hits = 0;
+      gw.srv.on('request', (req, res) => {
+        if (req.url.startsWith('/v1/models')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ data: [{ id: 'claude-opus-5' }] }));
+        }
+        hits += 1;
+        const mine = hits;
+        req.on('data', () => {});
+        req.on('end', () => {
+          if (mine === 1) return;                 // молчим совсем: ни заголовков, ни тела
+          res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+          res.end(SSE_BODY);
+        });
+      });
+      await gw.listen();
+      const kp = spawnKeepalive(P, U, {
+        MAX_ATTEMPTS: '1', HOLD_MS: '30000', EMPTY_STREAM_MS: '4000',
+        PRE_COMMIT_MS: '1500', IDLE_MS: '700',
+      });
+      open.push(gw.srv, kp.proc);
+      await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive (сцена 10)');
+
+      const r = await ask(P);
+      assert.ok(/пре-коммит SSE/.test(kp.log), 'клиент был взят на пинги');
+      assert.ok(/пустой поток #1: 4000мс без единого байта содержимого/.test(kp.log),
+        'страж сработал ДО прихода заголовков — это и был пропущенный случай');
+      assert.strictEqual(r.status, 200, `клиент получил ответ со второй попытки (было ${r.status})`);
+      assert.ok(r.body.includes('ХОЛД-ОК'), 'содержимое доехало');
+      assert.ok(!/event: error/.test(r.body), 'ошибки клиент не увидел');
+      assert.strictEqual(hits, 2, `шлюз спрошен дважды (было ${hits})`);
+      checks += 6;
+    }
+
     // ── Сцена 9: НЕ-стримовый запрос (`/compact`) держится пробелами ─────────────
     // Пинг — событие SSE, в JSON его не вставить, поэтому такой запрос не получал ни
     // байта, пока шлюз не досчитает, и Claude Code сдавался на ~20 с:
@@ -372,7 +416,8 @@ function ask(port, model) {
     console.log(`check-hold-window OK (${checks} проверок): обрыв посреди ожидания переигран незаметно, `
       + 'промах маршрута отдан без ретраев, мёртвый путь удержан и сдан повторяемой формой, '
       + 'мёртвая модель тира подменена живой, пустой поток переигран — и по обрыву, и по времени, '
-      + 'не-стримовый запрос удержан пробелами и разобран клиентом как обычный JSON');
+      + 'не-стримовый запрос удержан пробелами и разобран клиентом как обычный JSON, '
+      + 'молчание шлюза ДО заголовков тоже ограничено — страж тикает с пре-коммита');
     process.exitCode = 0;
   } catch (e) {
     console.error('ПРОВАЛ: ' + e.message);

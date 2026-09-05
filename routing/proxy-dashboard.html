@@ -4,11 +4,16 @@
 <meta charset="utf-8">
 <title>ABUSE HUB</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2310b981'/><text x='50%25' y='54%25' dominant-baseline='middle' text-anchor='middle' font-size='20' fill='white'>⚡</text></svg>">
-<script src="https://unpkg.com/@tailwindcss/browser@4"></script>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Локальные копии вместо четырёх чужих хостов (05.09). Раньше здесь были unpkg.com,
+     cdn.jsdelivr.net, fonts.googleapis.com и fonts.gstatic.com: без сети дашборд
+     открывался вообще без вёрстки, а с медленной сетью старт ждал их все. Файлы лежат в
+     routing/vendor/ и коммитятся; отдаёт их сам :8200 маршрутом /vendor/*.
+     🪤 Порядок важен: Tailwind собирает CSS из <style type="text/tailwindcss"> ниже, то
+     есть его скрипт обязан загрузиться ДО первого рендера — держим его первым и без
+     defer/async, как было с CDN. -->
+<script src="/vendor/tailwindcss-browser-4.js"></script>
+<script src="/vendor/sortable-1.15.6.min.js"></script>
+<link href="/vendor/fonts.css" rel="stylesheet">
 <style type="text/tailwindcss">
 @theme {
   --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;

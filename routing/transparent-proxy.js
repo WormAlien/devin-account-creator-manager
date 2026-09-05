@@ -8415,7 +8415,7 @@ function hubIdentity() {
         let git = '';
         try {
             git = execFileSync('git', ['config', 'user.name'],
-                { cwd: __dirname, encoding: 'utf8', timeout: 3000 }).trim();
+                { cwd: __dirname, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         } catch { /* нет git или имя не задано — не беда */ }
         doc.nick = leagueNickClean(git) || ('hub-' + doc.installId.slice(0, 4));
         dirty = true;
@@ -8725,7 +8725,7 @@ function hubBuild() {
     try { ver = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || null; } catch (e) {}
     try {
         sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'],
-            { cwd: __dirname, encoding: 'utf8', timeout: 3000 }).trim();
+            { cwd: __dirname, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     } catch (e) { /* не git-чекаут — сойдёт и без sha */ }
     HUB_BUILD = { ver, sha };
     return HUB_BUILD;
@@ -8744,15 +8744,93 @@ function leaguePeers() {
     } catch { return { updated: null, peers: [] }; }
 }
 
-// GET /__switch/api/league — свой срез + соседи (пока пусто) одним ответом.
+// ── Отправитель среза: opt-in, конфиг в routing/league-config.json ──────────
+// Файла нет — значит лига выключена и НИЧЕГО наружу не уезжает. Это и есть opt-in:
+// не тумблер в UI, который можно случайно включить, а отсутствующий файл.
+// Формат: { "enabled": true, "url": "http://host:8420", "key": "…", "everyMin": 10 }
+// В git файл не попадает — в нём секрет, см. .gitignore.
+const LEAGUE_CONFIG_FILE = path.join(__dirname, 'league-config.json');
+function leagueConfig() {
+    try {
+        const raw = fs.readFileSync(LEAGUE_CONFIG_FILE, 'utf8');
+        const c = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        return {
+            enabled: !!c.enabled,
+            url: String(c.url || '').replace(/\/+$/, ''),
+            key: String(c.key || ''),
+            everyMin: Number(c.everyMin) > 0 ? Number(c.everyMin) : 10,
+        };
+    } catch { return { enabled: false, url: '', key: '', everyMin: 10 }; }
+}
+let LEAGUE_SYNC_LAST = { at: null, ok: null, error: null, peers: 0 };
+
+// Один обмен: отправить свой срез, забрать чужие, записать в league-peers.json.
+// Ключ в логи не попадает никогда — только адрес и результат.
+async function leagueSync() {
+    const c = leagueConfig();
+    if (!c.enabled || !c.url || !c.key) return { skipped: 'лига не настроена' };
+    try {
+        const me = leagueSelf();
+        const r = await fetch(`${c.url}/slice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-League-Key': c.key },
+            body: JSON.stringify(me),
+            signal: AbortSignal.timeout(20000),
+        });
+        if (!r.ok) throw new Error(`slice ${r.status}: ${(await r.text()).slice(0, 160)}`);
+        const p = await fetch(`${c.url}/peers?installId=${encodeURIComponent(me.installId)}`, {
+            headers: { 'X-League-Key': c.key },
+            signal: AbortSignal.timeout(20000),
+        });
+        if (!p.ok) throw new Error(`peers ${p.status}`);
+        const doc = await p.json();
+        const peers = Array.isArray(doc.peers) ? doc.peers : [];
+        const tmp = LEAGUE_PEERS_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify({ updated: doc.updated || new Date().toISOString(), peers }));
+        fs.renameSync(tmp, LEAGUE_PEERS_FILE);
+        LEAGUE_SYNC_LAST = { at: new Date().toISOString(), ok: true, error: null, peers: peers.length };
+        return { ok: true, peers: peers.length };
+    } catch (e) {
+        LEAGUE_SYNC_LAST = { at: new Date().toISOString(), ok: false, error: e.message, peers: LEAGUE_SYNC_LAST.peers };
+        logLine(`league sync (${c.url}): ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+// Тик самопланирующийся, а не setInterval: период перечитывается из конфига каждый
+// раз, поэтому смена `everyMin` не требует рестарта. Первый обмен через минуту после
+// старта — на подъёме стека и без него есть чем заняться.
+function leagueTick() {
+    const every = Math.max(2, leagueConfig().everyMin) * 60_000;
+    leagueSync().catch(() => {}).finally(() => { setTimeout(leagueTick, every).unref?.(); });
+}
+setTimeout(leagueTick, 60_000).unref?.();
+
+// GET /__switch/api/league — свой срез + соседи одним ответом.
 async function handleLeague(req, res) {
     try {
         res.setHeader('Access-Control-Allow-Origin', '*');
         const me = leagueSelf();
         const nb = leaguePeers();
-        jsonRes(res, 200, { me, peers: nb.peers, peersUpdated: nb.updated,
-            receiver: { configured: false, note: 'приёмник на Финке ещё не поднят' } });
+        const c = leagueConfig();
+        jsonRes(res, 200, {
+            me, peers: nb.peers, peersUpdated: nb.updated,
+            // Секрет не отдаём никогда; адрес — можно, его вписал сам владелец.
+            receiver: {
+                configured: !!(c.enabled && c.url && c.key),
+                url: c.url || null,
+                everyMin: c.everyMin,
+                last: LEAGUE_SYNC_LAST,
+                note: (c.enabled && c.url && c.key) ? null
+                    : 'приёмник не настроен: нет routing/league-config.json',
+            },
+        });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/league/sync → обменяться прямо сейчас, не ожидая тика.
+async function handleLeagueSync(req, res) {
+    try { jsonRes(res, 200, await leagueSync()); }
+    catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 // POST /__switch/api/league/nick { nick } → сохраняет ник рядом с installId.
@@ -17340,6 +17418,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/finance/history')) return handleFinanceHistory(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league/nick')) return jsonRes(res, 405, { error: 'POST' });
     if (req.method === 'POST' && req.url === '/__switch/api/league/nick') return handleLeagueNick(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/league/sync') return handleLeagueSync(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league')) return handleLeague(req, res);
 
     // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157/:20158) — реальное время без рестарта.
@@ -18207,6 +18286,42 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
         }
 
         return jsonRes(res, 405, { error: 'method not allowed' });
+    }
+
+    // ── /vendor/* — локальные копии того, что раньше тянулось из интернета ──
+    //
+    // Зачем: старт дашборда ждал `unpkg.com` (Tailwind, 282 КБ), `cdn.jsdelivr.net`
+    // (Sortable) и `fonts.googleapis.com` + `fonts.gstatic.com` (Geist, 14 файлов). Без
+    // сети страница открывалась без вёрстки вообще, а с медленной сетью — с задержкой на
+    // четыре чужих хоста. Теперь всё лежит в `routing/vendor/` и коммитится.
+    //
+    // 🪤 Путь собираем ТОЛЬКО из basename и сверяем с белым списком расширений: `/vendor/`
+    // это первый маршрут дашборда, который отдаёт файлы с диска по имени из URL, и
+    // `../../.env` тут стоил бы дороже всего остального вместе.
+    if (req.method === 'GET' && req.url.startsWith('/vendor/')) {
+        const VENDOR_MIME = { '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2' };
+        try {
+            const rel = decodeURIComponent(req.url.split('?')[0].slice('/vendor/'.length));
+            const parts = rel.split('/').filter(Boolean);
+            // Максимум один подкаталог (fonts/), и ни одного `..` — иначе 404, не 403:
+            // сообщать сканеру, что путь существовал бы, незачем.
+            const bad = parts.length === 0 || parts.length > 2 || parts.some(p => p === '..' || p.includes('\\'));
+            const ext = bad ? '' : path.extname(parts[parts.length - 1]).toLowerCase();
+            if (bad || !VENDOR_MIME[ext] || (parts.length === 2 && parts[0] !== 'fonts')) {
+                res.writeHead(404); return res.end('not found');
+            }
+            const file = path.join(__dirname, 'vendor', ...parts.map(p => path.basename(p)));
+            const body = fs.readFileSync(file);
+            res.writeHead(200, {
+                'Content-Type': VENDOR_MIME[ext],
+                // Файлы версионированы именем и меняются только руками — кешируем надолго,
+                // иначе смысл локальной копии теряется на каждом Ctrl+Shift+R.
+                'Cache-Control': 'public, max-age=31536000, immutable',
+            });
+            return res.end(body);
+        } catch (e) {
+            res.writeHead(404); return res.end('not found');
+        }
     }
 
     if (req.method === 'GET' && (req.url === '/' || req.url === '/__switch' || req.url === '/__switch/')) {

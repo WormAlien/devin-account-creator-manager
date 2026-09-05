@@ -286,8 +286,13 @@ section('routing/proxy-dashboard.html · вкладка');
         'кнопка TrueSOTA НЕ в группе «Чтим память» — шлюз живой');
     const listOf = (name) => (new RegExp(`^const ${name} = .+$`, 'm').exec(html) || [''])[0];
     const tabs = listOf('DEFAULT_TABS_VISIBLE');
-    check(!!tabs && /'truesota'/.test(tabs),
-        "DEFAULT_TABS_VISIBLE: 'truesota' на месте — иначе вкладки не видно в дефолтном сайдбаре");
+    // Решение владельца 05.09: `truesota` из ДЕФОЛТНОГО набора убран — вкладка живая, но
+    // места в сайдбаре не оправдывает, включается в «Настроить вкладки» одним кликом.
+    // Поэтому здесь проверяется обратное: его в списке быть не должно, а сама кнопка и
+    // группа — на месте (проверено выше). 🪤 Утверждение перевёрнуто вместе с решением, а
+    // не снято: снятая проверка не заметила бы, если вкладку вернут в дефолт случайно.
+    check(!!tabs && !/'truesota'/.test(tabs),
+        "DEFAULT_TABS_VISIBLE: 'truesota' НЕ в дефолте — решение владельца 05.09, включается вручную");
     check(/truesota:/.test(listOf('LABELS')), 'LABELS: truesota (иначе в шапке будет «unknown»)');
     check(/truesota:/.test(listOf('COLORS')), 'COLORS: truesota (без цвета плашка активного бэкенда серая)');
 

@@ -838,6 +838,42 @@ t('панель запаса влезает рядом с картинкой, а
     return true;
 });
 
+t('вкладки не зовут функций, которых нет: сверка «зовут ↔ объявлено» по всем префиксам', () => {
+    // 🪤 Ровно этот дефект дважды ломал вкладку целиком и дважды был не виден регрессам:
+    // у TrueSOTA не было `tsResetKeepalive` (нашли 31.08 сверкой множеств), у HCNsec —
+    // `hnResetKeepalive`, а у менеджера ящиков `olRowHtml` (нашлось 05.09 по жалобе
+    // владельца `olRowHtml is not defined`). Каждый раз собственный чекер вкладки был
+    // зелёным, потому что проверял НАЛИЧИЕ вызова, а не то, что вызываемое существует.
+    // `switchTab` зовёт такую функцию первой — открытие вкладки падает ReferenceError и
+    // не доходит до конца, то есть пустая вкладка вместо содержимого.
+    const src = read('routing/proxy-dashboard.html');
+    const PREF = '(?:ar|go|tb|xp|jw|sk|ts|kk|hn|ol)';
+    const called = new Set([...src.matchAll(new RegExp('\\b(' + PREF + '[A-Z][A-Za-z0-9]*)\\s*\\(', 'g'))].map(m => m[1]));
+    const defined = new Set();
+    for (const re of [
+        new RegExp('(?:async\\s+)?function\\s+(' + PREF + '[A-Z][A-Za-z0-9]*)\\s*\\(', 'g'),
+        new RegExp('(?:const|let|var)\\s+(' + PREF + '[A-Z][A-Za-z0-9]*)\\s*=', 'g'),
+        new RegExp('(' + PREF + '[A-Z][A-Za-z0-9]*)\\s*[:=]\\s*(?:async\\s*)?(?:function|\\()', 'g'),
+    ]) for (const m of src.matchAll(re)) defined.add(m[1]);
+    // 🪤 Отбрасываем упоминания ИЗ КОММЕНТАРИЕВ: в файле есть ссылки на серверные функции
+    // («arSettingsModel() в transparent-proxy.js — править синхронно»), и они не вызовы.
+    // Резать `//`-хвосты у всего файла нельзя — в коде полно `https://`, срезало бы код.
+    // Поэтому кандидат отбрасывается, только если ВСЕ его вхождения закомментированы.
+    const lines = src.split('\n');
+    const liveCall = (n) => {
+        const re = new RegExp('\\b' + n + '\\s*\\(');
+        return lines.some((l) => {
+            const m = re.exec(l);
+            if (!m) return false;
+            const before = l.slice(0, m.index);
+            return !/\/\/|^\s*\*/.test(before);
+        });
+    };
+    const miss = [...called].filter((n) => !defined.has(n) && liveCall(n));
+    if (miss.length) return `зовут, но не объявлено: ${miss.sort().join(', ')}`;
+    return true;
+});
+
 t('дефолтный набор вкладок дашборда — как на рабочей установке', () => {
     const src = read('routing/proxy-dashboard.html');
     const m = src.match(/const DEFAULT_TABS_VISIBLE = \[([^\]]+)\]/);

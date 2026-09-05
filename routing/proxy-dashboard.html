@@ -4348,10 +4348,6 @@ window.finTabRefresh = () => { loadLive(chart.preset); loadGh(); };
         font:600 14px/1 inherit;color:var(--lg-ink);
         background:color-mix(in oklab,var(--lg-bg) 60%,transparent);
         border:1px solid var(--lg-azure);outline:none}
-      #leagueTab .lgfoot{margin-top:26px;color:var(--lg-faint);font-size:12.5px;
-        line-height:1.7;max-width:84ch}
-      #leagueTab .lgfoot b{color:var(--lg-muted)}
-      #leagueTab .lgfoot code{font:12px var(--lg-mono);color:var(--lg-dim)}
       @media (max-width:1100px){
         #leagueTab .lghead{display:none}
         #leagueTab .lgrow{grid-template-columns:34px 30px minmax(0,1fr) 96px}
@@ -11681,6 +11677,15 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+// 🪤 Две строки, которых не хватало, и обе ломали вкладку целиком — `switchTab` и кнопка
+// «Сбросить» на карточке keepalive зовут их по имени, а определения не было: открытие
+// вкладки падало `ReferenceError` и не доходило до конца. У TrueSOTA это нашли сверкой
+// множеств 31.08, у HCNsec — тем же способом 05.09, когда вкладки вернули из транскриптов.
+// Регресс тогда этого не видел (93/93 и до, и после), потому что проверял НАЛИЧИЕ вызовов,
+// а не то, что вызываемое существует. Отсюда общее правило: пары «зовут ↔ объявлено»
+// проверять сверкой, а не глазами.
+const tsResetKeepalive  = () => resetKeepaliveCard('ts', KEEPALIVE_API.ts);
+const hnResetKeepalive  = () => resetKeepaliveCard('hn', KEEPALIVE_API.hn);
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.
@@ -19436,6 +19441,57 @@ async function loadOlList() {
 
 // Сводка цифрами в шапке + счётчик в сайдбаре. Если сервер сводку не прислал —
 // считаем по списку сами: цифра в сайдбаре не должна зависеть от лишнего поля.
+
+// Одна строка таблицы. Кнопки — как у соседних вкладок, через actBtn (одинаковый
+// размер 6×6 и цветной hover), поэтому колонка действий не плывёт по ширине.
+function olRowHtml(a) {
+  const idJ = JSON.stringify(a.id);
+  const st = olStatusMeta(a.status || 'unknown');
+  const dim = (a.status === 'dead') ? 'opacity-60' : '';
+  const kind = a.kind === 'student'
+    ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-violet/15 border border-violet/40 text-violet" title="Домен .edu / .ac.&lt;cc&gt; — ящик даёт право на подписки для учащихся">🎓 student</span>`
+    : `<span class="text-[9px] px-1.5 py-0.5 rounded border border-line-soft text-dim" title="обычный личный ящик">personal</span>`;
+  const checked = olAge(a.lastCheck);
+  const statusCell = `<span class="text-[11px] ${st.cls}" title="${esc(st.hint)}${checked ? ' · проверено ' + esc(checked) + ' назад' : ' · проверок не было'}">${st.label}</span>`;
+  // «Возраст сессии» — это возраст СНИМКА (sessionAt), а не время последнего чека:
+  // снимок мог сняться месяц назад и до сих пор быть живым, и путать эти две даты нельзя.
+  const sessAge = olAge(a.sessionAt);
+  const sessCell = a.hasSession
+    ? `<span class="text-[11px] text-azure" title="Снимок storageState есть${sessAge ? ' · снят ' + esc(sessAge) + ' назад' : ''}">есть${sessAge ? ` <span class="text-faint">· ${esc(sessAge)}</span>` : ''}</span>`
+    : `<span class="text-[11px] text-dim" title="Снимка нет — «Взять код» откроет профиль и попросит войти руками">нет</span>`;
+  const usedChips = (a.usedOn || []).length
+    ? (a.usedOn || []).map(u =>
+        `<span class="text-[9px] px-1.5 py-0.5 rounded bg-amber/10 border border-amber/40 text-amber" title="израсходован здесь${u.at ? ' · ' + esc(olAge(u.at)) + ' назад' : ''}">${esc(u.tag)}</span>`
+      ).join(' ')
+    : `<span class="text-[10px] text-dim" title="ящик ещё никуда не заселён">свободен</span>`;
+  const note = a.note
+    ? `<span class="text-[10px] text-faint truncate inline-block max-w-[220px] align-middle" title="${esc(a.note)}">${esc(a.note)}</span>`
+    : `<span class="text-[10px] text-dim">—</span>`;
+  const nick = a.nickname && a.nickname !== a.email
+    ? `<span class="text-[10px] text-faint ml-1.5" title="ник">${esc(a.nickname)}</span>` : '';
+  const noPass = a.hasPassword ? '' :
+    `<span class="text-[9px] text-amber ml-1.5" title="пароля в пуле нет — в профиль придётся входить самому">⚠ без пароля</span>`;
+  const busy = (state.olBusy || {})[a.id];
+
+  return `<tr class="border-t border-line-soft hover:bg-elevated/40 ${dim}">
+    <td class="px-3 py-1.5 font-mono text-xs whitespace-nowrap"><span class="text-azure">📧 ${esc(a.email || '')}</span>${nick}${noPass}</td>
+    <td class="px-3 py-1.5 whitespace-nowrap">${kind}</td>
+    <td class="px-3 py-1.5 whitespace-nowrap">${statusCell}</td>
+    <td class="px-3 py-1.5 whitespace-nowrap">${sessCell}</td>
+    <td class="px-3 py-1.5 whitespace-nowrap">${usedChips}</td>
+    <td class="px-3 py-1.5">${note}</td>
+    <td class="px-3 py-1.5 text-right whitespace-nowrap">
+      <div class="inline-flex gap-1 items-center">
+        ${actBtn(`olOpen(${idJ})`, 'Открыть ящик в его профиле браузера (первый вход — руками)', busy === 'open' ? '⏳' : '🌐', 'azure')}
+        ${actBtn(`olCode(${idJ})`, 'Взять код из последнего письма: покажу тостом и положу в буфер', busy === 'code' ? '⏳' : '📩', 'emerald')}
+        ${actBtn(`olRename(${idJ})`, 'Переименовать (ник, адрес не меняется)', '✏️', 'violet')}
+        ${actBtn(`olStatusMenu(event, ${idJ})`, 'Сменить статус ящика', '🏷', 'amber')}
+        ${actBtn(`olDelete(${idJ})`, 'Удалить ящик из пула', '🗑', 'crimson')}
+      </div>
+    </td>
+  </tr>`;
+}
+
 function olPaintSummary() {
   const list = state.outlook || [];
   const s = state.olSummary || {};
@@ -26512,13 +26568,23 @@ setInterval(() => {
 // когда поднимем приёмник. Пока их нет, вкладка честно говорит об этом и показывает
 // свою кривую — она и есть половина смысла, «как в Claude Code статистика».
 const LG = { data: null, metric: 'tok', range: 'd7', plot: null, err: null, loading: false };
+// Определения метрик живут в подсказках кнопок, а не абзацами под графиком: сноски
+// владелец снял как лишний текст, но цифру всё равно надо уметь прочитать правильно.
+// Полный разбор — в вике, [[Рейтинг расхода в ABUSE HUB — аудит учёта и план]].
 const LG_M = {
-  tok: { lb: 'токены', fmt: v => lgTok(v), unit: null },
-  sp:  { lb: 'деньги', fmt: v => '$' + lgInt(v), unit: { div: 1, name: 'долларов' } },
-  act: { lb: 'активность', fmt: v => lgInt(v), unit: { div: 1, name: 'промптов' } },
+  tok: { lb: 'токены', fmt: v => lgTok(v), unit: null,
+    hint: 'вход + выход, без кеша. Сутки и неделя — журнал front-door (все харнессы), '
+        + 'раньше 26.08 — stats-cache самого Claude Code' },
+  sp:  { lb: 'деньги', fmt: v => '$' + lgInt(v), unit: { div: 1, name: 'долларов' },
+    hint: 'расход по знаковым дельтам панелей шлюзов: откаты вычитаются, сбросы счётчика — нет, '
+        + 'повторная наливка отсеяна' },
+  act: { lb: 'активность', fmt: v => lgInt(v), unit: { div: 1, name: 'промптов' },
+    hint: 'промпты, а не сообщения: одна строка history.jsonl = одно нажатие Enter. '
+        + 'Считаются только количества' },
   // Аккаунты — величина накопительная (счётчик заведённых, а не расход за период),
   // поэтому кривая монотонна и итог не зависит от окна.
-  acc: { lb: 'аккаунты', fmt: v => lgInt(v), unit: { div: 1, name: 'аккаунтов' }, cum: 1 },
+  acc: { lb: 'аккаунты', fmt: v => lgInt(v), unit: { div: 1, name: 'аккаунтов' }, cum: 1,
+    hint: 'закупленные гитхабы + зареганные ключи, по накоплению на настоящие даты заведения' },
 };
 const LG_R = {
   h24: { lb: 'сутки', ttl: 'по часам за скользящие сутки' },
@@ -26785,16 +26851,16 @@ const LG_SHELL = `
     <div class="lghead" id="lg-thead"></div>
     <div id="lg-list" class="flex flex-col gap-0.5"></div>
     <div class="lgyou" id="lg-you"></div>
-    <footer class="lgfoot" id="lg-foot"></footer>
   </div>
   <div class="lgtip" id="lg-tip"></div>`;
 
 function lgSeg(host, items, cur, pick) {
   if (!host) return;
   host.innerHTML = '';
-  for (const [k, lb] of items) {
+  for (const [k, lb, hint] of items) {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = lb; b.dataset.k = k;
+    if (hint) b.title = hint;
     b.setAttribute('aria-pressed', String(k === cur()));
     b.addEventListener('click', () => {
       pick(k);
@@ -26827,9 +26893,9 @@ function lgRender() {
   if (!host.dataset.built) {
     host.innerHTML = LG_SHELL;
     host.dataset.built = '1';
-    lgSeg(document.getElementById('lg-segM'), Object.entries(LG_M).map(([k, v]) => [k, v.lb]),
+    lgSeg(document.getElementById('lg-segM'), Object.entries(LG_M).map(([k, v]) => [k, v.lb, v.hint]),
       () => LG.metric, k => { LG.metric = k; });
-    lgSeg(document.getElementById('lg-segR'), Object.entries(LG_R).map(([k, v]) => [k, v.lb]),
+    lgSeg(document.getElementById('lg-segR'), Object.entries(LG_R).map(([k, v]) => [k, v.lb, v.hint]),
       () => LG.range, k => { LG.range = k; });
   }
   const rows = lgRows(), me = LG.data.me, m = LG_M[LG.metric], r = LG_R[LG.range];
@@ -26896,55 +26962,9 @@ function lgRender() {
   document.getElementById('lg-nickbtn').addEventListener('click', lgNickEdit);
   document.getElementById('lg-stamp').textContent = solo
     ? `срез свежий · участников 1` : `участников ${rows.length} · срез ${lgAgo(me.stamp)}`;
-  lgFoot();
   const nav = document.getElementById('nav-count-league');
   if (nav) nav.textContent = solo ? '1' : `${mi + 1} / ${rows.length}`;
   lgPaintMini(rows, mi);
-}
-// Сноски пишем цифрами со среза, а не общими словами: у этой вкладки три источника,
-// и читатель обязан знать, какая цифра откуда и что в неё не входит.
-function lgFoot() {
-  const s = LG.data.me.src || {}, t = LG.data.me.tot || {};
-  const cacheRatio = t.tokW > 0 ? (s.cacheTokW / t.tokW) : 0;
-  document.getElementById('lg-foot').innerHTML = `
-    <p><b>Токены — это вход плюс выход.</b> Кеш (чтение и запись) в метрику не входит:
-      по суткам за всё время его знает только сводка Claude Code целиком, а не по дням,
-      и менять определение посреди окон значит врать в самой заметной цифре. За неделю
-      кеш добавил бы сверху ещё <b>${lgTok(s.cacheTokW || 0)}</b>
-      (${(cacheRatio * 100).toFixed(0)}% к показанному).</p>
-    <p><b>Два источника, сшитые по дате.</b> Журнал хаба <code>token-usage.jsonl</code>
-      живёт с <b>${lgEsc(s.journalFirst || '—')}</b> и видит все харнессы через front-door;
-      раньше этой даты — <code>~/.claude/stats-cache.json</code> самого Claude Code
-      (посчитан до <b>${lgEsc(s.statsCacheLast || '—')}</b>). Граница —
-      <b>${lgEsc(s.cutover || '—')}</b>: первые сутки журнала неполные, поэтому стык
-      сдвинут на день вперёд. Величина в обоих одна и та же, разный только охват.</p>
-    <p><b>Кривая гладкая, но не выдуманная.</b> Точки соединены монотонным кубическим
-      сплайном: обычный Catmull-Rom рисует горбы между точками там, где данные их не
-      подтверждают. Разрыв данных нарисован разрывом, а не нулём.</p>
-    <p><b>Активность — промпты, не сообщения.</b> Одна строка
-      <code>~/.claude/history.jsonl</code> = одно нажатие Enter: всего
-      <b>${lgInt(t.promptsAll || 0)}</b>, за неделю <b>${lgInt(t.ppd || 0)}</b> в день,
-      стрик <b>${lgInt(t.streak || 0)}</b> суток. Считаются только количества — текст
-      промптов не читается и в срез не попадает.</p>
-    <p><b>Аккаунты — две разные вещи, и в одну сумму их не сводим.</b> Закуплено
-      <b>${lgInt(t.bought || 0)}</b> гитхабов (у ${lgInt(s.boughtCreds || 0)} в записи
-      лежат креды — так их и отдают при покупке): за них платили деньгами. Зарегано
-      <b>${lgInt(t.reg || 0)}</b> ключей на шлюзах, которые авторег завёл через эти
-      гитхабы: за них платили временем. Кривая показывает их сумму по накоплению —
-      по настоящим датам заведения, поэтому она монотонна.</p>
-    <p><b>Деньги.</b> Остаток <b>$${lgInt(t.bal || 0)}</b> — сумма только
-      ПОЛОЖИТЕЛЬНЫХ остатков живых ключей${s.balanceUnknownKeys
-        ? `; на <b>${lgInt(s.balanceUnknownKeys)}</b> ключах выдача угадана мимо и остаток
-           считается неизвестным, а не отрицательным` : ''}. Расход за неделю
-      <b>$${lgInt(t.spW || 0)}</b> собран знаковыми дельтами по
-      <code>finance-history.jsonl</code> (${lgInt(s.financeLines || 0)} записей): откаты
-      вычитаются, сбросы счётчика — нет, повторная наливка отсеяна
-      (за неделю дублей на $${lgInt(s.dupTopupW || 0)}).</p>
-    <p><b>Ник правится на месте</b> — клик по нему в плашке ниже, Enter сохраняет.
-      Живёт в <code>routing/hub-identity.json</code> рядом с постоянным
-      <code>installId ${lgEsc(String(LG.data.me.installId || '').slice(0, 8))}…</code>,
-      чтобы переименование не заводило в рейтинге вторую строку. По умолчанию хаб берёт
-      <code>git config user.name</code>.</p>`;
 }
 // Движение места. Прошлые места знает только эта машина (приёмник не поднят), поэтому
 // складываем «место + сутки» в localStorage и сравниваем с сегодняшним. Стрелка меняется

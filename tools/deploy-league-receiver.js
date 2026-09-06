@@ -44,13 +44,27 @@ const ROOT = path.join(__dirname, '..');
 const DRY = has('dry-run');
 const ROLLBACK = has('rollback');
 
-// Дефолты — швейцарская нода (та же, что алиас `ch` в ~/.ssh/config).
+// 🔒 Адреса и имя ключа в этом файле НЕТ намеренно: репозиторий `hub-cc` ПУБЛИЧНЫЙ.
+// 06.09 сюда был вписан живой адрес ноды вместе с портом, пользователем и именем
+// ключа — и уехал в публику вместе с коммитом. Секретов это не раскрыло (ключ и
+// отпечаток лежат в gitignore-конфиге), но опубликовало точку входа по SSH.
+// Дефолты берём из `routing/league-config.json` (он вне репо) и из алиаса
+// `~/.ssh/config`; ничего не нашлось — скрипт просит `--host`/`--alias` явно.
+function leagueCfgHost() {
+  try {
+    const raw = fs.readFileSync(path.join(ROOT, 'routing', 'league-config.json'), 'utf8');
+    const c = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    if (c.ip) return String(c.ip).trim();
+    if (c.url) return new URL(String(c.url)).hostname;
+  } catch { /* конфига нет — значит адрес обязан прийти параметром */ }
+  return '';
+}
 const C = {
-  host: opt('host', '185.114.117.145'),
+  host: opt('host', leagueCfgHost()),
   port: opt('port', '333'),
   user: opt('user', 'root'),
-  key: opt('key', path.join(os.homedir(), '.ssh', 'xgate2')),
-  alias: opt('alias', ''),                   // --alias=ch → ssh ch, без -i/-p
+  key: opt('key', path.join(os.homedir(), '.ssh', process.env.LEAGUE_SSH_KEY || 'id_ed25519')),
+  alias: opt('alias', 'ch'),                 // ssh ch — без -i/-p, адрес в ~/.ssh/config
   remote: opt('remote', '/opt/league/league-receiver.js'),
   data: opt('data', '/opt/league/data'),     // сверяется с живым юнитом
   backups: opt('backups', '/opt/league/backup'),

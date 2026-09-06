@@ -1673,7 +1673,7 @@ async function main() {
     // Поверив коду 200, вкладка решила бы «личность есть, групп ноль» и погасила бы поле
     // ввода поверх РАБОТАЮЩЕГО чата. Признак настоящего /me — memberId и массив groups.
     const g4 = mkCli(async () => ({ ok: true, status: 200, json: async () => ({
-      me: { nick: 'WormAlien', installId: 'b046c359c0df0824' }, peers: [],
+      me: { nick: 'WormAlien', installId: '0123456789abcdef' }, peers: [],
       receiver: { configured: true } }) }));
     check('общий обзор лиги, прилетевший на /me по префиксу, за личность НЕ принимается',
       await g4.lgChatMe() === false && g4.LGC.ident === false
@@ -1693,12 +1693,12 @@ async function main() {
       seen.push(String(u));
       if (/\/league\/me$/.test(String(u))) {
         return { ok: true, status: 200, json: async () => ({
-          me: { nick: 'WormAlien', installId: 'b046c359c0df0824' }, peers: [],
+          me: { nick: 'WormAlien', installId: '0123456789abcdef' }, peers: [],
           receiver: { configured: true } }) };
       }
       return { ok: true, status: 200, json: async () => ({ seq: 9, gseq: 10, firstSeq: 9,
         cold: false, more: false,
-        messages: [{ seq: 9, installId: 'b046c359c0df0824', nick: 'WormAlien',
+        messages: [{ seq: 9, installId: '0123456789abcdef', nick: 'WormAlien',
           text: 'salam', recvAt: '2026-09-05T16:28:58.389Z' }],
         gone: [{ seq: 5, at: 'x', gseq: 1 }, { seq: 6, at: 'x', gseq: 2 }] }) };
     });
